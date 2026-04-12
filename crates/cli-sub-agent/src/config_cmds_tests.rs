@@ -194,37 +194,42 @@ auto_weave_upgrade = true
 }
 
 #[test]
-fn resolve_effective_key_project_only_execution_ignores_global_user_fallback() {
+fn build_config_get_lookup_resolves_effective_project_nested_resource_keys() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
-
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
     std::fs::write(
-        global_dir.join("config.toml"),
+        csa_dir.join("config.toml"),
         r#"
 schema_version = 1
-[execution]
-min_timeout_seconds = 3600
+[resources]
+memory_max_mb = 1024
 "#,
     )
     .unwrap();
 
-    let value = resolve_effective_key(
+    let lookup = build_config_get_lookup(
         Some(dir.path()),
-        "execution.min_timeout_seconds",
-        true,
+        "resources.slot_wait_timeout_seconds",
+        false,
         false,
     )
     .unwrap();
+    let value = resolve_lookup_sources(&lookup.sources, "resources.slot_wait_timeout_seconds")
+        .unwrap()
+        .expect("effective resources default should resolve");
 
+    assert_eq!(value.as_integer(), Some(250));
     assert!(
-        value.is_none(),
-        "project-only execution lookup should stay raw and not synthesize defaults"
+        collect_lookup_keys(&lookup.sources)
+            .unwrap()
+            .contains("resources.slot_wait_timeout_seconds"),
+        "effective lookup should advertise nested resource keys visible in config show"
     );
 }
 
@@ -333,6 +338,238 @@ long_poll_seconds = 9999
         .expect("kv cache long poll should resolve from global defaults");
 
     assert_eq!(value.as_integer(), Some(240));
+}
+
+#[test]
+fn build_config_get_lookup_preserves_unknown_raw_project_sections() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[pr_review]
+cloud_bot_name = "gemini-code-assist"
+cloud_bot_trigger = "comment"
+merge_strategy = "merge"
+delete_branch = false
+"#,
+    )
+    .unwrap();
+
+    let lookup =
+        build_config_get_lookup(Some(dir.path()), "pr_review.cloud_bot_name", false, false)
+            .unwrap();
+
+    assert_eq!(
+        resolve_lookup_sources(&lookup.sources, "pr_review.cloud_bot_name")
+            .unwrap()
+            .and_then(|value| value.as_str().map(str::to_string)),
+        Some("gemini-code-assist".to_string())
+    );
+    assert_eq!(
+        resolve_lookup_sources(&lookup.sources, "pr_review.cloud_bot_trigger")
+            .unwrap()
+            .and_then(|value| value.as_str().map(str::to_string)),
+        Some("comment".to_string())
+    );
+    assert_eq!(
+        resolve_lookup_sources(&lookup.sources, "pr_review.merge_strategy")
+            .unwrap()
+            .and_then(|value| value.as_str().map(str::to_string)),
+        Some("merge".to_string())
+    );
+    assert_eq!(
+        resolve_lookup_sources(&lookup.sources, "pr_review.delete_branch")
+            .unwrap()
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+}
+
+#[test]
+fn build_config_get_lookup_prefers_effective_values_for_known_sections() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(
+        global_dir.join("config.toml"),
+        r#"
+[tools.codex]
+enabled = false
+"#,
+    )
+    .unwrap();
+
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[tools.codex]
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let lookup =
+        build_config_get_lookup(Some(dir.path()), "tools.codex.enabled", false, false).unwrap();
+    let value = resolve_lookup_sources(&lookup.sources, "tools.codex.enabled")
+        .unwrap()
+        .expect("effective tool enablement should resolve");
+
+    assert_eq!(value.as_bool(), Some(false));
+}
+
+#[test]
+fn build_config_get_lookup_project_only_uses_effective_project_defaults() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .unwrap();
+
+    let lookup = build_config_get_lookup(
+        Some(dir.path()),
+        "resources.slot_wait_timeout_seconds",
+        true,
+        false,
+    )
+    .unwrap();
+    let value = resolve_lookup_sources(&lookup.sources, "resources.slot_wait_timeout_seconds")
+        .unwrap()
+        .expect("project-only lookups should expose effective project defaults");
+
+    assert_eq!(value.as_integer(), Some(250));
+}
+
+#[test]
+fn resolve_lookup_sources_returns_project_raw_match_before_global_parse() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(global_dir.join("config.toml"), "{{invalid toml").unwrap();
+
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[pr_review]
+cloud_bot_name = "gemini-code-assist"
+"#,
+    )
+    .unwrap();
+
+    let lookup =
+        build_config_get_lookup(Some(dir.path()), "pr_review.cloud_bot_name", false, false)
+            .unwrap();
+    let value = resolve_lookup_sources(&lookup.sources, "pr_review.cloud_bot_name")
+        .unwrap()
+        .and_then(|value| value.as_str().map(str::to_string));
+
+    assert_eq!(value, Some("gemini-code-assist".to_string()));
+}
+
+#[test]
+fn resolve_lookup_sources_invalid_project_raw_still_errors_before_global_match() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(
+        global_dir.join("config.toml"),
+        r#"
+[execution]
+min_timeout_seconds = 3600
+"#,
+    )
+    .unwrap();
+
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(csa_dir.join("config.toml"), "{{invalid toml").unwrap();
+
+    let lookup = build_config_get_lookup(
+        Some(dir.path()),
+        "execution.min_timeout_seconds",
+        false,
+        false,
+    )
+    .unwrap();
+    let error = resolve_lookup_sources(&lookup.sources, "execution.min_timeout_seconds")
+        .expect_err("broken project config should fail before global fallback");
+
+    assert!(error.to_string().contains("Failed to parse project config"));
+}
+
+#[test]
+fn suggest_key_paths_returns_closest_matches() {
+    let candidates = std::collections::BTreeSet::from([
+        "pr_review.cloud_bot_name".to_string(),
+        "pr_review.cloud_bot_trigger".to_string(),
+        "resources.slot_wait_timeout_seconds".to_string(),
+    ]);
+
+    let suggestions = suggest_key_paths("pr_review.cloud_bot_nam", &candidates);
+
+    assert_eq!(
+        suggestions.first().map(String::as_str),
+        Some("pr_review.cloud_bot_name")
+    );
+}
+
+#[test]
+fn format_missing_key_message_includes_suggestions() {
+    let message = format_missing_key_message(
+        "pr_review.cloud_bot_nam",
+        &[
+            "pr_review.cloud_bot_name".to_string(),
+            "pr_review.cloud_bot_trigger".to_string(),
+        ],
+    );
+
+    assert!(message.contains("Key not found: pr_review.cloud_bot_nam"));
+    assert!(message.contains("Closest matches:"));
+    assert!(message.contains("pr_review.cloud_bot_name"));
+    assert!(message.contains("pr_review.cloud_bot_trigger"));
 }
 
 #[test]
