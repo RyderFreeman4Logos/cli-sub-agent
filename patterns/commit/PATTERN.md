@@ -129,6 +129,14 @@ Tool: csa
 Tier: tier-2-standard
 OnFail: abort
 
+Run the security audit directly in this CSA step.
+- Review the staged changes and associated tests.
+- Perform the full three-phase audit: test completeness, vulnerability scan, and code quality.
+- Emit `CSA_VAR:AUDIT_FAIL=true` when blocking issues exist; otherwise emit `CSA_VAR:AUDIT_FAIL=false`.
+- Emit `CSA_VAR:AUDIT_PASS_DEFERRED=true` when only deferred follow-up issues remain; otherwise emit `CSA_VAR:AUDIT_PASS_DEFERRED=false`.
+- Blocking issues take precedence over deferred ones.
+- End with a concise audit report and a final verdict: PASS, PASS_DEFERRED, or FAIL.
+
 ## INCLUDE security-audit
 
 Three-phase audit: test completeness, vulnerability scan, code quality.
@@ -155,6 +163,12 @@ immediate post-commit fixing.
 
 Tool: csa
 Tier: tier-2-standard
+
+Run the staged-diff review directly in this CSA step.
+- Inspect `git diff --cached` for correctness, regressions, security issues, and test gaps.
+- Emit `CSA_VAR:REVIEW_HAS_ISSUES=true` when fixes are required before commit; otherwise emit `CSA_VAR:REVIEW_HAS_ISSUES=false`.
+- If issues exist, explain exactly what must be fixed before commit proceeds.
+- Preserve the AGENTS.md compliance checklist and rule checks below.
 
 ## INCLUDE ai-reviewed-commit
 

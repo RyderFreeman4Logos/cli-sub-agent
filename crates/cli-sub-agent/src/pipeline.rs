@@ -57,6 +57,15 @@ pub(crate) enum ParentSessionSource {
     ExplicitOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionCreationMode {
+    /// Reuse the daemon-preassigned session ID when present. This is the
+    /// normal top-level CLI behavior.
+    DaemonManaged,
+    /// Always allocate a fresh child session ID, even inside a daemon child.
+    FreshChild,
+}
+
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
     cli_override: Option<u64>,

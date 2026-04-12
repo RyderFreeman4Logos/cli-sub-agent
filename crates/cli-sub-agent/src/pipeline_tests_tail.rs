@@ -722,6 +722,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         None,
         None,
         ParentSessionSource::ExplicitOnly,
+        SessionCreationMode::DaemonManaged,
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable

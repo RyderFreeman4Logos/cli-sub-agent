@@ -107,6 +107,7 @@ pub(super) async fn execute_review(
         None,
         Some(global_config),
         crate::pipeline::ParentSessionSource::ExplicitOnly,
+        crate::pipeline::SessionCreationMode::DaemonManaged,
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
