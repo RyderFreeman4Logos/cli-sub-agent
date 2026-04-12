@@ -644,6 +644,11 @@ pub(crate) fn resolve_requested_tool_from_tier(
 /// `skip_specs` excludes model specs that have already been tried (e.g. due to
 /// 429 rate-limit failover within the same tier).
 ///
+/// **Whitelist interaction (#648)**: When `whitelist` is `Some`, only tier models
+/// whose tool name appears in the whitelist are considered. This is how
+/// `[review].tool` and `[debate].tool` narrow a multi-tool tier to a single tool.
+/// Pass `None` to use the tier's full fallback chain.
+///
 /// Returns `None` if no enabled, available tool is found in the tier.
 pub(crate) fn resolve_tool_from_tier(
     tier_name: &str,

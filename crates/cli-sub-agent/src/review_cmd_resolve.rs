@@ -141,7 +141,10 @@ pub(crate) fn resolve_review_tool(
         return Ok((tool, None));
     }
 
-    // Compute effective whitelist from tool selection (project > global)
+    // Compute effective whitelist from tool selection (project > global).
+    // IMPORTANT (#648): When [review].tool is set, it acts as a whitelist filter
+    // on the tier's model list, silently narrowing a multi-tool tier to only the
+    // specified tool(s). To use the full tier fallback chain, set tool = "auto".
     let effective_whitelist = project_config
         .and_then(|cfg| cfg.review.as_ref())
         .map(|r| &r.tool)
