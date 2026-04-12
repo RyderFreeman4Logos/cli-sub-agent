@@ -129,6 +129,9 @@ name = "DELETE_BRANCH_FLAG"
 name = "FALLBACK_REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
+name = "REVIEW_COMPLETED"
+
+[[workflow.variables]]
 name = "FIND_RC"
 
 [[workflow.variables]]
@@ -559,6 +562,7 @@ if [ "${CLOUD_BOT}" = "false" ]; then
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
 FALLBACK_REVIEW_HAS_ISSUES="${FALLBACK_REVIEW_HAS_ISSUES:-false}"
+echo "CSA_VAR:CLOUD_BOT=$CLOUD_BOT"
 echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
 echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
 echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
@@ -965,7 +969,7 @@ git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && (${BOT_UNAVAILABLE})"
+condition = "!(${CLOUD_BOT})"
 
 [[workflow.steps]]
 id = 10
