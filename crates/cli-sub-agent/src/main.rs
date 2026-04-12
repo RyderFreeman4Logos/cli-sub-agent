@@ -6,6 +6,7 @@ use clap::Parser;
 mod audit;
 mod audit_cmds;
 mod batch;
+mod bug_class;
 mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;
@@ -163,6 +164,11 @@ fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
     )
 }
 
+fn link_bug_class_pipeline() {
+    let _ = bug_class::BugClassCandidate::aggregate_from_review_artifacts(&[]);
+    bug_class::link_bug_class_pipeline_symbols();
+}
+
 #[tokio::main]
 
 async fn main() {
@@ -177,6 +183,8 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
+    link_bug_class_pipeline();
+
     // Read current depth from env
     let current_depth: u32 = std::env::var("CSA_DEPTH")
         .ok()

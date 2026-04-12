@@ -11,6 +11,10 @@ fn default_identity_version() -> u8 {
     1
 }
 
+fn default_review_iterations() -> u32 {
+    1
+}
+
 const FORK_CALL_RATE_LIMIT_MAX: usize = 10;
 const FORK_CALL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
@@ -144,6 +148,9 @@ pub struct ReviewSessionMeta {
     pub fix_attempted: bool,
     /// Number of fix rounds completed (0 if no fix attempted).
     pub fix_rounds: u32,
+    /// Number of outer review cycles observed on the same branch/PR.
+    #[serde(default = "default_review_iterations")]
+    pub review_iterations: u32,
     /// ISO 8601 timestamp of when this metadata was written.
     pub timestamp: DateTime<Utc>,
     /// Content hash of the diff being reviewed (e.g., "sha256:abc123...").

@@ -12,6 +12,7 @@ const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
 pub(super) struct ReviewerOutcome {
     pub reviewer_index: usize,
     pub tool: ToolName,
+    pub session_id: String,
     pub output: String,
     pub exit_code: i32,
     pub verdict: &'static str,

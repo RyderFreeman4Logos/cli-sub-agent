@@ -38,6 +38,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub verdict: String,
     pub max_rounds: u8,
     pub initial_session_id: String,
+    pub review_iterations: u32,
 }
 
 /// Run fix rounds, returning the final exit code.
@@ -179,6 +180,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                     exit_code: 0,
                     fix_attempted: true,
                     fix_rounds: u32::from(round),
+                    review_iterations: ctx.review_iterations,
                     timestamp: chrono::Utc::now(),
                     diff_fingerprint: None,
                 },
@@ -200,6 +202,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             exit_code: 1,
             fix_attempted: true,
             fix_rounds: u32::from(ctx.max_rounds),
+            review_iterations: ctx.review_iterations,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: None,
         },

@@ -1,7 +1,3 @@
-use anyhow::{Context, Result};
-use tokio::task::JoinSet;
-use tracing::{debug, error, warn};
-
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
     CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
@@ -15,6 +11,7 @@ use crate::review_context::resolve_review_context;
 use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
+use anyhow::{Context, Result};
 #[cfg(test)]
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
@@ -22,6 +19,8 @@ use csa_core::types::ReviewDecision;
 #[cfg(test)]
 use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
+use tokio::task::JoinSet;
+use tracing::{debug, error, warn};
 
 #[path = "review_cmd_output.rs"]
 mod output;
@@ -42,8 +41,13 @@ mod reviewers;
 #[path = "review_cmd_execute.rs"]
 mod execute;
 
+#[path = "review_cmd_bug_class.rs"]
+mod bug_class_pipeline;
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
+use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
+#[cfg(test)]
+use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_review_iterations};
 use execute::{compute_diff_fingerprint, execute_review};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 #[cfg(test)]
@@ -381,6 +385,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             parse_review_decision(&result.execution.output, result.execution.exit_code)
         };
         debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
+        let review_iterations = resolve_review_iterations(&project_root, &result.meta_session_id);
+        let review_session_ids = vec![result.meta_session_id.clone()];
 
         // Write structured review metadata to session directory.
         let effective_exit_code = if empty_output {
@@ -401,6 +407,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 exit_code: effective_exit_code,
                 fix_attempted: args.fix,
                 fix_rounds: 0,
+                review_iterations,
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint,
             },
@@ -430,6 +437,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &scope,
             );
             emit_post_review_output(&post_review_output);
+            maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 
             return Ok(effective_exit_code);
         }
@@ -445,6 +453,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 tool = %tool,
                 "--fix requested but tool has allow_edit_existing_files=false; skipping fix loop"
             );
+            maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
             return Ok(effective_exit_code);
         }
 
@@ -472,6 +481,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             verdict: verdict.to_string(),
             max_rounds: args.max_rounds,
             initial_session_id: result.meta_session_id.clone(),
+            review_iterations,
         })
         .await;
 
@@ -503,6 +513,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             // Fix exhausted — accumulate original findings for promotion.
             crate::review_findings::accumulate_findings(&project_root, &sanitized);
         }
+
+        maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 
         return fix_exit_code;
     }
@@ -599,6 +611,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
                 reviewer_index,
                 tool: reviewer_tool,
+                session_id: session_result.meta_session_id,
                 verdict: if empty {
                     HAS_ISSUES
                 } else {
@@ -679,9 +692,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         );
     }
 
+    let review_session_ids = outcomes
+        .iter()
+        .map(|outcome| outcome.session_id.clone())
+        .collect::<Vec<_>>();
+    maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
+
     Ok(if final_verdict == CLEAN { 0 } else { 1 })
 }
-
 #[cfg(test)]
 #[path = "review_cmd_tests.rs"]
 mod tests;
