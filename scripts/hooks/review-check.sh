@@ -13,7 +13,13 @@ if [ "${CSA_SKIP_REVIEW_CHECK:-0}" = "1" ]; then
   timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   head_sha="$(git rev-parse HEAD 2>/dev/null || echo "<unknown-head>")"
   author_email="$(git config user.email 2>/dev/null || echo "<unknown-email>")"
-  reason="${CSA_SKIP_REVIEW_CHECK_REASON:-<unspecified>}"
+  raw_reason="${CSA_SKIP_REVIEW_CHECK_REASON:-<unspecified>}"
+  reason="$(
+    printf '%s' "${raw_reason}" \
+      | tr '\r\n\t' '   ' \
+      | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+  )"
+  [ -z "${reason}" ] && reason="<unspecified>"
 
   mkdir -p .csa
   printf '%s %s %s %s\n' "${timestamp}" "${head_sha}" "${author_email}" "${reason}" >> .csa/review-bypass.log
