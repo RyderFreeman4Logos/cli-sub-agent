@@ -127,7 +127,29 @@ pub enum TodoCommands {
         cd: Option<String>,
     },
 
-    /// Update a TODO plan's status
+    /// Update a TODO plan (title, status, description)
+    Update {
+        /// Timestamp of the TODO plan
+        timestamp: String,
+
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New status (draft, debating, approved, implementing, done)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// New description (overwrites TODO.md content)
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Update a TODO plan's status (convenience alias for `update --status`)
     Status {
         /// Timestamp of the TODO plan
         timestamp: String,

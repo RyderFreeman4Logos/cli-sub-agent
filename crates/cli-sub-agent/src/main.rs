@@ -640,6 +640,15 @@ async fn run() -> Result<()> {
             } => {
                 todo_cmd::handle_show(timestamp, version, path, spec, refs, cd)?;
             }
+            TodoCommands::Update {
+                timestamp,
+                title,
+                status,
+                description,
+                cd,
+            } => {
+                todo_cmd::handle_update(timestamp, title, status, description, cd)?;
+            }
             TodoCommands::Status {
                 timestamp,
                 status,

@@ -199,6 +199,20 @@ pub fn save_file(
     save_paths(todos_dir, timestamp, &[file], message)
 }
 
+/// Stage and commit multiple files within a plan directory.
+///
+/// `files` are paths relative to `todos_dir` (e.g. `["20260211T023000/metadata.toml",
+/// "20260211T023000/TODO.md"]`).
+/// Returns the short commit hash, or `None` if there were no changes to commit.
+pub fn save_files(
+    todos_dir: &Path,
+    timestamp: &str,
+    files: &[&str],
+    message: &str,
+) -> Result<Option<String>> {
+    save_paths(todos_dir, timestamp, files, message)
+}
+
 /// Internal: stage given paths and commit.
 fn save_paths(
     todos_dir: &Path,
