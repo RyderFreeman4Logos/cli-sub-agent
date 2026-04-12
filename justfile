@@ -156,13 +156,14 @@ check-version-bumped:
         exit 1
     fi
 
-# Run all checks: monolith guard, Chinese character detection, formatting, linting, and tests.
+# Run all checks: monolith guard, env-dependent test lint, Chinese character detection, formatting, linting, and tests.
 pre-commit:
     just find-monolith-files
     just check-generated-artifacts
     just check-version-bumped
     just check-chinese
     just fmt
+    ./scripts/hooks/check-env-dependent-tests.sh
     just deny
     just clippy
     just test
