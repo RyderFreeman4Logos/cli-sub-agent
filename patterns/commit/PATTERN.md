@@ -131,11 +131,21 @@ OnFail: abort
 
 Run the security audit directly in this CSA step.
 - Review the staged changes and associated tests.
-- Perform the full three-phase audit: test completeness, vulnerability scan, and code quality.
+- Phase 1: test completeness.
+  - For each changed public function, verify normal-path, edge/boundary, and error-condition coverage.
+  - Ask whether there is a missing test case you can still propose; treat missing coverage in changed code as blocking unless it is clearly deferred outside the current scope.
+- Phase 2: vulnerability scan.
+  - For external-input handling, check input validation and size/length limits.
+  - Check panic paths on untrusted input (`unwrap`, `expect`, index access).
+  - Check crafted-input resource exhaustion risks.
+  - Check timing-attack exposure for secrets.
+  - Check integer overflow handling.
+- Phase 3: code quality.
+  - Check for debug code, hardcoded secrets, commented-out code, TODO/FIXME security items, and incomplete error handling on untrusted input.
 - Emit `CSA_VAR:AUDIT_FAIL=true` when blocking issues exist; otherwise emit `CSA_VAR:AUDIT_FAIL=false`.
 - Emit `CSA_VAR:AUDIT_PASS_DEFERRED=true` when only deferred follow-up issues remain; otherwise emit `CSA_VAR:AUDIT_PASS_DEFERRED=false`.
 - Blocking issues take precedence over deferred ones.
-- End with a concise audit report and a final verdict: PASS, PASS_DEFERRED, or FAIL.
+- End with a concise structured audit report and a final verdict: PASS, PASS_DEFERRED, or FAIL.
 
 ## INCLUDE security-audit
 
@@ -166,6 +176,14 @@ Tier: tier-2-standard
 
 Run the staged-diff review directly in this CSA step.
 - Inspect `git diff --cached` for correctness, regressions, security issues, and test gaps.
+- Use an authorship-aware review strategy.
+  - Self-authored changes from this session: review with the adversarial rigor of `csa debate`.
+  - Other-authored changes: review with the `csa review --diff --allow-fallback` standard.
+- Check the applicable AGENTS.md chain for every staged file.
+- Explicitly check rule 009 (error handling), rule 014 (security), and rule 016 (testing).
+- If staged changes touch `PATTERN.md` or `workflow.toml`, check rule 027 `pattern-workflow-sync`.
+- If staged changes touch process spawning or lifecycle code, check Rust rule 015 `subprocess-lifecycle`.
+- If the implementation session is available, you may optionally use fork-based self-review guidance such as `csa review --fork-from <impl-session-id> --diff` for zero-cost context reuse.
 - Emit `CSA_VAR:REVIEW_HAS_ISSUES=true` when fixes are required before commit; otherwise emit `CSA_VAR:REVIEW_HAS_ISSUES=false`.
 - If issues exist, explain exactly what must be fixed before commit proceeds.
 - Preserve the AGENTS.md compliance checklist and rule checks below.

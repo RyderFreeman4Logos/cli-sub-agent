@@ -84,14 +84,15 @@ pub(crate) fn resolve_tool_and_model(
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
-    // unless --force-ignore-tier-setting (or --force) is active.
+    // unless --force-ignore-tier-setting (or --force) is active. --model-spec is the
+    // exact-selection escape hatch and is handled below.
     // Auto-resolved tools (from HeterogeneousPreferred etc.) don't count as user-explicit.
     let tool_triggers_enforcement = tool.is_some() && !tool_is_auto_resolved;
     validate_tool_tier_override_flags(tool_triggers_enforcement, tier, force_ignore_tier_setting)?;
     if tiers_configured
         && !bypass_tier
         && tier.is_none()
-        && (tool_triggers_enforcement || model_spec.is_some() || model.is_some())
+        && (tool_triggers_enforcement || model.is_some())
     {
         let cfg = config.unwrap();
         let mut tier_list = String::new();
@@ -103,7 +104,7 @@ pub(crate) fn resolve_tool_and_model(
         }
         let alias_hint = cfg.format_tier_aliases();
         anyhow::bail!(
-            "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured.\n\
+            "Direct --tool/--model/--thinking is restricted when tiers are configured.\n\
              Use --tier <name> to specify which tier's model/thinking config to use, \
              or add --force-ignore-tier-setting to override.\n\
              Available tiers: [{tier_list}]{alias_hint}\n\
@@ -184,20 +185,15 @@ pub(crate) fn resolve_tool_and_model(
         return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
     }
 
-    // Case 1: model_spec provided → parse it to get tool
+    // Case 1: model_spec provided → parse it to get tool. --model-spec is the
+    // exact-selection escape hatch and implicitly bypasses tier whitelist;
+    // enforce_tool_enabled still applies.
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
         // Enforce tool enablement from user config
         if let Some(cfg) = config {
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
-        }
-        // Enforce tier whitelist: model-spec must appear in tiers
-        if !force
-            && !bypass_tier
-            && let Some(cfg) = config
-        {
-            cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
         }
         return Ok((tool_name, Some(spec.to_string()), None));
     }

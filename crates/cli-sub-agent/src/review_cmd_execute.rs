@@ -48,7 +48,8 @@ pub(super) async fn execute_review(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
 ) -> Result<crate::pipeline::SessionExecutionResult> {
-    let enforce_tier = tier_model_spec.is_some() && !force_ignore_tier_setting;
+    let enforce_tier =
+        tier_name.is_some() && tier_model_spec.is_some() && !force_ignore_tier_setting;
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),
@@ -336,6 +337,92 @@ printf 'tool mutation\\n' >> tracked.txt\n",
         assert_eq!(
             std::fs::read_to_string(project_dir.path().join("tracked.txt")).unwrap(),
             "baseline\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn execute_review_model_spec_bypasses_tier_enforcement_without_active_tier() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project_dir = setup_git_repo();
+        let _sandbox = ScopedSessionSandbox::new(&project_dir);
+        let bin_dir = project_dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let fake_opencode = bin_dir.join("opencode");
+        std::fs::write(
+            &fake_opencode,
+            "#!/bin/sh\n\
+printf '%s\\n' \
+'<!-- CSA:SECTION:summary -->' \
+'Explicit model spec review succeeded.' \
+'<!-- CSA:SECTION:summary:END -->' \
+'' \
+'<!-- CSA:SECTION:details -->' \
+'Explicit model spec bypassed tier enforcement.' \
+'<!-- CSA:SECTION:details:END -->' \
+'' \
+'PASS'\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_opencode, perms).unwrap();
+
+        let inherited_path = std::env::var("PATH").unwrap_or_default();
+        let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+        let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+        let mut config = project_config_with_enabled_tools(&["opencode", "gemini-cli"]);
+        config.tiers.insert(
+            "quality".to_string(),
+            csa_config::config::TierConfig {
+                description: "Test tier".to_string(),
+                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                strategy: csa_config::TierStrategy::default(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+
+        let global = GlobalConfig::default();
+        let result = execute_review(
+            ToolName::Opencode,
+            "scope=uncommitted mode=review-only security=auto".to_string(),
+            None,
+            None,
+            Some("opencode/provider/model/medium".to_string()),
+            None, // tier_name
+            None, // thinking
+            "review: model-spec-bypasses-tier-regression".to_string(),
+            project_dir.path(),
+            Some(&config),
+            &global,
+            ReviewRoutingMetadata {
+                project_profile: ProjectProfile::Unknown,
+                detection_method: "auto",
+            },
+            csa_process::StreamMode::BufferOnly,
+            crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
+            None,  // initial_response_timeout_seconds
+            false, // force_override_user_config
+            false, // force_ignore_tier_setting
+            false, // no_failover
+            false, // no_fs_sandbox
+            false, // readonly_project_root
+            &[],   // extra_writable
+        )
+        .await
+        .expect("explicit review model spec should bypass tier enforcement");
+
+        assert_eq!(result.execution.exit_code, 0);
+        assert!(
+            result
+                .execution
+                .output
+                .contains("Explicit model spec review succeeded."),
+            "expected structured review output, got: {}",
+            result.execution.output
         );
     }
 }

@@ -24,6 +24,7 @@ pub(crate) async fn handle_claude_sub_agent(
     let prompt = crate::run_helpers::read_prompt(args.question)?;
 
     // 6. Resolve tool
+    let user_explicit_tool = args.tool.is_some();
     let parent_tool = crate::run_helpers::detect_parent_tool();
     let tool = resolve_claude_tool(
         args.tool,
@@ -41,12 +42,12 @@ pub(crate) async fn handle_claude_sub_agent(
             args.model.as_deref(),
             config.as_ref(),
             &project_root,
-            false, // claude-sub-agent does not support --force
-            false, // claude-sub-agent does not support --force-override-user-config
-            false, // sub-agent dispatch always uses explicit tool
-            None,  // claude-sub-agent does not support --tier
-            false, // claude-sub-agent does not support --force-ignore-tier-setting
-            false, // user-explicit tool
+            false,               // claude-sub-agent does not support --force
+            false,               // claude-sub-agent does not support --force-override-user-config
+            false,               // claude-sub-agent does not require edit-capable tool filtering
+            None,                // claude-sub-agent does not support --tier
+            false,               // claude-sub-agent does not support --force-ignore-tier-setting
+            !user_explicit_tool, // auto-selected unless the caller explicitly passed --tool
         )?;
 
     // 8. Build executor and validate tool
@@ -59,7 +60,10 @@ pub(crate) async fn handle_claude_sub_agent(
             project: config.as_ref(),
             global: Some(&global_config),
         },
-        true,  // enforce tier whitelist for sub-agent execution
+        // enforce tier whitelist for sub-agent execution, except when the caller
+        // provided an exact --model-spec (matching the csa run / review / debate
+        // escape-hatch semantic so the CLI contract is consistent).
+        args.model_spec.is_none(),
         false, // claude-sub-agent does not support --force-override-user-config
         false, // scoped to `csa run --tool`, not sub-agent orchestration
     )
@@ -317,6 +321,39 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool, ToolName::Codex));
+    }
+
+    #[test]
+    fn resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_tool() {
+        let global = GlobalConfig::default();
+        let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+        let tool = resolve_claude_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap();
+
+        let (tool_name, model_spec, model) = crate::run_helpers::resolve_tool_and_model(
+            Some(tool),
+            Some("codex/openai/gpt-5.4/high"),
+            None,
+            Some(&cfg),
+            std::path::Path::new("/tmp/test-project"),
+            false,
+            false,
+            false,
+            None,
+            false,
+            true,
+        )
+        .expect("auto-selected claude-sub-agent tool should not block explicit model_spec");
+
+        assert_eq!(tool_name, ToolName::Codex);
+        assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
+        assert!(model.is_none());
     }
 
     #[test]
