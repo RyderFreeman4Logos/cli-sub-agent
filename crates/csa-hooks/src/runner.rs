@@ -728,4 +728,22 @@ mod tests {
         // Raw: value injected directly
         assert_eq!(substitute_variables("cmd {!FLAGS}", &vars), "cmd -p crate1");
     }
+
+    #[test]
+    fn test_substitute_project_root_variable() {
+        let mut vars = HashMap::new();
+        vars.insert(
+            "project_root".to_string(),
+            "/home/user/my-project".to_string(),
+        );
+        vars.insert("session_id".to_string(), "01J0TEST".to_string());
+
+        // Escaped form: safe for shell arguments
+        let result = substitute_variables("ls {project_root}/src && echo {session_id}", &vars);
+        assert_eq!(result, "ls '/home/user/my-project'/src && echo '01J0TEST'");
+
+        // Raw form: for use in paths that need no quoting
+        let result = substitute_variables("cat {!project_root}/CLAUDE.md", &vars);
+        assert_eq!(result, "cat /home/user/my-project/CLAUDE.md");
+    }
 }

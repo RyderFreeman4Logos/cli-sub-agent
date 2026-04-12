@@ -5,7 +5,8 @@
 //! 1. Explicit `gate_commands` pipeline from project config (multi-layer L1→L3)
 //! 2. Legacy `gate_command` from project config (single command)
 //! 3. `git config core.hooksPath` → `<hooksPath>/pre-commit`
-//! 4. No gate found → skip with debug log
+//! 4. Lefthook auto-detection: `lefthook` binary on PATH + config file in project root
+//! 5. No gate found → skip with debug log
 //!
 //! When `CSA_DEPTH > 0`, the gate is skipped entirely to prevent recursion.
 
@@ -189,6 +190,7 @@ pub(crate) async fn evaluate_quality_gate(
     }
 
     // Step 1: Resolve gate command
+    // Priority: explicit config > core.hooksPath > lefthook > none
     let resolved_command = match gate_command {
         Some(cmd) => {
             debug!(command = cmd, "Using explicit gate_command from config");
@@ -199,12 +201,18 @@ pub(crate) async fn evaluate_quality_gate(
                 debug!(command = %cmd, "Detected pre-commit hook via core.hooksPath");
                 cmd
             }
-            None => {
-                debug!("No quality gate found; skipping");
-                return Ok(GateResult::skipped(
-                    "no gate command configured or detected",
-                ));
-            }
+            None => match detect_lefthook(project_root).await {
+                Some(cmd) => {
+                    debug!(command = %cmd, "Detected lefthook in project");
+                    cmd
+                }
+                None => {
+                    debug!("No quality gate found; skipping");
+                    return Ok(GateResult::skipped(
+                        "no gate command configured or detected",
+                    ));
+                }
+            },
         },
     };
 
@@ -262,6 +270,43 @@ async fn detect_git_hooks_pre_commit(project_root: &Path) -> Result<Option<Strin
         );
         Ok(None)
     }
+}
+
+/// Detect lefthook installation in the project.
+///
+/// Returns `Some("lefthook run pre-commit")` when both conditions are met:
+/// 1. The `lefthook` binary is found on `PATH` (via `which::which()`)
+/// 2. A lefthook config file exists in the project root
+///    (`lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`, or `.lefthook.yaml`)
+///
+/// Lefthook does NOT set `core.hooksPath`, so this detection fills the gap
+/// between explicit config and native `.git/hooks` detection.
+async fn detect_lefthook(project_root: &Path) -> Option<String> {
+    // Check for lefthook binary on PATH using the `which` crate (portable,
+    // no dependency on a shell `which` binary).
+    if which::which("lefthook").is_err() {
+        debug!("lefthook binary not found on PATH");
+        return None;
+    }
+
+    // Check for lefthook config file in project root (all supported extensions)
+    let config_names = [
+        "lefthook.yml",
+        "lefthook.yaml",
+        ".lefthook.yml",
+        ".lefthook.yaml",
+    ];
+    let has_config = config_names
+        .iter()
+        .any(|name| project_root.join(name).exists());
+
+    if !has_config {
+        debug!("lefthook binary found but no config file in project root");
+        return None;
+    }
+
+    info!("Auto-detected lefthook with config in project root");
+    Some("lefthook run pre-commit --no-auto-install".to_string())
 }
 
 /// Execute a gate command with timeout and process group management.

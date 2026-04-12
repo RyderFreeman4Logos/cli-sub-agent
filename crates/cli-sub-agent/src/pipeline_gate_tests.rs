@@ -509,4 +509,70 @@ async fn test_pipeline_summary_for_review() {
     unsafe { clear_depth() };
 }
 
+// ---------------------------------------------------------------------------
+// detect_lefthook
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[serial]
+async fn test_detect_lefthook_no_config() {
+    // Even if lefthook binary exists, without config file detection returns None.
+    let dir = tempfile::tempdir().unwrap();
+    // No lefthook.yml or .lefthook.yml created
+
+    let result = detect_lefthook(dir.path()).await;
+    assert!(result.is_none(), "Should return None without config file");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_detect_lefthook_with_dotfile_config() {
+    // Test that .lefthook.yml (dotfile variant) is also detected.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".lefthook.yml"), "pre-commit:\n").unwrap();
+
+    // Result depends on whether lefthook binary is on PATH in the test env.
+    // If binary exists, should return Some; otherwise None.
+    let result = detect_lefthook(dir.path()).await;
+    if result.is_some() {
+        assert_eq!(result.unwrap(), "lefthook run pre-commit --no-auto-install");
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn test_evaluate_gate_lefthook_fallback() {
+    // When no explicit command and no core.hooksPath, lefthook should be tried.
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    // Init a git repo (so core.hooksPath check doesn't error)
+    tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    // Create lefthook config but no binary on PATH (likely in CI)
+    std::fs::write(
+        dir.path().join("lefthook.yml"),
+        "pre-commit:\n  commands:\n    lint:\n      run: echo ok\n",
+    )
+    .unwrap();
+
+    let result = evaluate_quality_gate(dir.path(), None, 250, &GateMode::Full)
+        .await
+        .unwrap();
+
+    // If lefthook is on PATH: gate runs (lefthook run pre-commit).
+    // If lefthook is NOT on PATH: gate is skipped (no gate found).
+    // Either way, the function should not error.
+    assert!(result.passed());
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
 use csa_config::GateStep;
