@@ -67,6 +67,14 @@ fn explicit_review_tool(args: &ReviewArgs) -> Option<ToolName> {
     })
 }
 
+fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
+    if verdict == CLEAN {
+        ReviewDecision::Pass
+    } else {
+        ReviewDecision::Fail
+    }
+}
+
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
@@ -667,6 +675,36 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     }
     outcomes.sort_by_key(|o| o.reviewer_index);
 
+    let review_iterations = outcomes
+        .first()
+        .map(|outcome| resolve_review_iterations(&project_root, &outcome.session_id))
+        .unwrap_or(1);
+    let review_meta_timestamp = chrono::Utc::now();
+    let head_sha = csa_session::detect_git_head(&project_root).unwrap_or_default();
+    let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
+
+    for outcome in &outcomes {
+        persist_review_meta(
+            &project_root,
+            &ReviewSessionMeta {
+                session_id: outcome.session_id.clone(),
+                head_sha: head_sha.clone(),
+                decision: review_decision_from_verdict(outcome.verdict)
+                    .as_str()
+                    .to_string(),
+                verdict: outcome.verdict.to_string(),
+                tool: outcome.tool.as_str().to_string(),
+                scope: scope.clone(),
+                exit_code: outcome.exit_code,
+                fix_attempted: false,
+                fix_rounds: 0,
+                review_iterations,
+                timestamp: review_meta_timestamp,
+                diff_fingerprint: diff_fingerprint.clone(),
+            },
+        );
+    }
+
     if let Err(err) = write_multi_reviewer_consolidated_artifact(reviewers) {
         warn!(
             error = %err,
@@ -709,6 +747,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .iter()
         .map(|outcome| outcome.session_id.clone())
         .collect::<Vec<_>>();
+    // NOTE: Do NOT persist review_meta for the inherited CSA_SESSION_ID here.
+    // The single-reviewer path (review_cmd_execute.rs:80) explicitly ignores
+    // inherited CSA_SESSION_ID unless --session was passed.  Persisting it
+    // unconditionally in the multi-reviewer path would overwrite an unrelated
+    // session's review_meta.json when launched from another CSA session.
+
     maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 
     Ok(if final_verdict == CLEAN { 0 } else { 1 })

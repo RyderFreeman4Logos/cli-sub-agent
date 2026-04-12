@@ -5,6 +5,35 @@ pub const DEFAULT_KV_CACHE_FREQUENT_POLL_SECS: u64 = 60;
 pub const DEFAULT_KV_CACHE_LONG_POLL_SECS: u64 = 240;
 pub const LEGACY_SESSION_WAIT_FALLBACK_SECS: u64 = 250;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvCacheValueSource {
+    Configured,
+    SectionDefault,
+    DocumentedDefault,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedKvCacheValue {
+    pub seconds: u64,
+    pub source: KvCacheValueSource,
+}
+
+impl ResolvedKvCacheValue {
+    pub(crate) fn documented_default() -> Self {
+        Self {
+            seconds: DEFAULT_KV_CACHE_LONG_POLL_SECS,
+            source: KvCacheValueSource::DocumentedDefault,
+        }
+    }
+
+    pub(crate) fn section_default() -> Self {
+        Self {
+            seconds: DEFAULT_KV_CACHE_LONG_POLL_SECS,
+            source: KvCacheValueSource::SectionDefault,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KvCacheConfig {
     /// Poll interval for fast-changing external state such as GitHub bot events.

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -8,9 +9,24 @@ use tracing::{info, warn};
 use crate::bug_class::{
     SkillExtractor, classify_recurring_bug_classes, load_review_artifacts_for_project,
 };
+use crate::review_consensus::build_consolidated_artifact;
 
 const REVIEW_CONSOLIDATED_ARTIFACT_FILE: &str = "review-consolidated.json";
 const REVIEW_FINDINGS_ARTIFACT_FILE: &str = "review-findings.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ReviewArtifactGroupKey {
+    branch: String,
+    review_iterations: u32,
+    scope: String,
+    head_sha: String,
+    diff_fingerprint: Option<String>,
+}
+
+struct GroupedReviewArtifact {
+    artifact: ReviewArtifact,
+    has_consolidated_artifact: bool,
+}
 
 pub(super) fn maybe_extract_recurring_bug_class_skills(
     project_root: &Path,
@@ -40,7 +56,7 @@ pub(super) fn try_extract_recurring_bug_class_skills(
         return Ok(());
     }
 
-    let review_artifacts = load_review_artifacts_for_project(project_root)?;
+    let review_artifacts = load_bug_class_review_artifacts(project_root)?;
     let candidates = classify_recurring_bug_classes(&review_artifacts);
     if candidates.is_empty() {
         return Ok(());
@@ -100,6 +116,100 @@ fn load_session_review_artifact(session_dir: &Path) -> Result<Option<ReviewArtif
     Ok(None)
 }
 
+pub(super) fn load_bug_class_review_artifacts(project_root: &Path) -> Result<Vec<ReviewArtifact>> {
+    let review_artifacts = load_review_artifacts_for_project(project_root)?;
+    collapse_bug_class_review_artifacts(project_root, review_artifacts)
+}
+
+fn collapse_bug_class_review_artifacts(
+    project_root: &Path,
+    review_artifacts: Vec<ReviewArtifact>,
+) -> Result<Vec<ReviewArtifact>> {
+    let mut collapsed = Vec::new();
+    let mut grouped = BTreeMap::<ReviewArtifactGroupKey, Vec<GroupedReviewArtifact>>::new();
+
+    for artifact in review_artifacts {
+        let Some(group_key) =
+            resolve_review_artifact_group_key(project_root, &artifact.session_id)?
+        else {
+            collapsed.push(artifact);
+            continue;
+        };
+
+        grouped
+            .entry(group_key)
+            .or_default()
+            .push(GroupedReviewArtifact {
+                has_consolidated_artifact: session_has_consolidated_artifact(
+                    project_root,
+                    &artifact.session_id,
+                )?,
+                artifact,
+            });
+    }
+
+    for (_, artifacts) in grouped {
+        if let Some(consolidated) = artifacts
+            .iter()
+            .find(|artifact| artifact.has_consolidated_artifact)
+            .map(|artifact| artifact.artifact.clone())
+        {
+            collapsed.push(consolidated);
+            continue;
+        }
+
+        let mut artifacts = artifacts
+            .into_iter()
+            .map(|artifact| artifact.artifact)
+            .collect::<Vec<_>>();
+        if artifacts.len() == 1 {
+            collapsed.extend(artifacts);
+            continue;
+        }
+
+        let session_id = artifacts
+            .first()
+            .map(|artifact| artifact.session_id.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        collapsed.push(build_consolidated_artifact(
+            std::mem::take(&mut artifacts),
+            &session_id,
+        ));
+    }
+
+    Ok(collapsed)
+}
+
+fn resolve_review_artifact_group_key(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<Option<ReviewArtifactGroupKey>> {
+    let Some(review_meta) = load_review_meta(project_root, session_id)? else {
+        return Ok(None);
+    };
+    let session = csa_session::load_session(project_root, session_id)
+        .with_context(|| format!("failed to load review session {session_id}"))?;
+    let Some(branch) = session.resolved_identity().ref_name else {
+        return Ok(None);
+    };
+
+    Ok(Some(ReviewArtifactGroupKey {
+        branch,
+        review_iterations: review_meta.review_iterations,
+        scope: review_meta.scope,
+        head_sha: review_meta.head_sha,
+        diff_fingerprint: review_meta.diff_fingerprint,
+    }))
+}
+
+fn session_has_consolidated_artifact(project_root: &Path, session_id: &str) -> Result<bool> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)
+        .with_context(|| format!("failed to resolve review session dir for {session_id}"))?;
+    Ok(session_dir
+        .join(REVIEW_CONSOLIDATED_ARTIFACT_FILE)
+        .is_file())
+}
+
 pub(super) fn resolve_review_iterations(project_root: &Path, session_id: &str) -> u32 {
     match try_resolve_review_iterations(project_root, session_id) {
         Ok(review_iterations) => review_iterations,
@@ -121,27 +231,29 @@ pub(super) fn try_resolve_review_iterations(project_root: &Path, session_id: &st
         return Ok(1);
     };
 
-    let mut branch_sessions = csa_session::list_sessions(project_root, None)?
+    let max_review_iterations = csa_session::list_sessions(project_root, None)?
         .into_iter()
         .filter(|candidate| candidate.meta_session_id != session_id)
         .filter(|candidate| {
             candidate.resolved_identity().ref_name.as_deref() == Some(branch.as_str())
         })
-        .collect::<Vec<_>>();
-    branch_sessions.sort_by(|left, right| right.last_accessed.cmp(&left.last_accessed));
+        .try_fold(0_u32, |max_review_iterations, candidate| {
+            let review_iterations =
+                load_review_iterations(project_root, &candidate.meta_session_id)?.unwrap_or(0);
+            Ok::<u32, anyhow::Error>(max_review_iterations.max(review_iterations))
+        })?;
 
-    for candidate in branch_sessions {
-        if let Some(review_iterations) =
-            load_review_iterations(project_root, &candidate.meta_session_id)?
-        {
-            return Ok(review_iterations.saturating_add(1));
-        }
-    }
-
-    Ok(1)
+    Ok(std::cmp::max(1, max_review_iterations.saturating_add(1)))
 }
 
 fn load_review_iterations(project_root: &Path, session_id: &str) -> Result<Option<u32>> {
+    Ok(
+        load_review_meta(project_root, session_id)?
+            .map(|review_meta| review_meta.review_iterations),
+    )
+}
+
+fn load_review_meta(project_root: &Path, session_id: &str) -> Result<Option<ReviewSessionMeta>> {
     let session_dir = csa_session::get_session_dir(project_root, session_id)
         .with_context(|| format!("failed to resolve review session dir for {session_id}"))?;
     let review_meta_path = session_dir.join("review_meta.json");
@@ -153,5 +265,5 @@ fn load_review_iterations(project_root: &Path, session_id: &str) -> Result<Optio
         .with_context(|| format!("failed to read {}", review_meta_path.display()))?;
     let review_meta: ReviewSessionMeta = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse {}", review_meta_path.display()))?;
-    Ok(Some(review_meta.review_iterations))
+    Ok(Some(review_meta))
 }

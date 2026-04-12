@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 pub use crate::global_env::ExecutionEnvOptions;
 pub use crate::global_kv_cache::{
     DEFAULT_KV_CACHE_FREQUENT_POLL_SECS, DEFAULT_KV_CACHE_LONG_POLL_SECS, KvCacheConfig,
-    LEGACY_SESSION_WAIT_FALLBACK_SECS,
+    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, ResolvedKvCacheValue,
 };
 use crate::mcp::McpServerConfig;
 use crate::memory::MemoryConfig;
@@ -522,26 +522,43 @@ impl GlobalConfig {
     /// Missing or invalid config falls back to the documented KV cache default.
     /// Once `[kv_cache]` exists, `long_poll_seconds` still defaults to 240 if omitted.
     pub fn resolve_session_wait_long_poll_seconds() -> u64 {
-        let config_dir = paths::config_dir();
-        Self::resolve_session_wait_long_poll_seconds_from_dir(config_dir.as_deref())
+        Self::resolve_session_wait_long_poll_seconds_with_source().seconds
     }
 
+    pub fn resolve_session_wait_long_poll_seconds_with_source() -> ResolvedKvCacheValue {
+        let config_dir = paths::config_dir();
+        Self::resolve_session_wait_long_poll_seconds_from_dir_with_source(config_dir.as_deref())
+    }
+
+    #[cfg(test)]
     pub(crate) fn resolve_session_wait_long_poll_seconds_from_dir(
         config_dir: Option<&Path>,
     ) -> u64 {
+        Self::resolve_session_wait_long_poll_seconds_from_dir_with_source(config_dir).seconds
+    }
+
+    pub(crate) fn resolve_session_wait_long_poll_seconds_from_dir_with_source(
+        config_dir: Option<&Path>,
+    ) -> ResolvedKvCacheValue {
         let path = config_dir.map(|dir| dir.join("config.toml"));
-        Self::resolve_session_wait_long_poll_seconds_from_path(path.as_deref())
+        Self::resolve_session_wait_long_poll_seconds_from_path_with_source(path.as_deref())
     }
 
     pub fn resolve_session_wait_long_poll_seconds_from_path(path: Option<&Path>) -> u64 {
+        Self::resolve_session_wait_long_poll_seconds_from_path_with_source(path).seconds
+    }
+
+    pub fn resolve_session_wait_long_poll_seconds_from_path_with_source(
+        path: Option<&Path>,
+    ) -> ResolvedKvCacheValue {
         let Some(path) = path else {
-            return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+            return ResolvedKvCacheValue::documented_default();
         };
 
         let content = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+                return ResolvedKvCacheValue::documented_default();
             }
             Err(err) => {
                 tracing::warn!(
@@ -549,7 +566,7 @@ impl GlobalConfig {
                     error = %err,
                     "Failed to read global config while resolving session wait timeout"
                 );
-                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+                return ResolvedKvCacheValue::documented_default();
             }
         };
 
@@ -561,28 +578,43 @@ impl GlobalConfig {
                     error = %err,
                     "Failed to parse global config while resolving session wait timeout"
                 );
-                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+                return ResolvedKvCacheValue::documented_default();
             }
         };
 
-        if raw
-            .get("kv_cache")
-            .and_then(toml::Value::as_table)
-            .is_none()
-        {
-            return DEFAULT_KV_CACHE_LONG_POLL_SECS;
-        }
+        let Some(kv_cache) = raw.get("kv_cache").and_then(toml::Value::as_table) else {
+            return ResolvedKvCacheValue::documented_default();
+        };
 
-        match toml::from_str::<Self>(&content) {
-            Ok(config) => config.sanitized(Some(path)).kv_cache.long_poll_seconds,
-            Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "Failed to deserialize global config while resolving session wait timeout"
-                );
-                DEFAULT_KV_CACHE_LONG_POLL_SECS
-            }
+        match kv_cache.get("long_poll_seconds") {
+            None => ResolvedKvCacheValue::section_default(),
+            Some(value) => match value.as_integer() {
+                Some(seconds) if seconds > 0 => match u64::try_from(seconds) {
+                    Ok(seconds) => ResolvedKvCacheValue {
+                        seconds,
+                        source: KvCacheValueSource::Configured,
+                    },
+                    Err(_) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            key = "kv_cache.long_poll_seconds",
+                            value = seconds,
+                            fallback = DEFAULT_KV_CACHE_LONG_POLL_SECS,
+                            "Ignoring out-of-range KV cache interval; using section default"
+                        );
+                        ResolvedKvCacheValue::section_default()
+                    }
+                },
+                _ => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        key = "kv_cache.long_poll_seconds",
+                        fallback = DEFAULT_KV_CACHE_LONG_POLL_SECS,
+                        "Ignoring invalid KV cache interval; using section default"
+                    );
+                    ResolvedKvCacheValue::section_default()
+                }
+            },
         }
     }
 

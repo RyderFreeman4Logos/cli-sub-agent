@@ -1,4 +1,6 @@
 use super::*;
+use crate::bug_class::classify_recurring_bug_classes;
+use crate::review_cmd::bug_class_pipeline::load_bug_class_review_artifacts;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use csa_session::state::ReviewSessionMeta;
@@ -163,4 +165,142 @@ fn review_iterations_do_not_undercount_after_more_than_ten_prior_reviews() {
     let review_iterations =
         try_resolve_review_iterations(project_dir.path(), &current.meta_session_id).unwrap();
     assert_eq!(review_iterations, 12);
+}
+
+#[test]
+fn review_iterations_use_max_prior_value_instead_of_most_recent_session() {
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+
+    let older_high = create_session(
+        project_dir.path(),
+        Some("older review"),
+        None,
+        Some("codex"),
+    )
+    .expect("older session");
+    let older_high_dir = get_session_dir(project_dir.path(), &older_high.meta_session_id).unwrap();
+    write_review_meta(
+        &older_high_dir,
+        &ReviewSessionMeta {
+            session_id: older_high.meta_session_id.clone(),
+            head_sha: "deadbeef".to_string(),
+            decision: "fail".to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            tool: "codex".to_string(),
+            scope: "base:main".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 5,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
+        },
+    )
+    .expect("older review meta");
+
+    let newer_low = create_session(
+        project_dir.path(),
+        Some("newer review"),
+        None,
+        Some("codex"),
+    )
+    .expect("newer session");
+    let newer_low_dir = get_session_dir(project_dir.path(), &newer_low.meta_session_id).unwrap();
+    write_review_meta(
+        &newer_low_dir,
+        &ReviewSessionMeta {
+            session_id: newer_low.meta_session_id.clone(),
+            head_sha: "deadbeef".to_string(),
+            decision: "fail".to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            tool: "codex".to_string(),
+            scope: "base:main".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 2,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
+        },
+    )
+    .expect("newer review meta");
+
+    let current = create_session(
+        project_dir.path(),
+        Some("current review"),
+        None,
+        Some("codex"),
+    )
+    .expect("current session");
+
+    let review_iterations =
+        try_resolve_review_iterations(project_dir.path(), &current.meta_session_id).unwrap();
+    assert_eq!(review_iterations, 6);
+}
+
+#[test]
+fn bug_class_loader_collapses_multi_reviewer_sessions_into_one_logical_review() {
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+
+    let reviewer_one = create_session(
+        project_dir.path(),
+        Some("review[1]: base:main"),
+        None,
+        Some("codex"),
+    )
+    .expect("reviewer one session");
+    let reviewer_two = create_session(
+        project_dir.path(),
+        Some("review[2]: base:main"),
+        None,
+        Some("opencode"),
+    )
+    .expect("reviewer two session");
+    let reviewer_one_dir =
+        get_session_dir(project_dir.path(), &reviewer_one.meta_session_id).unwrap();
+    let reviewer_two_dir =
+        get_session_dir(project_dir.path(), &reviewer_two.meta_session_id).unwrap();
+
+    write_review_artifact(
+        &reviewer_one_dir,
+        &sample_review_artifact(&reviewer_one.meta_session_id, Severity::High, "rust/002"),
+    );
+    write_review_artifact(
+        &reviewer_two_dir,
+        &sample_review_artifact(&reviewer_two.meta_session_id, Severity::High, "rust/003"),
+    );
+
+    for session in [&reviewer_one, &reviewer_two] {
+        let session_dir = get_session_dir(project_dir.path(), &session.meta_session_id).unwrap();
+        write_review_meta(
+            &session_dir,
+            &ReviewSessionMeta {
+                session_id: session.meta_session_id.clone(),
+                head_sha: "deadbeef".to_string(),
+                decision: "fail".to_string(),
+                verdict: "HAS_ISSUES".to_string(),
+                tool: "codex".to_string(),
+                scope: "base:main".to_string(),
+                exit_code: 1,
+                fix_attempted: false,
+                fix_rounds: 0,
+                review_iterations: 7,
+                timestamp: chrono::Utc::now(),
+                diff_fingerprint: Some("sha256:shared".to_string()),
+            },
+        )
+        .expect("review meta");
+    }
+
+    let review_artifacts = load_bug_class_review_artifacts(project_dir.path())
+        .expect("multi-reviewer artifacts should collapse");
+
+    assert_eq!(review_artifacts.len(), 1);
+    assert_eq!(review_artifacts[0].findings.len(), 2);
+    assert!(
+        classify_recurring_bug_classes(&review_artifacts).is_empty(),
+        "one logical review should not satisfy the recurrence threshold by itself"
+    );
 }
