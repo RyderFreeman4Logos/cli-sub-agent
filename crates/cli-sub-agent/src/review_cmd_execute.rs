@@ -69,7 +69,7 @@ pub(super) async fn execute_review(
         project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let can_write_new =
         project_config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
-    let effective_prompt = if !can_edit || !can_write_new {
+    let mut effective_prompt = if !can_edit || !can_write_new {
         info!(
             tool = %executor.tool_name(),
             can_edit,
@@ -95,6 +95,10 @@ pub(super) async fn execute_review(
             inherited_session_id = %inherited_session_id,
             "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
         );
+    }
+
+    if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(project_config) {
+        effective_prompt = format!("{guard}\n\n{effective_prompt}");
     }
 
     let mut execution = crate::pipeline::execute_with_session_and_meta_with_parent_source(

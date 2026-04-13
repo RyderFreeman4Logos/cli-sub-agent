@@ -183,7 +183,10 @@ pub(crate) async fn handle_debate(
     }
 
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
-    let prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
+    let mut prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
+    if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(config.as_ref()) {
+        prompt = format!("{guard}\n\n{prompt}");
+    }
     let debate_description = format!(
         "debate: {}",
         crate::run_helpers::truncate_prompt(&question, 80)
