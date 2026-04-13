@@ -30,10 +30,23 @@ impl Drop for EnvVarGuard {
 }
 
 fn write_global_config(contents: &str) -> std::path::PathBuf {
-    let path = csa_config::GlobalConfig::config_path().expect("resolve global config path");
-    std::fs::create_dir_all(path.parent().expect("global config dir")).unwrap();
-    std::fs::write(&path, contents).unwrap();
-    path
+    // Mirror every production read path. Both `GlobalConfig::load()` and
+    // `ProjectConfig::load()` resolve the user-level config via
+    // `paths::config_dir().join("config.toml")`, so the test fixture must
+    // populate whatever that resolver returns for the current environment.
+    // Also populate `GlobalConfig::config_path()` (the canonical write path)
+    // so production code and tests agree on which bytes they see on
+    // platforms where the read and write resolvers can disagree.
+    let read_path =
+        csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(read_path.parent().expect("user config dir")).unwrap();
+    std::fs::write(&read_path, contents).unwrap();
+    let write_path = csa_config::GlobalConfig::config_path().expect("resolve global config path");
+    if write_path != read_path {
+        std::fs::create_dir_all(write_path.parent().expect("global config dir")).unwrap();
+        std::fs::write(&write_path, contents).unwrap();
+    }
+    read_path
 }
 
 #[test]
