@@ -7,9 +7,36 @@ mod cli_defs;
 use clap::Parser;
 use cli_defs::{AuditCommands, Cli, Commands, McpHubCommands, validate_command_args};
 use csa_core::types::OutputFormat;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 /// Create a [`Command`] pointing at the built `csa` binary with HOME, XDG_STATE_HOME,
 /// and XDG_CONFIG_HOME redirected to the given temp directory so tests never touch
@@ -20,6 +47,14 @@ fn csa_cmd(tmp: &std::path::Path) -> Command {
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"));
     cmd
+}
+
+fn global_config_path(tmp: &Path) -> std::path::PathBuf {
+    // Mirror the production resolver so the test writes the same platform-specific
+    // global path that `csa config get` reads on Linux and macOS.
+    let _home_guard = EnvVarGuard::set("HOME", tmp);
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", tmp.join(".config"));
+    csa_config::GlobalConfig::config_path().expect("resolve global config path")
 }
 
 /// Run `csa init` (minimal mode) inside the given temp directory.
@@ -347,12 +382,14 @@ memory_max_mb = 1024
 }
 
 #[test]
+#[serial]
 fn config_get_prefers_effective_tool_state_over_raw_project_value() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    let global_config_path = global_config_path(tmp.path());
+    let global_dir = global_config_path.parent().expect("global config dir");
     std::fs::create_dir_all(&global_dir).expect("create global config dir");
     std::fs::write(
-        global_dir.join("config.toml"),
+        &global_config_path,
         r#"
 [tools.codex]
 enabled = false
@@ -383,12 +420,14 @@ enabled = true
 }
 
 #[test]
+#[serial]
 fn config_get_redacts_global_memory_api_keys_in_project_scoped_lookups() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    let global_config_path = global_config_path(tmp.path());
+    let global_dir = global_config_path.parent().expect("global config dir");
     std::fs::create_dir_all(&global_dir).expect("create global config dir");
     std::fs::write(
-        global_dir.join("config.toml"),
+        &global_config_path,
         r#"
 [memory.llm]
 enabled = true
@@ -428,12 +467,13 @@ inject = true
 }
 
 #[test]
+#[serial]
 fn config_get_falls_back_to_raw_project_value_when_global_config_is_invalid() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    let global_config_path = global_config_path(tmp.path());
+    let global_dir = global_config_path.parent().expect("global config dir");
     std::fs::create_dir_all(&global_dir).expect("create global config dir");
-    std::fs::write(global_dir.join("config.toml"), "{{invalid toml")
-        .expect("write invalid global config");
+    std::fs::write(&global_config_path, "{{invalid toml").expect("write invalid global config");
 
     let config_path = csa_config::ProjectConfig::config_path(tmp.path());
     std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
