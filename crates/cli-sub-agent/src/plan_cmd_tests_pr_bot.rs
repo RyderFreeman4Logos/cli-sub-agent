@@ -315,6 +315,12 @@ fn pr_bot_artifacts_paginate_reusable_current_head_review_lookup() {
                     .contains(r#"--jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#),
                 "{artifact} helper occurrence {occurrence} must flatten paginated review pages before sorting reusable review records"
             );
+            assert!(
+                helper.contains(
+                    r#"| sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'"#
+                ),
+                "{artifact} helper occurrence {occurrence} must guard null reusable review records so empty result variables stay empty instead of rendering a tab"
+            );
         }
     }
 }
