@@ -31,6 +31,12 @@ fn write_global_config(contents: &str) -> std::path::PathBuf {
     let path = csa_config::GlobalConfig::config_path().expect("resolve global config path");
     std::fs::create_dir_all(path.parent().expect("global config dir")).unwrap();
     std::fs::write(&path, contents).unwrap();
+    if let Some(user_path) = csa_config::ProjectConfig::user_config_path()
+        && user_path != path
+    {
+        std::fs::create_dir_all(user_path.parent().expect("user config dir")).unwrap();
+        std::fs::write(&user_path, contents).unwrap();
+    }
     path
 }
 
