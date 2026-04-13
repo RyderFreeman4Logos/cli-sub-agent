@@ -17,14 +17,36 @@ _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep
 # Just already executes repository-controlled code, so trust this checkout's
 # mise config and avoid interactive trust prompts on sandboxed commit paths.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
-# Codex CI runs cargo against a mirrored workspace path that is not writable for
-# lock files. Keep the fallback target/state dirs inside the repo so clippy and
-# nextest do not lose incremental artifacts under tmpfs-backed `/tmp`.
-_codex_ci_root := `repo_root=$(git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel); if [ "${CODEX_CI:-0}" = "1" ]; then dir="$repo_root/.tmp/codex-ci"; mkdir -p "$dir"; printf '%s' "$dir"; fi`
-_cargo_target_dir := `repo_root=$(git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel); if [ "${CODEX_CI:-0}" = "1" ]; then dir="$repo_root/.tmp/codex-ci/target"; mkdir -p "$dir"; printf '%s' "$dir"; else printf '%s' "$repo_root/target"; fi`
 
 # Keep cargo state local to avoid host pollution (Optional)
 # export CARGO_HOME := _repo_root + "/.cargo-local"
+
+# Fail fast when sandboxing blocks the default cargo or nextest write paths.
+_check_writable path attempted:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    path="{{path}}"
+    attempted="{{attempted}}"
+    resolved_path="$(readlink -f "$path" 2>/dev/null || printf '%s' "$path")"
+    mkdir -p "$path" 2>/dev/null || true
+    probe="$path/.csa-write-probe.$$"
+    if touch "$probe" >/dev/null 2>&1; then
+        rm -f "$probe"
+        exit 0
+    fi
+    echo >&2 "ERROR: attempted to write ${attempted} at ${path} (resolved: ${resolved_path}), but the path is not writable."
+    echo >&2 "Adjust filesystem_sandbox.extra_writable in ~/.config/cli-sub-agent/config.toml to include ${resolved_path}."
+    echo >&2 "If this is unexpected, file an issue: GH_CONFIG_DIR=~/.config/gh-aider gh issue create --repo RyderFreeman4Logos/cli-sub-agent --title \"Sandbox write denial for ${attempted}\" --body \"Attempted to write ${attempted} at ${path} (resolved: ${resolved_path}), but the sandbox denied it. Please include your sandbox mode and the writable path you expected.\""
+    exit 2
+
+check-cargo-target-writable:
+    just _check_writable "{{_repo_root}}/target" "cargo build artifacts"
+
+check-nextest-state-writable:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+    just _check_writable "$state_home" "cargo nextest state files"
 
 # Default recipe
 default: pre-commit
@@ -188,12 +210,14 @@ fmt:
 
 # Run clippy for the entire workspace (strict mode).
 clippy:
-    CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo clippy --workspace --all-features -- -D warnings
+    just check-cargo-target-writable
+    cargo clippy --workspace --all-features -- -D warnings
 
 # Run clippy for a specific package.
 # Usage: just clippy-p my-crate
 clippy-p package:
-    CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo clippy -p {{package}} --all-features -- -D warnings
+    just check-cargo-target-writable
+    cargo clippy -p {{package}} --all-features -- -D warnings
 
 # Security audit (requires cargo-deny)
 deny:
@@ -208,21 +232,29 @@ deny:
 
 # Run all tests in the workspace.
 test:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features; fi
+    just check-cargo-target-writable
+    just check-nextest-state-writable
+    cargo nextest run --workspace --all-features
 
 # Run e2e tests only.
 test-e2e:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --package cli-sub-agent --test e2e --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --package cli-sub-agent --test e2e --all-features; fi
+    just check-cargo-target-writable
+    just check-nextest-state-writable
+    cargo nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
 # Usage: just test-p my-crate
 test-p package:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run -p {{package}} --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run -p {{package}} --all-features; fi
+    just check-cargo-target-writable
+    just check-nextest-state-writable
+    cargo nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
 # Usage: just test-f login_validation
 test-f pattern:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features -E 'test({{pattern}})'; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features -E 'test({{pattern}})'; fi
+    just check-cargo-target-writable
+    just check-nextest-state-writable
+    cargo nextest run --workspace --all-features -E 'test({{pattern}})'
 
 # ==============================================================================
 # 🛠 Git Helpers
@@ -337,9 +369,10 @@ install-hooks:
 
 # Install latest local build to /usr/local/bin (reuses workspace target/ cache).
 install:
-    CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo build --release --all-features -p cli-sub-agent -p weave
-    install -m 755 "{{_cargo_target_dir}}"/release/csa /usr/local/bin/csa
-    install -m 755 "{{_cargo_target_dir}}"/release/weave /usr/local/bin/weave
+    just check-cargo-target-writable
+    cargo build --release --all-features -p cli-sub-agent -p weave
+    install -m 755 "{{_repo_root}}"/target/release/csa /usr/local/bin/csa
+    install -m 755 "{{_repo_root}}"/target/release/weave /usr/local/bin/weave
     @echo "Verifying installation..."
     @csa --version
     @weave --version
