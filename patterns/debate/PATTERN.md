@@ -17,7 +17,7 @@ deep orchestrated debate (multi-round + tier escalation).
 Determine if this agent is the orchestrator or a debate participant.
 If initial prompt contains "Use the debate skill" → participant mode.
 If invoked by user via /debate → orchestrator mode.
-Participants MUST NOT run any csa commands (infinite recursion).
+Participants should produce their proposal or critique directly; nested `csa` calls are allowed up to `project.max_recursion_depth` (default 5; `pipeline::load_and_validate` enforces the ceiling), but dilute the adversarial-reasoning signal the debate command is designed to provide.
 
 ## Step 2: Discover Available Models
 

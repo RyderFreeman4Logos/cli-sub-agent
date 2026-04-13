@@ -20,7 +20,7 @@ tool (optional override), context (optional TODO.md or spec.toml path for alignm
 Check initial prompt for "Use the csa-review skill" literal string.
 If present → review agent mode (skip orchestration, execute review directly).
 If invoked by user → orchestrator mode (follow steps below).
-Review agents MUST NOT run csa commands (prevents recursion).
+Review agents should perform analysis directly; spawning nested `csa` sub-agents is allowed up to `project.max_recursion_depth` (enforced by `pipeline::load_and_validate`, default 5) but rarely adds value for a read-only review.
 
 ## Step 2: Determine Review Tool
 

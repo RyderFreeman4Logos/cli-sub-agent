@@ -4,8 +4,10 @@
 > It defines the full review procedure the agent must follow autonomously.
 
 > **CRITICAL**: You are the review agent. Your job is to review code DIRECTLY — NOT to orchestrate.
-> **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command.
-> Do NOT spawn sub-agents. Do NOT delegate. Execute every step below yourself using `git`, `cat`, `grep`, etc.
+> **STRONG PREFERENCE — DIRECT REVIEW**: Execute every step below yourself using `git`, `cat`, `grep`, etc.
+> Nested `csa` calls are allowed up to `project.max_recursion_depth` (default 5; `pipeline::load_and_validate`
+> is the hard ceiling), but spawning sub-agents rarely adds value for a read-only review and complicates
+> artifact attribution. Delegate only when scope genuinely requires it.
 > **REVIEW-ONLY SAFETY**: Do NOT run `git add/commit/push/merge/rebase/checkout/reset/stash` or mutate PR state with `gh pr` write operations.
 > Write review artifacts to `$CSA_SESSION_DIR/reviewer-{N}/` (for example:
 > `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` and `$CSA_SESSION_DIR/reviewer-{N}/review-report.md`).
@@ -235,7 +237,7 @@ If P0 or P1 findings exist, set both fields to `null` — the developer needs to
 
 1. Always read CLAUDE.md before any review reasoning.
 2. Discover and apply all AGENTS.md files (root-to-leaf) for changed file paths.
-3. **Do NOT call `csa run`, `csa review`, `codex review`, or any sub-agent spawning command.** You ARE the review agent — executing these would cause infinite recursion.
+3. **Prefer direct execution over sub-agent spawning.** You ARE the review agent — in most cases executing steps yourself is faster, cheaper, and keeps artifact attribution simple. Nested `csa` calls remain allowed up to `project.max_recursion_depth` (default 5), but reach for that only when the scope genuinely exceeds a single-agent budget.
 4. Prefer read-only inspection for review steps.
 5. Focus findings on correctness, regressions, security, AGENTS.md compliance, and missing tests.
 6. Treat insufficient tests as first-class findings using finding_type: test-gap with explicit priority.
