@@ -250,8 +250,13 @@ fn select_any_available_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::ScopedTestEnvVar;
     use csa_config::{ProjectMeta, ResourcesConfig, TierConfig, TierStrategy, ToolConfig};
     use std::collections::HashMap;
+
+    fn assume_tier_tools_available() -> ScopedTestEnvVar {
+        ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
+    }
 
     fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         let mut tool_map = HashMap::new();
@@ -323,8 +328,9 @@ mod tests {
         assert!(matches!(tool, ToolName::Codex));
     }
 
-    #[test]
-    fn resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_tool() {
+    pub(super) fn resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_tool_impl()
+     {
+        let _tool_availability = assume_tier_tools_available();
         let global = GlobalConfig::default();
         let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
         let tool = resolve_claude_tool(
@@ -480,4 +486,10 @@ mod tests {
             assert!(e.to_string().contains("No tools available"));
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_tool() {
+    tests::resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_tool_impl();
 }

@@ -57,6 +57,39 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
+fn pr_bot_artifact_text(path: &str) -> String {
+    std::fs::read_to_string(workspace_root().join(path)).unwrap()
+}
+
+fn assert_marker_order(text: &str, first: &str, second: &str, artifact: &str) {
+    let first_idx = text
+        .find(first)
+        .unwrap_or_else(|| panic!("{artifact} must contain marker '{first}'"));
+    let second_idx = text
+        .find(second)
+        .unwrap_or_else(|| panic!("{artifact} must contain marker '{second}'"));
+    assert!(
+        first_idx < second_idx,
+        "{artifact} must place '{first}' before '{second}'"
+    );
+}
+
+fn extract_nth_shell_function(text: &str, name: &str, occurrence: usize, artifact: &str) -> String {
+    let header = format!("{name}() {{");
+    let start = text
+        .match_indices(&header)
+        .nth(occurrence)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| {
+            panic!("{artifact} must contain function '{name}' occurrence {occurrence}")
+        });
+    let body = &text[start..];
+    let end = body.find("\n}\n").unwrap_or_else(|| {
+        panic!("{artifact} function '{name}' occurrence {occurrence} must terminate")
+    });
+    body[..end + 3].to_string()
+}
+
 fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<String> {
     let tree = Command::new("git")
         .args(["write-tree"])
@@ -154,4 +187,131 @@ fn pr_bot_archive_includes_helper_scripts() {
         entries.contains(&"patterns/pr-bot/scripts/csa/session-wait-until-done.sh".to_string()),
         "git archive for patterns/pr-bot must include session-wait-until-done.sh"
     );
+}
+
+#[test]
+fn pr_bot_pattern_and_workflow_reuse_existing_current_head_reviews() {
+    for artifact in [
+        "patterns/pr-bot/workflow.toml",
+        "patterns/pr-bot/PATTERN.md",
+    ] {
+        let text = pr_bot_artifact_text(artifact);
+        assert!(
+            text.contains("query_reusable_current_head_review_record"),
+            "{artifact} must select a reusable current-HEAD review object"
+        );
+        assert!(
+            text.contains("query_latest_current_head_trigger_ts"),
+            "{artifact} must anchor reusable null-commit reviews to a prior current-HEAD trigger"
+        );
+        assert!(
+            text.contains("query_current_window_current_head_review_ts"),
+            "{artifact} must probe separately for current-window HEAD reviews"
+        );
+        assert!(
+            text.contains(
+                "Reusable @${CLOUD_BOT_NAME} review #${BOT_REUSED_REVIEW_ID} already exists for HEAD"
+            ),
+            "{artifact} must document reusable current-HEAD review-id reuse"
+        );
+        assert!(
+            text.contains("select(.submitted_at >= \"'\"${WAIT_BASE_TS}\"'\")")
+                || text.contains("select(.submitted_at >= \"'\"${RETRIGGER_TS}\"'\")"),
+            "{artifact} must gate new current-HEAD review reuse to the active trigger window"
+        );
+        assert!(
+            text.contains("reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100"),
+            "{artifact} must scope reused target-review comments to BOT_REUSED_REVIEW_ID"
+        );
+        assert!(
+            text.contains("reviews/${POST_FIX_REUSED_REVIEW_ID}/comments?per_page=100"),
+            "{artifact} must scope reused post-fix comments to POST_FIX_REUSED_REVIEW_ID"
+        );
+        assert!(
+            text.contains("case \"${BOT_HAS_ISSUES_SOURCE:-current_window_comments}\" in"),
+            "{artifact} must branch comment selection by BOT_HAS_ISSUES_SOURCE"
+        );
+        assert!(
+            text.contains("BOT_HAS_ISSUES_SOURCE=\"reused_review_comments\""),
+            "{artifact} must record when issues came from a reused review"
+        );
+        assert!(
+            text.contains("current_sha_comments)"),
+            "{artifact} must preserve current-SHA fallback comment selection for reused non-target bot findings"
+        );
+        assert!(
+            text.contains("CSA_VAR:BOT_REUSED_REVIEW_ID=${BOT_REUSED_REVIEW_ID}"),
+            "{artifact} must persist the reused review id for later steps"
+        );
+        assert!(
+            text.contains("CSA_VAR:BOT_HAS_ISSUES_SOURCE=${BOT_HAS_ISSUES_SOURCE}"),
+            "{artifact} must persist the issue-source selector for later steps"
+        );
+        assert_marker_order(
+            &text,
+            "# --- Detect whether current HEAD already has a reusable bot review ---",
+            "# --- Trigger cloud bot review for current HEAD ---",
+            artifact,
+        );
+        assert_marker_order(
+            &text,
+            "# --- Detect whether current HEAD already has a reusable post-fix review ---",
+            "# --- Re-trigger bot review (ALWAYS explicit — bots don't auto-review on force-push) ---",
+            artifact,
+        );
+    }
+}
+
+#[test]
+fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
+    for artifact in [
+        "patterns/pr-bot/workflow.toml",
+        "patterns/pr-bot/PATTERN.md",
+    ] {
+        let text = pr_bot_artifact_text(artifact);
+        for occurrence in 0..2 {
+            let helper = extract_nth_shell_function(
+                &text,
+                "query_latest_current_head_trigger_ts",
+                occurrence,
+                artifact,
+            );
+            assert!(
+                helper.contains(
+                    r#"gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100""#
+                ),
+                "{artifact} helper occurrence {occurrence} must paginate and slurp issue comments"
+            );
+            assert!(
+                helper.contains(r#"--jq '[.[][] | select((.body // "") | test("csa-trigger:"#),
+                "{artifact} helper occurrence {occurrence} must flatten paginated comment pages before sorting"
+            );
+        }
+    }
+}
+
+#[test]
+fn pr_bot_artifacts_recovery_probe_reuses_null_commit_reviews() {
+    for artifact in [
+        "patterns/pr-bot/workflow.toml",
+        "patterns/pr-bot/PATTERN.md",
+    ] {
+        let text = pr_bot_artifact_text(artifact);
+        for (occurrence, window_var) in [(0, "WAIT_BASE_TS"), (1, "RETRIGGER_TS")] {
+            let helper = extract_nth_shell_function(
+                &text,
+                "query_current_window_current_head_review_ts",
+                occurrence,
+                artifact,
+            );
+            let expected = format!(
+                "select(.submitted_at >= \"'\"${{{}}}\"'\") | select(.commit_id == \"'\"${{CURRENT_SHA}}\"'\" or .commit_id == null) | .submitted_at",
+                window_var
+            );
+            assert!(
+                helper.contains(&expected),
+                "{artifact} recovery helper occurrence {occurrence} must treat null commit_id reviews as valid current-head signals"
+            );
+        }
+    }
 }
