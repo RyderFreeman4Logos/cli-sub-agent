@@ -29,6 +29,8 @@ impl Drop for EnvVarGuard {
 }
 
 fn global_config_path(tmp: &Path) -> std::path::PathBuf {
+    // Mirror the production resolver so the test writes the same platform-specific
+    // global path that `csa config get --global` reads on Linux and macOS.
     let _home_guard = EnvVarGuard::set("HOME", tmp);
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", tmp.join(".config"));
     csa_config::GlobalConfig::config_path().expect("resolve global config path")

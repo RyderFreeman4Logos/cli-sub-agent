@@ -380,7 +380,7 @@ query_latest_current_head_trigger_ts() {
 query_reusable_current_head_review_record() {
   local latest_trigger_ts="${1:-}"
   gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-    --jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | [.id, .submitted_at] | @tsv) // ""' \
+    --jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""' \
     2>/dev/null
 }
 
@@ -1213,7 +1213,7 @@ query_latest_current_head_trigger_ts() {
 query_reusable_current_head_review_record() {
   local latest_trigger_ts="${1:-}"
   gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-    --jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | [.id, .submitted_at] | @tsv) // ""' \
+    --jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""' \
     2>/dev/null
 }
 
