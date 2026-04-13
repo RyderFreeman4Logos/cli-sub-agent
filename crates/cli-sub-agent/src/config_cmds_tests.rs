@@ -711,9 +711,13 @@ fn handle_config_edit_supports_quoted_editor_path_with_embedded_args() {
 
     let captured_args = std::fs::read_to_string(&captured_args_path).unwrap();
     let captured_lines: Vec<_> = captured_args.lines().collect();
+    // `handle_config_edit` canonicalizes the project root (resolves symlinks
+    // like macOS's `/var` -> `/private/var`), so compare against the
+    // canonicalized config path instead of the raw tempdir join.
+    let expected_config_path = config_path.canonicalize().unwrap();
     assert_eq!(
         captured_lines,
-        vec!["--wait", config_path.to_str().unwrap()]
+        vec!["--wait", expected_config_path.to_str().unwrap()]
     );
 }
 
