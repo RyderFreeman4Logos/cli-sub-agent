@@ -26,7 +26,7 @@ triggers:
    - **Implementation**: Concrete actionable steps (if applicable)
    - **Anticipated Counterarguments**: Honestly acknowledge weaknesses
 5. **For continuations** (`continuation=true`): Respond directly to the arguments, concede valid points, defend your position with evidence.
-6. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa debate`, `csa review`, or ANY `csa` command. You must respond directly. Running any `csa` command causes infinite recursion.
+6. **STRONG PREFERENCE — DIRECT RESPONSE**: Respond directly with your own reasoning. Avoid spawning `csa run`/`csa debate`/`csa review` sub-agents unless the scope genuinely requires delegation. Fractal recursion is allowed up to the configured ceiling (`project.max_recursion_depth`, default 5) and `pipeline::load_and_validate` enforces it, but a debate participant that nests more CSA invocations dilutes the adversarial-reasoning signal this command is designed to provide.
 
 **Only if you are Claude Code and a human user typed `/debate` in the chat**:
 - You are the **orchestrator**. Follow the sections below.

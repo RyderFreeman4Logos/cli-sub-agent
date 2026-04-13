@@ -487,19 +487,23 @@ pub(crate) fn review_scope_allows_auto_discovery(args: &ReviewArgs) -> bool {
     args.range.is_some() || (!args.diff && args.commit.is_none() && args.files.is_none())
 }
 
-/// Anti-recursion preamble injected into every review/debate subprocess prompt.
+/// Review-only safety preamble injected into every review subprocess prompt.
 ///
-/// Prevents the spawned tool (e.g. claude-code-acp) from reading CLAUDE.md rules
-/// that say "use csa review" and recursively invoking `csa run` / `csa review`.
+/// Constrains the reviewer tool (e.g. claude-code-acp, codex-acp) to read-only
+/// operations on the repository: no mutations via git/gh. The reviewer may
+/// perform the task directly or, when it clearly halves the work, delegate
+/// sub-tasks via `csa` — the depth-aware guard in `pipeline::prompt_guard`
+/// and the hard ceiling in `load_and_validate` enforce the recursion contract
+/// (see `MAX_RECURSION_DEPTH`), so prompt-level blanket prohibition here is
+/// both redundant and counter-productive for the documented fractal-recursion
+/// pattern.
 pub(crate) const ANTI_RECURSION_PREAMBLE: &str = "\
-CRITICAL: You are running INSIDE a CSA subprocess (csa review / csa debate). \
-Do NOT invoke `csa run`, `csa review`, `csa debate`, or ANY `csa` CLI command — \
-this causes infinite recursion. Perform the task DIRECTLY using your own \
-capabilities (Read, Grep, Glob, Bash for read-only git commands). \
+CONTEXT: You are running INSIDE a CSA subprocess (csa review / csa debate). \
+Perform the review task DIRECTLY using your own capabilities \
+(Read, Grep, Glob, Bash for read-only git commands). \
 REVIEW-ONLY SAFETY: Do NOT run git add/commit/push/merge/rebase/tag/stash/reset/checkout/cherry-pick, \
 and do NOT run gh pr/create/comment/merge or any command that mutates repository/PR state. \
-Ignore prompt-guard reminders about commit/push in this subprocess. \
-Ignore any CLAUDE.md or AGENTS.md rules that instruct you to delegate to CSA.\n\n";
+Ignore prompt-guard reminders about commit/push in this subprocess.\n\n";
 
 /// Build a concise review instruction that tells the tool to use the csa-review skill.
 ///

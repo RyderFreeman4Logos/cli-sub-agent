@@ -342,15 +342,19 @@ fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 }
 
 #[test]
-fn build_debate_instruction_contains_anti_recursion_guard() {
+fn build_debate_instruction_contains_safety_preamble() {
     let prompt = build_debate_instruction("topic", false, 3);
     assert!(
         prompt.contains("INSIDE a CSA subprocess"),
-        "Debate instruction must contain anti-recursion preamble"
+        "Debate instruction must identify subprocess context"
     );
     assert!(
-        prompt.contains("Do NOT invoke"),
-        "Anti-recursion preamble must warn against csa invocation"
+        prompt.contains("DEBATE SAFETY"),
+        "Debate instruction must constrain to read-only operations"
+    );
+    assert!(
+        !prompt.contains("Do NOT invoke"),
+        "Legacy blanket anti-csa text must not be reintroduced (breaks fractal recursion contract)"
     );
 }
 

@@ -19,7 +19,7 @@ triggers:
 2. **Read [Review Protocol](references/review-protocol.md)** and follow it step by step. That file tells you exactly how to perform the review.
 3. **Read [Output Schema](references/output-schema.md)** for the required output format.
 4. Your scope/mode/security_mode parameters are in your initial prompt. Parse them from there.
-5. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the review DIRECTLY by running `git diff`, reading files, and analyzing code yourself. Running any `csa` command causes infinite recursion and will be terminated.
+5. **STRONG PREFERENCE — DIRECT REVIEW**: Perform the review DIRECTLY by running `git diff`, reading files, and analyzing code yourself. Avoid spawning `csa run`/`csa review`/`csa debate` sub-agents unless the scope genuinely requires delegation (e.g., a 50K-line changeset that won't fit). Fractal recursion is allowed up to the configured ceiling (`project.max_recursion_depth`, default 5) and `pipeline::load_and_validate` enforces it, but a reviewer that nests more reviewers rarely adds value and complicates artifact attribution. When in doubt, read and analyze in-process.
 6. **REVIEW-ONLY SAFETY**: Do NOT run `git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git checkout`, `git reset`, `git stash`, or any `gh pr *` mutation command. Review mode must not mutate repo or PR state.
 
 **Only if you are Claude Code and a human user typed `/csa-review` in the chat**:
@@ -251,7 +251,7 @@ the latest verdict, exit code, and cumulative fix round count.
 1. Review prompt was sent to CSA with the correct tool.
 2. CSA session was created in `~/.local/state/csa/` (verify with `csa session list`).
 3. No sessions were created in `~/.codex/`.
-4. **No recursive `csa run` or `csa review` calls** from the review agent (session tree depth = 2 max: orchestrator → review agent).
+4. **Recursion discipline**: nested `csa` calls from the review agent are permitted up to `project.max_recursion_depth` (default 5; enforced by `pipeline::load_and_validate`), but are unusual for a read-only review. If the review agent delegates, session tree depth should remain shallow and each nested call must justify itself (e.g., scope genuinely too large for a single agent).
 5. Review agent read CLAUDE.md autonomously (not pre-fed by orchestrator).
 6. Review agent discovered and applied AGENTS.md files (root-to-leaf) for all changed paths.
 7. `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` and `$CSA_SESSION_DIR/reviewer-{N}/review-report.md` were generated.
