@@ -22,29 +22,47 @@ pub(super) fn should_emit_prompt_guard_to_caller() -> bool {
     }
 }
 
-/// Documented ceiling for fractal recursion (see `CSA_DEPTH` in architecture
-/// docs). `load_and_validate` enforces this — the prompt-level guard only
-/// warns the tool when a further `csa` invocation would exceed it.
-const MAX_RECURSION_DEPTH: u32 = 5;
+/// Default ceiling for fractal recursion when no project config is in scope.
+///
+/// Matches `csa_config::ProjectMeta::max_recursion_depth` default; the real
+/// hard-enforcement still lives in `pipeline::load_and_validate`, which reads
+/// the project-configured ceiling.
+pub(crate) const DEFAULT_MAX_RECURSION_DEPTH: u32 = 5;
+
+/// Resolve the effective recursion ceiling from config (or fall back to the
+/// documented default). Kept `pub(crate)` so tests and callers share the same
+/// resolution logic — the ceiling is always aligned with the value that
+/// `pipeline::load_and_validate` enforces at runtime.
+pub(crate) fn effective_max_recursion_depth(config: Option<&csa_config::ProjectConfig>) -> u32 {
+    config
+        .map(|cfg| cfg.project.max_recursion_depth)
+        .unwrap_or(DEFAULT_MAX_RECURSION_DEPTH)
+}
 
 /// Build a depth-ceiling warning for tools dispatched by CSA.
 ///
 /// Fractal recursion is a documented contract (Layer 1 → Layer 2 and beyond,
-/// up to `MAX_RECURSION_DEPTH`). This guard is advisory only and fires just
-/// before the ceiling so the tool can choose between (a) delegating once more
-/// while depth still permits, or (b) doing the work inline. Returns `None`
-/// below the near-ceiling threshold so legitimate sub-agent dispatch is not
-/// discouraged — `load_and_validate` at `pipeline.rs` remains the hard
-/// enforcement point.
-pub(crate) fn anti_recursion_guard() -> Option<String> {
+/// up to the configured `max_recursion_depth` — default 5). This guard is
+/// advisory only and fires just before the ceiling so the tool can choose
+/// between (a) delegating once more while depth still permits, or (b) doing
+/// the work inline. Returns `None` below the near-ceiling threshold so
+/// legitimate sub-agent dispatch is not discouraged — `load_and_validate` at
+/// `pipeline.rs` remains the hard enforcement point.
+///
+/// `config` is the project config for the caller; when `None`, the default
+/// ceiling (`DEFAULT_MAX_RECURSION_DEPTH`) is used so the prompt-level guard
+/// stays aligned with the same fallback that `pipeline::load_and_validate`
+/// applies at runtime.
+pub(crate) fn anti_recursion_guard(config: Option<&csa_config::ProjectConfig>) -> Option<String> {
     let depth = current_depth();
-    if depth + 1 < MAX_RECURSION_DEPTH {
+    let max_depth = effective_max_recursion_depth(config);
+    if depth + 1 < max_depth {
         return None;
     }
-    let remaining = MAX_RECURSION_DEPTH.saturating_sub(depth);
+    let remaining = max_depth.saturating_sub(depth);
     Some(format!(
-        "<csa-depth-ceiling depth=\"{depth}\" max=\"{MAX_RECURSION_DEPTH}\" remaining=\"{remaining}\">\n\
-         NOTE: You are running at CSA recursion depth {depth} of {MAX_RECURSION_DEPTH}.\n\
+        "<csa-depth-ceiling depth=\"{depth}\" max=\"{max_depth}\" remaining=\"{remaining}\">\n\
+         NOTE: You are running at CSA recursion depth {depth} of {max_depth}.\n\
          Further `csa run` / `csa review` / `csa debate` invocations count against the ceiling: \
          a sub-agent call from here would execute at depth {} and at most {remaining} \
          more levels are available before `load_and_validate` rejects the dispatch.\n\
