@@ -555,7 +555,8 @@ async fn test_evaluate_gate_lefthook_fallback() {
         .await
         .unwrap();
 
-    // Create lefthook config but no binary on PATH (likely in CI)
+    // Create lefthook config. Whether the binary is on PATH varies per env
+    // (CI pre-commit job installs it via mise; bare CI `Test` job does not).
     std::fs::write(
         dir.path().join("lefthook.yml"),
         "pre-commit:\n  commands:\n    lint:\n      run: echo ok\n",
@@ -566,10 +567,18 @@ async fn test_evaluate_gate_lefthook_fallback() {
         .await
         .unwrap();
 
-    // If lefthook is on PATH: gate runs (lefthook run pre-commit).
-    // If lefthook is NOT on PATH: gate is skipped (no gate found).
-    // Either way, the function should not error.
-    assert!(result.passed());
+    // If lefthook is NOT on PATH: gate is skipped (no gate found) -> passed.
+    // If lefthook IS on PATH: gate runs `lefthook run pre-commit ...`; the exit
+    // code depends on the installed lefthook version and tempdir git state,
+    // so only assert the command was resolved to the lefthook invocation.
+    if which::which("lefthook").is_err() {
+        assert!(result.passed(), "expected skip when lefthook missing");
+    } else {
+        assert_eq!(
+            result.command, "lefthook run pre-commit --no-auto-install",
+            "expected lefthook fallback command when binary is on PATH"
+        );
+    }
 
     // SAFETY: Restoring env.
     unsafe { clear_depth() };

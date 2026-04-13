@@ -32,7 +32,6 @@ allow = [
     "MPL-2.0",
     "Zlib",
     "CDLA-Permissive-2.0",
-    "OpenSSL",
 ]
 # xurl-core is pre-release (0.0.0-dev) with no license field in manifest yet.
 # Upstream repo (github.com/Xuanwo/xurl) is Apache-2.0 licensed.
@@ -48,6 +47,10 @@ license-files = []
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+skip = [
+    # agent-teams/cc-sdk -> reqwest 0.11 and tokuin/tiktoken-rs still pin base64 0.21.x.
+    { crate = "base64@0.21.7", reason = "old reqwest 0.11 and tiktoken-rs transitive chain still require 0.21.7" },
+]
 
 [sources]
 unknown-registry = "warn"

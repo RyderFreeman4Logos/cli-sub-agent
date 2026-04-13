@@ -29,6 +29,26 @@ impl Drop for EnvVarGuard {
     }
 }
 
+fn write_global_config(contents: &str) -> std::path::PathBuf {
+    // Mirror every production read path. Both `GlobalConfig::load()` and
+    // `ProjectConfig::load()` resolve the user-level config via
+    // `paths::config_dir().join("config.toml")`, so the test fixture must
+    // populate whatever that resolver returns for the current environment.
+    // Also populate `GlobalConfig::config_path()` (the canonical write path)
+    // so production code and tests agree on which bytes they see on
+    // platforms where the read and write resolvers can disagree.
+    let read_path =
+        csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(read_path.parent().expect("user config dir")).unwrap();
+    std::fs::write(&read_path, contents).unwrap();
+    let write_path = csa_config::GlobalConfig::config_path().expect("resolve global config path");
+    if write_path != read_path {
+        std::fs::create_dir_all(write_path.parent().expect("global config dir")).unwrap();
+        std::fs::write(&write_path, contents).unwrap();
+    }
+    read_path
+}
+
 #[test]
 fn resolve_key_scalar() {
     let root: toml::Value = toml::from_str("[review]\ntool = \"auto\"\n").unwrap();
@@ -169,18 +189,14 @@ fn resolve_effective_execution_key_uses_global_fallback_when_project_missing() {
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 schema_version = 1
 [execution]
 min_timeout_seconds = 3600
 auto_weave_upgrade = true
 "#,
-    )
-    .unwrap();
+    );
 
     let timeout = resolve_effective_execution_key(dir.path(), "execution.min_timeout_seconds")
         .unwrap()
@@ -262,17 +278,13 @@ fn resolve_effective_global_key_uses_configured_kv_cache_values() {
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [kv_cache]
 frequent_poll_seconds = 45
 long_poll_seconds = 3000
 "#,
-    )
-    .unwrap();
+    );
 
     let frequent = resolve_effective_global_key("kv_cache.frequent_poll_seconds")
         .unwrap()
@@ -294,17 +306,13 @@ fn resolve_effective_global_key_sanitizes_zero_kv_cache_values() {
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [kv_cache]
 frequent_poll_seconds = 0
 long_poll_seconds = 0
 "#,
-    )
-    .unwrap();
+    );
 
     let frequent = resolve_effective_global_key("kv_cache.frequent_poll_seconds")
         .unwrap()
@@ -326,16 +334,12 @@ fn resolve_effective_key_ignores_project_kv_cache_override() {
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [kv_cache]
 long_poll_seconds = 3000
 "#,
-    )
-    .unwrap();
+    );
 
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
@@ -422,16 +426,12 @@ fn build_config_get_lookup_prefers_effective_values_for_known_sections() {
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [tools.codex]
 enabled = false
 "#,
-    )
-    .unwrap();
+    );
 
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
@@ -463,17 +463,13 @@ fn resolve_effective_key_redacts_global_memory_api_keys_in_project_scoped_lookup
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [memory.llm]
 enabled = true
 api_key = "sk-super-secret-5982"
 "#,
-    )
-    .unwrap();
+    );
 
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
@@ -545,9 +541,7 @@ fn resolve_lookup_sources_falls_back_to_raw_project_for_known_sections_when_glob
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(global_dir.join("config.toml"), "{{invalid toml").unwrap();
+    write_global_config("{{invalid toml");
 
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
@@ -579,9 +573,7 @@ fn resolve_lookup_sources_returns_project_raw_match_before_global_parse() {
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(global_dir.join("config.toml"), "{{invalid toml").unwrap();
+    write_global_config("{{invalid toml");
 
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
@@ -614,16 +606,12 @@ fn resolve_lookup_sources_invalid_project_raw_still_errors_before_global_match()
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [execution]
 min_timeout_seconds = 3600
 "#,
-    )
-    .unwrap();
+    );
 
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
@@ -723,9 +711,13 @@ fn handle_config_edit_supports_quoted_editor_path_with_embedded_args() {
 
     let captured_args = std::fs::read_to_string(&captured_args_path).unwrap();
     let captured_lines: Vec<_> = captured_args.lines().collect();
+    // `handle_config_edit` canonicalizes the project root (resolves symlinks
+    // like macOS's `/var` -> `/private/var`), so compare against the
+    // canonicalized config path instead of the raw tempdir join.
+    let expected_config_path = config_path.canonicalize().unwrap();
     assert_eq!(
         captured_lines,
-        vec!["--wait", config_path.to_str().unwrap()]
+        vec!["--wait", expected_config_path.to_str().unwrap()]
     );
 }
 

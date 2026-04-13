@@ -22,6 +22,16 @@ fn csa_cmd(tmp: &std::path::Path) -> Command {
     cmd
 }
 
+fn global_config_path(tmp: &Path) -> std::path::PathBuf {
+    // Mirror the production resolver so the test writes the same platform-specific
+    // global path that `csa config get` reads on Linux and macOS.
+    if cfg!(target_os = "macos") {
+        tmp.join("Library/Application Support/cli-sub-agent/config.toml")
+    } else {
+        tmp.join(".config/cli-sub-agent/config.toml")
+    }
+}
+
 /// Run `csa init` (minimal mode) inside the given temp directory.
 fn init_project(tmp: &std::path::Path) {
     let status = csa_cmd(tmp)
@@ -349,10 +359,11 @@ memory_max_mb = 1024
 #[test]
 fn config_get_prefers_effective_tool_state_over_raw_project_value() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    let global_config_path = global_config_path(tmp.path());
+    let global_dir = global_config_path.parent().expect("global config dir");
     std::fs::create_dir_all(&global_dir).expect("create global config dir");
     std::fs::write(
-        global_dir.join("config.toml"),
+        &global_config_path,
         r#"
 [tools.codex]
 enabled = false
@@ -385,10 +396,11 @@ enabled = true
 #[test]
 fn config_get_redacts_global_memory_api_keys_in_project_scoped_lookups() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    let global_config_path = global_config_path(tmp.path());
+    let global_dir = global_config_path.parent().expect("global config dir");
     std::fs::create_dir_all(&global_dir).expect("create global config dir");
     std::fs::write(
-        global_dir.join("config.toml"),
+        &global_config_path,
         r#"
 [memory.llm]
 enabled = true
@@ -430,10 +442,10 @@ inject = true
 #[test]
 fn config_get_falls_back_to_raw_project_value_when_global_config_is_invalid() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    let global_config_path = global_config_path(tmp.path());
+    let global_dir = global_config_path.parent().expect("global config dir");
     std::fs::create_dir_all(&global_dir).expect("create global config dir");
-    std::fs::write(global_dir.join("config.toml"), "{{invalid toml")
-        .expect("write invalid global config");
+    std::fs::write(&global_config_path, "{{invalid toml").expect("write invalid global config");
 
     let config_path = csa_config::ProjectConfig::config_path(tmp.path());
     std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");

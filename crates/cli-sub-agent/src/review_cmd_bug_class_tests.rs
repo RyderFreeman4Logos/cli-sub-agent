@@ -44,6 +44,11 @@ fn recurring_bug_class_skill_extraction_runs_for_high_severity_review_completion
     let config_home = temp.path().join("config");
     std::fs::create_dir_all(&config_home).unwrap();
     let _config_guard = ScopedEnvVarRestore::set("XDG_CONFIG_HOME", config_home.to_str().unwrap());
+    // macOS's `directories` crate ignores `XDG_CONFIG_HOME` and resolves
+    // `$HOME/Library/Application Support`, so redirect HOME too. Without
+    // this, the production extractor writes skills into the real runner
+    // home on macOS and the assertion below cannot find them.
+    let _home_guard = ScopedEnvVarRestore::set("HOME", temp.path().to_str().unwrap());
     let project_root = temp.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
 
@@ -69,7 +74,13 @@ fn recurring_bug_class_skill_extraction_runs_for_high_severity_review_completion
     )
     .expect("skill extraction should succeed");
 
-    let skill_dir = config_home.join("cli-sub-agent/skills/code-quality-rust");
+    // Resolve the skill directory through the same production resolver that
+    // `SkillExtractor::from_global_config()` uses, so the lookup stays
+    // correct on platforms where `directories` ignores `XDG_CONFIG_HOME`
+    // (e.g. macOS, which uses `$HOME/Library/Application Support`).
+    let skill_dir = csa_config::paths::config_dir_write()
+        .expect("resolve config dir")
+        .join("skills/code-quality-rust");
     assert!(skill_dir.join("SKILL.md").is_file());
     assert!(
         std::fs::read_to_string(skill_dir.join("references/detailed-patterns.md"))

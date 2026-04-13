@@ -291,6 +291,41 @@ fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
 }
 
 #[test]
+fn pr_bot_artifacts_paginate_reusable_current_head_review_lookup() {
+    for artifact in [
+        "patterns/pr-bot/workflow.toml",
+        "patterns/pr-bot/PATTERN.md",
+    ] {
+        let text = pr_bot_artifact_text(artifact);
+        for occurrence in 0..2 {
+            let helper = extract_nth_shell_function(
+                &text,
+                "query_reusable_current_head_review_record",
+                occurrence,
+                artifact,
+            );
+            assert!(
+                helper.contains(
+                    r#"gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
+                ),
+                "{artifact} helper occurrence {occurrence} must paginate and slurp pull-request reviews"
+            );
+            assert!(
+                helper
+                    .contains(r#"--jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#),
+                "{artifact} helper occurrence {occurrence} must flatten paginated review pages before sorting reusable review records"
+            );
+            assert!(
+                helper.contains(
+                    r#"| sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'"#
+                ),
+                "{artifact} helper occurrence {occurrence} must guard null reusable review records so empty result variables stay empty instead of rendering a tab"
+            );
+        }
+    }
+}
+
+#[test]
 fn pr_bot_artifacts_recovery_probe_reuses_null_commit_reviews() {
     for artifact in [
         "patterns/pr-bot/workflow.toml",
@@ -304,6 +339,17 @@ fn pr_bot_artifacts_recovery_probe_reuses_null_commit_reviews() {
                 occurrence,
                 artifact,
             );
+            assert!(
+                helper.contains(
+                    r#"gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
+                ),
+                "{artifact} recovery helper occurrence {occurrence} must paginate and slurp pull-request reviews"
+            );
+            assert!(
+                helper
+                    .contains(r#"--jq '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#),
+                "{artifact} recovery helper occurrence {occurrence} must flatten paginated review pages before selecting current-window signals"
+            );
             let expected = format!(
                 "select(.submitted_at >= \"'\"${{{}}}\"'\") | select(.commit_id == \"'\"${{CURRENT_SHA}}\"'\" or .commit_id == null) | .submitted_at",
                 window_var
@@ -311,6 +357,42 @@ fn pr_bot_artifacts_recovery_probe_reuses_null_commit_reviews() {
             assert!(
                 helper.contains(&expected),
                 "{artifact} recovery helper occurrence {occurrence} must treat null commit_id reviews as valid current-head signals"
+            );
+        }
+    }
+}
+
+#[test]
+fn pr_bot_artifacts_paginate_review_event_counts() {
+    for artifact in [
+        "patterns/pr-bot/workflow.toml",
+        "patterns/pr-bot/PATTERN.md",
+    ] {
+        let text = pr_bot_artifact_text(artifact);
+        assert_eq!(
+            text.matches(
+                r#"gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
+            )
+            .count(),
+            0,
+            "{artifact} must slurp every paginated pull-request reviews query"
+        );
+        assert_eq!(
+            text.matches(
+                r#"gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
+            )
+            .count(),
+            6,
+            "{artifact} must slurp all six paginated pull-request review queries"
+        );
+        for window_var in ["BOT_REVIEW_WINDOW_START", "POST_FIX_REVIEW_WINDOW_START"] {
+            let expected = format!(
+                "[.[][] | select(.user.login == \"'\"${{CLOUD_BOT_LOGIN}}\"'\") | select(.submitted_at >= \"'\"${{{}}}\"'\") | select(.commit_id == \"'\"${{CURRENT_SHA}}\"'\" or .commit_id == null)] | length",
+                window_var
+            );
+            assert!(
+                text.contains(&expected),
+                "{artifact} must flatten paginated review pages before counting review events for {window_var}"
             );
         }
     }

@@ -27,6 +27,9 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@v2
 
+      - name: Install ripgrep
+        run: mise use -g ripgrep
+
       - name: Install cargo tools
         uses: taiki-e/install-action@v2
         with:

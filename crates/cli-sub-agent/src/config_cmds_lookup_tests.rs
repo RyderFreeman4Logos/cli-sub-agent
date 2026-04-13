@@ -27,6 +27,28 @@ impl Drop for EnvVarGuard {
     }
 }
 
+fn write_global_config(contents: &str) -> std::path::PathBuf {
+    // Mirror every production read path. Both `GlobalConfig::load()` and
+    // `ProjectConfig::load()` resolve the user-level config via
+    // `paths::config_dir().join("config.toml")`, so the test fixture must
+    // populate whatever that resolver returns for the current environment.
+    // Also populate `GlobalConfig::config_path()` (the canonical write path)
+    // so `LookupSourceSpec::RawGlobal` consumers see the same bytes on
+    // platforms where the read and write resolvers can disagree.
+    let read_path =
+        csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(read_path.parent().expect("user config dir")).unwrap();
+    std::fs::write(&read_path, contents).unwrap();
+    let write_path = csa_config::GlobalConfig::config_path().expect("resolve global config path");
+    if write_path != read_path {
+        std::fs::create_dir_all(write_path.parent().expect("global config dir")).unwrap();
+        std::fs::write(&write_path, contents).unwrap();
+    }
+    // Return the read path so callers wiring `LookupSourceSpec::RawGlobal` use
+    // the same file that `ProjectConfig::load` will read from.
+    read_path
+}
+
 #[test]
 fn build_config_get_lookup_global_kv_cache_returns_not_found_when_key_is_absent() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
@@ -36,16 +58,12 @@ fn build_config_get_lookup_global_kv_cache_returns_not_found_when_key_is_absent(
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [review]
 tool = "auto"
 "#,
-    )
-    .unwrap();
+    );
 
     let lookup = build_config_get_lookup(None, "kv_cache.long_poll_seconds", false, true).unwrap();
     let value = resolve_lookup_sources(&lookup.sources, "kv_cache.long_poll_seconds").unwrap();
@@ -65,10 +83,7 @@ fn resolve_lookup_sources_global_raw_match_survives_invalid_unrelated_global_fie
     let _home_guard = EnvVarGuard::set("HOME", dir.path());
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    std::fs::write(
-        global_dir.join("config.toml"),
+    write_global_config(
         r#"
 [review]
 tool = "auto"
@@ -76,8 +91,7 @@ tool = "auto"
 [defaults]
 max_concurrent = "oops"
 "#,
-    )
-    .unwrap();
+    );
 
     let lookup = build_config_get_lookup(None, "review.tool", false, true).unwrap();
     let value = resolve_lookup_sources(&lookup.sources, "review.tool")
@@ -99,11 +113,7 @@ fn resolve_lookup_sources_warns_when_raw_global_fallback_follows_effective_proje
     let project_root = dir.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
 
-    let global_dir = config_root.join("cli-sub-agent");
-    std::fs::create_dir_all(&global_dir).unwrap();
-    let global_config_path = global_dir.join("config.toml");
-    std::fs::write(
-        &global_config_path,
+    let global_config_path = write_global_config(
         r#"
 [review]
 tool = "auto"
@@ -111,8 +121,7 @@ tool = "auto"
 [execution]
 min_timeout_seconds = "oops"
 "#,
-    )
-    .unwrap();
+    );
 
     let sources = vec![
         LookupSourceSpec::RawProject {
