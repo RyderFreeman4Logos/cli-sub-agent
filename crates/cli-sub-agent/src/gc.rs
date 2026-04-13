@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use csa_config::{GcConfig, GlobalConfig};
 use csa_core::types::OutputFormat;
+use csa_resource::cleanup_orphan_scopes;
 use csa_session::{
     PhaseEvent, delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
 };
@@ -30,6 +31,7 @@ pub(crate) fn handle_gc(
     let mut orphan_dirs_removed = 0;
     let mut expired_sessions_removed = 0;
     let mut sessions_retired = 0u64;
+    let mut orphan_scopes_cleaned = 0u64;
 
     if dry_run {
         eprintln!("[dry-run] No changes will be made.");
@@ -185,6 +187,26 @@ pub(crate) fn handle_gc(
 
     let transcript_stats = cleanup_project_transcripts(&session_root, gc_config, dry_run);
 
+    if dry_run {
+        eprintln!("[dry-run] Would scan for orphan csa-*.scope units with 0 active PIDs");
+    } else {
+        match cleanup_orphan_scopes() {
+            Ok(cleaned) => {
+                orphan_scopes_cleaned = cleaned.len() as u64;
+                for scope in cleaned {
+                    info!(
+                        scope = %scope.unit_name,
+                        active_pids = scope.active_pids,
+                        "Stopped orphan cgroup scope (stale unit with no live processes)"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "Failed to enumerate orphan cgroup scopes; skipping");
+            }
+        }
+    }
+
     let mut stale_slots_cleaned = 0;
     if let Ok(slots_dir) = GlobalConfig::slots_dir()
         && slots_dir.exists()
@@ -237,6 +259,7 @@ pub(crate) fn handle_gc(
                 "transcripts_removed": transcript_stats.files_removed,
                 "transcript_bytes_reclaimed": transcript_stats.bytes_reclaimed,
                 "stale_slots_cleaned": stale_slots_cleaned,
+                "orphan_scopes_cleaned": orphan_scopes_cleaned,
             });
             if max_age_days.is_some() {
                 summary["expired_sessions_removed"] = serde_json::json!(expired_sessions_removed);
@@ -264,6 +287,7 @@ pub(crate) fn handle_gc(
                 prefix, transcript_stats.files_removed, transcript_stats.bytes_reclaimed
             );
             eprintln!("{prefix}  Stale slots cleaned: {stale_slots_cleaned}");
+            eprintln!("{prefix}  Orphan cgroup scopes cleaned: {orphan_scopes_cleaned}");
         }
     }
 
@@ -504,6 +528,27 @@ pub(crate) fn handle_gc_global(
             total_transcript_bytes_reclaimed.saturating_add(transcript_stats.bytes_reclaimed);
     }
 
+    let mut orphan_scopes_cleaned = 0u64;
+    if dry_run {
+        eprintln!("[dry-run] Would scan for orphan csa-*.scope units with 0 active PIDs");
+    } else {
+        match cleanup_orphan_scopes() {
+            Ok(cleaned) => {
+                orphan_scopes_cleaned = cleaned.len() as u64;
+                for scope in cleaned {
+                    info!(
+                        scope = %scope.unit_name,
+                        active_pids = scope.active_pids,
+                        "Stopped orphan cgroup scope (stale unit with no live processes)"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "Failed to enumerate orphan cgroup scopes; skipping");
+            }
+        }
+    }
+
     let mut stale_slots_cleaned = 0u64;
     if let Ok(slots_dir) = GlobalConfig::slots_dir()
         && slots_dir.exists()
@@ -559,6 +604,7 @@ pub(crate) fn handle_gc_global(
                 "transcripts_removed": total_transcripts_removed,
                 "transcript_bytes_reclaimed": total_transcript_bytes_reclaimed,
                 "stale_slots_cleaned": stale_slots_cleaned,
+                "orphan_scopes_cleaned": orphan_scopes_cleaned,
             });
             if max_age_days.is_some() {
                 summary["expired_sessions_removed"] = serde_json::json!(total_expired_sessions);
@@ -589,6 +635,7 @@ pub(crate) fn handle_gc_global(
                 "{prefix}  Transcript files removed: {total_transcripts_removed} ({total_transcript_bytes_reclaimed} bytes)"
             );
             eprintln!("{prefix}  Stale slots cleaned: {stale_slots_cleaned}");
+            eprintln!("{prefix}  Orphan cgroup scopes cleaned: {orphan_scopes_cleaned}");
         }
     }
 

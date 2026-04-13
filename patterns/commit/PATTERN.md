@@ -24,7 +24,7 @@ Initialize and declare workflow variables.
 - `${COMMIT_SUBJECT}`: Generated or provided commit subject
 - `${COMMIT_BODY}`: Generated or provided commit body
 - `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
-- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish)
+- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish). Workflow auto-activates this when `CSA_SKIP_PUBLISH=true` or when running inside a CSA session (`CSA_DEPTH` set and non-zero) to keep employee sessions orchestration-pure — the Layer 0 orchestrator owns publish/pr-bot (#752 Bug 4).
 - `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
 - `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
 - `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
@@ -425,7 +425,9 @@ OnFail: abort
 Push, create or reuse the PR, then synchronously run the post-create helper.
 This makes PR creation + pr-bot a single shell-enforced transaction.
 Runs by default when standalone. Skipped when parent workflow sets
-`CSA_SKIP_PUBLISH=true`.
+`CSA_SKIP_PUBLISH=true`, or automatically when invoked from inside a CSA
+session (`CSA_DEPTH` set and non-zero) — the Layer 0 orchestrator owns the
+publish/pr-bot transaction in that case.
 
 ```bash
 set -euo pipefail
