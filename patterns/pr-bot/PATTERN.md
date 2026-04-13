@@ -347,6 +347,9 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   because bots do NOT auto-review on subsequent pushes (#506).
 
 Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then delegate `cloud_bot_poll_max_seconds` (default: `kv_cache.long_poll_seconds`, 240s) polling to CSA.
+If an exact current-HEAD bot review already exists before this run triggers the
+bot, reuse that specific review object instead of posting a duplicate trigger
+or aborting on resume/rerun.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
@@ -359,10 +362,54 @@ else
   CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
 fi
 
-# --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
-TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 REVIEW_ROUND="${REVIEW_ROUND:-0}"
+BOT_UNAVAILABLE=true
+FALLBACK_REVIEW_HAS_ISSUES=false
+BOT_HAS_ISSUES=false
+BOT_HAS_ISSUES_SOURCE=""
+BOT_REUSED_REVIEW_ID=""
+
+# --- Detect whether current HEAD already has a reusable bot review ---
+query_latest_current_head_trigger_ts() {
+  gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+    --jq '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""' \
+    2>/dev/null
+}
+
+query_reusable_current_head_review_record() {
+  local latest_trigger_ts="${1:-}"
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+    --jq '([.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | [.id, .submitted_at] | @tsv) // ""' \
+    2>/dev/null
+}
+
+set +e
+LATEST_CURRENT_HEAD_TRIGGER_TS="$(query_latest_current_head_trigger_ts)"
+LATEST_CURRENT_HEAD_TRIGGER_TS_RC=$?
+REUSABLE_CURRENT_HEAD_REVIEW_RECORD="$(query_reusable_current_head_review_record "${LATEST_CURRENT_HEAD_TRIGGER_TS}")"
+REUSABLE_CURRENT_HEAD_REVIEW_RECORD_RC=$?
+set -e
+
+REUSABLE_CURRENT_HEAD_REVIEW_TS=""
+if [ "${REUSABLE_CURRENT_HEAD_REVIEW_RECORD_RC}" -eq 0 ] && [ -n "${REUSABLE_CURRENT_HEAD_REVIEW_RECORD}" ]; then
+  IFS=$'\t' read -r BOT_REUSED_REVIEW_ID REUSABLE_CURRENT_HEAD_REVIEW_TS <<EOF
+${REUSABLE_CURRENT_HEAD_REVIEW_RECORD}
+EOF
+fi
+
+REUSE_EXISTING_CURRENT_HEAD_REVIEW=false
+if [ -n "${BOT_REUSED_REVIEW_ID}" ] && [ -n "${REUSABLE_CURRENT_HEAD_REVIEW_TS}" ]; then
+  REUSE_EXISTING_CURRENT_HEAD_REVIEW=true
+  BOT_UNAVAILABLE=false
+  BOT_REVIEW_WINDOW_START="${REUSABLE_CURRENT_HEAD_REVIEW_TS}"
+  WAIT_MARKER="BOT_REPLY=received"
+  echo "Reusable @${CLOUD_BOT_NAME} review #${BOT_REUSED_REVIEW_ID} already exists for HEAD ${CURRENT_SHA} at ${REUSABLE_CURRENT_HEAD_REVIEW_TS}; skipping trigger and delegated wait."
+fi
+
+# --- Trigger cloud bot review for current HEAD ---
+if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "false" ]; then
+TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Round-aware trigger logic (#506):
 # - Round 0 (initial PR creation) + auto: bot auto-reviews on push, skip trigger
@@ -395,11 +442,27 @@ fi
 # --- Initial quiet wait — bot responses rarely arrive faster ---
 echo "Waiting ${CLOUD_BOT_WAIT_SECONDS}s before polling (bot responses rarely arrive faster)..."
 sleep "${CLOUD_BOT_WAIT_SECONDS}"
+BOT_REVIEW_WINDOW_START="${WAIT_BASE_TS}"
 
 # --- Delegate remaining polling to CSA-managed step ---
-BOT_UNAVAILABLE=true
-FALLBACK_REVIEW_HAS_ISSUES=false
-BOT_HAS_ISSUES=false
+query_current_window_current_head_review_ts() {
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+    --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""' \
+    2>/dev/null
+}
+
+refresh_current_window_review_signal() {
+  set +e
+  CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS="$(query_current_window_current_head_review_ts)"
+  CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC=$?
+  set -e
+  if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] \
+    && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]
+  then
+    echo "Detected current-window @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA} at ${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}."
+  fi
+}
+WAIT_MARKER=""
 # POLL_IDLE_TIMEOUT and POLL_MAX_TIMEOUT are pre-computed in Step 4a.
 set +e
 WAIT_SID="$(csa run --sa-mode true --tier tier-1 --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait ${CLOUD_BOT_POLL_MAX_SECONDS} seconds (quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
@@ -424,95 +487,120 @@ else
         | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
         || true
     )"
-    if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
-      BOT_UNAVAILABLE=false
-      BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
-      sleep "${BOT_SETTLE_SECS}"
-
-      # --- Positive signal check (#505): verify a review EVENT exists ---
-      # A review event with submitted_at > WAIT_BASE_TS AND commit_id matching
-      # CURRENT_SHA is the positive confirmation that the bot actually reviewed
-      # current HEAD. Without this, "0 new comments" is ambiguous (could mean
-      # bot reviewed and found nothing, or bot hasn't reviewed yet). The
-      # commit_id filter prevents a late review of a previous push from being
-      # mistaken for a review of the current HEAD.
-      set +e
-      REVIEW_EVENT_RAW="$(
-        gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-          2>/dev/null
-      )"
-      REVIEW_EVENT_RC=$?
-      set -e
-      REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
-      # Helper: check for setup/configuration messages before marking unavailable
-      _check_setup_message_step5() {
-        set +e
-        local setup_body
-        setup_body="$(
-          gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-            --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
-            2>/dev/null
-        )"
-        set -e
-        if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
-          echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
-          echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
-          echo "" >&2
-          echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
-          BOT_NEEDS_SETUP=true
-          return 0
-        fi
-        return 1
-      }
-
-      if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
-        echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
-        _check_setup_message_step5 || {
-          echo "Treating as bot unavailable — API failure with no setup message." >&2
-          BOT_UNAVAILABLE=true
-        }
-      fi
-      # --- Check inline comments for actionable findings ---
-      # This runs regardless of REVIEW_EVENT_COUNT because some bots
-      # post inline comments without a formal review event.
-      if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
-        set +e
-        ACTIONABLE_COMMENT_COUNT="$(
-          gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-            --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
-            2>/dev/null
-        )"
-        ACTIONABLE_COMMENT_RC=$?
-        set -e
-        if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
-          echo "ERROR: Failed to query actionable bot comments for trigger window (rc=${ACTIONABLE_COMMENT_RC})." >&2
-          exit 1
-        fi
-        case "${ACTIONABLE_COMMENT_COUNT:-}" in
-          ''|*[!0-9]*)
-            echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
-            exit 1
-            ;;
-        esac
-        if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
-          echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
-          BOT_HAS_ISSUES=true
-        elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-          # No review event AND no inline comments — bot responded but
-          # didn't actually review. Check for setup message, then mark unavailable.
-          echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${WAIT_BASE_TS}." >&2
-          _check_setup_message_step5 || {
-            echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
-            BOT_UNAVAILABLE=true
-          }
-        fi
-      fi
-    elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
+    if [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
       BOT_UNAVAILABLE=true
-    else
+    elif [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
       echo "WARN: Delegated bot wait returned no marker; treating cloud bot as unavailable." >&2
       BOT_UNAVAILABLE=true
+    fi
+  fi
+fi
+fi
+
+if [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
+  refresh_current_window_review_signal
+  if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]; then
+    WAIT_MARKER="BOT_REPLY=received"
+    BOT_UNAVAILABLE=false
+    echo "Detected current-window @${CLOUD_BOT_NAME} review for HEAD ${CURRENT_SHA} after delegated wait; continuing."
+  fi
+fi
+
+if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
+  BOT_UNAVAILABLE=false
+  BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+  sleep "${BOT_SETTLE_SECS}"
+
+  # --- Positive signal check (#505): verify a current-HEAD review EVENT exists ---
+  # If this run reused a specific current-HEAD review object, that selection is
+  # already the positive signal and later checks must stay scoped to that review.
+  if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+    REVIEW_EVENT_RC=0
+    REVIEW_EVENT_COUNT=1
+  else
+    set +e
+    REVIEW_EVENT_RAW="$(
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
+        2>/dev/null
+    )"
+    REVIEW_EVENT_RC=$?
+    set -e
+    REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
+  fi
+  # Helper: check for setup/configuration messages before marking unavailable
+  _check_setup_message_step5() {
+    set +e
+    local setup_body
+    setup_body="$(
+      gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
+        2>/dev/null
+    )"
+    set -e
+    if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+      echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
+      echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
+      echo "" >&2
+      echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
+      BOT_NEEDS_SETUP=true
+      return 0
+    fi
+    return 1
+  }
+
+  if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
+    echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
+    _check_setup_message_step5 || {
+      echo "Treating as bot unavailable — API failure with no setup message." >&2
+      BOT_UNAVAILABLE=true
+    }
+  fi
+  # --- Check inline comments for actionable findings ---
+  # This runs regardless of REVIEW_EVENT_COUNT because some bots
+  # post inline comments without a formal review event.
+  if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
+    set +e
+    if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+      ACTIONABLE_COMMENT_COUNT="$(
+        gh api "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
+          --jq '[.[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          2>/dev/null
+      )"
+    else
+      ACTIONABLE_COMMENT_COUNT="$(
+        gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          2>/dev/null
+      )"
+    fi
+    ACTIONABLE_COMMENT_RC=$?
+    set -e
+    if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
+      echo "ERROR: Failed to query actionable bot comments for the effective review window (rc=${ACTIONABLE_COMMENT_RC})." >&2
+      exit 1
+    fi
+    case "${ACTIONABLE_COMMENT_COUNT:-}" in
+      ''|*[!0-9]*)
+        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
+        exit 1
+        ;;
+    esac
+    if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
+      if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+        echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) in reusable review #${BOT_REUSED_REVIEW_ID}; marking BOT_HAS_ISSUES=true."
+        BOT_HAS_ISSUES_SOURCE="reused_review_comments"
+      else
+        echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) since ${BOT_REVIEW_WINDOW_START}; marking BOT_HAS_ISSUES=true."
+        BOT_HAS_ISSUES_SOURCE="current_window_comments"
+      fi
+      BOT_HAS_ISSUES=true
+    elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+      echo "WARN: No current-HEAD review event or inline comments for HEAD ${CURRENT_SHA} since ${BOT_REVIEW_WINDOW_START}." >&2
+      _check_setup_message_step5 || {
+        echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
+        BOT_UNAVAILABLE=true
+      }
     fi
   fi
 fi
@@ -520,23 +608,36 @@ fi
 # --- Check for non-target bot comments (e.g., codex auto-review) ---
 if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
   set +e
-  OTHER_BOT_COUNT="$(
-    gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-      --jq '[.[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
-      2>/dev/null || echo "0"
-  )"
+  if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+    OTHER_BOT_COUNT="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        2>/dev/null || echo "0"
+    )"
+  else
+    OTHER_BOT_COUNT="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        2>/dev/null || echo "0"
+    )"
+  fi
   set -e
   if [ "${OTHER_BOT_COUNT:-0}" -gt 0 ]; then
     echo "WARNING: Detected ${OTHER_BOT_COUNT} actionable comment(s) from non-target bot(s)." >&2
     echo "WARNING: These may consume coding quota for the originating bot service." >&2
     echo "Including non-target bot findings in review."
+    if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+      BOT_HAS_ISSUES_SOURCE="current_sha_comments"
+    else
+      BOT_HAS_ISSUES_SOURCE="current_window_comments"
+    fi
     BOT_HAS_ISSUES=true
   fi
 fi
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "" >&2
-  echo "ERROR: Cloud bot (${CLOUD_BOT_NAME}) did not respond within the polling window (${CLOUD_BOT_WAIT_SECONDS}s wait + ${CLOUD_BOT_POLL_MAX_SECONDS}s poll)." >&2
+  echo "ERROR: Cloud bot (${CLOUD_BOT_NAME}) did not produce a current-HEAD review signal within the polling window (${CLOUD_BOT_WAIT_SECONDS}s wait + ${CLOUD_BOT_POLL_MAX_SECONDS}s poll)." >&2
   echo "" >&2
   echo "Options:" >&2
   echo "  1. Wait and re-run: csa plan run patterns/pr-bot/workflow.toml" >&2
@@ -546,11 +647,13 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "ABORTING: Will not merge without cloud bot confirmation." >&2
   exit 1
 fi
-echo "CSA_VAR:BOT_REVIEW_WINDOW_START=$WAIT_BASE_TS"
+echo "CSA_VAR:BOT_REUSED_REVIEW_ID=${BOT_REUSED_REVIEW_ID}"
+echo "CSA_VAR:BOT_REVIEW_WINDOW_START=$BOT_REVIEW_WINDOW_START"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:BOT_NEEDS_SETUP=${BOT_NEEDS_SETUP:-false}"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
+echo "CSA_VAR:BOT_HAS_ISSUES_SOURCE=${BOT_HAS_ISSUES_SOURCE}"
 ```
 
 ## IF ${BOT_NEEDS_SETUP}
@@ -704,26 +807,46 @@ echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" requi
 Tool: bash
 OnFail: abort
 
-Select one actionable bot review comment from the current review window and
-export its metadata as `CURRENT_COMMENT_ID`, `COMMENT_PATH`, and
+Select one actionable bot review comment from the current review window or
+the reusable-review scope and export its metadata as `CURRENT_COMMENT_ID`, `COMMENT_PATH`, and
 `COMMENT_TIMESTAMP`. Initialize `COMMENT_IS_FALSE_POSITIVE=true` and
 `COMMENT_IS_STALE=false` so the current comment always enters the arbitration
 path first unless the staleness guard suppresses it.
 
 ```bash
 set -euo pipefail
-if [ -z "${BOT_REVIEW_WINDOW_START:-}" ]; then
-  echo "ERROR: BOT_REVIEW_WINDOW_START is unset."
-  exit 1
-fi
-
-# Query from ANY bot (not just target) to also catch non-target bot findings
-COMMENT_RECORD="$(
-  gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[] | select(.user.type == "Bot") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
-)"
+CURRENT_SHA="$(git rev-parse HEAD)"
+case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
+  reused_review_comments)
+    if [ -z "${BOT_REUSED_REVIEW_ID:-}" ]; then
+      echo "ERROR: BOT_REUSED_REVIEW_ID is unset for reused review comment selection."
+      exit 1
+    fi
+    COMMENT_RECORD="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
+        --jq '[.[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+    )"
+    ;;
+  current_sha_comments)
+    COMMENT_RECORD="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+    )"
+    ;;
+  *)
+    if [ -z "${BOT_REVIEW_WINDOW_START:-}" ]; then
+      echo "ERROR: BOT_REVIEW_WINDOW_START is unset."
+      exit 1
+    fi
+    # Query from ANY bot (not just target) to also catch non-target bot findings
+    COMMENT_RECORD="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+    )"
+    ;;
+esac
 if [ -z "${COMMENT_RECORD}" ] || [ "${COMMENT_RECORD}" = "null" ]; then
-  echo "ERROR: BOT_HAS_ISSUES=true but no actionable current bot comment was found."
+  echo "ERROR: BOT_HAS_ISSUES=true but no actionable bot comment was found in the selected scope."
   exit 1
 fi
 
@@ -1052,13 +1175,15 @@ to Step 5" above is guidance for LLM orchestrators but is NOT enforced
 by the workflow engine (`csa plan run` executes steps linearly).
 
 **Positive confirmation signal** (#505): The gate checks for a **review event**
-(via `pulls/{pr}/reviews` API) with `submitted_at` > push timestamp, NOT
-merely the absence of inline comments. This distinguishes "bot re-reviewed
-and found nothing" from "bot hasn't re-reviewed yet."
+(via `pulls/{pr}/reviews` API) on the current HEAD. If the current HEAD was
+already re-reviewed before this rerun starts, the gate reuses that exact
+current-HEAD review and skips posting a duplicate retrigger comment. Otherwise
+it waits for a new current-window review before proceeding. This distinguishes
+"bot re-reviewed and found nothing" from "bot hasn't re-reviewed yet."
 
 The gate:
 1. Records push timestamp before checking
-2. Polls for a review event from `${CLOUD_BOT_LOGIN}` with `submitted_at` > push time
+2. Checks for an already-posted exact current-HEAD review before retriggering; otherwise polls for a new review event from `${CLOUD_BOT_LOGIN}` on the current HEAD
 3. If review event found AND has P0/P1/P2 inline comments → **abort** (user must re-run pr-bot)
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
@@ -1075,9 +1200,48 @@ else
   CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
 fi
 CURRENT_SHA="$(git rev-parse HEAD)"
-RETRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BOT_CLEAN=false
+POST_FIX_REUSED_REVIEW_ID=""
+
+# --- Detect whether current HEAD already has a reusable post-fix review ---
+query_latest_current_head_trigger_ts() {
+  gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+    --jq '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""' \
+    2>/dev/null
+}
+
+query_reusable_current_head_review_record() {
+  local latest_trigger_ts="${1:-}"
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+    --jq '([.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | [.id, .submitted_at] | @tsv) // ""' \
+    2>/dev/null
+}
+
+set +e
+LATEST_CURRENT_HEAD_TRIGGER_TS="$(query_latest_current_head_trigger_ts)"
+LATEST_CURRENT_HEAD_TRIGGER_TS_RC=$?
+REUSABLE_POST_FIX_REVIEW_RECORD="$(query_reusable_current_head_review_record "${LATEST_CURRENT_HEAD_TRIGGER_TS}")"
+REUSABLE_POST_FIX_REVIEW_RECORD_RC=$?
+set -e
+
+REUSABLE_POST_FIX_REVIEW_TS=""
+if [ "${REUSABLE_POST_FIX_REVIEW_RECORD_RC}" -eq 0 ] && [ -n "${REUSABLE_POST_FIX_REVIEW_RECORD}" ]; then
+  IFS=$'\t' read -r POST_FIX_REUSED_REVIEW_ID REUSABLE_POST_FIX_REVIEW_TS <<EOF
+${REUSABLE_POST_FIX_REVIEW_RECORD}
+EOF
+fi
+
+REUSE_EXISTING_POST_FIX_REVIEW=false
+if [ -n "${POST_FIX_REUSED_REVIEW_ID}" ] && [ -n "${REUSABLE_POST_FIX_REVIEW_TS}" ]; then
+  REUSE_EXISTING_POST_FIX_REVIEW=true
+  POST_FIX_REVIEW_WINDOW_START="${REUSABLE_POST_FIX_REVIEW_TS}"
+  WAIT_MARKER="BOT_REPLY=received"
+  echo "Reusable @${CLOUD_BOT_NAME} post-fix review #${POST_FIX_REUSED_REVIEW_ID} already exists for HEAD ${CURRENT_SHA} at ${REUSABLE_POST_FIX_REVIEW_TS}; skipping retrigger and delegated wait."
+fi
 
 # --- Re-trigger bot review (ALWAYS explicit — bots don't auto-review on force-push) ---
+if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "false" ]; then
+RETRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RETRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
 
 <!-- csa-retrigger:post-fix:${CURRENT_SHA}:${RETRIGGER_TS} -->"
@@ -1089,7 +1253,26 @@ echo "Waiting ${CLOUD_BOT_WAIT_SECONDS}s before polling post-fix review (bot res
 sleep "${CLOUD_BOT_WAIT_SECONDS}"
 
 # --- Delegate remaining polling to CSA via daemon+wait ---
-BOT_CLEAN=false
+POST_FIX_REVIEW_WINDOW_START="${RETRIGGER_TS}"
+
+query_current_window_current_head_review_ts() {
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+    --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""' \
+    2>/dev/null
+}
+
+refresh_post_fix_review_signal() {
+  set +e
+  CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS="$(query_current_window_current_head_review_ts)"
+  CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC=$?
+  set -e
+  if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] \
+    && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]
+  then
+    echo "Detected current-window @${CLOUD_BOT_NAME} post-fix review on HEAD ${CURRENT_SHA} at ${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}."
+  fi
+}
+WAIT_MARKER=""
 # POLL_IDLE_TIMEOUT and POLL_MAX_TIMEOUT are pre-computed in Step 4a.
 set +e
 WAIT_SID="$(csa run --sa-mode true --tier tier-1 --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} \
@@ -1115,7 +1298,7 @@ set -e
 
 if [ "${WAIT_RC}" -ne 0 ]; then
   echo "" >&2
-  echo "ERROR: Post-fix cloud bot (${CLOUD_BOT_NAME}) did not respond within re-review polling window (rc=${WAIT_RC})." >&2
+  echo "ERROR: Post-fix cloud bot (${CLOUD_BOT_NAME}) did not produce a current-HEAD re-review signal within the polling window (rc=${WAIT_RC})." >&2
   echo "ABORTING: Will not merge without cloud bot confirmation after fixes." >&2
   echo "Re-run pr-bot to start a new review cycle." >&2
   exit 1
@@ -1127,91 +1310,114 @@ else
       | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
       || true
   )"
-  if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
-    BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
-    sleep "${BOT_SETTLE_SECS}"
+fi
+fi
 
-    # --- Positive signal check (#505): verify a review EVENT exists ---
+if [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
+  refresh_post_fix_review_signal
+  if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]; then
+    WAIT_MARKER="BOT_REPLY=received"
+    echo "Detected current-window @${CLOUD_BOT_NAME} review for HEAD ${CURRENT_SHA} after delegated post-fix wait; continuing."
+  fi
+fi
+
+if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
+  BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+  sleep "${BOT_SETTLE_SECS}"
+
+  # --- Positive signal check (#505): verify a current-HEAD review EVENT exists ---
+  if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "true" ]; then
+    REVIEW_EVENT_RC=0
+    REVIEW_EVENT_COUNT=1
+  else
     set +e
     REVIEW_EVENT_RAW="$(
       gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
         2>/dev/null
     )"
     REVIEW_EVENT_RC=$?
     set -e
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
-    # --- Setup message check (runs before any fallback to catch config issues) ---
-    # NOTE: Similar to _check_setup_message_step5 in Step 5, but with different
-    # semantics: Step 5 soft-detects (sets BOT_NEEDS_SETUP, returns 0/1);
-    # this version hard-fails (exit 1) because post-fix is too late to recover.
-    _check_setup_message() {
-      set +e
-      local setup_body
-      setup_body="$(
-        gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${RETRIGGER_TS}"'")] | .[0].body // ""' \
-          2>/dev/null
-      )"
-      set -e
-      if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
-        echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
-        echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
-        echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
-        exit 1
-      fi
-    }
-
-    if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
-      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
-      _check_setup_message
-      REVIEW_API_FAILED=true
-    fi
-    # --- Check inline comments for actionable findings ---
-    if [ "${BOT_CLEAN}" != "true" ]; then
-      set +e
-      ACTIONABLE_COUNT="$(
-        gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${RETRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
-          2>/dev/null
-      )"
-      ACTIONABLE_RC=$?
-      set -e
-      if [ "${ACTIONABLE_RC}" -ne 0 ]; then
-        echo "ERROR: Failed to query post-fix bot comments (rc=${ACTIONABLE_RC})." >&2
-        exit 1
-      fi
-      case "${ACTIONABLE_COUNT:-}" in
-        ''|*[!0-9]*)
-          echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
-          exit 1
-          ;;
-      esac
-      if [ "${ACTIONABLE_COUNT}" -gt 0 ]; then
-        echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
-        echo "Re-run pr-bot to start a new fix cycle."
-        exit 1
-      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ] || [ "${REVIEW_API_FAILED:-false}" = "true" ]; then
-        echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} after ${RETRIGGER_TS}." >&2
-        _check_setup_message
-        echo "Falling back to local review." >&2
-        SID=$(csa review --sa-mode true --range main...HEAD)
-        if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
-          echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
-          exit 1
-        fi
-      fi
-    fi
-    BOT_CLEAN=true
-  else
-    echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
-    SID=$(csa review --sa-mode true --range main...HEAD)
-    if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
-      echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+  fi
+  # --- Setup message check (runs before any fallback to catch config issues) ---
+  # NOTE: Similar to _check_setup_message_step5 in Step 5, but with different
+  # semantics: Step 5 soft-detects (sets BOT_NEEDS_SETUP, returns 0/1);
+  # this version hard-fails (exit 1) because post-fix is too late to recover.
+  _check_setup_message() {
+    set +e
+    local setup_body
+    setup_body="$(
+      gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
+        2>/dev/null
+    )"
+    set -e
+    if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+      echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
+      echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
+      echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
       exit 1
     fi
-    BOT_CLEAN=true
+  }
+
+  if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
+    echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
+    _check_setup_message
+    REVIEW_API_FAILED=true
   fi
+  # --- Check inline comments for actionable findings ---
+  if [ "${BOT_CLEAN}" != "true" ]; then
+    set +e
+    if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "true" ]; then
+      ACTIONABLE_COUNT="$(
+        gh api "repos/${REPO}/pulls/${PR_NUM}/reviews/${POST_FIX_REUSED_REVIEW_ID}/comments?per_page=100" \
+          --jq '[.[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          2>/dev/null
+      )"
+    else
+      ACTIONABLE_COUNT="$(
+        gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          2>/dev/null
+      )"
+    fi
+    ACTIONABLE_RC=$?
+    set -e
+    if [ "${ACTIONABLE_RC}" -ne 0 ]; then
+      echo "ERROR: Failed to query post-fix bot comments (rc=${ACTIONABLE_RC})." >&2
+      exit 1
+    fi
+    case "${ACTIONABLE_COUNT:-}" in
+      ''|*[!0-9]*)
+        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
+        exit 1
+        ;;
+    esac
+    if [ "${ACTIONABLE_COUNT}" -gt 0 ]; then
+      echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
+      echo "Re-run pr-bot to start a new fix cycle."
+      exit 1
+    elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ] || [ "${REVIEW_API_FAILED:-false}" = "true" ]; then
+      echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} since ${POST_FIX_REVIEW_WINDOW_START}." >&2
+      _check_setup_message
+      echo "Falling back to local review." >&2
+      SID=$(csa review --sa-mode true --range main...HEAD)
+      if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
+        echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+        exit 1
+      fi
+    fi
+  fi
+  BOT_CLEAN=true
+else
+  echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
+  SID=$(csa review --sa-mode true --range main...HEAD)
+  if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
+    echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+    exit 1
+  fi
+  BOT_CLEAN=true
 fi
 
 if [ "${BOT_CLEAN}" != "true" ]; then
@@ -1221,6 +1427,7 @@ fi
 
 # Clear BOT_HAS_ISSUES so merge steps can proceed
 BOT_HAS_ISSUES=false
+echo "CSA_VAR:POST_FIX_REUSED_REVIEW_ID=${POST_FIX_REUSED_REVIEW_ID}"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```
