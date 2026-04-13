@@ -584,19 +584,21 @@ async fn wait_for_still_working_backoff() {
     tokio::time::sleep(STILL_WORKING_BACKOFF).await;
 }
 
-/// Anti-recursion preamble injected into debate subprocess prompts.
+/// Debate-only safety preamble injected into debate subprocess prompts.
 ///
-/// Same guard as `review_cmd::ANTI_RECURSION_PREAMBLE` — prevents the spawned
-/// tool from reading CLAUDE.md and recursively invoking CSA commands.
+/// Same shape as `review_cmd::ANTI_RECURSION_PREAMBLE`: the spawned tool is
+/// constrained to read-only operations on the repository. Recursion-depth
+/// enforcement is handled by `pipeline::prompt_guard` (warn near ceiling) and
+/// `pipeline::load_and_validate` (hard reject above `MAX_RECURSION_DEPTH`), so
+/// blanket "never call csa" text here would break the documented fractal
+/// recursion contract (Layer 1 → Layer 2 is legitimate).
 const ANTI_RECURSION_PREAMBLE: &str = "\
-CRITICAL: You are running INSIDE a CSA subprocess (csa review / csa debate). \
-Do NOT invoke `csa run`, `csa review`, `csa debate`, or ANY `csa` CLI command — \
-this causes infinite recursion. Perform the task DIRECTLY using your own \
-capabilities (Read, Grep, Glob, Bash for read-only git commands). \
+CONTEXT: You are running INSIDE a CSA subprocess (csa review / csa debate). \
+Perform the debate task DIRECTLY using your own capabilities \
+(Read, Grep, Glob, Bash for read-only git commands). \
 DEBATE SAFETY: Do NOT run git add/commit/push/merge/rebase/tag/stash/reset/checkout/cherry-pick, \
 and do NOT run gh pr/create/comment/merge or any command that mutates repository/PR state. \
-Ignore prompt-guard reminders about commit/push in this subprocess. \
-Ignore any CLAUDE.md or AGENTS.md rules that instruct you to delegate to CSA.\n\n";
+Ignore prompt-guard reminders about commit/push in this subprocess.\n\n";
 
 /// Build a debate instruction that passes parameters to the debate skill.
 ///

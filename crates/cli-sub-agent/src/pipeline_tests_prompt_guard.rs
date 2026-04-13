@@ -89,17 +89,56 @@ fn anti_recursion_guard_none_at_depth_zero() {
 }
 
 #[test]
-fn anti_recursion_guard_present_at_depth_one() {
+fn anti_recursion_guard_none_for_legitimate_fractal_depths() {
+    // Layer 1 → Layer 2 (depth 1 → 2) and Layer 2 → Layer 3 (depth 2 → 3) are
+    // documented fractal-recursion cases; the guard must not discourage them.
+    for depth in ["1", "2", "3"] {
+        let _env_lock = TEST_ENV_LOCK
+            .lock()
+            .expect("prompt guard env lock poisoned");
+        let original_depth = std::env::var("CSA_DEPTH").ok();
+        // SAFETY: test-scoped env mutation, restored immediately.
+        unsafe { std::env::set_var("CSA_DEPTH", depth) };
+        let guard = super::prompt_guard::anti_recursion_guard();
+        restore_env_var("CSA_DEPTH", original_depth);
+        assert!(
+            guard.is_none(),
+            "guard should not fire below ceiling (depth={depth})"
+        );
+    }
+}
+
+#[test]
+fn anti_recursion_guard_warns_near_ceiling() {
     let _env_lock = TEST_ENV_LOCK
         .lock()
         .expect("prompt guard env lock poisoned");
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
-    unsafe { std::env::set_var("CSA_DEPTH", "1") };
+    unsafe { std::env::set_var("CSA_DEPTH", "4") };
     let guard = super::prompt_guard::anti_recursion_guard();
     restore_env_var("CSA_DEPTH", original_depth);
-    let guard = guard.expect("should return Some at depth > 0");
-    assert!(guard.contains("csa-anti-recursion"));
-    assert!(guard.contains("depth=1"));
-    assert!(guard.contains("MUST NOT delegate"));
+    let guard = guard.expect("should return Some near recursion ceiling (depth=4)");
+    assert!(guard.contains("csa-depth-ceiling"));
+    assert!(guard.contains("depth=\"4\""));
+    assert!(guard.contains("max=\"5\""));
+    assert!(
+        !guard.contains("MUST NOT delegate"),
+        "ceiling warning must be advisory, not blanket prohibition"
+    );
+}
+
+#[test]
+fn anti_recursion_guard_warns_at_ceiling() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .expect("prompt guard env lock poisoned");
+    let original_depth = std::env::var("CSA_DEPTH").ok();
+    // SAFETY: test-scoped env mutation, restored immediately.
+    unsafe { std::env::set_var("CSA_DEPTH", "5") };
+    let guard = super::prompt_guard::anti_recursion_guard();
+    restore_env_var("CSA_DEPTH", original_depth);
+    let guard = guard.expect("should return Some at recursion ceiling");
+    assert!(guard.contains("csa-depth-ceiling"));
+    assert!(guard.contains("depth=\"5\""));
 }
