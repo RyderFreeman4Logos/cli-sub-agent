@@ -33,7 +33,7 @@ prompt = """
 Check initial prompt for "Use the csa-review skill" literal string.
 If present → review agent mode (skip orchestration, execute review directly).
 If invoked by user → orchestrator mode (follow steps below).
-Review agents MUST NOT run csa commands (prevents recursion)."""
+Review agents should perform analysis directly; nested `csa` calls are allowed up to `project.max_recursion_depth` (default 5; enforced by `pipeline::load_and_validate`) but rarely add value for a read-only review."""
 on_fail = "abort"
 
 [[workflow.steps]]
