@@ -94,6 +94,7 @@ fn inspect_unpushed_commits(
     project_root: &Path,
     branch: &str,
 ) -> Result<Option<UnpushedCommitsSidecar>> {
+    let session_branch_ref = format!("refs/heads/{branch}");
     let range = if git_success(
         project_root,
         &[
@@ -105,18 +106,18 @@ fn inspect_unpushed_commits(
     ) {
         (
             Some(format!("origin/{branch}")),
-            format!("origin/{branch}..HEAD"),
+            format!("origin/{branch}..{session_branch_ref}"),
         )
     } else if git_success(
         project_root,
         &["rev-parse", "--verify", "--quiet", "refs/heads/main"],
     ) {
-        (None, "main..HEAD".to_string())
+        (None, format!("main..{session_branch_ref}"))
     } else if git_success(
         project_root,
         &["rev-parse", "--verify", "--quiet", "refs/heads/master"],
     ) {
-        (None, "master..HEAD".to_string())
+        (None, format!("master..{session_branch_ref}"))
     } else {
         return Ok(None);
     };
