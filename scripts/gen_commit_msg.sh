@@ -116,6 +116,9 @@ ${summary}
 - **Design Intent**: Capture the staged changes in a non-empty fallback commit body when no richer upstream summary was provided.
 - **Key Decisions**: Derive this fallback from the staged file set and preserve the AI Reviewer Metadata scaffold required by the audited commit workflow.
 - **Reviewer Guidance**: Verify the staged diff still matches this generated summary and expand the metadata when the change needs task-specific rationale.
+  - **Timing/Race Scenarios**: <none identified for this change>
+  - **Boundary Cases**: <describe or list "n/a">
+  - **Risk Areas**: <describe or list "n/a">
 EOF
 }
 

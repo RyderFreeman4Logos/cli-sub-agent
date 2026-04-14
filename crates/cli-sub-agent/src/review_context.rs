@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use csa_session::{Finding, ReviewArtifact, ReviewSessionMeta, Severity};
 use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager};
 use tracing::warn;
 
@@ -152,6 +153,150 @@ pub(crate) fn discover_review_checklist(project_root: &Path) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+/// Maximum prior-round findings injected into the current review prompt.
+/// Caps prompt growth when a prior round produced many findings.
+const MAX_PRIOR_ROUND_FINDINGS: usize = 12;
+
+/// Summary of the prior cumulative review round, restricted to fields safe to
+/// inject into a review prompt. Excludes raw diff text, file contents, env
+/// vars, api keys, and user TOML.
+pub(crate) struct PriorRoundSummary {
+    pub(crate) session_id: String,
+    pub(crate) decision: String,
+    pub(crate) review_iterations: u32,
+    pub(crate) findings: Vec<PriorRoundFinding>,
+}
+
+pub(crate) struct PriorRoundFinding {
+    pub(crate) severity: String,
+    pub(crate) file: String,
+    pub(crate) line: Option<u32>,
+    pub(crate) summary: String,
+}
+
+/// Discover the most recent prior review session on `branch` (excluding
+/// `current_session_id`) and render a prompt-safe `## Prior-Round Assumptions
+/// to Re-verify` section. Returns `None` when no prior round exists — i.e.
+/// `review_iterations == 1` for the current run.
+///
+/// Whitelisted fields: `decision`, `review_iterations`, `findings[*].severity`,
+/// `findings[*].file`, `findings[*].line`, `findings[*].summary`. Never reads
+/// env vars, api keys, file contents, diff text, or user TOML.
+pub(crate) fn discover_prior_round_assumptions(
+    project_root: &Path,
+    branch: Option<&str>,
+    current_session_id: Option<&str>,
+) -> Option<String> {
+    let branch = branch?;
+    let (prior_session_id, meta) =
+        find_latest_branch_review_meta(project_root, branch, current_session_id)?;
+    let findings = load_whitelisted_findings(project_root, &prior_session_id).unwrap_or_default();
+    let summary = PriorRoundSummary {
+        session_id: prior_session_id,
+        decision: meta.decision,
+        review_iterations: meta.review_iterations,
+        findings,
+    };
+    Some(render_prior_round_assumptions(&summary))
+}
+
+fn find_latest_branch_review_meta(
+    project_root: &Path,
+    branch: &str,
+    exclude_session_id: Option<&str>,
+) -> Option<(String, ReviewSessionMeta)> {
+    let sessions = csa_session::list_sessions(project_root, None).ok()?;
+    sessions
+        .into_iter()
+        .filter(|candidate| candidate.resolved_identity().ref_name.as_deref() == Some(branch))
+        .filter(|candidate| {
+            exclude_session_id
+                .map(|id| candidate.meta_session_id != id)
+                .unwrap_or(true)
+        })
+        .filter_map(|candidate| {
+            let meta = load_review_meta(project_root, &candidate.meta_session_id)?;
+            Some((candidate.meta_session_id, meta))
+        })
+        .max_by(|a, b| a.1.timestamp.cmp(&b.1.timestamp))
+}
+
+fn load_review_meta(project_root: &Path, session_id: &str) -> Option<ReviewSessionMeta> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id).ok()?;
+    let review_meta_path = session_dir.join("review_meta.json");
+    if !review_meta_path.is_file() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&review_meta_path).ok()?;
+    serde_json::from_str::<ReviewSessionMeta>(&content).ok()
+}
+
+fn load_whitelisted_findings(
+    project_root: &Path,
+    session_id: &str,
+) -> Option<Vec<PriorRoundFinding>> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id).ok()?;
+    for name in ["review-findings-consolidated.json", "review-findings.json"] {
+        let path = session_dir.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).ok()?;
+        let artifact: ReviewArtifact = serde_json::from_str(&content).ok()?;
+        return Some(
+            artifact
+                .findings
+                .into_iter()
+                .take(MAX_PRIOR_ROUND_FINDINGS)
+                .map(finding_to_prior_round)
+                .collect(),
+        );
+    }
+    None
+}
+
+fn finding_to_prior_round(finding: Finding) -> PriorRoundFinding {
+    PriorRoundFinding {
+        severity: severity_label(&finding.severity).to_string(),
+        file: finding.file,
+        line: finding.line,
+        summary: finding.summary,
+    }
+}
+
+fn severity_label(severity: &Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "critical",
+        Severity::High => "high",
+        Severity::Medium => "medium",
+        Severity::Low => "low",
+        Severity::Info => "info",
+    }
+}
+
+fn render_prior_round_assumptions(summary: &PriorRoundSummary) -> String {
+    let mut out = String::from("\n\n## Prior-Round Assumptions to Re-verify\n");
+    out.push_str(&format!(
+        "Prior review session `{}` (iteration {}) reached decision `{}`.\n",
+        summary.session_id, summary.review_iterations, summary.decision
+    ));
+    if summary.findings.is_empty() {
+        out.push_str(
+            "No structured findings captured. Re-verify the prior verdict still holds for the current diff.\n",
+        );
+    } else {
+        out.push_str("Re-verify each prior-round assumption still holds for the current diff:\n");
+        for f in &summary.findings {
+            let line_suffix = f.line.map(|l| format!(":{l}")).unwrap_or_default();
+            out.push_str(&format!(
+                "- [{}] {}{} -- {}\n",
+                f.severity, f.file, line_suffix, f.summary
+            ));
+        }
+    }
+    out
 }
 
 pub(crate) fn render_spec_review_context(spec: &SpecDocument) -> String {
@@ -435,6 +580,135 @@ mod tests {
         assert_eq!(super::floor_char_boundary(&s, 4), 3);
         assert_eq!(super::floor_char_boundary(&s, 5), 3);
         assert_eq!(super::floor_char_boundary(&s, 6), 6);
+    }
+
+    fn run_git_cmd(dir: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git command should execute");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn setup_git_repo_with_branch(branch: &str) -> tempfile::TempDir {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        run_git_cmd(temp.path(), &["init", "--initial-branch", branch]);
+        run_git_cmd(temp.path(), &["config", "user.email", "test@example.com"]);
+        run_git_cmd(temp.path(), &["config", "user.name", "Test"]);
+        std::fs::write(temp.path().join("seed.txt"), "seed\n").unwrap();
+        run_git_cmd(temp.path(), &["add", "seed.txt"]);
+        run_git_cmd(temp.path(), &["commit", "-m", "init"]);
+        temp
+    }
+
+    fn make_review_meta(session_id: &str, decision: &str, iters: u32) -> ReviewSessionMeta {
+        ReviewSessionMeta {
+            session_id: session_id.to_string(),
+            head_sha: "abc123".to_string(),
+            decision: decision.to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            tool: "codex".to_string(),
+            scope: "base:main".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: iters,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
+        }
+    }
+
+    fn make_review_artifact(session_id: &str, sev: Severity) -> ReviewArtifact {
+        use csa_session::SeveritySummary;
+        let findings = vec![Finding {
+            severity: sev,
+            fid: "F-001".to_string(),
+            file: "src/lib.rs".to_string(),
+            line: Some(42),
+            rule_id: "rust/test".to_string(),
+            summary: "Assumption no unwrap in production path".to_string(),
+            engine: "reviewer".to_string(),
+        }];
+        ReviewArtifact {
+            severity_summary: SeveritySummary::from_findings(&findings),
+            findings,
+            review_mode: None,
+            schema_version: "1.0".to_string(),
+            session_id: session_id.to_string(),
+            timestamp: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn prior_round_assumptions_none_when_no_prior_session() {
+        use crate::test_session_sandbox::ScopedSessionSandbox;
+        let project = setup_git_repo_with_branch("feat/iter1");
+        let _sandbox = ScopedSessionSandbox::new(&project);
+
+        let result = discover_prior_round_assumptions(project.path(), Some("feat/iter1"), None);
+        assert!(
+            result.is_none(),
+            "iter=1 (no prior session) must not inject Prior-Round section"
+        );
+    }
+
+    #[test]
+    fn prior_round_assumptions_render_when_prior_exists() {
+        use crate::test_session_sandbox::ScopedSessionSandbox;
+        use csa_session::{create_session, get_session_dir, write_review_meta};
+
+        let project = setup_git_repo_with_branch("feat/iter2");
+        let _sandbox = ScopedSessionSandbox::new(&project);
+
+        let prior = create_session(project.path(), Some("prior review"), None, Some("codex"))
+            .expect("prior session created");
+        let prior_dir = get_session_dir(project.path(), &prior.meta_session_id).unwrap();
+
+        write_review_meta(
+            &prior_dir,
+            &make_review_meta(&prior.meta_session_id, "fail", 1),
+        )
+        .expect("write review meta");
+
+        let artifact = make_review_artifact(&prior.meta_session_id, Severity::High);
+        std::fs::write(
+            prior_dir.join("review-findings.json"),
+            serde_json::to_string(&artifact).unwrap(),
+        )
+        .expect("write findings");
+
+        let result = discover_prior_round_assumptions(project.path(), Some("feat/iter2"), None);
+        let rendered = result.expect("iter=2 must inject Prior-Round section");
+
+        assert!(rendered.contains("## Prior-Round Assumptions to Re-verify"));
+        assert!(rendered.contains("iteration 1"));
+        assert!(rendered.contains("decision `fail`"));
+        assert!(rendered.contains("[high]"));
+        assert!(rendered.contains("src/lib.rs:42"));
+        assert!(rendered.contains("no unwrap"));
+    }
+
+    #[test]
+    fn render_prior_round_assumptions_handles_empty_findings() {
+        let summary = PriorRoundSummary {
+            session_id: "01TESTTIMESTAMP0001".to_string(),
+            decision: "pass".to_string(),
+            review_iterations: 3,
+            findings: vec![],
+        };
+        let rendered = render_prior_round_assumptions(&summary);
+        assert!(rendered.contains("## Prior-Round Assumptions to Re-verify"));
+        assert!(rendered.contains("01TESTTIMESTAMP0001"));
+        assert!(rendered.contains("iteration 3"));
+        assert!(rendered.contains("decision `pass`"));
+        assert!(rendered.contains("No structured findings captured"));
     }
 
     #[test]

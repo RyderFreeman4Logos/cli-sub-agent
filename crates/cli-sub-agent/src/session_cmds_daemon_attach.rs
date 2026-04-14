@@ -26,7 +26,8 @@ fn routes_session_output_to_output_log(metadata: &csa_session::metadata::Session
     )
 }
 
-fn attach_primary_output_from_metadata(
+#[cfg_attr(test, allow(dead_code))]
+pub(super) fn attach_primary_output_from_metadata(
     metadata: &csa_session::metadata::SessionMetadata,
     output_log_exists: bool,
     session_active: bool,

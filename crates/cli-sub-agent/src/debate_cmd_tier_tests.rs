@@ -4,6 +4,8 @@ use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::{GlobalConfig, ProjectConfig, ReviewConfig, ToolConfig, ToolSelection};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::MakeWriter;
 
 fn assume_tier_tools_available() -> ScopedTestEnvVar {
     ScopedTestEnvVar::set(
@@ -81,6 +83,54 @@ fn debate_config_with_whitelist(
         ..Default::default()
     });
     cfg
+}
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SharedLogBuffer {
+    fn contents(&self) -> String {
+        String::from_utf8(self.bytes.lock().expect("log buffer lock").clone()).expect("utf8 logs")
+    }
+}
+
+struct SharedLogWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = SharedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriter {
+            bytes: Arc::clone(&self.bytes),
+        }
+    }
+}
+
+impl std::io::Write for SharedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.bytes
+            .lock()
+            .expect("log writer lock")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn debate_config_with_single_tool_whitelist(
+    tier_name: &str,
+    models: Vec<&str>,
+    enabled_tools: &[&str],
+    whitelist_tool: &str,
+) -> ProjectConfig {
+    debate_config_with_whitelist(tier_name, models, enabled_tools, &[whitelist_tool])
 }
 
 #[test]
@@ -243,6 +293,130 @@ fn test_debate_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
         msg.contains("active debate tier remains authoritative"),
         "{msg}"
     );
+}
+
+#[test]
+fn debate_resolution_warns_on_silent_narrowing_without_flag() {
+    let _tool_availability = assume_tier_tools_available();
+    let global = GlobalConfig::default();
+    let cfg = debate_config_with_single_tool_whitelist(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["gemini-cli", "codex"],
+        "codex",
+    );
+
+    let buffer = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(buffer.clone())
+        .without_time()
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let result = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    )
+    .expect("narrowing should soft-fallback by default");
+
+    assert_eq!(result.0, ToolName::Codex);
+    assert_eq!(result.1, DebateMode::Heterogeneous);
+    assert_eq!(result.2.as_deref(), Some("codex/openai/gpt-5.4/high"));
+
+    let logs = buffer.contents();
+    assert!(
+        logs.contains("debate panel narrowed to single tool `codex`"),
+        "expected narrowing warning, got: {logs}"
+    );
+    assert!(
+        logs.contains("tier `quality` declared 2 models"),
+        "expected tier context in warning, got: {logs}"
+    );
+}
+
+#[test]
+fn debate_resolution_fails_on_narrowing_when_require_heterogeneous_true() {
+    let _tool_availability = assume_tier_tools_available();
+    let mut global = GlobalConfig::default();
+    global.debate.require_heterogeneous = true;
+    let cfg = debate_config_with_single_tool_whitelist(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["gemini-cli", "codex"],
+        "codex",
+    );
+
+    let err = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    )
+    .expect_err("strict heterogeneity should fail on narrowing");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Debate tier 'quality' narrowed to a single surviving tool 'codex'"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("gemini-cli/google/default/xhigh"),
+        "declared models missing from error: {msg}"
+    );
+    assert!(
+        msg.contains("codex/openai/gpt-5.4/high"),
+        "declared models missing from error: {msg}"
+    );
+}
+
+#[test]
+fn debate_resolution_passes_when_panel_stays_heterogeneous() {
+    let _tool_availability = assume_tier_tools_available();
+    let global = GlobalConfig::default();
+    let cfg = debate_config_with_tier(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["gemini-cli", "codex"],
+    );
+
+    let result = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    )
+    .expect("heterogeneous panel should resolve");
+
+    assert_eq!(result.0, ToolName::GeminiCli);
+    assert_eq!(result.1, DebateMode::Heterogeneous);
+    assert_eq!(result.2.as_deref(), Some("gemini-cli/google/default/xhigh"));
 }
 
 #[test]

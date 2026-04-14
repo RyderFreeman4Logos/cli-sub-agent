@@ -49,6 +49,7 @@ tokuin.workspace = true
 xurl-core.workspace = true
 
 [dev-dependencies]
+proptest = "1"
 serial_test = "3.4"
 
 [features]

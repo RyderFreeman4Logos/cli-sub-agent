@@ -1,7 +1,10 @@
+use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 
-use csa_core::types::ToolName;
+use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
+use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, write_review_verdict};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
 use tracing::{debug, warn};
 
@@ -134,6 +137,82 @@ pub(super) fn persist_review_meta(project_root: &Path, meta: &ReviewSessionMeta)
     }
 }
 
+/// Persist a [`ReviewVerdictArtifact`] to `{session_dir}/output/review-verdict.json`.
+///
+/// Best-effort: failures are logged as warnings but do not fail the review.
+pub(super) fn persist_review_verdict(
+    project_root: &Path,
+    meta: &ReviewSessionMeta,
+    findings: &[Finding],
+    prior_round_refs: Vec<String>,
+) {
+    match csa_session::get_session_dir(project_root, &meta.session_id) {
+        Ok(session_dir) => {
+            let verdict_path = session_dir.join("output").join("review-verdict.json");
+            if verdict_path.exists() {
+                debug!(
+                    session_id = %meta.session_id,
+                    path = %verdict_path.display(),
+                    "Skipping output/review-verdict.json persistence because AI artifact already exists"
+                );
+                return;
+            }
+            let decision =
+                ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain);
+            let synthesized_findings = match load_review_findings_from_output(&session_dir) {
+                Ok(Some(loaded_findings)) => loaded_findings,
+                Ok(None) => findings.to_vec(),
+                Err(error) => {
+                    debug!(
+                        session_id = %meta.session_id,
+                        error = %error,
+                        "Failed to load output/review-findings.json; synthesizing empty review-verdict sidecar"
+                    );
+                    findings.to_vec()
+                }
+            };
+            let artifact = ReviewVerdictArtifact::from_parts(
+                meta.session_id.clone(),
+                decision,
+                meta.verdict.clone(),
+                &synthesized_findings,
+                prior_round_refs,
+            );
+            if let Err(e) = write_review_verdict(&session_dir, &artifact) {
+                warn!(
+                    session_id = %meta.session_id,
+                    error = %e,
+                    "Failed to write output/review-verdict.json"
+                );
+            } else {
+                debug!(session_id = %meta.session_id, "Wrote output/review-verdict.json");
+            }
+        }
+        Err(e) => {
+            warn!(
+                session_id = %meta.session_id,
+                error = %e,
+                "Cannot resolve session dir for review verdict"
+            );
+        }
+    }
+}
+
+fn load_review_findings_from_output(
+    session_dir: &Path,
+) -> Result<Option<Vec<Finding>>, anyhow::Error> {
+    let findings_path = session_dir.join("review-findings.json");
+    if !findings_path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&findings_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
+    let artifact = serde_json::from_str::<ReviewArtifact>(&contents)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", findings_path.display()))?;
+    Ok(Some(artifact.findings))
+}
+
 /// Detect whether `project_root` resides inside a git worktree submodule.
 ///
 /// A worktree submodule's `.git` is a file (not directory) containing a
@@ -236,4 +315,135 @@ fn strip_prompt_guards(text: &str) -> String {
 
 fn truncate_review_result_summary(line: &str) -> String {
     line.chars().take(REVIEW_RESULT_SUMMARY_MAX_CHARS).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_review_verdict;
+    use csa_core::types::ReviewDecision;
+    use csa_session::state::ReviewSessionMeta;
+    use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
+        ReviewSessionMeta {
+            session_id: session_id.to_string(),
+            head_sha: String::new(),
+            decision: ReviewDecision::Fail.as_str().to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            tool: "codex".to_string(),
+            scope: "diff".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
+        }
+    }
+
+    fn make_finding(severity: Severity, fid: &str) -> Finding {
+        Finding {
+            severity,
+            fid: fid.to_string(),
+            file: "src/lib.rs".to_string(),
+            line: Some(1),
+            rule_id: format!("rule.{fid}"),
+            summary: format!("summary {fid}"),
+            engine: "reviewer".to_string(),
+        }
+    }
+
+    fn temp_project_root(test_name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("csa-{test_name}-{suffix}"));
+        fs::create_dir_all(&path).expect("create temp project root");
+        path
+    }
+
+    fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
+        let session_dir =
+            csa_session::get_session_dir(project_root, session_id).expect("resolve session dir");
+        fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+        session_dir
+    }
+
+    #[test]
+    fn persist_review_verdict_skips_when_ai_file_exists() {
+        let project_root = temp_project_root("persist-review-verdict-skip");
+        let session_id = "01TESTSKIP0000000000000000";
+        let session_dir = create_session_dir(&project_root, session_id);
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let ai_payload = r#"{"ai":"preserved"}"#;
+        fs::write(&verdict_path, ai_payload).expect("write AI verdict artifact");
+
+        let meta = make_review_meta(session_id);
+        persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+        let actual = fs::read_to_string(&verdict_path).expect("read verdict artifact");
+        assert_eq!(actual, ai_payload);
+
+        fs::remove_dir_all(project_root).expect("remove temp project root");
+    }
+
+    #[test]
+    fn persist_review_verdict_synthesizes_from_findings_json() {
+        let project_root = temp_project_root("persist-review-verdict-findings");
+        let session_id = "01TESTFINDINGS000000000000";
+        let session_dir = create_session_dir(&project_root, session_id);
+        let findings_path = session_dir.join("review-findings.json");
+        let findings = vec![
+            make_finding(Severity::High, "high"),
+            make_finding(Severity::Low, "low"),
+        ];
+        let artifact = ReviewArtifact {
+            severity_summary: SeveritySummary::from_findings(&findings),
+            findings: findings.clone(),
+            review_mode: None,
+            schema_version: "1.0".to_string(),
+            session_id: session_id.to_string(),
+            timestamp: chrono::Utc::now(),
+        };
+        fs::write(
+            &findings_path,
+            serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
+        )
+        .expect("write findings artifact");
+
+        let meta = make_review_meta(session_id);
+        persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+        assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&1));
+
+        fs::remove_dir_all(project_root).expect("remove temp project root");
+    }
+
+    #[test]
+    fn persist_review_verdict_empty_sidecar_when_findings_missing() {
+        let project_root = temp_project_root("persist-review-verdict-empty");
+        let session_id = "01TESTEMPTY000000000000000";
+        let session_dir = create_session_dir(&project_root, session_id);
+        let meta = make_review_meta(session_id);
+
+        persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.severity_counts.len(), 5);
+        assert!(artifact.severity_counts.values().all(|value| *value == 0));
+
+        fs::remove_dir_all(project_root).expect("remove temp project root");
+    }
 }

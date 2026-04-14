@@ -11,6 +11,9 @@ version = "0.1.0"
 Ensures all code is reviewed by csa review before committing.
 Automated fix-and-retry loop: review → fix → re-review → repeat until clean.
 Maximum 3 iterations.
+Because this pattern invokes the downstream `commit` skill, the AI reviewer should verify the
+`Reviewer Guidance` schema required there, including `Timing/Race Scenarios`, `Boundary Cases`,
+and `Risk Areas`.
 
 ## Step 1: Stage Changes
 

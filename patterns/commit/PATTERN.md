@@ -290,6 +290,13 @@ do
   fi
 done
 
+for required_guidance in 'Timing/Race Scenarios:' 'Boundary Cases:' 'Risk Areas:'; do
+  if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- "${required_guidance}"; then
+    echo "ERROR: Commit body Reviewer Guidance must include the required '${required_guidance}' sub-field." >&2
+    exit 1
+  fi
+done
+
 if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | awk '
   BEGIN { found = 0; has_summary = 0 }
   /^### AI Reviewer Metadata$/ { found = 1; next }
