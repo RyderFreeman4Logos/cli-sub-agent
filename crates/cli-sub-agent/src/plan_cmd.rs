@@ -40,6 +40,7 @@ mod plan_cmd_flow;
 
 #[path = "plan_cmd_steps.rs"]
 mod plan_cmd_steps;
+pub(crate) use plan_cmd_flow::shell_escape_for_command;
 use plan_cmd_steps::{PlanRunContext, execute_plan_with_journal};
 pub(crate) use plan_cmd_steps::{StepResult, StepTarget, resolve_step_tool};
 #[cfg(test)]

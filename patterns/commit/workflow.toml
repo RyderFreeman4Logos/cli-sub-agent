@@ -110,15 +110,16 @@ Initialize and declare workflow variables.
 # Bridge CSA_SKIP_PUBLISH env var to workflow variable.
 # When parent workflow (mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true, auto-PR is skipped.
 # When standalone, CSA_SKIP_PUBLISH is unset → auto-PR runs after commit.
-# Also auto-skip when running inside a CSA session (CSA_DEPTH>0) — the Layer 0
-# orchestrator owns publish/pr-bot. Letting an employee session invoke /pr-bot
-# nests another `csa plan run` and can trip the recursion-ceiling guard or leak
-# grandchild processes if the chain fails mid-flight (see #752 Bug 4).
+# Also auto-skip in executor mode (`CSA_DEPTH>0` + `CSA_INTERNAL_INVOCATION=1`) —
+# the Layer 0 orchestrator owns publish/pr-bot. Letting an employee session
+# invoke /pr-bot nests another `csa plan run` and can trip the recursion-ceiling
+# guard or leak grandchild processes if the chain fails mid-flight (see #752 Bug 4).
 if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
   echo "CSA_VAR:SKIP_PUBLISH=true"
-elif [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ]; then
+elif [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
+     { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
   echo "CSA_VAR:SKIP_PUBLISH=true"
-  echo "INFO: Detected CSA_DEPTH=${CSA_DEPTH}; auto-skipping pr-bot to keep employee sessions orchestration-pure."
+  echo "INFO: Detected executor mode (CSA_DEPTH=${CSA_DEPTH}, CSA_INTERNAL_INVOCATION=${CSA_INTERNAL_INVOCATION:-0}); auto-skipping push/PR to keep employee sessions orchestration-pure."
 else
   echo "CSA_VAR:SKIP_PUBLISH=${SKIP_PUBLISH:-false}"
 fi
@@ -519,6 +520,12 @@ Runs by default when commit is standalone. Skipped when parent workflow
 
 ```bash
 set -euo pipefail
+if [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
+   { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+  echo "INFO: Executor mode detected; skipping push/PR transaction."
+  exit 0
+fi
+
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
   echo "ERROR: PR title is empty." >&2
   exit 1

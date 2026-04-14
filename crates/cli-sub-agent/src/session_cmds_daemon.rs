@@ -1,5 +1,6 @@
 //! Daemon-specific session commands extracted from `session_cmds.rs`.
 
+use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -37,6 +38,11 @@ enum AttachPrimaryOutput {
 struct DaemonCompletionPacket {
     exit_code: i32,
     status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UnpushedCommitsRecoveryPacket {
+    recovery_command: String,
 }
 
 impl DaemonCompletionPacket {
@@ -168,22 +174,78 @@ where
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
             && !session_has_terminal_process(&session_dir)
         {
-            let _ = refresh_result_for_wait(
+            let refreshed_result = refresh_result_for_wait(
                 effective_root,
                 &resolved.session_id,
                 &session_dir,
                 is_cross_project,
             );
+            if let Err(err) = &refreshed_result {
+                tracing::debug!(
+                    session_id = %resolved.session_id,
+                    error = %err,
+                    "Failed to refresh result after daemon completion packet"
+                );
+            }
+            let refreshed_result = refreshed_result.ok().flatten();
+            let mut synthetic = false;
+            let refreshed_result_available = refreshed_result.is_some();
+            let mut loaded_result = refreshed_result.filter(|result| {
+                match (
+                    fs::metadata(session_dir.join(csa_session::result::RESULT_FILE_NAME))
+                        .ok()
+                        .and_then(|metadata| metadata.modified().ok()),
+                    fs::metadata(daemon_completion_path(&session_dir))
+                        .ok()
+                        .and_then(|metadata| metadata.modified().ok()),
+                ) {
+                    (Some(result_modified), Some(completion_modified))
+                        if result_modified > completion_modified =>
+                    {
+                        true
+                    }
+                    (Some(result_modified), Some(completion_modified))
+                        if result_modified == completion_modified =>
+                    {
+                        completion.exit_code == 0 && result.exit_code != 0
+                    }
+                    _ => false,
+                }
+            });
+            if refreshed_result_available {
+                crate::session_cmds::retire_if_dead_with_result(
+                    effective_root,
+                    &resolved.session_id,
+                    "session wait",
+                )?;
+            } else {
+                let reconciled = reconcile_dead_active_session(
+                    effective_root,
+                    &resolved.session_id,
+                    "session wait",
+                )?;
+                synthetic = reconciled.synthetic;
+                if reconciled.result_became_available {
+                    loaded_result = load_completed_daemon_result_adaptive(
+                        effective_root,
+                        &resolved.session_id,
+                        &session_dir,
+                        is_cross_project,
+                    )?;
+                }
+            }
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
+            #[rustfmt::skip]
+            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, loaded_result.as_ref());
             emit_completion_signal(
                 &resolved.session_id,
-                &completion.status,
-                completion.exit_code,
-                false,
+                completion_status.as_ref(),
+                exit_code,
+                synthetic,
                 !streamed_output,
             );
-            return Ok(completion.exit_code);
+            return Ok(exit_code);
         }
 
         if let Some(result) = load_completed_daemon_result_adaptive(
@@ -194,14 +256,16 @@ where
         )? {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
+            #[rustfmt::skip]
+            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
             emit_completion_signal(
                 &resolved.session_id,
-                &result.status,
-                result.exit_code,
+                completion_status.as_ref(),
+                exit_code,
                 false,
                 !streamed_output,
             );
-            return Ok(result.exit_code);
+            return Ok(exit_code);
         }
 
         // Synthesize terminal result for dead Active sessions.
@@ -217,10 +281,12 @@ where
         {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
+            #[rustfmt::skip]
+            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
             emit_completion_signal(
                 &resolved.session_id,
-                &result.status,
-                result.exit_code,
+                completion_status.as_ref(),
+                exit_code,
                 reconciled.synthetic,
                 !streamed_output,
             );
@@ -230,7 +296,7 @@ where
                     resolved.session_id,
                 );
             }
-            return Ok(result.exit_code);
+            return Ok(exit_code);
         }
 
         if !session_has_terminal_process(&session_dir) {
@@ -242,14 +308,16 @@ where
             )? {
                 let streamed_output = stream_wait_output(&session_dir)?;
                 emit_wait_next_step_if_needed(&session_dir)?;
+                #[rustfmt::skip]
+                let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
                 emit_completion_signal(
                     &resolved.session_id,
-                    &result.status,
-                    result.exit_code,
+                    completion_status.as_ref(),
+                    exit_code,
                     false,
                     !streamed_output,
                 );
-                return Ok(result.exit_code);
+                return Ok(exit_code);
             }
             eprintln!(
                 "Session {} has no live daemon process and no terminal result packet.",
@@ -322,6 +390,37 @@ pub(crate) fn synthesized_wait_next_step(session_dir: &Path) -> Result<Option<St
         return Ok(None);
     }
 
+    let unpushed_commits_path = session_dir.join("output").join("unpushed_commits.json");
+    if unpushed_commits_path.is_file() {
+        match fs::read_to_string(&unpushed_commits_path) {
+            Ok(contents) => {
+                match serde_json::from_str::<UnpushedCommitsRecoveryPacket>(&contents) {
+                    Ok(recovery) if !recovery.recovery_command.trim().is_empty() => {
+                        return Ok(Some(csa_hooks::format_next_step_directive(
+                            &recovery.recovery_command,
+                            true,
+                        )));
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            sidecar_path = %unpushed_commits_path.display(),
+                            error = %err,
+                            "Ignoring malformed unpushed commit recovery sidecar while synthesizing wait next-step"
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::debug!(
+                    sidecar_path = %unpushed_commits_path.display(),
+                    error = %err,
+                    "Ignoring unreadable unpushed commit recovery sidecar while synthesizing wait next-step"
+                );
+            }
+        }
+    }
+
     let review_meta_path = session_dir.join("review_meta.json");
     if !review_meta_path.is_file() {
         return Ok(None);
@@ -348,7 +447,20 @@ fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
     }
     Ok(())
 }
-
+fn resolve_wait_completion_status_and_exit<'a>(
+    fallback_status: &'a str,
+    fallback_exit_code: i32,
+    synthetic: bool,
+    real_result: Option<&'a csa_session::SessionResult>,
+) -> (Cow<'a, str>, i32) {
+    if synthetic {
+        return (Cow::Borrowed("failure"), 1);
+    }
+    real_result.map_or_else(
+        || (Cow::Borrowed(fallback_status), fallback_exit_code),
+        |result| (Cow::Borrowed(result.status.as_str()), result.exit_code),
+    )
+}
 fn load_completed_daemon_result(
     project_root: &std::path::Path,
     session_id: &str,
@@ -373,7 +485,6 @@ fn load_completed_daemon_result(
     if session_has_terminal_process(session_dir) {
         return Ok(None);
     }
-
     Ok(Some(result))
 }
 

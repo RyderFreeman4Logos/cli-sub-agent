@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, anyhow};
+use csa_core::vcs::VcsKind;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use tracing::{info, warn};
 
 use csa_process::ToolLiveness;
@@ -9,7 +12,29 @@ use csa_session::{
     MetaSessionState, SessionPhase, SessionResult, get_session_dir, load_result, load_session,
 };
 
+use crate::plan_cmd::shell_escape_for_command;
+
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
+const UNPUSHED_COMMITS_SIDECAR_PATH: &str = "output/unpushed_commits.json";
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UnpushedCommitRecord { sha: String, subject: String }
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UnpushedCommitsSidecar { branch: String, remote_ref: Option<String>, commits_ahead: u64, commits: Vec<UnpushedCommitRecord>, recovery_command: String }
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArtifactRollbackGuard { artifact_path: PathBuf, expected_contents: Vec<u8>, rollback_action: ArtifactRollbackAction }
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ArtifactRollbackAction { RemoveIfContentsMatch, RestoreOriginal(Vec<u8>) }
+
+#[rustfmt::skip]
+struct ArtifactRollbackLabels<'a> { removed_cleanup: &'a str, missing_after_match_cleanup: &'a str, remove_failed_cleanup: &'a str, preserved_cleanup: &'a str, missing_cleanup: &'a str, read_failed_cleanup: &'a str, artifact_label: &'a str }
 
 struct SyntheticResultHooks<'a> {
     before_write: &'a dyn Fn(&Path),
@@ -56,6 +81,106 @@ fn with_reconcile_lock<R>(
 }
 
 fn noop_path(_: &Path) {}
+
+fn git_output(project_root: &Path, args: &[&str]) -> Result<std::process::Output> {
+    Command::new("git")
+        .args(args)
+        .current_dir(project_root)
+        .output()
+        .with_context(|| format!("Failed to run git {:?}", args))
+}
+
+fn git_success(project_root: &Path, args: &[&str]) -> bool {
+    git_output(project_root, args)
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn inspect_unpushed_commits(
+    project_root: &Path,
+    branch: &str,
+) -> Result<Option<UnpushedCommitsSidecar>> {
+    let session_branch_ref = format!("refs/heads/{branch}");
+    let range = if git_success(
+        project_root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/origin/{branch}"),
+        ],
+    ) {
+        (
+            Some(format!("origin/{branch}")),
+            format!("origin/{branch}..{session_branch_ref}"),
+        )
+    } else if git_success(
+        project_root,
+        &["rev-parse", "--verify", "--quiet", "refs/heads/main"],
+    ) {
+        (None, format!("main..{session_branch_ref}"))
+    } else if git_success(
+        project_root,
+        &["rev-parse", "--verify", "--quiet", "refs/heads/master"],
+    ) {
+        (None, format!("master..{session_branch_ref}"))
+    } else {
+        return Ok(None);
+    };
+    let (remote_ref, rev_range) = range;
+
+    let count_output = git_output(project_root, &["rev-list", "--count", &rev_range])?;
+    if !count_output.status.success() {
+        return Ok(None);
+    }
+    let commits_ahead = String::from_utf8_lossy(&count_output.stdout)
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0);
+    if commits_ahead == 0 {
+        return Ok(None);
+    }
+
+    let log_output = git_output(project_root, &["log", "--format=%H%x09%s", &rev_range])?;
+    if !log_output.status.success() {
+        return Ok(None);
+    }
+
+    let commits = String::from_utf8_lossy(&log_output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (sha, subject) = line.split_once('\t')?;
+            Some(UnpushedCommitRecord {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if commits.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(UnpushedCommitsSidecar {
+        branch: branch.to_string(),
+        remote_ref,
+        commits_ahead,
+        commits,
+        recovery_command: format_git_push_recovery_command(branch),
+    }))
+}
+
+#[rustfmt::skip]
+fn persist_unpushed_commits_sidecar(project_root: &Path, session: &MetaSessionState, session_dir: &Path) -> Result<Option<ArtifactRollbackGuard>> {
+    if session.resolved_identity().vcs_kind != VcsKind::Git { return Ok(None); }
+    let Some(branch) = session.branch.as_deref() else { return Ok(None); };
+    let Some(sidecar) = inspect_unpushed_commits(project_root, branch)? else { return Ok(None); };
+    fs::create_dir_all(session_dir.join("output"))?;
+    let sidecar_path = session_dir.join(UNPUSHED_COMMITS_SIDECAR_PATH);
+    let sidecar_contents = serde_json::to_vec_pretty(&sidecar)?;
+    let rollback_guard = artifact_rollback_guard(&sidecar_path, sidecar_contents.as_slice())?;
+    write_sidecar_atomically(&sidecar_path, &sidecar_contents)?;
+    Ok(rollback_guard)
+}
 
 fn session_has_terminal_process(session_dir: &Path) -> bool {
     ToolLiveness::has_live_process(session_dir) || ToolLiveness::daemon_pid_is_alive(session_dir)
@@ -193,7 +318,6 @@ where
         }
         Err(err) => return Err(err),
     }
-
     let now = chrono::Utc::now();
     let tool_name = session
         .tools
@@ -201,8 +325,21 @@ where
         .max_by_key(|(_, state)| state.updated_at)
         .map(|(tool, _)| tool.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    let artifacts =
-        crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
+    #[rustfmt::skip]
+    let sidecar_rollback_guard = match persist_unpushed_commits_sidecar(project_root, &session, session_dir) {
+        Ok(rollback_guard) => rollback_guard,
+        Err(err) => {
+            warn!(
+                session_id = %session_id,
+                trigger = %trigger,
+                error = %err,
+                "Failed to persist unpushed commit recovery sidecar"
+            );
+            None
+        }
+    };
+    #[rustfmt::skip]
+    let artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
     let output_log_mtime = format_optional_file_mtime(&session_dir.join("output.log"));
     let summary_prefix = format!(
         "synthetic failure by {trigger}: process dead, result.toml missing (reconciliation_reason=true_missing_result, output_log_mtime={})",
@@ -222,10 +359,19 @@ where
         artifacts,
         peak_memory_mb: None,
     };
-    let result_contents = toml::to_string_pretty(&fallback)
-        .map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
+    #[rustfmt::skip]
+    let result_contents = toml::to_string_pretty(&fallback).map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
     match persist_new_result_file(&result_path, &result_contents, before_write)? {
         SyntheticResultPersistOutcome::AlreadyExists => {
+            if let Err(err) = rollback_sidecar(sidecar_rollback_guard.as_ref()) {
+                warn!(
+                    session_id = %session_id,
+                    trigger = %trigger,
+                    reconciliation_reason = "late_result_write_sidecar_cleanup_failed",
+                    error = %err,
+                    "Failed to clean up reconcile-owned unpushed commit sidecar after late result.toml write"
+                );
+            }
             let retired = retire_if_dead_with_result_impl(
                 project_root,
                 session_id,
@@ -260,14 +406,16 @@ where
             error = %err,
             "Failed to transition orphaned session to Retired phase during reconciliation; removing synthetic result and leaving session state unchanged"
         );
-        remove_synthetic_result_if_unchanged(&result_path, result_contents.as_bytes()).map_err(
-            |cleanup_err| {
+        rollback_reconciliation_artifacts(
+            &result_path,
+            result_contents.as_bytes(),
+            sidecar_rollback_guard.as_ref(),
+        )
+        .map_err(|cleanup_err| {
             anyhow!(
-                "Failed to transition orphaned session to Retired phase during reconciliation for {session_id}: {err}; additionally failed to remove synthetic result {}: {cleanup_err}",
-                result_path.display()
+                "Failed to transition orphaned session to Retired phase during reconciliation for {session_id}: {err}; additionally failed to remove synthetic artifacts: {cleanup_err}"
             )
-        },
-        )?;
+        })?;
         return Err(anyhow!(
             "Failed to transition orphaned session to Retired phase during reconciliation for {session_id}: {err}"
         ));
@@ -281,14 +429,16 @@ where
             error = %err,
             "Failed to persist retired orphaned session state during reconciliation; removing synthetic result and leaving session state unchanged"
         );
-        remove_synthetic_result_if_unchanged(&result_path, result_contents.as_bytes()).map_err(
-            |cleanup_err| {
+        rollback_reconciliation_artifacts(
+            &result_path,
+            result_contents.as_bytes(),
+            sidecar_rollback_guard.as_ref(),
+        )
+        .map_err(|cleanup_err| {
             anyhow!(
-                "Failed to persist retired orphaned session state for {session_id}: {err}; additionally failed to remove synthetic result {}: {cleanup_err}",
-                result_path.display()
+                "Failed to persist retired orphaned session state for {session_id}: {err}; additionally failed to remove synthetic artifacts: {cleanup_err}"
             )
-        },
-        )?;
+        })?;
         return Err(anyhow!(
             "Failed to persist retired orphaned session state for {session_id}: {err}"
         ));
@@ -414,68 +564,83 @@ fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionSta
     })?;
     Ok(())
 }
-
-fn remove_synthetic_result_if_unchanged(
-    result_path: &Path,
-    expected_contents: &[u8],
-) -> std::io::Result<()> {
-    match fs::read(result_path) {
-        Ok(current_contents) if current_contents == expected_contents => {
-            match fs::remove_file(result_path) {
-                Ok(()) => {
-                    warn!(
-                        result_path = %result_path.display(),
-                        rollback_cleanup = "removed_synthetic_result",
-                        "Rollback removed synthetic result.toml after reconciliation failure"
-                    );
-                    Ok(())
-                }
-                Err(err) if err.kind() == ErrorKind::NotFound => {
-                    warn!(
-                        result_path = %result_path.display(),
-                        rollback_cleanup = "result_missing_after_match",
-                        "Rollback synthetic result.toml was already absent after reconciliation failure"
-                    );
-                    Ok(())
-                }
-                Err(err) => {
-                    warn!(
-                        result_path = %result_path.display(),
-                        rollback_cleanup = "remove_failed",
-                        error = %err,
-                        "Rollback failed to remove matching synthetic result.toml after reconciliation failure"
-                    );
-                    Err(err)
-                }
-            }
-        }
-        Ok(_) => {
-            warn!(
-                result_path = %result_path.display(),
-                rollback_cleanup = "late_real_result_preserved",
-                "Rollback detected late real result.toml and left it in place"
-            );
-            Ok(())
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            warn!(
-                result_path = %result_path.display(),
-                rollback_cleanup = "result_missing",
-                "Rollback found no result.toml to clean up after reconciliation failure"
-            );
-            Ok(())
-        }
-        Err(err) => {
-            warn!(
-                result_path = %result_path.display(),
-                rollback_cleanup = "read_failed",
-                error = %err,
-                "Rollback failed to read result.toml for content-aware cleanup after reconciliation failure"
-            );
-            Ok(())
-        }
+#[rustfmt::skip]
+fn remove_synthetic_result_if_unchanged(result_path: &Path, expected_contents: &[u8]) -> std::io::Result<()> {
+    remove_artifact_if_unchanged(result_path, expected_contents, ArtifactRollbackLabels { removed_cleanup: "removed_synthetic_result", missing_after_match_cleanup: "result_missing_after_match", remove_failed_cleanup: "remove_failed", preserved_cleanup: "late_real_result_preserved", missing_cleanup: "result_missing", read_failed_cleanup: "read_failed", artifact_label: "synthetic result.toml" })
+}
+#[rustfmt::skip]
+fn rollback_sidecar(rollback_guard: Option<&ArtifactRollbackGuard>) -> std::io::Result<()> {
+    let Some(rollback_guard) = rollback_guard else { return Ok(()); };
+    match &rollback_guard.rollback_action {
+        ArtifactRollbackAction::RemoveIfContentsMatch => remove_artifact_if_unchanged(&rollback_guard.artifact_path, rollback_guard.expected_contents.as_slice(), ArtifactRollbackLabels { removed_cleanup: "removed_unpushed_commits_sidecar", missing_after_match_cleanup: "sidecar_missing_after_match", remove_failed_cleanup: "sidecar_remove_failed", preserved_cleanup: "preexisting_sidecar_preserved", missing_cleanup: "sidecar_missing", read_failed_cleanup: "sidecar_read_failed", artifact_label: "unpushed_commits.json sidecar" }),
+        ArtifactRollbackAction::RestoreOriginal(original_contents) => match fs::read(&rollback_guard.artifact_path) {
+            Ok(current_contents) if current_contents == rollback_guard.expected_contents => { fs::write(&rollback_guard.artifact_path, original_contents)?; warn!(artifact_path = %rollback_guard.artifact_path.display(), rollback_cleanup = "restored_preexisting_unpushed_commits_sidecar", "Rollback restored preexisting unpushed_commits.json sidecar after reconciliation failure"); Ok(()) }
+            Ok(_) => { warn!(artifact_path = %rollback_guard.artifact_path.display(), rollback_cleanup = "preexisting_sidecar_preserved", "Rollback preserved unpushed_commits.json sidecar because contents changed after reconciliation failure"); Ok(()) }
+            Err(err) if err.kind() == ErrorKind::NotFound => { warn!(artifact_path = %rollback_guard.artifact_path.display(), rollback_cleanup = "sidecar_missing", "Rollback found no unpushed_commits.json sidecar to restore after reconciliation failure"); Ok(()) }
+            Err(err) => { warn!(artifact_path = %rollback_guard.artifact_path.display(), rollback_cleanup = "sidecar_read_failed", error = %err, "Rollback failed to read unpushed_commits.json sidecar for content-aware restore after reconciliation failure"); Ok(()) }
+        },
     }
 }
+#[rustfmt::skip]
+fn rollback_reconciliation_artifacts(result_path: &Path, result_contents: &[u8], sidecar_rollback_guard: Option<&ArtifactRollbackGuard>) -> std::io::Result<()> {
+    remove_synthetic_result_if_unchanged(result_path, result_contents)?;
+    rollback_sidecar(sidecar_rollback_guard)
+}
+#[rustfmt::skip]
+fn remove_artifact_if_unchanged(artifact_path: &Path, expected_contents: &[u8], labels: ArtifactRollbackLabels<'_>) -> std::io::Result<()> {
+    match fs::read(artifact_path) {
+        Ok(current_contents) if current_contents == expected_contents => match fs::remove_file(artifact_path) {
+            Ok(()) => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.removed_cleanup, "Rollback removed matching {} after reconciliation failure", labels.artifact_label); Ok(()) }
+            Err(err) if err.kind() == ErrorKind::NotFound => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.missing_after_match_cleanup, "Rollback matching {} was already absent after reconciliation failure", labels.artifact_label); Ok(()) }
+            Err(err) => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.remove_failed_cleanup, error = %err, "Rollback failed to remove matching {} after reconciliation failure", labels.artifact_label); Err(err) }
+        },
+        Ok(_) if labels.preserved_cleanup == "late_real_result_preserved" => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.preserved_cleanup, "Rollback detected late real result.toml and left it in place"); Ok(()) }
+        Ok(_) => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.preserved_cleanup, "Rollback preserved {} because contents changed after reconciliation failure", labels.artifact_label); Ok(()) }
+        Err(err) if err.kind() == ErrorKind::NotFound => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.missing_cleanup, "Rollback found no {} to clean up after reconciliation failure", labels.artifact_label); Ok(()) }
+        Err(err) => { warn!(artifact_path = %artifact_path.display(), rollback_cleanup = labels.read_failed_cleanup, error = %err, "Rollback failed to read {} for content-aware cleanup after reconciliation failure", labels.artifact_label); Ok(()) }
+    }
+}
+
+#[rustfmt::skip]
+fn artifact_rollback_guard(artifact_path: &Path, expected_contents: &[u8]) -> std::io::Result<Option<ArtifactRollbackGuard>> {
+    match fs::read(artifact_path) {
+        Ok(current_contents) if current_contents == expected_contents => Ok(None),
+        Ok(current_contents) => Ok(Some(ArtifactRollbackGuard {
+            artifact_path: artifact_path.to_path_buf(),
+            expected_contents: expected_contents.to_vec(),
+            rollback_action: ArtifactRollbackAction::RestoreOriginal(current_contents),
+        })),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(Some(ArtifactRollbackGuard {
+            artifact_path: artifact_path.to_path_buf(),
+            expected_contents: expected_contents.to_vec(),
+            rollback_action: ArtifactRollbackAction::RemoveIfContentsMatch,
+        })),
+        Err(err) => Err(err),
+    }
+}
+
+#[rustfmt::skip]
+fn write_sidecar_atomically(sidecar_path: &Path, contents: &[u8]) -> Result<()> {
+    let sidecar_dir = sidecar_path.parent().ok_or_else(|| anyhow!("Unpushed commit sidecar path has no parent: {}", sidecar_path.display()))?;
+    let mut temp_file = tempfile::NamedTempFile::new_in(sidecar_dir).with_context(|| format!("Failed to create temporary unpushed commit sidecar in {}", sidecar_dir.display()))?;
+    temp_file.as_file_mut().write_all(contents).with_context(|| format!("Failed to write temporary unpushed commit sidecar for {}", sidecar_path.display()))?;
+    temp_file.as_file_mut().sync_all().with_context(|| format!("Failed to sync temporary unpushed commit sidecar for {}", sidecar_path.display()))?;
+    preserve_existing_permissions_if_present(temp_file.as_file_mut(), sidecar_path, "unpushed commit sidecar")?;
+    temp_file.persist(sidecar_path).map_err(|err| anyhow!("Failed to publish unpushed commit sidecar {}: {}", sidecar_path.display(), err.error))?;
+    Ok(())
+}
+
+#[rustfmt::skip]
+fn format_git_push_recovery_command(branch: &str) -> String {
+    if branch_is_shell_word_safe(branch) {
+        format!("git push -u origin {branch}")
+    } else {
+        format!("git push -u origin {}", shell_escape_for_command(branch))
+    }
+}
+
+#[rustfmt::skip]
+fn branch_is_shell_word_safe(branch: &str) -> bool { branch.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-')) }
 
 fn persist_new_result_file<F>(
     result_path: &Path,
@@ -574,3 +739,7 @@ fn format_optional_file_mtime(path: &Path) -> Option<String> {
 #[cfg(test)]
 #[path = "session_cmds_reconcile_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_cmds_reconcile_tests_tail.rs"]
+mod tail_tests;

@@ -24,7 +24,7 @@ Initialize and declare workflow variables.
 - `${COMMIT_SUBJECT}`: Generated or provided commit subject
 - `${COMMIT_BODY}`: Generated or provided commit body
 - `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
-- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish). Workflow auto-activates this when `CSA_SKIP_PUBLISH=true` or when running inside a CSA session (`CSA_DEPTH` set and non-zero) to keep employee sessions orchestration-pure — the Layer 0 orchestrator owns publish/pr-bot (#752 Bug 4).
+- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish). Workflow auto-activates this when `CSA_SKIP_PUBLISH=true` or in executor mode (`CSA_DEPTH` set and non-zero plus `CSA_INTERNAL_INVOCATION=1`) to keep employee sessions orchestration-pure — the Layer 0 orchestrator owns publish/pr-bot (#752 Bug 4, #782).
 - `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
 - `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
 - `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
@@ -33,7 +33,23 @@ Initialize and declare workflow variables.
 
 ```bash
 # Force weave to pick up these variables
-: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}"
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}" "${SKIP_PUBLISH}"
+
+# Bridge CSA_SKIP_PUBLISH env var to workflow variable.
+# When parent workflow (mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true, auto-PR is skipped.
+# When standalone, CSA_SKIP_PUBLISH is unset → auto-PR runs after commit.
+# Also auto-skip in executor mode (`CSA_DEPTH>0` + `CSA_INTERNAL_INVOCATION=1`) —
+# the Layer 0 orchestrator owns publish/pr-bot. Letting an employee session
+# invoke /pr-bot nests another `csa plan run` and can trip the recursion-ceiling
+# guard or leak grandchild processes if the chain fails mid-flight (see #752 Bug 4).
+if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
+  SKIP_PUBLISH=true
+elif [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
+     { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+  SKIP_PUBLISH=true
+else
+  : "${SKIP_PUBLISH:=false}"
+fi
 echo "Variables initialized."
 ```
 
@@ -432,12 +448,18 @@ OnFail: abort
 Push, create or reuse the PR, then synchronously run the post-create helper.
 This makes PR creation + pr-bot a single shell-enforced transaction.
 Runs by default when standalone. Skipped when parent workflow sets
-`CSA_SKIP_PUBLISH=true`, or automatically when invoked from inside a CSA
-session (`CSA_DEPTH` set and non-zero) — the Layer 0 orchestrator owns the
-publish/pr-bot transaction in that case.
+`CSA_SKIP_PUBLISH=true`, or automatically in executor mode
+(`CSA_DEPTH` set and non-zero plus `CSA_INTERNAL_INVOCATION=1`) — the Layer 0
+orchestrator owns the publish/pr-bot transaction in that case.
 
 ```bash
 set -euo pipefail
+if [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
+   { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+  echo "INFO: Executor mode detected; skipping push/PR transaction."
+  exit 0
+fi
+
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
   echo "ERROR: PR title is empty." >&2
   exit 1
