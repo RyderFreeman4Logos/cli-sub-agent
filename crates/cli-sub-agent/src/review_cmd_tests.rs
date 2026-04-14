@@ -6,8 +6,7 @@ use crate::test_env_lock::TEST_ENV_LOCK;
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
-use std::collections::HashMap;
-use std::process::Command;
+use std::{collections::HashMap, process::Command};
 use tempfile::TempDir;
 
 pub(super) struct ScopedEnvVarRestore {
@@ -36,6 +35,12 @@ impl Drop for ScopedEnvVarRestore {
     }
 }
 
+fn assume_review_tools_available() -> (std::sync::MutexGuard<'static, ()>, ScopedEnvVarRestore) {
+    (
+        TEST_ENV_LOCK.lock().expect("review env lock poisoned"),
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1"),
+    )
+}
 pub(super) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
     for tool in csa_config::global::all_known_tools() {
@@ -210,9 +215,7 @@ fn resolve_review_tool_prefers_cli_override() {
 
 #[test]
 fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("review env lock poisoned");
-    let _available_guard =
-        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let (_env_lock, _available_guard) = assume_review_tools_available();
     let global = GlobalConfig::default();
     // Parent=claude-code (Anthropic family), so first heterogeneous candidate
     // in default order is gemini-cli.
@@ -234,9 +237,7 @@ fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
 
 #[test]
 fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("review env lock poisoned");
-    let _available_guard =
-        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let (_env_lock, _available_guard) = assume_review_tools_available();
     let global = GlobalConfig::default();
     // Only gemini-cli enabled — auto-selection should still succeed.
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
@@ -327,6 +328,7 @@ fn resolve_review_tool_prefers_project_override() {
 
 #[test]
 fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
+    let (_env_lock, _available_guard) = assume_review_tools_available();
     let global = GlobalConfig::default();
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
@@ -352,6 +354,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
 
 #[test]
 fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
+    let (_env_lock, _available_guard) = assume_review_tools_available();
     let mut global = GlobalConfig::default();
     global.preferences.tool_priority = vec!["opencode".to_string(), "claude-code".to_string()];
 
@@ -379,6 +382,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
 
 #[test]
 fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection() {
+    let (_env_lock, _available_guard) = assume_review_tools_available();
     let mut global = GlobalConfig::default();
     global.preferences.tool_priority = vec!["codexx".to_string()];
 
