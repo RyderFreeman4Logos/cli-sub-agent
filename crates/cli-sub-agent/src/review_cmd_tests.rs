@@ -2,6 +2,7 @@ use super::output::{derive_review_result_summary, has_structured_review_content}
 use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use crate::review_consensus::build_reviewer_tools;
+use crate::test_env_lock::TEST_ENV_LOCK;
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
@@ -209,6 +210,9 @@ fn resolve_review_tool_prefers_cli_override() {
 
 #[test]
 fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("review env lock poisoned");
+    let _available_guard =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     // Parent=claude-code (Anthropic family), so first heterogeneous candidate
     // in default order is gemini-cli.
@@ -230,6 +234,9 @@ fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
 
 #[test]
 fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("review env lock poisoned");
+    let _available_guard =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     // Only gemini-cli enabled — auto-selection should still succeed.
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
