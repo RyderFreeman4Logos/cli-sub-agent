@@ -1,8 +1,9 @@
 //! Environment diagnostics for CSA.
 
 use anyhow::Result;
-use csa_config::{ProjectConfig, paths};
+use csa_config::{ProjectConfig, ToolTransport, paths};
 use csa_core::types::OutputFormat;
+use csa_executor::{CodexRuntimeMetadata, CodexTransport};
 use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
@@ -15,19 +16,51 @@ mod doctor_routing;
 pub use doctor_routing::run_doctor_routing;
 
 /// Tool availability status.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolAvailabilityState {
+    Installed,
+    Missing,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexDoctorStatus {
+    transport_active: CodexTransport,
+    acp_compiled_in: bool,
+    probed_binary: String,
+    acp_override_hint: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolStatus {
     name: &'static str,
+    availability: ToolAvailabilityState,
     binary_name: String,
-    installed: bool,
     version: Option<String>,
     hint: Option<String>,
+    codex_transport: Option<CodexDoctorStatus>,
+}
+
+impl ToolStatus {
+    fn is_ready(&self) -> bool {
+        matches!(self.availability, ToolAvailabilityState::Installed)
+    }
 }
 
 fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {
     crate::run_helpers::resolved_tool_binary_name(tool_name, config)
         .unwrap_or(tool_name)
         .to_string()
+}
+
+fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
+    config
+        .and_then(|cfg| cfg.tool_transport("codex"))
+        .map(|transport| match transport {
+            ToolTransport::Cli => CodexTransport::Cli,
+            ToolTransport::Acp => CodexTransport::Acp,
+        })
+        .unwrap_or_else(CodexTransport::default_for_build)
 }
 
 fn load_doctor_project_config() -> Option<ProjectConfig> {
@@ -101,13 +134,7 @@ async fn run_doctor_json() -> Result<()> {
         .iter()
         .map(|tool_name| {
             let status = check_tool_status(tool_name, project_config.as_ref());
-            serde_json::json!({
-                "name": status.name,
-                "binary": status.binary_name,
-                "installed": status.installed,
-                "version": status.version,
-                "hint": status.hint,
-            })
+            tool_status_json(&status)
         })
         .collect();
 
@@ -233,7 +260,7 @@ async fn print_tool_availability(config: Option<&ProjectConfig>) {
 
     for tool_name in &tools {
         let status = check_tool_status(tool_name, config);
-        if status.installed {
+        if status.is_ready() {
             installed_count += 1;
         }
         print_tool_status(&status);
@@ -250,18 +277,27 @@ fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) ->
     match crate::run_helpers::tool_binary_availability(tool_name, config) {
         crate::run_helpers::ToolBinaryAvailability::Available { .. } => ToolStatus {
             name: tool_name,
+            availability: ToolAvailabilityState::Installed,
             binary_name: binary_name.clone(),
-            installed: true,
             version: check_tool_version(&binary_name),
             hint: None,
+            codex_transport: codex_doctor_status(tool_name, config),
         },
-        crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. }
-        | crate::run_helpers::ToolBinaryAvailability::Unsupported { hint, .. } => ToolStatus {
+        crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } => ToolStatus {
             name: tool_name,
+            availability: ToolAvailabilityState::Missing,
             binary_name,
-            installed: false,
             version: None,
             hint: Some(hint.into_owned()),
+            codex_transport: codex_doctor_status(tool_name, config),
+        },
+        crate::run_helpers::ToolBinaryAvailability::Unsupported { hint, .. } => ToolStatus {
+            name: tool_name,
+            availability: ToolAvailabilityState::Unsupported,
+            binary_name,
+            version: None,
+            hint: Some(hint.into_owned()),
+            codex_transport: codex_doctor_status(tool_name, config),
         },
     }
 }
@@ -281,30 +317,122 @@ fn check_tool_version(exe_name: &str) -> Option<String> {
 
 /// Print a single tool's status.
 fn print_tool_status(status: &ToolStatus) {
-    let checkmark = if status.installed { "✓" } else { "✗" };
-    let status_msg = if status.installed {
-        if let Some(ref version) = status.version {
-            format!("installed ({version})")
-        } else {
-            "installed (version unknown)".to_string()
-        }
-    } else {
-        "not found".to_string()
+    for line in render_tool_status_lines(status) {
+        println!("{line}");
+    }
+}
+
+fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
+    let checkmark = if status.is_ready() { "✓" } else { "✗" };
+    let status_msg = match status.availability {
+        ToolAvailabilityState::Installed => status
+            .version
+            .as_ref()
+            .map(|version| format!("installed ({version})"))
+            .unwrap_or_else(|| "installed (version unknown)".to_string()),
+        ToolAvailabilityState::Missing => "not found".to_string(),
+        ToolAvailabilityState::Unsupported => "unsupported".to_string(),
     };
 
-    println!(
+    let mut lines = vec![format!(
         "{:<12} {} {}",
         format!("{}:", status.name),
         checkmark,
         status_msg
-    );
+    )];
 
-    if !status.installed
+    if let Some(codex_status) = status.codex_transport.as_ref() {
+        lines.push(format!(
+            "             Active transport: {}",
+            codex_transport_label(codex_status.transport_active)
+        ));
+        lines.push(format!(
+            "             ACP compiled in: {}",
+            yes_no(codex_status.acp_compiled_in)
+        ));
+        lines.push(format!(
+            "             Probed binary: {}",
+            codex_status.probed_binary
+        ));
+        if let Some(acp_override_hint) = codex_status.acp_override_hint {
+            lines.push(format!("             ACP override: {acp_override_hint}"));
+        }
+    }
+
+    if !status.is_ready()
         && let Some(hint) = status.hint.as_deref()
     {
-        println!("             Expected runtime: {}", status.binary_name);
-        println!("             {hint}");
+        lines.push(format!(
+            "             Expected runtime: {}",
+            status.binary_name
+        ));
+        lines.push(format!("             {hint}"));
     }
+
+    lines
+}
+
+fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
+    let mut entry = serde_json::json!({
+        "name": status.name,
+        "binary": status.binary_name,
+        "installed": status.is_ready(),
+        "version": status.version,
+        "hint": status.hint,
+    });
+
+    if let Some(codex_status) = status.codex_transport.as_ref()
+        && let Some(object) = entry.as_object_mut()
+    {
+        object.insert(
+            "transport_active".to_string(),
+            serde_json::json!(codex_transport_label(codex_status.transport_active)),
+        );
+        object.insert(
+            "acp_compiled_in".to_string(),
+            serde_json::json!(codex_status.acp_compiled_in),
+        );
+        object.insert(
+            "probed_binary".to_string(),
+            serde_json::json!(codex_status.probed_binary),
+        );
+    }
+
+    entry
+}
+
+fn codex_doctor_status(
+    tool_name: &str,
+    config: Option<&ProjectConfig>,
+) -> Option<CodexDoctorStatus> {
+    if tool_name != "codex" {
+        return None;
+    }
+
+    let transport_active = resolved_codex_transport(config);
+    let acp_compiled_in = CodexRuntimeMetadata::acp_compiled_in();
+
+    Some(CodexDoctorStatus {
+        transport_active,
+        acp_compiled_in,
+        probed_binary: transport_active.runtime_binary_name().to_string(),
+        acp_override_hint: if acp_compiled_in && transport_active != CodexTransport::Acp {
+            Some("set [tools.codex].transport = \"acp\"")
+        } else {
+            None
+        },
+    })
+}
+
+fn codex_transport_label(transport: CodexTransport) -> &'static str {
+    match transport {
+        CodexTransport::Cli => "cli",
+        CodexTransport::Acp => "acp",
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 /// Print project config status.
@@ -526,59 +654,5 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_env_lock::ScopedTestEnvVar;
-
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0.0 GB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
-        assert_eq!(format_bytes(8 * 1024 * 1024 * 1024), "8.0 GB");
-        assert_eq!(format_bytes(8589934592), "8.0 GB"); // 8 GB in bytes
-    }
-
-    #[test]
-    fn test_check_tool_version_nonexistent() {
-        let version = check_tool_version("nonexistent-tool-12345");
-        assert!(version.is_none());
-    }
-
-    #[test]
-    fn test_check_tool_status_nonexistent() {
-        let status = check_tool_status("nonexistent-tool", None);
-        assert!(!status.installed);
-        assert!(status.version.is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn default_build_doctor_accepts_codex_cli_runtime() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let td = tempfile::tempdir().expect("tempdir");
-        let bin_dir = td.path().join("bin");
-        fs::create_dir_all(&bin_dir).expect("create bin dir");
-        let codex_path = bin_dir.join("codex");
-        fs::write(&codex_path, "#!/bin/sh\necho 'codex 1.2.3'\n").expect("write codex stub");
-        let mut perms = fs::metadata(&codex_path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&codex_path, perms).expect("chmod codex");
-
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let joined = std::env::join_paths(
-            std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&path)),
-        )
-        .expect("join PATH");
-        let _path_guard = ScopedTestEnvVar::set("PATH", joined);
-
-        let status = check_tool_status("codex", None);
-        assert!(
-            status.installed,
-            "doctor should accept the default codex CLI"
-        );
-        assert_eq!(status.binary_name, "codex");
-        assert!(status.hint.is_none());
-    }
-}
+#[path = "doctor_tests.rs"]
+mod tests;
