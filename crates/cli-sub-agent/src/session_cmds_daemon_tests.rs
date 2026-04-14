@@ -99,6 +99,34 @@ fn attach_primary_output_preserves_legacy_codex_output_log_when_runtime_binary_m
 }
 
 #[test]
+fn attach_primary_output_waits_for_unresolved_live_codex_session() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let metadata = csa_session::metadata::SessionMetadata {
+        tool: "codex".to_string(),
+        tool_locked: true,
+        runtime_binary: None,
+    };
+    let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        metadata_toml,
+    )
+    .expect("write metadata");
+    std::fs::write(td.path().join("stdout.log"), "").expect("write stdout log");
+    std::fs::create_dir_all(td.path().join("locks")).expect("create locks dir");
+    std::fs::write(
+        td.path().join("locks").join("codex.lock"),
+        format!("{{\"pid\":{}}}", std::process::id()),
+    )
+    .expect("write codex lock");
+
+    assert_eq!(
+        attach_primary_output_for_session(td.path()),
+        AttachPrimaryOutput::Pending
+    );
+}
+
+#[test]
 fn attach_primary_output_keeps_stdout_for_non_codex_sessions_with_output_log() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {
@@ -160,6 +188,28 @@ fn attach_primary_output_uses_persisted_codex_acp_runtime_binary() {
     assert_eq!(
         attach_primary_output_for_session(td.path()),
         AttachPrimaryOutput::OutputLog
+    );
+}
+
+#[test]
+fn attach_primary_output_uses_stdout_for_persisted_codex_cli_runtime_binary() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let metadata = csa_session::metadata::SessionMetadata {
+        tool: "codex".to_string(),
+        tool_locked: true,
+        runtime_binary: Some("codex".to_string()),
+    };
+    let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        metadata_toml,
+    )
+    .expect("write metadata");
+    std::fs::write(td.path().join("stdout.log"), "").expect("write stdout log");
+
+    assert_eq!(
+        attach_primary_output_for_session(td.path()),
+        AttachPrimaryOutput::StdoutLog
     );
 }
 
