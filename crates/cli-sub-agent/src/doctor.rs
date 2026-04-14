@@ -56,13 +56,6 @@ enum DoctorProjectConfigStatus {
 }
 
 impl DoctorProjectConfigStatus {
-    fn project_config(&self) -> Option<&ProjectConfig> {
-        match self {
-            Self::Valid(config) => Some(config),
-            Self::Missing | Self::Invalid(_) => None,
-        }
-    }
-
     fn json_value(&self) -> serde_json::Value {
         match self {
             Self::Missing => serde_json::json!({
@@ -145,7 +138,7 @@ fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
 }
 
 fn load_doctor_project_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
-    ProjectConfig::load(project_root)
+    ProjectConfig::load_project_only(project_root)
 }
 
 fn inspect_doctor_project_config_from(project_root: &Path) -> DoctorProjectConfigStatus {
@@ -177,6 +170,7 @@ async fn run_doctor_text() -> Result<()> {
 
 async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
     let project_config_status = inspect_doctor_project_config_from(project_root);
+    let runtime_config = ProjectConfig::load(project_root).ok().flatten();
 
     println!("=== CSA Environment Check ===");
     print_platform_info();
@@ -184,7 +178,7 @@ async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
     println!();
 
     println!("=== Tool Availability ===");
-    print_tool_availability(project_config_status.project_config()).await;
+    print_tool_availability(runtime_config.as_ref()).await;
     println!();
 
     println!("=== Project Config ===");
@@ -228,6 +222,7 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
     let project_config_status = inspect_doctor_project_config_from(project_root);
+    let runtime_config = ProjectConfig::load(project_root).ok().flatten();
 
     let state_dir = paths::state_dir()
         .map(|d| d.display().to_string())
@@ -236,7 +231,7 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
     let tool_statuses: Vec<serde_json::Value> = ["gemini-cli", "opencode", "codex", "claude-code"]
         .iter()
         .map(|tool_name| {
-            let status = check_tool_status(tool_name, project_config_status.project_config());
+            let status = check_tool_status(tool_name, runtime_config.as_ref());
             tool_status_json(&status)
         })
         .collect();

@@ -1,11 +1,12 @@
 use super::*;
-use crate::test_env_lock::ScopedTestEnvVar;
+use crate::test_env_lock::{ScopedTestEnvVar, TEST_ENV_LOCK};
 #[cfg(not(feature = "codex-acp"))]
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
 #[cfg(not(feature = "codex-acp"))]
 use serde_json::Value;
 #[cfg(not(feature = "codex-acp"))]
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::Path;
 
 #[cfg(not(feature = "codex-acp"))]
@@ -45,6 +46,32 @@ fn write_project_config(project_root: &Path, contents: &str) {
     let config_dir = project_root.join(".csa");
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     std::fs::write(config_dir.join("config.toml"), contents).expect("write config");
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var_os(key);
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: restoration of test-scoped env mutation guarded by a process-wide mutex.
+        unsafe {
+            match self.original.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -250,6 +277,56 @@ transport = "stdio"
     assert!(
         error.contains("unknown transport \"stdio\""),
         "doctor JSON should surface the invalid transport value: {error}"
+    );
+}
+
+#[test]
+fn doctor_project_config_display_ignores_invalid_user_global_config() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
+    let td = tempfile::tempdir().expect("tempdir");
+    let config_root = td.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
+        .expect("create user config dir");
+    std::fs::write(
+        &user_config_path,
+        r#"
+[tools.claude-code]
+transport = "cli"
+"#,
+    )
+    .expect("write invalid user config");
+
+    write_project_config(
+        td.path(),
+        r#"
+[tools.codex]
+transport = "cli"
+"#,
+    );
+
+    let merged_error = ProjectConfig::load(td.path()).expect_err("merged load should fail");
+    assert!(
+        merged_error
+            .to_string()
+            .contains("[tools.claude-code].transport"),
+        "test fixture should exercise an invalid user-level transport override: {merged_error}"
+    );
+
+    let status = inspect_doctor_project_config_from(td.path());
+    let rendered = render_project_config_lines(&status).join("\n");
+
+    assert!(
+        matches!(status, DoctorProjectConfigStatus::Valid(_)),
+        "doctor should validate .csa/config.toml independently of broken user config: {rendered}"
+    );
+    assert!(
+        rendered.contains("Config:      .csa/config.toml (valid)"),
+        "doctor should keep the project config display valid when user config is broken: {rendered}"
     );
 }
 
