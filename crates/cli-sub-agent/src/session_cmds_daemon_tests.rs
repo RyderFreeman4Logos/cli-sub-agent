@@ -99,7 +99,7 @@ fn attach_primary_output_preserves_legacy_codex_output_log_when_runtime_binary_m
 }
 
 #[test]
-fn attach_primary_output_waits_for_unresolved_live_codex_session() {
+fn attach_primary_output_preserves_output_log_for_unresolved_live_codex_session() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {
         tool: "codex".to_string(),
@@ -122,7 +122,7 @@ fn attach_primary_output_waits_for_unresolved_live_codex_session() {
 
     assert_eq!(
         attach_primary_output_for_session(td.path()),
-        AttachPrimaryOutput::Pending
+        AttachPrimaryOutput::OutputLog
     );
 }
 
@@ -188,6 +188,64 @@ fn attach_primary_output_uses_persisted_codex_acp_runtime_binary() {
     assert_eq!(
         attach_primary_output_for_session(td.path()),
         AttachPrimaryOutput::OutputLog
+    );
+}
+
+#[test]
+fn wait_for_attach_live_output_path_keeps_waiting_past_sixty_seconds_for_codex_output_log() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    use std::time::Duration;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let metadata = csa_session::metadata::SessionMetadata {
+        tool: "codex".to_string(),
+        tool_locked: true,
+        runtime_binary: Some("codex-acp".to_string()),
+    };
+    let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        metadata_toml,
+    )
+    .expect("write metadata");
+    std::fs::create_dir_all(td.path().join("locks")).expect("create locks dir");
+    std::fs::write(
+        td.path().join("locks").join("codex.lock"),
+        format!("{{\"pid\":{}}}", std::process::id()),
+    )
+    .expect("write codex lock");
+
+    let stdout_path = td.path().join("stdout.log");
+    let output_path = td.path().join("output.log");
+    let elapsed_ms = Arc::new(AtomicU64::new(0));
+    let sleep_elapsed_ms = Arc::clone(&elapsed_ms);
+    let delayed_output_path = output_path.clone();
+
+    let resolved = wait_for_attach_live_output_path(
+        td.path(),
+        "attach-60s-codex-output",
+        &stdout_path,
+        &output_path,
+        || Duration::from_millis(elapsed_ms.load(Ordering::Relaxed)),
+        move |duration| {
+            let elapsed = sleep_elapsed_ms
+                .fetch_add(duration.as_millis() as u64, Ordering::Relaxed)
+                + duration.as_millis() as u64;
+            if elapsed >= 61_000 && !delayed_output_path.exists() {
+                std::fs::write(&delayed_output_path, "late acp output\n")
+                    .expect("write delayed output log");
+            }
+        },
+    )
+    .expect("wait should not fail");
+
+    assert_eq!(resolved, Some(output_path));
+    assert!(
+        elapsed_ms.load(Ordering::Relaxed) >= 61_000,
+        "attach should keep waiting well past the old 30s failure threshold"
     );
 }
 

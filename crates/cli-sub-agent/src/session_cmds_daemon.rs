@@ -10,6 +10,11 @@ use csa_session::get_session_dir;
 use csa_session::state::ReviewSessionMeta;
 use serde::{Deserialize, Serialize};
 
+#[path = "session_cmds_daemon_attach.rs"]
+mod attach;
+
+use attach::{resolve_attach_terminal_exit, wait_for_attach_live_output_path};
+
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
@@ -94,10 +99,8 @@ fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput 
             } else {
                 AttachPrimaryOutput::StdoutLog
             }
-        } else if output_log_exists {
-            AttachPrimaryOutput::OutputLog
         } else {
-            AttachPrimaryOutput::Pending
+            AttachPrimaryOutput::OutputLog
         };
     }
     if routes_session_output_to_output_log(&metadata) {
@@ -538,47 +541,25 @@ pub(crate) fn handle_session_attach(
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
-    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
 
     let stdout_path = session_dir.join("stdout.log");
     let stderr_path = session_dir.join("stderr.log");
     let output_path = session_dir.join("output.log");
-    // Wait for the spool file to appear (daemon may still be starting).
     let start = std::time::Instant::now();
-    let live_stdout_path = loop {
-        let primary_output = attach_primary_output_for_session(&session_dir);
-        let candidate = match primary_output {
-            AttachPrimaryOutput::StdoutLog => &stdout_path,
-            AttachPrimaryOutput::OutputLog => &output_path,
-            AttachPrimaryOutput::Pending => {
-                if start.elapsed().as_secs() > 30 {
-                    anyhow::bail!(
-                        "session output routing not resolved after 30s — session {} may still be starting",
-                        resolved.session_id
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                continue;
-            }
-        };
-        if candidate.exists() {
-            break candidate;
-        }
-        if start.elapsed().as_secs() > 30 {
-            let missing_name = candidate
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("session output");
-            anyhow::bail!(
-                "{missing_name} not found after 30s — session {} may not be a daemon session",
-                resolved.session_id
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+    let live_stdout_path = wait_for_attach_live_output_path(
+        &session_dir,
+        &resolved.session_id,
+        &stdout_path,
+        &output_path,
+        || start.elapsed(),
+        std::thread::sleep,
+    )?;
+    let Some(live_stdout_path) = live_stdout_path else {
+        return resolve_attach_terminal_exit(&project_root, &session_dir, &resolved.session_id);
     };
 
-    let live_streams_output_log = live_stdout_path == output_path.as_path();
-    let mut live_stdout_file = std::fs::File::open(live_stdout_path)?;
+    let live_streams_output_log = live_stdout_path == output_path;
+    let mut live_stdout_file = std::fs::File::open(&live_stdout_path)?;
     let mut completion_stdout_file: Option<std::fs::File> =
         if live_streams_output_log && stdout_path.exists() {
             Some(std::fs::File::open(&stdout_path)?)
@@ -659,49 +640,8 @@ pub(crate) fn handle_session_attach(
             return Ok(completion.exit_code);
         }
 
-        if result_path.exists() && !session_has_terminal_process(&session_dir) {
-            let exit_code = fs::read_to_string(&result_path)
-                .ok()
-                .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())
-                .map(|r| r.exit_code)
-                .unwrap_or(0);
-            return Ok(exit_code);
-        }
-
-        // Detect dead daemon: no live session-relevant process remains and no
-        // terminal result exists yet. This shares the same PID-reuse guard as
-        // wait/reconcile/kill instead of trusting the raw daemon.pid value.
         if !session_has_terminal_process(&session_dir) {
-            if let Some(pid) = read_daemon_pid(&session_dir) {
-                eprintln!(
-                    "Daemon process {} exited without producing result.toml; synthesizing fallback",
-                    pid,
-                );
-            } else {
-                eprintln!(
-                    "Session {} has no live daemon process and no result.toml; synthesizing fallback",
-                    resolved.session_id,
-                );
-            }
-            // For cross-project sessions, skip synthesis (requires project_root write access).
-            let is_cross_project =
-                csa_session::get_session_dir(&project_root, &resolved.session_id).is_err();
-            if !is_cross_project {
-                let _ = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
-                    &project_root,
-                    &resolved.session_id,
-                    "session attach (daemon dead)",
-                );
-            }
-            // Try to load the synthesized or pre-existing result from session_dir directly.
-            let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
-            if result_path.is_file()
-                && let Ok(contents) = fs::read_to_string(&result_path)
-                && let Ok(result) = toml::from_str::<csa_session::result::SessionResult>(&contents)
-            {
-                return Ok(result.exit_code);
-            }
-            return Ok(1);
+            return resolve_attach_terminal_exit(&project_root, &session_dir, &resolved.session_id);
         }
 
         if !any_output {
