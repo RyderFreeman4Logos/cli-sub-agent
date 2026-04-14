@@ -141,6 +141,59 @@ fn test_dedupe_keeps_all_when_empty_checklist() {
     assert_eq!(result.len(), 1);
 }
 
+#[test]
+fn placeholder_checklist_item_does_not_suppress_finding() {
+    // Regression: severity-only items (e.g. `- [ ] HIGH`, `- [ ] CRITICAL:`)
+    // have exactly one keyword after stopword/length filtering, which the
+    // 60%-overlap dedup heuristic mis-classified as a 100% match for any
+    // finding carrying the same severity token. Bug #736.
+    let temp = tempdir().unwrap();
+    let checklist = temp.path().join("checklist.md");
+    std::fs::write(
+        &checklist,
+        "# Checklist\n- [ ] HIGH\n- [ ] CRITICAL:\n- [ ] P1\n- [ ] NIT -- \n",
+    )
+    .unwrap();
+
+    let findings = vec![
+        "HIGH: Race condition between fork and kill invocations".to_string(),
+        "CRITICAL: Missing timeout handling in subprocess lifecycle".to_string(),
+    ];
+
+    let result = dedupe_against_checklist(&findings, &checklist);
+
+    assert_eq!(
+        result.len(),
+        2,
+        "placeholders must not suppress findings: got {result:?}"
+    );
+}
+
+#[test]
+fn substantive_checklist_item_still_suppresses_matching_finding() {
+    // Guard: the placeholder fix must not regress the original behavior —
+    // checklist items with >= 2 meaningful keywords still dedup new findings
+    // via fuzzy keyword overlap.
+    let temp = tempdir().unwrap();
+    let checklist = temp.path().join("checklist.md");
+    std::fs::write(
+        &checklist,
+        "# Checklist\n- [ ] HIGH\n- [ ] RAII guards call finalize before process exit\n",
+    )
+    .unwrap();
+
+    let findings = vec![
+        "HIGH: RAII guards must call finalize before calling process exit".to_string(),
+        "Missing timeout handling in subprocess lifecycle".to_string(),
+    ];
+
+    let result = dedupe_against_checklist(&findings, &checklist);
+
+    // RAII finding overlaps with the substantive item; timeout finding passes.
+    assert_eq!(result.len(), 1);
+    assert!(result[0].contains("timeout"));
+}
+
 // ── append_candidates ───────────────────────────────────────────────────────
 
 #[test]

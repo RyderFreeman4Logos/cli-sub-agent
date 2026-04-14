@@ -13,6 +13,12 @@ const DEFAULT_PROMOTION_THRESHOLD: usize = 3;
 /// appear in the longer text.
 const FUZZY_MATCH_THRESHOLD: f64 = 0.60;
 
+/// Minimum significant keywords for a checklist item to act as a dedup anchor.
+/// Items below this threshold (e.g. severity-only placeholders like
+/// `- [ ] HIGH`) would otherwise suppress any finding that shares the
+/// severity token at 100% overlap ratio.
+const MIN_SUBSTANTIVE_KEYWORDS: usize = 2;
+
 // ── Extraction ──────────────────────────────────────────────────────────────
 
 /// Extract one-line finding summaries from raw review output.
@@ -147,9 +153,18 @@ pub(crate) fn dedupe_against_checklist(findings: &[String], checklist_path: &Pat
         return findings.to_vec();
     }
 
-    // Pre-compute keyword sets for checklist items
-    let checklist_keyword_sets: Vec<HashSet<String>> =
-        checklist_items.iter().map(|item| keywords(item)).collect();
+    // Pre-compute keyword sets; only substantive items (>= MIN_SUBSTANTIVE_KEYWORDS)
+    // act as dedup anchors. Severity-only placeholders would otherwise suppress
+    // any finding that merely shares the severity token.
+    let checklist_keyword_sets: Vec<HashSet<String>> = checklist_items
+        .iter()
+        .map(|item| keywords(item))
+        .filter(|kw| kw.len() >= MIN_SUBSTANTIVE_KEYWORDS)
+        .collect();
+
+    if checklist_keyword_sets.is_empty() {
+        return findings.to_vec();
+    }
 
     findings
         .iter()
