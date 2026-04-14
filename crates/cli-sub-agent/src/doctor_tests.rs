@@ -6,6 +6,7 @@ use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
 use serde_json::Value;
 #[cfg(not(feature = "codex-acp"))]
 use std::collections::HashMap;
+use std::path::Path;
 
 #[cfg(not(feature = "codex-acp"))]
 fn project_config_with_codex_transport(transport: ToolTransport) -> ProjectConfig {
@@ -38,6 +39,12 @@ fn project_config_with_codex_transport(transport: ToolTransport) -> ProjectConfi
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
+}
+
+fn write_project_config(project_root: &Path, contents: &str) {
+    let config_dir = project_root.join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(config_dir.join("config.toml"), contents).expect("write config");
 }
 
 #[cfg(unix)]
@@ -159,16 +166,13 @@ fn explicit_codex_acp_transport_reports_rebuild_hint() {
 #[test]
 fn doctor_load_rejects_invalid_codex_transport_override() {
     let td = tempfile::tempdir().expect("tempdir");
-    let config_dir = td.path().join(".csa");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    std::fs::write(
-        config_dir.join("config.toml"),
+    write_project_config(
+        td.path(),
         r#"
 [tools.codex]
 transport = "acp"
 "#,
-    )
-    .expect("write config");
+    );
 
     let err = load_doctor_project_config_from(td.path()).unwrap_err();
     let message = err.to_string();
@@ -180,6 +184,72 @@ transport = "acp"
     assert!(
         message.contains("codex-acp"),
         "doctor should surface the missing feature guidance: {message}"
+    );
+}
+
+#[tokio::test]
+async fn doctor_text_reports_invalid_codex_transport_without_aborting() {
+    let td = tempfile::tempdir().expect("tempdir");
+    write_project_config(
+        td.path(),
+        r#"
+[tools.codex]
+transport = "stdio"
+"#,
+    );
+
+    let status = inspect_doctor_project_config_from(td.path());
+    let rendered = render_project_config_lines(&status).join("\n");
+
+    assert!(
+        matches!(status, DoctorProjectConfigStatus::Invalid(_)),
+        "doctor should classify invalid project config without aborting: {rendered}"
+    );
+
+    run_doctor_text_from(td.path())
+        .await
+        .expect("doctor text should keep running when project config is invalid");
+
+    assert!(
+        rendered.contains("Config:      .csa/config.toml (invalid)"),
+        "doctor text should use the existing invalid config branch: {rendered}"
+    );
+    assert!(
+        rendered.contains("Invalid [tools.codex].transport"),
+        "doctor text should surface the exact invalid transport key: {rendered}"
+    );
+    assert!(
+        rendered.contains("unknown transport \"stdio\""),
+        "doctor text should surface the invalid transport value: {rendered}"
+    );
+}
+
+#[test]
+fn doctor_json_reports_invalid_codex_transport() {
+    let td = tempfile::tempdir().expect("tempdir");
+    write_project_config(
+        td.path(),
+        r#"
+[tools.codex]
+transport = "stdio"
+"#,
+    );
+
+    let report = build_doctor_json(td.path());
+    let config = &report["config"];
+    let error = config["error"]
+        .as_str()
+        .expect("doctor JSON should include invalid config error text");
+
+    assert_eq!(config["found"], serde_json::json!(true));
+    assert_eq!(config["valid"], serde_json::json!(false));
+    assert!(
+        error.contains("Invalid [tools.codex].transport"),
+        "doctor JSON should surface the exact invalid transport key: {error}"
+    );
+    assert!(
+        error.contains("unknown transport \"stdio\""),
+        "doctor JSON should surface the invalid transport value: {error}"
     );
 }
 
