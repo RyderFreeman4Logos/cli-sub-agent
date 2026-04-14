@@ -182,6 +182,127 @@ fn ensure_terminal_result_for_dead_active_session_writes_unpushed_commit_sidecar
     );
 }
 
+#[test]
+fn ensure_terminal_result_for_dead_active_session_shell_escapes_recovery_command() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path().join("project");
+    let origin = td.path().join("origin.git");
+    fs::create_dir_all(&project).unwrap();
+
+    run_git(&project, &["init", "--initial-branch", "main"]);
+    run_git(&project, &["config", "user.email", "test@example.com"]);
+    run_git(&project, &["config", "user.name", "Test User"]);
+    fs::write(project.join("README.md"), "base\n").unwrap();
+    run_git(&project, &["add", "README.md"]);
+    run_git(&project, &["commit", "-m", "init"]);
+
+    run_git(td.path(), &["init", "--bare", origin.to_str().unwrap()]);
+    run_git(
+        &project,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    run_git(&project, &["push", "-u", "origin", "main"]);
+
+    let branch = "feat/$(touch-pwn)";
+    run_git(&project, &["checkout", "-b", branch]);
+    fs::write(project.join("progress.txt"), "first\n").unwrap();
+    run_git(&project, &["add", "progress.txt"]);
+    run_git(&project, &["commit", "-m", "feat: adversarial progress"]);
+
+    let session = create_session(&project, Some("escaped-recovery"), None, Some("codex")).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&project, &session_id).unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(&project, &session_id, "session wait")
+            .unwrap();
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure
+    );
+
+    let sidecar_path = session_dir.join("output").join("unpushed_commits.json");
+    let sidecar: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+    assert_eq!(
+        sidecar["recovery_command"],
+        "git push -u origin 'feat/$(touch-pwn)'"
+    );
+
+    let directive = crate::session_cmds_daemon::synthesized_wait_next_step(&session_dir)
+        .unwrap()
+        .expect("recovery next-step directive should be synthesized");
+    let parsed = csa_hooks::parse_next_step_directive(&directive)
+        .expect("directive should parse into a next-step command");
+    assert_eq!(
+        parsed.cmd.as_deref(),
+        Some("git push -u origin 'feat/$(touch-pwn)'")
+    );
+}
+
+#[test]
+fn reconcile_failure_rolls_back_new_unpushed_commit_sidecar() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path().join("project");
+    let origin = td.path().join("origin.git");
+    fs::create_dir_all(&project).unwrap();
+
+    run_git(&project, &["init", "--initial-branch", "main"]);
+    run_git(&project, &["config", "user.email", "test@example.com"]);
+    run_git(&project, &["config", "user.name", "Test User"]);
+    fs::write(project.join("README.md"), "base\n").unwrap();
+    run_git(&project, &["add", "README.md"]);
+    run_git(&project, &["commit", "-m", "init"]);
+
+    run_git(td.path(), &["init", "--bare", origin.to_str().unwrap()]);
+    run_git(
+        &project,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    run_git(&project, &["push", "-u", "origin", "main"]);
+
+    run_git(&project, &["checkout", "-b", "fix/session-progress"]);
+    fs::write(project.join("progress.txt"), "first\n").unwrap();
+    run_git(&project, &["add", "progress.txt"]);
+    run_git(&project, &["commit", "-m", "feat: first progress"]);
+
+    let session = create_session(&project, Some("rollback-sidecar"), None, Some("codex")).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&project, &session_id).unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    let err = ensure_terminal_result_for_dead_active_session_impl(
+        &project,
+        &session_id,
+        "session wait",
+        &session_dir,
+        SyntheticResultHooks {
+            before_write: &noop_path,
+            after_publish: &noop_path,
+        },
+        |_| {},
+        &|_, _| Err(anyhow::anyhow!("persist session failed")),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("persist session failed"));
+    assert!(
+        !session_dir
+            .join("output")
+            .join("unpushed_commits.json")
+            .exists(),
+        "rollback should remove a sidecar created by this reconcile attempt"
+    );
+    assert!(
+        !session_dir
+            .join(csa_session::result::RESULT_FILE_NAME)
+            .exists(),
+        "rollback should remove the synthetic result when session persistence fails"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {

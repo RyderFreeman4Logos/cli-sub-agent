@@ -8,7 +8,7 @@ pub(super) enum OrchestratorHandoff {
     AwaitUser,
 }
 
-fn shell_escape_for_command(value: &str) -> String {
+pub(crate) fn shell_escape_for_command(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
