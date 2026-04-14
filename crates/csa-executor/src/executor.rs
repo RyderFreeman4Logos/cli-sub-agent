@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 use csa_acp::SessionConfig;
-use csa_core::types::{PromptTransport, ToolName, prompt_transport_capabilities};
+use csa_core::types::{PromptTransport, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,9 @@ use arg_helpers::{
     append_gemini_include_directories_args, codex_notify_suppression_args,
     effective_gemini_model_override, gemini_include_directories,
 };
+
+#[path = "executor_prompt_helpers.rs"]
+mod prompt_helpers;
 
 pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 
@@ -566,6 +569,11 @@ impl Executor {
         prompt_transport: PromptTransport,
         gemini_include_directories: &[String],
     ) {
+        let codex_resume = matches!(self, Self::Codex { .. })
+            && tool_state
+                .and_then(|state| state.provider_session_id.as_deref())
+                .is_some();
+
         // Structural args (subcommand, output format, yolo) come first
         match self {
             Self::GeminiCli { .. } => {
@@ -577,6 +585,7 @@ impl Executor {
             }
             Self::Codex { .. } => {
                 cmd.arg("exec");
+                cmd.arg("--json");
                 cmd.arg("--dangerously-bypass-approvals-and-sandbox");
             }
             Self::ClaudeCode { .. } => {
@@ -607,7 +616,7 @@ impl Executor {
                     cmd.arg("-s").arg(session_id);
                 }
                 Self::Codex { .. } => {
-                    cmd.arg("--session-id").arg(session_id);
+                    cmd.arg("resume").arg(session_id);
                 }
                 Self::ClaudeCode { .. } => {
                     cmd.arg("--resume").arg(session_id);
@@ -631,6 +640,9 @@ impl Executor {
                 match self {
                     Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
                         cmd.arg("-p");
+                    }
+                    Self::Codex { .. } if codex_resume => {
+                        cmd.arg("-");
                     }
                     Self::Opencode { .. } | Self::Codex { .. } | Self::OpenaiCompat { .. } => {
                         // These tools read from stdin natively without extra flags.
@@ -714,74 +726,6 @@ impl Executor {
     fn append_yolo_args(&self, cmd: &mut Command) {
         for arg in self.yolo_args() {
             cmd.arg(arg);
-        }
-    }
-
-    /// Append minimal prompt args for execute_in.
-    fn append_prompt_args(&self, cmd: &mut Command, prompt: &str) {
-        self.append_prompt_args_with_transport(cmd, prompt, PromptTransport::Argv);
-    }
-
-    fn append_prompt_args_with_transport(
-        &self,
-        cmd: &mut Command,
-        prompt: &str,
-        prompt_transport: PromptTransport,
-    ) {
-        match self {
-            Self::GeminiCli { .. } => {
-                if matches!(prompt_transport, PromptTransport::Argv) {
-                    cmd.arg("-p").arg(prompt);
-                }
-            }
-            Self::Opencode { .. } => {
-                cmd.arg("run");
-                if matches!(prompt_transport, PromptTransport::Argv) {
-                    cmd.arg(prompt);
-                }
-            }
-            Self::Codex { .. } => {
-                cmd.arg("exec");
-                if matches!(prompt_transport, PromptTransport::Argv) {
-                    cmd.arg(prompt);
-                }
-            }
-            Self::ClaudeCode { .. } => {
-                if matches!(prompt_transport, PromptTransport::Argv) {
-                    cmd.arg("-p").arg(prompt);
-                }
-            }
-            Self::OpenaiCompat { .. } => {} // HTTP-only
-        }
-    }
-
-    fn select_prompt_transport(&self, prompt: &str) -> (PromptTransport, Option<Vec<u8>>) {
-        if prompt.len() <= MAX_ARGV_PROMPT_LEN {
-            return (PromptTransport::Argv, None);
-        }
-
-        let tool = self.tool_name_enum();
-        let supports_stdin = prompt_transport_capabilities(&tool).contains(&PromptTransport::Stdin);
-        if supports_stdin {
-            return (PromptTransport::Stdin, Some(prompt.as_bytes().to_vec()));
-        }
-
-        tracing::warn!(
-            tool = self.tool_name(),
-            prompt_len = prompt.len(),
-            max_argv_prompt_len = MAX_ARGV_PROMPT_LEN,
-            "Prompt exceeds argv threshold; tool supports argv-only transport"
-        );
-        (PromptTransport::Argv, None)
-    }
-
-    fn tool_name_enum(&self) -> ToolName {
-        match self {
-            Self::GeminiCli { .. } => ToolName::GeminiCli,
-            Self::Opencode { .. } => ToolName::Opencode,
-            Self::Codex { .. } => ToolName::Codex,
-            Self::ClaudeCode { .. } => ToolName::ClaudeCode,
-            Self::OpenaiCompat { .. } => ToolName::OpenaiCompat,
         }
     }
 }
