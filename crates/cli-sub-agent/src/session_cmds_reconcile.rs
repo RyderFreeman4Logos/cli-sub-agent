@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, anyhow};
+use csa_core::vcs::VcsKind;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::Path;
+use std::process::Command;
 use tracing::{info, warn};
 
 use csa_process::ToolLiveness;
@@ -10,6 +13,22 @@ use csa_session::{
 };
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
+const UNPUSHED_COMMITS_SIDECAR_PATH: &str = "output/unpushed_commits.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UnpushedCommitRecord {
+    sha: String,
+    subject: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UnpushedCommitsSidecar {
+    branch: String,
+    remote_ref: Option<String>,
+    commits_ahead: u64,
+    commits: Vec<UnpushedCommitRecord>,
+    recovery_command: String,
+}
 
 struct SyntheticResultHooks<'a> {
     before_write: &'a dyn Fn(&Path),
@@ -56,6 +75,113 @@ fn with_reconcile_lock<R>(
 }
 
 fn noop_path(_: &Path) {}
+
+fn git_output(project_root: &Path, args: &[&str]) -> Result<std::process::Output> {
+    Command::new("git")
+        .args(args)
+        .current_dir(project_root)
+        .output()
+        .with_context(|| format!("Failed to run git {:?}", args))
+}
+
+fn git_success(project_root: &Path, args: &[&str]) -> bool {
+    git_output(project_root, args)
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn inspect_unpushed_commits(
+    project_root: &Path,
+    branch: &str,
+) -> Result<Option<UnpushedCommitsSidecar>> {
+    let range = if git_success(
+        project_root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/origin/{branch}"),
+        ],
+    ) {
+        (
+            Some(format!("origin/{branch}")),
+            format!("origin/{branch}..HEAD"),
+        )
+    } else if git_success(
+        project_root,
+        &["rev-parse", "--verify", "--quiet", "refs/heads/main"],
+    ) {
+        (None, "main..HEAD".to_string())
+    } else if git_success(
+        project_root,
+        &["rev-parse", "--verify", "--quiet", "refs/heads/master"],
+    ) {
+        (None, "master..HEAD".to_string())
+    } else {
+        return Ok(None);
+    };
+    let (remote_ref, rev_range) = range;
+
+    let count_output = git_output(project_root, &["rev-list", "--count", &rev_range])?;
+    if !count_output.status.success() {
+        return Ok(None);
+    }
+    let commits_ahead = String::from_utf8_lossy(&count_output.stdout)
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0);
+    if commits_ahead == 0 {
+        return Ok(None);
+    }
+
+    let log_output = git_output(project_root, &["log", "--format=%H%x09%s", &rev_range])?;
+    if !log_output.status.success() {
+        return Ok(None);
+    }
+
+    let commits = String::from_utf8_lossy(&log_output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (sha, subject) = line.split_once('\t')?;
+            Some(UnpushedCommitRecord {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if commits.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(UnpushedCommitsSidecar {
+        branch: branch.to_string(),
+        remote_ref,
+        commits_ahead,
+        commits,
+        recovery_command: format!("git push -u origin {branch}"),
+    }))
+}
+
+fn persist_unpushed_commits_sidecar(
+    project_root: &Path,
+    session: &MetaSessionState,
+    session_dir: &Path,
+) -> Result<Option<UnpushedCommitsSidecar>> {
+    if session.resolved_identity().vcs_kind != VcsKind::Git {
+        return Ok(None);
+    }
+    let Some(branch) = session.branch.as_deref() else {
+        return Ok(None);
+    };
+    let Some(sidecar) = inspect_unpushed_commits(project_root, branch)? else {
+        return Ok(None);
+    };
+    let output_dir = session_dir.join("output");
+    fs::create_dir_all(&output_dir)?;
+    let sidecar_path = session_dir.join(UNPUSHED_COMMITS_SIDECAR_PATH);
+    fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
+    Ok(Some(sidecar))
+}
 
 fn session_has_terminal_process(session_dir: &Path) -> bool {
     ToolLiveness::has_live_process(session_dir) || ToolLiveness::daemon_pid_is_alive(session_dir)
@@ -201,6 +327,14 @@ where
         .max_by_key(|(_, state)| state.updated_at)
         .map(|(tool, _)| tool.clone())
         .unwrap_or_else(|| "unknown".to_string());
+    if let Err(err) = persist_unpushed_commits_sidecar(project_root, &session, session_dir) {
+        warn!(
+            session_id = %session_id,
+            trigger = %trigger,
+            error = %err,
+            "Failed to persist unpushed commit recovery sidecar"
+        );
+    }
     let artifacts =
         crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
     let output_log_mtime = format_optional_file_mtime(&session_dir.join("output.log"));
@@ -359,6 +493,14 @@ fn retire_if_dead_with_result_impl(
     if session_has_terminal_process(session_dir) || load_result(project_root, session_id)?.is_none()
     {
         return Ok(false);
+    }
+    if let Err(err) = persist_unpushed_commits_sidecar(project_root, &session, session_dir) {
+        warn!(
+            session_id = %session_id,
+            trigger = %trigger,
+            error = %err,
+            "Failed to persist unpushed commit recovery sidecar"
+        );
     }
     if session
         .apply_phase_event(csa_session::PhaseEvent::Retired)
@@ -574,3 +716,7 @@ fn format_optional_file_mtime(path: &Path) -> Option<String> {
 #[cfg(test)]
 #[path = "session_cmds_reconcile_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_cmds_reconcile_tests_tail.rs"]
+mod tail_tests;

@@ -793,5 +793,7 @@ fn session_to_json_includes_depth_and_parent() {
 mod daemon_pid_tail_tests;
 #[path = "session_cmds_tests_tail.rs"]
 mod tail_tests;
+#[path = "session_cmds_tests_tail_recovery.rs"]
+mod tail_tests_recovery;
 #[path = "session_cmds_tests_tail_wait.rs"]
 mod tail_tests_wait;

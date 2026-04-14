@@ -39,6 +39,11 @@ struct DaemonCompletionPacket {
     status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UnpushedCommitsRecoveryPacket {
+    recovery_command: String,
+}
+
 impl DaemonCompletionPacket {
     fn from_exit_code(exit_code: i32) -> Self {
         Self {
@@ -351,6 +356,18 @@ pub(crate) fn synthesized_wait_next_step(session_dir: &Path) -> Result<Option<St
         && csa_hooks::parse_next_step_directive(&stdout).is_some()
     {
         return Ok(None);
+    }
+
+    let unpushed_commits_path = session_dir.join("output").join("unpushed_commits.json");
+    if unpushed_commits_path.is_file() {
+        let recovery: UnpushedCommitsRecoveryPacket =
+            serde_json::from_str(&fs::read_to_string(unpushed_commits_path)?)?;
+        if !recovery.recovery_command.trim().is_empty() {
+            return Ok(Some(csa_hooks::format_next_step_directive(
+                &recovery.recovery_command,
+                true,
+            )));
+        }
     }
 
     let review_meta_path = session_dir.join("review_meta.json");
