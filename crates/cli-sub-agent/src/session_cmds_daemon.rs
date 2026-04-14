@@ -168,19 +168,50 @@ where
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
             && !session_has_terminal_process(&session_dir)
         {
-            let _ = refresh_result_for_wait(
+            let refreshed_result = refresh_result_for_wait(
                 effective_root,
                 &resolved.session_id,
                 &session_dir,
                 is_cross_project,
             );
+            if let Err(err) = &refreshed_result {
+                tracing::debug!(
+                    session_id = %resolved.session_id,
+                    error = %err,
+                    "Failed to refresh result after daemon completion packet"
+                );
+            }
+            let refreshed_result = refreshed_result.ok().flatten();
+            let mut synthetic = false;
+            if refreshed_result.is_some() {
+                let _ = crate::session_cmds::retire_if_dead_with_result(
+                    effective_root,
+                    &resolved.session_id,
+                    "session wait",
+                );
+            } else {
+                let reconciled = reconcile_dead_active_session(
+                    effective_root,
+                    &resolved.session_id,
+                    "session wait",
+                )?;
+                synthetic = reconciled.synthetic;
+                if reconciled.result_became_available {
+                    let _ = load_completed_daemon_result_adaptive(
+                        effective_root,
+                        &resolved.session_id,
+                        &session_dir,
+                        is_cross_project,
+                    )?;
+                }
+            }
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
             emit_completion_signal(
                 &resolved.session_id,
                 &completion.status,
                 completion.exit_code,
-                false,
+                synthetic,
                 !streamed_output,
             );
             return Ok(completion.exit_code);

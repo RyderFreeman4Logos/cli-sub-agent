@@ -789,8 +789,9 @@ fn session_to_json_includes_depth_and_parent() {
     assert_eq!(value.get("depth").and_then(|v| v.as_u64()), Some(2));
 }
 
-#[path = "session_cmds_tests_tail.rs"]
-mod tail_tests;
-
 #[path = "session_cmds_tests_daemon_pid_tail.rs"]
 mod daemon_pid_tail_tests;
+#[path = "session_cmds_tests_tail.rs"]
+mod tail_tests;
+#[path = "session_cmds_tests_tail_wait.rs"]
+mod tail_tests_wait;
