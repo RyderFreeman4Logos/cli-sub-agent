@@ -42,6 +42,18 @@ fn workspace_root() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
+fn extract_bash_block(prompt: &str) -> String {
+    let start = prompt
+        .find("```bash\n")
+        .expect("prompt should contain opening bash fence")
+        + "```bash\n".len();
+    let rest = &prompt[start..];
+    let end = rest
+        .find("\n```")
+        .expect("prompt should contain closing fence");
+    rest[..end].to_string()
+}
+
 #[test]
 fn commit_workflow_csa_dispatch_steps_have_non_empty_prompts() {
     let workflow_path = workspace_root().join("patterns/commit/workflow.toml");
@@ -131,5 +143,67 @@ async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
         child.genealogy.parent_session_id.as_deref(),
         Some(parent.meta_session_id.as_str()),
         "fresh plan child session should point back to the plan runner session"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn commit_workflow_auto_pr_step_exits_before_push_in_executor_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let workflow_path = workspace_root().join("patterns/commit/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let auto_pr_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Auto PR Transaction")
+        .expect("missing Auto PR Transaction step");
+    let script = extract_bash_block(&auto_pr_step.prompt);
+
+    let td = tempfile::tempdir().unwrap();
+    let bin_dir = td.path().join("bin");
+    let log_path = td.path().join("command.log");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+
+    for tool in ["git", "gh"] {
+        let tool_path = bin_dir.join(tool);
+        std::fs::write(
+            &tool_path,
+            format!(
+                "#!/bin/sh\nprintf '%s %s\\n' \"{tool}\" \"$*\" >> '{}'\nexit 99\n",
+                log_path.display()
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&tool_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&tool_path, perms).unwrap();
+    }
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let status = Command::new("bash")
+        .arg("-ceu")
+        .arg(script)
+        .current_dir(td.path())
+        .env("PATH", patched_path)
+        .env(
+            "COMMIT_SUBJECT",
+            "fix(cli-sub-agent): guard executor publish (#782)",
+        )
+        .env("BRANCH", "fix/executor-guard")
+        .env("PR_BODY", "body")
+        .env("CSA_DEPTH", "1")
+        .env("CSA_INTERNAL_INVOCATION", "1")
+        .status()
+        .unwrap();
+
+    assert!(status.success(), "executor-mode guard should exit cleanly");
+    let log_contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        log_contents.trim().is_empty(),
+        "executor-mode auto PR step must exit before invoking git/gh, got: {log_contents}"
     );
 }

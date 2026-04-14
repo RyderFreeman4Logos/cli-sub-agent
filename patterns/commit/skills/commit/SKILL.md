@@ -78,10 +78,10 @@ breaks prompt-guard propagation.
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 9. **Auto PR** (standalone by default): Push branch, create PR targeting main, invoke `/pr-bot`.
    Runs automatically when commit is standalone. Skipped when parent workflow
-   (mktsk/dev2merge) sets `CSA_SKIP_PUBLISH=true`, or automatically when
-   invoked from inside a CSA session (`CSA_DEPTH` set and non-zero) so that
-   employee sessions stay orchestration-pure and only the Layer 0 orchestrator
-   runs the PR + pr-bot transaction (#752 Bug 4).
+   (mktsk/dev2merge) sets `CSA_SKIP_PUBLISH=true`, or automatically in
+   executor mode (`CSA_DEPTH` set and non-zero plus `CSA_INTERNAL_INVOCATION=1`)
+   so that employee sessions stay orchestration-pure and only the Layer 0
+   orchestrator runs the push + PR + pr-bot transaction (#752 Bug 4, #782).
    - **NOTE**: `/pr-bot` internally runs a **separate cumulative review** (`csa review --range main...HEAD`) covering ALL commits on the branch before push. This is distinct from Step 6's per-commit review (`csa review --diff`). Do NOT skip pr-bot's internal review even if Step 6 passed.
 
 ## Two-Layer Review Architecture
