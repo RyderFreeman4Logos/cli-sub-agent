@@ -3,7 +3,7 @@ use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use crate::review_consensus::build_reviewer_tools;
 use clap::{Parser, error::ErrorKind};
-use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::collections::HashMap;
 use std::process::Command;
@@ -778,6 +778,9 @@ mod tier_tests;
 
 #[path = "review_cmd_tests_tail.rs"]
 mod tail_tests;
+
+#[path = "review_cmd_tests_transport_tail.rs"]
+mod transport_tail_tests;
 
 #[path = "review_cmd_tests_no_failover.rs"]
 mod no_failover_tests;

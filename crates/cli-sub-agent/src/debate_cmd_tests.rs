@@ -3,7 +3,7 @@ use crate::debate_cmd_output::*;
 use crate::debate_cmd_resolve::resolve_debate_tool;
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_config::global::ReviewConfig;
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig, ToolTransport};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::types::ToolName;
 use csa_session::{SessionArtifact, create_session, load_result, save_result};

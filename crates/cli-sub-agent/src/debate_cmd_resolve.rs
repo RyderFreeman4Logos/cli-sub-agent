@@ -292,7 +292,9 @@ fn resolve_debate_tool_from_selection(
         && let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart)
     {
         let counterpart_enabled = project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
-        if counterpart_enabled {
+        let counterpart_available =
+            crate::run_helpers::is_tool_binary_available_for_config(resolved, project_config);
+        if counterpart_enabled && counterpart_available {
             let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                 anyhow::anyhow!(
                     "BUG: auto debate tool resolution returned invalid tool '{resolved}'"
