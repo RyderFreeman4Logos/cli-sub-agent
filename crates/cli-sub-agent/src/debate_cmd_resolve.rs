@@ -376,14 +376,16 @@ fn resolve_same_model_fallback(
     }
 
     // Use the parent tool itself for same-model adversarial debate,
-    // but only if the tool is enabled in project config.
+    // but only if the configured runtime binary is actually available.
     if let Some(parent_str) = parent_tool
         && let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str)
     {
         let enabled = project_config
             .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
             .unwrap_or(true);
-        if enabled {
+        let available =
+            crate::run_helpers::is_tool_binary_available_for_config(tool.as_str(), project_config);
+        if enabled && available {
             return Ok((tool, DebateMode::SameModelAdversarial));
         }
     }

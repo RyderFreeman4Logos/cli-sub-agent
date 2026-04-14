@@ -333,6 +333,60 @@ fn resolve_debate_tool_same_model_fallback_skips_unavailable_configured_binary()
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn resolve_debate_tool_same_model_fallback_skips_unavailable_parent_binary() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let bin_dir = td.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let which_path = bin_dir.join("which");
+    fs::write(
+        &which_path,
+        "#!/bin/sh\nif [ \"$1\" = \"codex-acp\" ]; then\n  exit 0\nfi\nexit 1\n",
+    )
+    .expect("write which stub");
+    let mut perms = fs::metadata(&which_path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&which_path, perms).expect("chmod which");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let patched_path = std::env::join_paths(
+        std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&inherited_path)),
+    )
+    .expect("join PATH");
+    let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+    let global = GlobalConfig::default();
+    let mut cfg = project_config_with_enabled_tools(&["codex"]);
+    cfg.tools
+        .get_mut("codex")
+        .expect("codex tool config")
+        .transport = Some(ToolTransport::Cli);
+
+    let err = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        Some("codex"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("AUTO debate tool selection failed"),
+        "expected same-model fallback to reject unavailable parent binary, got: {err:#}"
+    );
+}
+
 #[test]
 fn verify_debate_skill_no_fallback_without_skill() {
     // Ensure no execution path silently downgrades when skill is missing.

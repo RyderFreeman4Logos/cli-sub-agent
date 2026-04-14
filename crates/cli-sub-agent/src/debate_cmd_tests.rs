@@ -146,7 +146,10 @@ fn resolve_debate_tool_auto_maps_reverse() {
 #[test]
 fn resolve_debate_tool_same_model_fallback_when_no_parent() {
     // With same_model_fallback enabled (default), no parent context should fall
-    // back to same-model adversarial using any available tool.
+    // back to same-model adversarial using any explicitly available tool.
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let (tool, mode, _) = resolve_debate_tool(
@@ -161,13 +164,8 @@ fn resolve_debate_tool_same_model_fallback_when_no_parent() {
         false, // force_ignore_tier_setting
     )
     .unwrap();
-    // Falls back to first known tool (same-model adversarial)
     assert_eq!(mode, DebateMode::SameModelAdversarial);
-    // Tool is from all_known_tools since no parent was detected
-    assert!(matches!(
-        tool,
-        ToolName::GeminiCli | ToolName::Opencode | ToolName::Codex | ToolName::ClaudeCode
-    ));
+    assert!(matches!(tool, ToolName::Opencode));
 }
 
 #[test]
