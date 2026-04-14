@@ -61,10 +61,18 @@ fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput 
     };
     let output_log = session_dir.join("output.log");
     let stdout_log = session_dir.join("stdout.log");
-    match (output_log.is_file(), stdout_log.is_file()) {
+    let output_log_exists = output_log.is_file();
+    let stdout_log_exists = stdout_log.is_file();
+    match (output_log_exists, stdout_log_exists) {
         (true, false) => return AttachPrimaryOutput::OutputLog,
         (false, true) => return AttachPrimaryOutput::StdoutLog,
         _ => {}
+    }
+    // Pre-upgrade daemon sessions did not persist runtime_binary; if output.log
+    // still exists, preserve the legacy ACP routing instead of re-resolving
+    // codex through the new CLI default.
+    if metadata.runtime_binary.is_none() && output_log_exists {
+        return AttachPrimaryOutput::OutputLog;
     }
     if metadata.runtime_binary.as_deref() == Some("codex-acp") {
         return AttachPrimaryOutput::OutputLog;
