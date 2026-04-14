@@ -99,6 +99,29 @@ fn attach_primary_output_preserves_legacy_codex_output_log_when_runtime_binary_m
 }
 
 #[test]
+fn attach_primary_output_keeps_stdout_for_non_codex_sessions_with_output_log() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let metadata = csa_session::metadata::SessionMetadata {
+        tool: "opencode".to_string(),
+        tool_locked: true,
+        runtime_binary: None,
+    };
+    let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        metadata_toml,
+    )
+    .expect("write metadata");
+    std::fs::write(td.path().join("output.log"), "").expect("write output log");
+    std::fs::write(td.path().join("stdout.log"), "").expect("write stdout log");
+
+    assert_eq!(
+        attach_primary_output_for_session(td.path()),
+        AttachPrimaryOutput::StdoutLog
+    );
+}
+
+#[test]
 fn attach_primary_output_keeps_stdout_for_legacy_tools() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {

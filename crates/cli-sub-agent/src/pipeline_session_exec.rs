@@ -256,14 +256,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     }
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-    if let Err(err) = session_exec_metadata::persist_session_runtime_binary(&session_dir, executor)
-    {
-        warn!(
-            session = %session.meta_session_id,
-            error = %err,
-            "Failed to persist session runtime binary metadata"
-        );
-    }
     // New-session cleanup guard: delete the orphan directory on pre-exec failure.
     let mut cleanup_guard = if session_arg.is_none() {
         Some(SessionCleanupGuard::new(session_dir.clone()))
@@ -600,6 +592,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
 
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
     crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
+    if let Err(err) = session_exec_metadata::persist_session_runtime_binary(&session_dir, executor)
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Failed to persist session runtime binary metadata"
+        );
+    }
 
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,

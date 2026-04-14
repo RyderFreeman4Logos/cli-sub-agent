@@ -792,5 +792,7 @@ fn enforce_result_toml_contract_now(
 mod contract_tests;
 #[path = "pipeline_tests_initial_response.rs"]
 mod initial_response_tests;
+#[path = "pipeline_tests_locking.rs"]
+mod locking_tests;
 #[path = "pipeline_tests_tail.rs"]
 mod tail_tests;

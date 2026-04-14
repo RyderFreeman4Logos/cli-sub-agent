@@ -51,6 +51,13 @@ fn session_has_terminal_process(session_dir: &Path) -> bool {
         || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
 }
 
+fn should_preserve_legacy_codex_output_log(
+    metadata: &csa_session::metadata::SessionMetadata,
+    output_log_exists: bool,
+) -> bool {
+    metadata.tool == "codex" && metadata.runtime_binary.is_none() && output_log_exists
+}
+
 fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput {
     let metadata_path = session_dir.join(csa_session::metadata::METADATA_FILE_NAME);
     let Ok(contents) = fs::read_to_string(metadata_path) else {
@@ -68,10 +75,8 @@ fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput 
         (false, true) => return AttachPrimaryOutput::StdoutLog,
         _ => {}
     }
-    // Pre-upgrade daemon sessions did not persist runtime_binary; if output.log
-    // still exists, preserve the legacy ACP routing instead of re-resolving
-    // codex through the new CLI default.
-    if metadata.runtime_binary.is_none() && output_log_exists {
+    // Only codex sessions became ambiguous when the default transport flipped.
+    if should_preserve_legacy_codex_output_log(&metadata, output_log_exists) {
         return AttachPrimaryOutput::OutputLog;
     }
     if metadata.runtime_binary.as_deref() == Some("codex-acp") {
