@@ -5,7 +5,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use csa_executor::{TransportFactory, TransportMode};
 use csa_session::get_session_dir;
 use csa_session::state::ReviewSessionMeta;
 use serde::{Deserialize, Serialize};
@@ -13,6 +12,8 @@ use serde::{Deserialize, Serialize};
 #[path = "session_cmds_daemon_attach.rs"]
 mod attach;
 
+#[cfg(test)]
+use attach::{ATTACH_METADATA_STDOUT_GRACE_WINDOW, attach_primary_output_for_session};
 use attach::{resolve_attach_terminal_exit, wait_for_attach_live_output_path};
 
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
@@ -53,61 +54,6 @@ fn is_pid_alive(pid: u32) -> bool {
 fn session_has_terminal_process(session_dir: &Path) -> bool {
     csa_process::ToolLiveness::has_live_process(session_dir)
         || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
-}
-
-fn routes_session_output_to_output_log(metadata: &csa_session::metadata::SessionMetadata) -> bool {
-    if metadata.runtime_binary.as_deref() == Some("codex-acp") {
-        return true;
-    }
-    matches!(
-        TransportFactory::mode_for_tool(&metadata.tool),
-        TransportMode::Acp
-    )
-}
-
-fn attach_output_fallback(
-    output_log_exists: bool,
-    stdout_log_exists: bool,
-    session_active: bool,
-) -> AttachPrimaryOutput {
-    if session_active && stdout_log_exists && !output_log_exists {
-        AttachPrimaryOutput::AwaitMetadata
-    } else if output_log_exists {
-        AttachPrimaryOutput::OutputLog
-    } else {
-        AttachPrimaryOutput::StdoutLog
-    }
-}
-
-fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput {
-    let output_log = session_dir.join("output.log");
-    let stdout_log = session_dir.join("stdout.log");
-    let output_log_exists = output_log.is_file();
-    let stdout_log_exists = stdout_log.is_file();
-    let session_active = session_has_terminal_process(session_dir);
-    let metadata_path = session_dir.join(csa_session::metadata::METADATA_FILE_NAME);
-    let Ok(contents) = fs::read_to_string(metadata_path) else {
-        return attach_output_fallback(output_log_exists, stdout_log_exists, session_active);
-    };
-    let Ok(metadata) = toml::from_str::<csa_session::metadata::SessionMetadata>(&contents) else {
-        return attach_output_fallback(output_log_exists, stdout_log_exists, session_active);
-    };
-    if metadata.tool == "codex" && metadata.runtime_binary.is_none() {
-        return if !session_active {
-            if output_log_exists {
-                AttachPrimaryOutput::OutputLog
-            } else {
-                AttachPrimaryOutput::StdoutLog
-            }
-        } else {
-            AttachPrimaryOutput::OutputLog
-        };
-    }
-    if routes_session_output_to_output_log(&metadata) {
-        AttachPrimaryOutput::OutputLog
-    } else {
-        AttachPrimaryOutput::StdoutLog
-    }
 }
 
 /// Read the daemon PID from `daemon.pid`, falling back to legacy stderr directives.
