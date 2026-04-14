@@ -366,6 +366,25 @@ if [ -z "$(printf '%s' "${COMMIT_BODY_LOCAL}" | tr -d '[:space:]')" ]; then
   exit 1
 fi
 
+for required_line in \
+  '### AI Reviewer Metadata' \
+  '- **Design Intent**:' \
+  '- **Key Decisions**:' \
+  '- **Reviewer Guidance**:'
+do
+  if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- "${required_line}"; then
+    echo "ERROR: Commit body is missing required AI reviewer metadata line: ${required_line}" >&2
+    exit 1
+  fi
+done
+
+for required_guidance in 'Timing/Race Scenarios:' 'Boundary Cases:' 'Risk Areas:'; do
+  if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- "${required_guidance}"; then
+    echo "ERROR: Commit body Reviewer Guidance must include the required '${required_guidance}' sub-field." >&2
+    exit 1
+  fi
+done
+
 echo "CSA_VAR:COMMIT_SUBJECT=$COMMIT_SUBJECT_LOCAL"
 echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
