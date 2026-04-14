@@ -265,6 +265,13 @@ mod tests {
         }
     }
 
+    fn write_user_config(contents: &str) {
+        let global_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(global_path.parent().expect("config parent")).unwrap();
+        std::fs::write(global_path, contents).unwrap();
+    }
+
     #[test]
     fn resolve_daemon_wait_timeout_uses_global_kv_cache_long_poll_seconds() {
         let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
@@ -274,16 +281,12 @@ mod tests {
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_dir = config_root.join("cli-sub-agent");
-        std::fs::create_dir_all(&global_dir).unwrap();
-        std::fs::write(
-            global_dir.join("config.toml"),
+        write_user_config(
             r#"
 [kv_cache]
 long_poll_seconds = 3000
 "#,
-        )
-        .unwrap();
+        );
 
         assert_eq!(resolve_daemon_wait_timeout(None), 3000);
     }
@@ -297,16 +300,12 @@ long_poll_seconds = 3000
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_dir = config_root.join("cli-sub-agent");
-        std::fs::create_dir_all(&global_dir).unwrap();
-        std::fs::write(
-            global_dir.join("config.toml"),
+        write_user_config(
             r#"
 [review]
 tool = "auto"
 "#,
-        )
-        .unwrap();
+        );
 
         assert_eq!(resolve_daemon_wait_timeout(None), 240);
     }
@@ -320,16 +319,12 @@ tool = "auto"
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_dir = config_root.join("cli-sub-agent");
-        std::fs::create_dir_all(&global_dir).unwrap();
-        std::fs::write(
-            global_dir.join("config.toml"),
+        write_user_config(
             r#"
 [kv_cache]
 long_poll_seconds = 3000
 "#,
-        )
-        .unwrap();
+        );
 
         let csa_dir = dir.path().join(".csa");
         std::fs::create_dir_all(&csa_dir).unwrap();
@@ -358,16 +353,12 @@ daemon_wait_seconds = 600
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_dir = config_root.join("cli-sub-agent");
-        std::fs::create_dir_all(&global_dir).unwrap();
-        std::fs::write(
-            global_dir.join("config.toml"),
+        write_user_config(
             r#"
 [kv_cache]
 long_poll_seconds = 240
 "#,
-        )
-        .unwrap();
+        );
 
         let csa_dir = dir.path().join(".csa");
         std::fs::create_dir_all(&csa_dir).unwrap();
@@ -397,16 +388,12 @@ daemon_wait_seconds = 600
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_dir = config_root.join("cli-sub-agent");
-        std::fs::create_dir_all(&global_dir).unwrap();
-        std::fs::write(
-            global_dir.join("config.toml"),
+        write_user_config(
             r#"
 [kv_cache]
 frequent_poll_seconds = 45
 "#,
-        )
-        .unwrap();
+        );
 
         let csa_dir = dir.path().join(".csa");
         std::fs::create_dir_all(&csa_dir).unwrap();
@@ -462,18 +449,13 @@ daemon_wait_seconds = 600
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_path =
-            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
-        std::fs::create_dir_all(global_path.parent().expect("config parent")).unwrap();
-        std::fs::write(
-            global_path,
+        write_user_config(
             r#"
 schema_version = 1
 [session]
 daemon_wait_seconds = 480
 "#,
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
