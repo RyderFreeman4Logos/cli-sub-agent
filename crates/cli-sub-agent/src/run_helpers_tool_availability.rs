@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use csa_config::{ProjectConfig, ToolTransport};
-use csa_executor::CodexTransport;
+use csa_executor::{CodexTransport, install_hint_for_known_tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToolBinaryAvailability {
@@ -116,14 +116,10 @@ pub(crate) fn tool_binary_availability(
         let hint = if tool_name == "codex" {
             Cow::Borrowed(resolved_codex_transport(config).install_hint())
         } else {
-            Cow::Borrowed(match tool_name {
-                "gemini-cli" => "Install: npm install -g @google/gemini-cli",
-                "opencode" => "Install: go install github.com/sst/opencode@latest",
-                "claude-code" => {
-                    "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
-                }
-                _ => "Install the tool and ensure it is on PATH",
-            })
+            Cow::Borrowed(
+                install_hint_for_known_tool(tool_name)
+                    .unwrap_or("Install the tool and ensure it is on PATH"),
+            )
         };
         ToolBinaryAvailability::Missing {
             binary_name: binary_name.to_string(),

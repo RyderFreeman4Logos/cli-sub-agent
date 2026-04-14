@@ -85,7 +85,7 @@ fn test_install_hint() {
             thinking_budget: None,
         }
         .install_hint(),
-        "Install: npm install -g @anthropic-ai/gemini-cli"
+        "Install: npm install -g @google/gemini-cli"
     );
     assert_eq!(
         Executor::Opencode {
@@ -94,7 +94,7 @@ fn test_install_hint() {
             thinking_budget: None,
         }
         .install_hint(),
-        "Install: go install github.com/anthropics/opencode@latest"
+        "Install: go install github.com/sst/opencode@latest"
     );
     assert_eq!(
         Executor::Codex {

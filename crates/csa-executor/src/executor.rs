@@ -11,6 +11,10 @@ use std::path::Path;
 use tokio::process::Command;
 
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
+use crate::install_hints::{
+    CLAUDE_CODE_ACP_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT,
+    OPENCODE_INSTALL_HINT,
+};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     SandboxTransportConfig, Transport, TransportFactory, TransportOptions, TransportResult,
@@ -104,17 +108,13 @@ impl Executor {
     /// Get installation instructions for the tool.
     pub fn install_hint(&self) -> &'static str {
         match self {
-            Self::GeminiCli { .. } => "Install: npm install -g @anthropic-ai/gemini-cli",
-            Self::Opencode { .. } => "Install: go install github.com/anthropics/opencode@latest",
+            Self::GeminiCli { .. } => GEMINI_CLI_INSTALL_HINT,
+            Self::Opencode { .. } => OPENCODE_INSTALL_HINT,
             Self::Codex {
                 runtime_metadata, ..
             } => runtime_metadata.install_hint(),
-            Self::ClaudeCode { .. } => {
-                "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
-            }
-            Self::OpenaiCompat { .. } => {
-                "Configure [tools.openai-compat] with base_url and api_key in config.toml"
-            }
+            Self::ClaudeCode { .. } => CLAUDE_CODE_ACP_INSTALL_HINT,
+            Self::OpenaiCompat { .. } => OPENAI_COMPAT_INSTALL_HINT,
         }
     }
 
