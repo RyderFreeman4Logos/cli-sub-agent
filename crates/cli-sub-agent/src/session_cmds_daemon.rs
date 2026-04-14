@@ -1,5 +1,6 @@
 //! Daemon-specific session commands extracted from `session_cmds.rs`.
 
+use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -188,7 +189,7 @@ where
             }
             let refreshed_result = refreshed_result.ok().flatten();
             let mut synthetic = false;
-            let mut completion_status = completion.status.as_str();
+            let mut completion_status = Cow::Borrowed(completion.status.as_str());
             let mut exit_code = completion.exit_code;
             if refreshed_result.is_some() {
                 let _ = crate::session_cmds::retire_if_dead_with_result(
@@ -203,24 +204,31 @@ where
                     "session wait",
                 )?;
                 synthetic = reconciled.synthetic;
+                let mut loaded_result = None;
                 if reconciled.synthetic {
-                    completion_status = "failure";
+                    completion_status = Cow::Borrowed("failure");
                     exit_code = 1;
                 }
                 if reconciled.result_became_available {
-                    let _ = load_completed_daemon_result_adaptive(
+                    loaded_result = load_completed_daemon_result_adaptive(
                         effective_root,
                         &resolved.session_id,
                         &session_dir,
                         is_cross_project,
                     )?;
                 }
+                if !reconciled.synthetic
+                    && let Some(result) = loaded_result
+                {
+                    completion_status = Cow::Owned(result.status);
+                    exit_code = result.exit_code;
+                }
             }
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
             emit_completion_signal(
                 &resolved.session_id,
-                completion_status,
+                completion_status.as_ref(),
                 exit_code,
                 synthetic,
                 !streamed_output,
