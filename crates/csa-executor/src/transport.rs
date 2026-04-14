@@ -58,20 +58,9 @@ mod transport_types;
 use transport_types::should_stream_acp_stdout_to_stderr;
 pub use transport_types::{SandboxTransportConfig, TransportOptions, TransportResult};
 
-#[async_trait]
-pub trait Transport: Send + Sync {
-    async fn execute(
-        &self,
-        prompt: &str,
-        tool_state: Option<&ToolState>,
-        session: &MetaSessionState,
-        extra_env: Option<&HashMap<String, String>>,
-        options: TransportOptions<'_>,
-    ) -> Result<TransportResult>;
-
-    #[cfg(test)]
-    fn as_any(&self) -> &dyn std::any::Any;
-}
+#[path = "transport_trait.rs"]
+mod transport_trait;
+pub use transport_trait::Transport;
 
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
@@ -337,6 +326,10 @@ impl LegacyTransport {
 
 #[async_trait]
 impl Transport for LegacyTransport {
+    fn mode(&self) -> TransportMode {
+        TransportMode::Legacy
+    }
+
     async fn execute(
         &self,
         prompt: &str,
@@ -651,6 +644,10 @@ impl AcpTransport {
 
 #[async_trait]
 impl Transport for AcpTransport {
+    fn mode(&self) -> TransportMode {
+        TransportMode::Acp
+    }
+
     #[tracing::instrument(skip_all, fields(tool = %self.tool_name))]
     async fn execute(
         &self,

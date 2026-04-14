@@ -134,6 +134,10 @@ struct ChatUsage {
 
 #[async_trait]
 impl Transport for OpenaiCompatTransport {
+    fn mode(&self) -> crate::transport::TransportMode {
+        crate::transport::TransportMode::OpenaiCompat
+    }
+
     async fn execute(
         &self,
         prompt: &str,

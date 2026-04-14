@@ -745,3 +745,7 @@ mod tier_tests;
 #[cfg(test)]
 #[path = "run_helpers_transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_transport_integration_tests.rs"]
+mod transport_integration_tests;

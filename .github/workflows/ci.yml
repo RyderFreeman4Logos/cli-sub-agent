@@ -152,7 +152,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install nextest
         uses: taiki-e/install-action@f1d55f103dfbf9be3d3cf757ce9e198778ba8687
-      - name: Run workspace tests
+      - name: Run workspace tests (default features)
+        run: cargo nextest run --workspace
+      - name: Run workspace tests (all features)
         run: cargo nextest run --workspace --all-features
       - name: Run cli-sub-agent e2e tests
         if: matrix.os == 'ubuntu-latest'
