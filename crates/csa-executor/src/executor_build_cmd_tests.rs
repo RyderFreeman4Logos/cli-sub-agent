@@ -120,6 +120,7 @@ fn test_build_command_codex_sets_csa_env_vars() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
@@ -225,6 +226,7 @@ fn test_build_command_reserved_session_paths_override_extra_env() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let mut extra = HashMap::new();
@@ -560,6 +562,7 @@ fn test_build_command_codex_args_structure() {
     let exec = Executor::Codex {
         model_override: Some("gpt-5".to_string()),
         thinking_budget: Some(ThinkingBudget::Low),
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None);
@@ -652,6 +655,7 @@ fn test_build_command_with_session_resume_codex() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let tool_state = ToolState {
@@ -751,6 +755,7 @@ fn test_build_command_no_resume_without_provider_session_id() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let tool_state = ToolState {

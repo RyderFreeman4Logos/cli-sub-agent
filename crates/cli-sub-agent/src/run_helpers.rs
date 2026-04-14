@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use std::io::Read;
 use std::path::Path;
 
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig, ToolTransport};
 use csa_core::types::ToolName;
-use csa_executor::{Executor, ModelSpec, ThinkingBudget};
+use csa_executor::{CodexTransport, Executor, ModelSpec, ThinkingBudget};
 use csa_session::TokenUsage;
 
 #[path = "run_helpers_edit_requirement.rs"]
@@ -349,6 +349,17 @@ pub(crate) fn build_executor(
             let budget = ThinkingBudget::parse(explicit_thinking)?;
             executor.override_thinking_budget(budget);
         }
+    }
+
+    if matches!(executor, Executor::Codex { .. }) {
+        let transport = config
+            .and_then(|cfg| cfg.tool_transport("codex"))
+            .map(|transport| match transport {
+                ToolTransport::Cli => CodexTransport::Cli,
+                ToolTransport::Acp => CodexTransport::Acp,
+            })
+            .unwrap_or_else(CodexTransport::default_for_build);
+        executor.override_codex_transport(transport);
     }
 
     Ok(executor)
@@ -772,3 +783,7 @@ mod tests;
 #[cfg(test)]
 #[path = "run_helpers_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_transport_tests.rs"]
+mod transport_tests;

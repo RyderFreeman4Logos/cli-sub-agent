@@ -18,6 +18,7 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
         },
         Executor::ClaudeCode {
             model_override: None,
@@ -43,6 +44,7 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
     let executor = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session_config = SessionConfig {
         no_load: vec!["skills/foo".to_string()],
@@ -61,6 +63,35 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
         .expect("expected AcpTransport");
 
     assert_eq!(acp.session_config, Some(session_config));
+}
+
+#[test]
+fn test_transport_factory_create_honors_codex_runtime_transport_override() {
+    let cli_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    };
+    let cli_transport = TransportFactory::create(&cli_executor, Some(SessionConfig::default()));
+    assert!(
+        cli_transport.as_ref().as_any().is::<LegacyTransport>(),
+        "codex cli override should use LegacyTransport"
+    );
+
+    let acp_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Acp,
+        ),
+    };
+    let acp_transport = TransportFactory::create(&acp_executor, Some(SessionConfig::default()));
+    assert!(
+        acp_transport.as_ref().as_any().is::<AcpTransport>(),
+        "codex acp override should use AcpTransport"
+    );
 }
 
 #[test]

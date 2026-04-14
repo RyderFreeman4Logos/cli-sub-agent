@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
-use crate::codex_runtime::codex_runtime_metadata;
+use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     LegacyTransport, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
@@ -47,6 +47,8 @@ pub enum Executor {
     Codex {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
+        #[serde(default = "default_codex_runtime_metadata")]
+        runtime_metadata: CodexRuntimeMetadata,
     },
     ClaudeCode {
         model_override: Option<String>,
@@ -57,6 +59,10 @@ pub enum Executor {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
     },
+}
+
+const fn default_codex_runtime_metadata() -> CodexRuntimeMetadata {
+    CodexRuntimeMetadata::current()
 }
 
 impl Executor {
@@ -88,7 +94,9 @@ impl Executor {
         match self {
             Self::GeminiCli { .. } => "gemini",
             Self::Opencode { .. } => "opencode",
-            Self::Codex { .. } => codex_runtime_metadata().runtime_binary_name(),
+            Self::Codex {
+                runtime_metadata, ..
+            } => runtime_metadata.runtime_binary_name(),
             Self::ClaudeCode { .. } => "claude-code-acp",
             Self::OpenaiCompat { .. } => "openai-compat", // no binary; HTTP-only
         }
@@ -99,7 +107,9 @@ impl Executor {
         match self {
             Self::GeminiCli { .. } => "Install: npm install -g @anthropic-ai/gemini-cli",
             Self::Opencode { .. } => "Install: go install github.com/anthropics/opencode@latest",
-            Self::Codex { .. } => codex_runtime_metadata().install_hint(),
+            Self::Codex {
+                runtime_metadata, ..
+            } => runtime_metadata.install_hint(),
             Self::ClaudeCode { .. } => {
                 "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
             }
@@ -137,6 +147,7 @@ impl Executor {
             "codex" => Ok(Self::Codex {
                 model_override: model,
                 thinking_budget: budget,
+                runtime_metadata: codex_runtime_metadata(),
             }),
             "claude-code" => Ok(Self::ClaudeCode {
                 model_override: model,
@@ -169,6 +180,7 @@ impl Executor {
             ToolName::Codex => Self::Codex {
                 model_override: model,
                 thinking_budget,
+                runtime_metadata: codex_runtime_metadata(),
             },
             ToolName::ClaudeCode => Self::ClaudeCode {
                 model_override: model,
@@ -214,6 +226,26 @@ impl Executor {
             | Self::OpenaiCompat { model_override, .. } => {
                 *model_override = Some(model);
             }
+        }
+    }
+
+    /// Override codex runtime transport metadata.
+    pub fn override_codex_transport(&mut self, transport: CodexTransport) {
+        if let Self::Codex {
+            runtime_metadata, ..
+        } = self
+        {
+            *runtime_metadata = CodexRuntimeMetadata::from_transport(transport);
+        }
+    }
+
+    #[must_use]
+    pub fn codex_transport(&self) -> Option<CodexTransport> {
+        match self {
+            Self::Codex {
+                runtime_metadata, ..
+            } => Some(runtime_metadata.transport_mode()),
+            _ => None,
         }
     }
 

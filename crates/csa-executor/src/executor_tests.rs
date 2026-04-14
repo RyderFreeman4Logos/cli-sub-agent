@@ -1,5 +1,5 @@
 use super::*;
-use crate::codex_runtime::codex_runtime_metadata;
+use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 
 #[test]
 fn test_tool_name() {
@@ -24,6 +24,7 @@ fn test_tool_name() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: codex_runtime_metadata(),
         }
         .tool_name(),
         "codex"
@@ -61,6 +62,7 @@ fn test_executable_name() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: codex_runtime_metadata(),
         }
         .executable_name(),
         "codex"
@@ -98,6 +100,7 @@ fn test_install_hint() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: codex_runtime_metadata(),
         }
         .install_hint(),
         codex_runtime_metadata().install_hint()
@@ -137,6 +140,7 @@ fn test_runtime_binary_name() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: codex_runtime_metadata(),
         }
         .runtime_binary_name(),
         codex_runtime_metadata().runtime_binary_name()
@@ -148,6 +152,36 @@ fn test_runtime_binary_name() {
         }
         .runtime_binary_name(),
         "claude-code-acp"
+    );
+}
+
+#[test]
+fn test_codex_runtime_binary_name_honors_explicit_cli_runtime_metadata() {
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::from_transport(CodexTransport::Cli),
+    };
+
+    assert_eq!(executor.runtime_binary_name(), "codex");
+    assert_eq!(
+        executor.install_hint(),
+        "Install: npm install -g @openai/codex"
+    );
+}
+
+#[test]
+fn test_codex_runtime_binary_name_honors_explicit_acp_runtime_metadata() {
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::from_transport(CodexTransport::Acp),
+    };
+
+    assert_eq!(executor.runtime_binary_name(), "codex-acp");
+    assert_eq!(
+        executor.install_hint(),
+        "Install ACP adapter: npm install -g @zed-industries/codex-acp"
     );
 }
 
@@ -174,6 +208,7 @@ fn test_yolo_args() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: codex_runtime_metadata(),
         }
         .yolo_args(),
         &["--dangerously-bypass-approvals-and-sandbox"]
@@ -324,6 +359,7 @@ fn test_thinking_budget_in_codex_args() {
     let exec = Executor::Codex {
         model_override: Some("gpt-5".to_string()),
         thinking_budget: Some(ThinkingBudget::Low),
+        runtime_metadata: codex_runtime_metadata(),
     };
 
     let mut cmd = Command::new(exec.executable_name());
@@ -453,6 +489,7 @@ fn test_apply_restrictions_preserves_all_tools() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: codex_runtime_metadata(),
         },
         Executor::ClaudeCode {
             model_override: None,
@@ -542,6 +579,7 @@ fn test_execute_in_preserves_model_override() {
         Executor::Codex {
             model_override: Some("gpt-5".to_string()),
             thinking_budget: Some(ThinkingBudget::Low),
+            runtime_metadata: codex_runtime_metadata(),
         },
         Executor::ClaudeCode {
             model_override: Some("claude-opus".to_string()),

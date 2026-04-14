@@ -21,11 +21,22 @@ impl TransportFactory {
         }
     }
 
+    fn mode_for_executor(executor: &Executor) -> TransportMode {
+        match executor {
+            Executor::Codex { .. } => match executor.codex_transport() {
+                Some(crate::CodexTransport::Cli) => TransportMode::Legacy,
+                Some(crate::CodexTransport::Acp) => TransportMode::Acp,
+                None => TransportMode::Acp,
+            },
+            _ => Self::mode_for_tool(executor.tool_name()),
+        }
+    }
+
     pub fn create(
         executor: &Executor,
         session_config: Option<SessionConfig>,
     ) -> Box<dyn Transport> {
-        match Self::mode_for_tool(executor.tool_name()) {
+        match Self::mode_for_executor(executor) {
             TransportMode::Legacy => Box::new(LegacyTransport::new(executor.clone())),
             TransportMode::Acp => Box::new(AcpTransport::new(executor.tool_name(), session_config)),
             TransportMode::OpenaiCompat => {

@@ -294,6 +294,7 @@ mod tests {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
         }
     }
 
@@ -317,6 +318,7 @@ mod tests {
             ExecutorAgentBackend::backend_type_for_executor(&Executor::Codex {
                 model_override: None,
                 thinking_budget: None,
+                runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
             }),
             BackendType::Codex
         );
@@ -344,6 +346,7 @@ mod tests {
             Executor::Codex {
                 model_override,
                 thinking_budget,
+                ..
             } => {
                 assert_eq!(model_override.as_deref(), Some("gpt-5"));
                 assert!(matches!(thinking_budget, Some(ThinkingBudget::High)));

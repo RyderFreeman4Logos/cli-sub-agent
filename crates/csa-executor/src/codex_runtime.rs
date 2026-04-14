@@ -4,8 +4,11 @@
 //! transport yet. Later tasks can rewire downstream callers to consult this
 //! module instead of duplicating hardcoded `"codex-acp"` assumptions.
 
+use serde::{Deserialize, Serialize};
+
 /// Codex transport mode selected for the current runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CodexTransport {
     Cli,
     Acp,
@@ -42,9 +45,16 @@ impl CodexTransport {
     }
 }
 
+impl Default for CodexTransport {
+    fn default() -> Self {
+        Self::default_for_build()
+    }
+}
+
 /// Unified view of codex runtime metadata for the current build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexRuntimeMetadata {
+    #[serde(default = "CodexTransport::default_for_build")]
     transport: CodexTransport,
 }
 
@@ -77,6 +87,12 @@ impl CodexRuntimeMetadata {
     #[must_use]
     pub const fn acp_compiled_in() -> bool {
         cfg!(feature = "codex-acp")
+    }
+}
+
+impl Default for CodexRuntimeMetadata {
+    fn default() -> Self {
+        Self::current()
     }
 }
 
