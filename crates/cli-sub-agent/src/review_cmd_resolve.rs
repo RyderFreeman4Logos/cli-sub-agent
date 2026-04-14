@@ -6,8 +6,8 @@ use tracing::{debug, warn};
 use crate::cli::{ReviewArgs, ReviewMode};
 use crate::review_consensus::{build_consolidated_artifact, write_consolidated_artifact};
 use crate::review_context::{
-    ResolvedReviewContext, ResolvedReviewContextKind, discover_review_checklist,
-    render_spec_review_context,
+    ResolvedReviewContext, ResolvedReviewContextKind, discover_prior_round_assumptions,
+    discover_review_checklist, render_spec_review_context,
 };
 use crate::review_routing::{ReviewRoutingMetadata, detect_review_routing_metadata};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
@@ -565,5 +565,17 @@ pub(crate) fn build_review_instruction_for_project(
         instruction.push_str("\n</review-checklist>");
     }
 
+    // Inject prior-round assumptions when a previous review session exists on
+    // the same branch (#764). Skipped on first-round reviews.
+    let branch = current_git_branch_for_review(project_root);
+    if let Some(prior) = discover_prior_round_assumptions(project_root, branch.as_deref(), None) {
+        instruction.push_str(&prior);
+    }
+
     (instruction, review_routing)
+}
+
+fn current_git_branch_for_review(project_root: &Path) -> Option<String> {
+    let backend = csa_session::vcs_backends::create_vcs_backend(project_root);
+    backend.current_branch(project_root).ok().flatten()
 }

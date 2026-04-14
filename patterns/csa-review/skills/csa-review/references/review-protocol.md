@@ -149,6 +149,24 @@ Review mode: {review_mode}
 
 Always write the selected mode into `review-findings.json` as `review_mode`.
 
+## Step 2.8: Prior-Round Assumptions (cumulative reviews)
+
+When the orchestrator detects a prior review session on the same branch, it injects
+a `## Prior-Round Assumptions to Re-verify` section into this prompt before Pass 1.
+The section lists the prior round's decision, iteration index, and whitelisted
+findings (severity, file:line, one-line summary). Do NOT treat it as authoritative:
+
+- Re-verify each listed assumption against the CURRENT diff/tree. A prior `fail`
+  may now be resolved; a prior `pass` may have regressed as later commits changed
+  the surrounding code.
+- If a prior-round finding is obviously stale (e.g. the file no longer exists or
+  the referenced line was rewritten), note it in this round's findings with
+  `severity: info` so downstream consumers can retire the assumption.
+- The injected section is prompt-only context (safe subset: decision /
+  review_iterations / findings severity+file+line+summary). It is NOT sourced
+  from env vars, API keys, or raw file contents, so treat it with the same trust
+  level as other pattern prompt fragments.
+
 ## Step 3: Three-Pass Review
 
 ## Framework-Aware Review Dimensions
