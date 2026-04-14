@@ -78,7 +78,7 @@ fn handle_session_wait_retires_active_session_after_dead_failure_completion_pack
 }
 
 #[test]
-fn handle_session_wait_prefers_synthetic_failure_exit_code_over_completion_packet() {
+fn handle_session_wait_prefers_synthetic_failure_status_and_exit_code_over_completion_packet() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
     let state_home = td.path().join("xdg-state");
@@ -122,6 +122,6 @@ fn handle_session_wait_prefers_synthetic_failure_exit_code_over_completion_packe
     assert_eq!(exit_code, 1);
     assert_eq!(
         emitted_completion,
-        Some((session_id, "success".to_string(), 1, true))
+        Some((session_id, "failure".to_string(), 1, true))
     );
 }

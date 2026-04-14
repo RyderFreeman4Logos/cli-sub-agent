@@ -188,6 +188,7 @@ where
             }
             let refreshed_result = refreshed_result.ok().flatten();
             let mut synthetic = false;
+            let mut completion_status = completion.status.as_str();
             let mut exit_code = completion.exit_code;
             if refreshed_result.is_some() {
                 let _ = crate::session_cmds::retire_if_dead_with_result(
@@ -203,6 +204,7 @@ where
                 )?;
                 synthetic = reconciled.synthetic;
                 if reconciled.synthetic {
+                    completion_status = "failure";
                     exit_code = 1;
                 }
                 if reconciled.result_became_available {
@@ -218,7 +220,7 @@ where
             emit_wait_next_step_if_needed(&session_dir)?;
             emit_completion_signal(
                 &resolved.session_id,
-                &completion.status,
+                completion_status,
                 exit_code,
                 synthetic,
                 !streamed_output,
