@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
-use csa_session::{Finding, ReviewVerdictArtifact, write_review_verdict};
+use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, write_review_verdict};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
 use tracing::{debug, warn};
 
@@ -208,9 +208,9 @@ fn load_review_findings_from_output(
 
     let contents = fs::read_to_string(&findings_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
-    let findings = serde_json::from_str::<Vec<Finding>>(&contents)
+    let artifact = serde_json::from_str::<ReviewArtifact>(&contents)
         .map_err(|error| anyhow::anyhow!("parse {}: {error}", findings_path.display()))?;
-    Ok(Some(findings))
+    Ok(Some(artifact.findings))
 }
 
 /// Detect whether `project_root` resides inside a git worktree submodule.
@@ -322,7 +322,7 @@ mod tests {
     use super::persist_review_verdict;
     use csa_core::types::ReviewDecision;
     use csa_session::state::ReviewSessionMeta;
-    use csa_session::{Finding, ReviewVerdictArtifact, Severity};
+    use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -401,9 +401,17 @@ mod tests {
             make_finding(Severity::High, "high"),
             make_finding(Severity::Low, "low"),
         ];
+        let artifact = ReviewArtifact {
+            severity_summary: SeveritySummary::from_findings(&findings),
+            findings: findings.clone(),
+            review_mode: None,
+            schema_version: "1.0".to_string(),
+            session_id: session_id.to_string(),
+            timestamp: chrono::Utc::now(),
+        };
         fs::write(
             &findings_path,
-            serde_json::to_vec_pretty(&findings).expect("serialize findings"),
+            serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
         )
         .expect("write findings artifact");
 
