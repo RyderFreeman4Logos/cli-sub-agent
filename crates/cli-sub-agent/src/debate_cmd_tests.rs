@@ -3,7 +3,7 @@ use crate::debate_cmd_output::*;
 use crate::debate_cmd_resolve::resolve_debate_tool;
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_config::global::ReviewConfig;
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig, ToolTransport};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::types::ToolName;
 use csa_session::{SessionArtifact, create_session, load_result, save_result};
@@ -105,6 +105,9 @@ fn resolve_debate_tool_prefers_cli_override() {
 
 #[test]
 fn resolve_debate_tool_auto_maps_heterogeneous() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["codex"]);
     let (tool, mode, _) = resolve_debate_tool(
@@ -125,6 +128,9 @@ fn resolve_debate_tool_auto_maps_heterogeneous() {
 
 #[test]
 fn resolve_debate_tool_auto_maps_reverse() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["claude-code"]);
     let (tool, mode, _) = resolve_debate_tool(
@@ -146,7 +152,10 @@ fn resolve_debate_tool_auto_maps_reverse() {
 #[test]
 fn resolve_debate_tool_same_model_fallback_when_no_parent() {
     // With same_model_fallback enabled (default), no parent context should fall
-    // back to same-model adversarial using any available tool.
+    // back to same-model adversarial using any explicitly available tool.
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let (tool, mode, _) = resolve_debate_tool(
@@ -161,13 +170,8 @@ fn resolve_debate_tool_same_model_fallback_when_no_parent() {
         false, // force_ignore_tier_setting
     )
     .unwrap();
-    // Falls back to first known tool (same-model adversarial)
     assert_eq!(mode, DebateMode::SameModelAdversarial);
-    // Tool is from all_known_tools since no parent was detected
-    assert!(matches!(
-        tool,
-        ToolName::GeminiCli | ToolName::Opencode | ToolName::Codex | ToolName::ClaudeCode
-    ));
+    assert!(matches!(tool, ToolName::Opencode));
 }
 
 #[test]
@@ -196,6 +200,9 @@ fn resolve_debate_tool_same_model_fallback_disabled_errors_without_parent() {
 #[test]
 fn resolve_debate_tool_same_model_fallback_uses_parent_tool() {
     // When only the parent tool family is available, fallback uses the parent tool.
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let (tool, mode, _) = resolve_debate_tool(
@@ -264,6 +271,9 @@ fn resolve_debate_tool_prefers_project_override() {
 
 #[test]
 fn resolve_debate_tool_project_auto_maps_heterogeneous() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.debate = Some(ReviewConfig {
@@ -289,6 +299,9 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
 
 #[test]
 fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut global = GlobalConfig::default();
     global.preferences.tool_priority = vec!["opencode".to_string(), "claude-code".to_string()];
 
@@ -316,6 +329,9 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
 
 #[test]
 fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut global = GlobalConfig::default();
     global.preferences.tool_priority = vec!["codexx".to_string()];
 

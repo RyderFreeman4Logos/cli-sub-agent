@@ -363,7 +363,9 @@ fn resolve_review_tool_from_selection(
         && let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart)
     {
         let counterpart_enabled = project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
-        if counterpart_enabled {
+        let counterpart_available =
+            crate::run_helpers::is_tool_binary_available_for_config(resolved, project_config);
+        if counterpart_enabled && counterpart_available {
             return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                 anyhow::anyhow!(
                     "BUG: auto review tool resolution returned invalid tool '{resolved}'"
@@ -387,6 +389,9 @@ fn select_auto_review_tool(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| {
+                crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+            })
             .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();
@@ -395,6 +400,9 @@ fn select_auto_review_tool(
         let all = csa_config::global::all_known_tools();
         let tools: Vec<_> = all
             .iter()
+            .filter(|t| {
+                crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+            })
             .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();

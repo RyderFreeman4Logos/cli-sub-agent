@@ -134,7 +134,7 @@ User -> csa run "prompt"
   +-> Create or load session
   +-> Pre-flight resource check (P95 memory estimation)
   +-> Acquire session lock (flock)
-  +-> Select transport (ACP or Legacy)
+  +-> Resolve runtime metadata / select transport (ACP or Legacy)
   |
   +-> [ACP path]
   |   +-> AcpConnection::spawn() -> child process
@@ -156,17 +156,24 @@ User -> csa run "prompt"
 
 ### Transport Routing
 
-| Tool | Transport | ACP Command |
-|------|-----------|-------------|
+| Tool | Transport | Runtime Binary |
+|------|-----------|----------------|
 | claude-code | ACP | `claude-code-acp` |
-| codex | ACP | `codex-acp` |
+| codex | Legacy by default, ACP opt-in | `codex` / `codex-acp` |
 | gemini-cli | Legacy | CLI process |
 | opencode | Legacy | CLI process |
 
 The `Transport` trait abstracts both modes. `TransportFactory` routes based
-on tool type and config. ACP fallback to Legacy is allowed only during
-connection initialization; during prompt execution, automatic fallback is
-forbidden.
+on tool type and config. For codex, CSA resolves `[tools.codex].transport`,
+stores the result in `CodexRuntimeMetadata`, and lets `TransportFactory`
+route `cli` to `LegacyTransport` and `acp` to `AcpTransport` when the
+`codex-acp` feature is compiled in. Without an override, codex defaults to
+`LegacyTransport`. ACP fallback to Legacy is allowed only during connection
+initialization; during prompt execution, automatic fallback is forbidden.
+
+`csa doctor` makes this routing visible for codex by reporting the active
+transport, whether ACP support was compiled in, and the probed runtime
+binary.
 
 ## Environment Variables
 

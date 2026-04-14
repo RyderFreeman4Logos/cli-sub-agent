@@ -34,6 +34,8 @@ use csa_session::{
 };
 
 use super::session_exec_failover::apply_transport_failover_overrides;
+#[path = "pipeline_session_exec_metadata.rs"]
+mod session_exec_metadata;
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
@@ -254,15 +256,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     }
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-    // Arm cleanup guard for new sessions only (not resumed ones).
-    // If any pre-execution step fails, the guard deletes the orphan directory.
+    // New-session cleanup guard: delete the orphan directory on pre-exec failure.
     let mut cleanup_guard = if session_arg.is_none() {
         Some(SessionCleanupGuard::new(session_dir.clone()))
     } else {
         None
     };
 
-    // Create session log writer
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {
@@ -592,6 +592,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
 
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
     crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
+    if let Err(err) = session_exec_metadata::persist_session_runtime_binary(&session_dir, executor)
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Failed to persist session runtime binary metadata"
+        );
+    }
 
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,

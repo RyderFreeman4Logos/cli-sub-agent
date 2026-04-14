@@ -230,9 +230,11 @@ deny:
 # 🧪 Testing
 # ==============================================================================
 
-# Run all tests in the workspace.
+# Run all tests in the workspace across default and feature builds.
 test:
     just check-cargo-target-writable
+    just check-nextest-state-writable
+    cargo nextest run --workspace
     just check-nextest-state-writable
     cargo nextest run --workspace --all-features
 

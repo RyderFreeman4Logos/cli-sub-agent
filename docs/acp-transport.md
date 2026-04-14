@@ -1,8 +1,11 @@
 # ACP Transport
 
 CSA uses the **Agent Communication Protocol (ACP)** for precise context
-window control when communicating with claude-code and codex. This replaces
-the CLI non-interactive mode which auto-loads 60K+ tokens of project context.
+window control when communicating with claude-code. Codex defaults to the
+direct CLI path and can opt into ACP when CSA is built with the
+`codex-acp` feature and `[tools.codex].transport = "acp"` is set. For ACP
+sessions, this replaces the CLI non-interactive mode which auto-loads 60K+
+tokens of project context.
 
 ## Why ACP?
 
@@ -23,18 +26,36 @@ context precisely:
 | Tool | Default Transport | ACP Binary |
 |------|-------------------|------------|
 | claude-code | ACP | `claude-code-acp` |
-| codex | ACP | `codex-acp` |
+| codex | Legacy CLI (`codex`) | `codex-acp` (opt-in) |
 | gemini-cli | Legacy CLI | N/A |
 | opencode | Legacy CLI | N/A |
 
 The `Transport` trait abstracts both execution modes. `TransportFactory`
-routes automatically based on tool type and configuration.
+routes automatically based on tool type and configuration. `claude-code`
+remains ACP-only. `codex` resolves transport from `CodexRuntimeMetadata`
+plus `[tools.codex].transport`, defaulting to `LegacyTransport` and the
+`codex` binary; ACP is selected only when the binary was compiled with
+`codex-acp` support and config explicitly requests it. `gemini-cli` and
+`opencode` remain direct CLI tools.
 
 **Fallback rules:**
 
 - ACP fallback to Legacy is allowed only during connection initialization
 - During prompt execution, automatic fallback is forbidden
 - This prevents silent degradation of context control
+
+### Migration notes
+
+Older builds and docs treated codex as ACP-by-default. Current builds default
+codex to `LegacyTransport` and probe the `codex` binary instead. If you were
+relying on the old ACP default, rebuild CSA with
+`cargo build --features codex-acp` (or
+`cargo install --path crates/cli-sub-agent --features codex-acp`) and set:
+
+```toml
+[tools.codex]
+transport = "acp"
+```
 
 ## Crate API
 

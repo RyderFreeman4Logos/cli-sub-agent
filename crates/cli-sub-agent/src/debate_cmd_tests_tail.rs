@@ -219,6 +219,174 @@ fn verify_debate_skill_present_succeeds() {
     assert!(verify_debate_skill_available(tmp.path()).is_ok());
 }
 
+#[cfg(unix)]
+#[test]
+fn resolve_debate_tool_auto_skips_counterpart_without_configured_binary() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let bin_dir = td.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let which_path = bin_dir.join("which");
+    fs::write(
+        &which_path,
+        "#!/bin/sh\nif [ \"$1\" = \"codex-acp\" ]; then\n  exit 0\nfi\nexit 1\n",
+    )
+    .expect("write which stub");
+    let mut perms = fs::metadata(&which_path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&which_path, perms).expect("chmod which");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let patched_path = std::env::join_paths(
+        std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&inherited_path)),
+    )
+    .expect("join PATH");
+    let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+    let mut global = GlobalConfig::default();
+    global.debate.same_model_fallback = false;
+
+    let mut cfg = project_config_with_enabled_tools(&["codex"]);
+    cfg.debate = Some(ReviewConfig {
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
+        ..Default::default()
+    });
+    cfg.tools
+        .get_mut("codex")
+        .expect("codex tool config")
+        .transport = Some(ToolTransport::Cli);
+
+    let err = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("AUTO debate tool selection failed"),
+        "expected clean auto-selection failure, got: {err:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_debate_tool_same_model_fallback_skips_unavailable_configured_binary() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let bin_dir = td.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let which_path = bin_dir.join("which");
+    fs::write(
+        &which_path,
+        "#!/bin/sh\nif [ \"$1\" = \"codex-acp\" ]; then\n  exit 0\nfi\nexit 1\n",
+    )
+    .expect("write which stub");
+    let mut perms = fs::metadata(&which_path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&which_path, perms).expect("chmod which");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let patched_path = std::env::join_paths(
+        std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&inherited_path)),
+    )
+    .expect("join PATH");
+    let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+    let global = GlobalConfig::default();
+    let mut cfg = project_config_with_enabled_tools(&["codex"]);
+    cfg.tools
+        .get_mut("codex")
+        .expect("codex tool config")
+        .transport = Some(ToolTransport::Cli);
+
+    let err = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        None,
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("AUTO debate tool selection failed"),
+        "expected same-model fallback to reject unavailable configured binary, got: {err:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_debate_tool_same_model_fallback_skips_unavailable_parent_binary() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let bin_dir = td.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let which_path = bin_dir.join("which");
+    fs::write(
+        &which_path,
+        "#!/bin/sh\nif [ \"$1\" = \"codex-acp\" ]; then\n  exit 0\nfi\nexit 1\n",
+    )
+    .expect("write which stub");
+    let mut perms = fs::metadata(&which_path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&which_path, perms).expect("chmod which");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let patched_path = std::env::join_paths(
+        std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&inherited_path)),
+    )
+    .expect("join PATH");
+    let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+    let global = GlobalConfig::default();
+    let mut cfg = project_config_with_enabled_tools(&["codex"]);
+    cfg.tools
+        .get_mut("codex")
+        .expect("codex tool config")
+        .transport = Some(ToolTransport::Cli);
+
+    let err = resolve_debate_tool(
+        None,
+        None,
+        Some(&cfg),
+        &global,
+        Some("codex"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("AUTO debate tool selection failed"),
+        "expected same-model fallback to reject unavailable parent binary, got: {err:#}"
+    );
+}
+
 #[test]
 fn verify_debate_skill_no_fallback_without_skill() {
     // Ensure no execution path silently downgrades when skill is missing.
@@ -328,10 +496,15 @@ fn debate_cli_rejects_zero_rounds() {
 
 #[test]
 fn debate_stream_mode_default_non_tty_is_buffer_only() {
-    // In test environment (non-TTY stderr), default should be BufferOnly.
-    // Note: in interactive TTY, default would be TeeToStderr (symmetric with review, #139)
+    // Default should follow is_terminal() on stderr
+    use std::io::IsTerminal;
+    let expected = if std::io::stderr().is_terminal() {
+        csa_process::StreamMode::TeeToStderr
+    } else {
+        csa_process::StreamMode::BufferOnly
+    };
     let mode = resolve_debate_stream_mode(false, false);
-    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+    assert!(matches!(mode, m if m == expected));
 }
 
 #[test]

@@ -171,6 +171,7 @@ fn create_session_in_with_strategy(
         let metadata = crate::metadata::SessionMetadata {
             tool: tool_name.to_string(),
             tool_locked: true,
+            runtime_binary: None,
         };
         let metadata_path = session_dir.join(crate::metadata::METADATA_FILE_NAME);
         let contents =

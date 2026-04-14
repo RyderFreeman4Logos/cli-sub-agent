@@ -26,7 +26,7 @@ use crate::run_cmd_post::{
 use crate::run_cmd_tool_selection::{
     resolve_slot_wait_timeout_seconds, take_next_runtime_fallback_tool,
 };
-use crate::run_helpers::{is_tool_binary_available, parse_tool_name};
+use crate::run_helpers::{is_tool_binary_available_for_config, parse_tool_name};
 
 use super::attempt_exec::{
     AttemptExecution, run_ephemeral_with_timeout, run_ephemeral_without_timeout,
@@ -209,7 +209,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                                 .config
                                 .map(|c| c.is_tool_auto_selectable(&s.tool_name))
                                 .unwrap_or(false)
-                            && is_tool_binary_available(&s.tool_name)
+                            && is_tool_binary_available_for_config(&s.tool_name, request.config)
                     });
 
                     if let Some(alt) = free_alt {

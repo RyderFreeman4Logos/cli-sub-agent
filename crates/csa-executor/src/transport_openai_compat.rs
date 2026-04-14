@@ -5,6 +5,7 @@
 //! Sends prompts via the `/v1/chat/completions` endpoint and collects the response.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -12,7 +13,9 @@ use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
 
-use crate::transport::{Transport, TransportOptions, TransportResult};
+use crate::transport::{
+    Transport, TransportOptions, TransportResult, build_ephemeral_meta_session,
+};
 
 /// Environment variable names for OpenAI-compat configuration.
 const ENV_BASE_URL: &str = "OPENAI_COMPAT_BASE_URL";
@@ -134,6 +137,10 @@ struct ChatUsage {
 
 #[async_trait]
 impl Transport for OpenaiCompatTransport {
+    fn mode(&self) -> crate::transport::TransportMode {
+        crate::transport::TransportMode::OpenaiCompat
+    }
+
     async fn execute(
         &self,
         prompt: &str,
@@ -207,6 +214,40 @@ impl Transport for OpenaiCompatTransport {
             events: Vec::new(),
             metadata: Default::default(),
         })
+    }
+
+    async fn execute_in(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+        _stream_mode: csa_process::StreamMode,
+        _idle_timeout_seconds: u64,
+    ) -> Result<TransportResult> {
+        let session = build_ephemeral_meta_session(work_dir);
+        self.execute(
+            prompt,
+            None,
+            &session,
+            extra_env,
+            TransportOptions {
+                stream_mode: csa_process::StreamMode::BufferOnly,
+                idle_timeout_seconds: csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
+                acp_crash_max_attempts: 2,
+                initial_response_timeout_seconds: None,
+                liveness_dead_seconds: csa_process::DEFAULT_LIVENESS_DEAD_SECS,
+                stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
+                acp_init_timeout_seconds: 120,
+                termination_grace_period_seconds:
+                    csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS,
+                output_spool: None,
+                output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+                output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+                setting_sources: None,
+                sandbox: None,
+            },
+        )
+        .await
     }
 
     #[cfg(test)]

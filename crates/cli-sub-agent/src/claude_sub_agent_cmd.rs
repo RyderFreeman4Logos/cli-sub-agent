@@ -182,7 +182,9 @@ fn resolve_auto_tool(
     // Build the set of tools that are configured for auto selection and installed.
     let available_tools: Vec<ToolName> = get_auto_selectable_tools(project_config, project_root)
         .into_iter()
-        .filter(|t| crate::run_helpers::is_tool_binary_available(t.as_str()))
+        .filter(|t| {
+            crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+        })
         .collect();
 
     // Try heterogeneous selection on actually-available tools
@@ -237,7 +239,7 @@ fn select_any_available_tool(
     let enabled_tools = get_auto_selectable_tools(project_config, project_root);
 
     for tool in enabled_tools {
-        if crate::run_helpers::is_tool_binary_available(tool.as_str()) {
+        if crate::run_helpers::is_tool_binary_available_for_config(tool.as_str(), project_config) {
             return Ok(tool);
         }
     }

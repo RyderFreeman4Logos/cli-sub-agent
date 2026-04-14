@@ -1,35 +1,236 @@
 //! Environment diagnostics for CSA.
 
 use anyhow::Result;
-use csa_config::{ProjectConfig, paths};
+use csa_config::{ProjectConfig, ToolTransport, paths};
 use csa_core::types::OutputFormat;
+use csa_executor::{CodexRuntimeMetadata, CodexTransport};
 use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
 use std::env;
+use std::path::Path;
 use std::process::Command;
 use sysinfo::System;
 
+#[path = "doctor_output_helpers.rs"]
+mod doctor_output_helpers;
 #[path = "doctor_routing.rs"]
 mod doctor_routing;
+use doctor_output_helpers::{print_effective_config, print_tool_availability_error};
 pub use doctor_routing::run_doctor_routing;
 
 /// Tool availability status.
-#[derive(Debug)]
-struct ToolStatus {
-    name: &'static str,
-    installed: bool,
-    version: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolAvailabilityState {
+    Installed,
+    Missing,
+    Unsupported,
 }
 
-/// Get installation hint for a tool.
-fn install_hint(tool_name: &str) -> &'static str {
-    match tool_name {
-        "gemini-cli" => "npm install -g @google/gemini-cli",
-        "opencode" => "go install github.com/sst/opencode@latest",
-        "codex" => "npm install -g @zed-industries/codex-acp",
-        "claude-code" => "npm install -g @zed-industries/claude-code-acp",
-        _ => "unknown tool",
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexDoctorStatus {
+    transport_active: CodexTransport,
+    acp_compiled_in: bool,
+    probed_binary: String,
+    acp_override_hint: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolStatus {
+    name: &'static str,
+    availability: ToolAvailabilityState,
+    binary_name: String,
+    version: Option<String>,
+    hint: Option<String>,
+    codex_transport: Option<CodexDoctorStatus>,
+}
+
+impl ToolStatus {
+    fn is_ready(&self) -> bool {
+        matches!(self.availability, ToolAvailabilityState::Installed)
+    }
+}
+
+#[derive(Debug)]
+enum DoctorProjectConfigStatus {
+    Missing,
+    Valid(Box<ProjectConfig>),
+    Invalid(String),
+}
+
+#[derive(Debug)]
+enum DoctorEffectiveConfigStatus {
+    Defaults,
+    Valid(Box<ProjectConfig>),
+    Invalid(String),
+}
+
+impl DoctorProjectConfigStatus {
+    fn json_value(&self) -> serde_json::Value {
+        match self {
+            Self::Missing => serde_json::json!({
+                "found": false,
+                "valid": false,
+            }),
+            Self::Valid(config) => {
+                let (enabled, disabled) = project_config_tool_lists(config);
+                serde_json::json!({
+                    "found": true,
+                    "valid": true,
+                    "enabled_tools": enabled,
+                    "disabled_tools": disabled,
+                })
+            }
+            Self::Invalid(error) => serde_json::json!({
+                "found": true,
+                "valid": false,
+                "error": error,
+            }),
+        }
+    }
+}
+
+impl DoctorEffectiveConfigStatus {
+    fn runtime_config(&self) -> Option<&ProjectConfig> {
+        match self {
+            Self::Valid(config) => Some(config.as_ref()),
+            Self::Defaults | Self::Invalid(_) => None,
+        }
+    }
+
+    fn tool_availability_error(&self) -> Option<String> {
+        match self {
+            Self::Defaults | Self::Valid(_) => None,
+            Self::Invalid(error) => Some(format!(
+                "Tool availability unknown (effective config invalid): {error}"
+            )),
+        }
+    }
+
+    fn json_value(&self) -> serde_json::Value {
+        match self {
+            Self::Defaults => serde_json::json!({
+                "loaded": false,
+                "valid": true,
+            }),
+            Self::Valid(_) => serde_json::json!({
+                "loaded": true,
+                "valid": true,
+            }),
+            Self::Invalid(error) => serde_json::json!({
+                "loaded": false,
+                "valid": false,
+                "error": error,
+            }),
+        }
+    }
+}
+
+fn project_config_tool_lists(config: &ProjectConfig) -> (Vec<&'static str>, Vec<&'static str>) {
+    let mut enabled = Vec::new();
+    let mut disabled = Vec::new();
+
+    for tool_name in &["gemini-cli", "opencode", "codex", "claude-code"] {
+        if config.is_tool_enabled(tool_name) {
+            enabled.push(*tool_name);
+        } else {
+            disabled.push(*tool_name);
+        }
+    }
+
+    (enabled, disabled)
+}
+
+fn render_project_config_lines(status: &DoctorProjectConfigStatus) -> Vec<String> {
+    match status {
+        DoctorProjectConfigStatus::Missing => vec![
+            "Config:      .csa/config.toml (missing)".to_string(),
+            "             Run 'csa init' to create configuration".to_string(),
+        ],
+        DoctorProjectConfigStatus::Valid(config) => {
+            let (enabled, disabled) = project_config_tool_lists(config);
+            let mut lines = vec!["Config:      .csa/config.toml (valid)".to_string()];
+
+            if !enabled.is_empty() {
+                lines.push(format!("Enabled:     {}", enabled.join(", ")));
+            }
+            if !disabled.is_empty() {
+                lines.push(format!("Disabled:    {}", disabled.join(", ")));
+            }
+
+            lines
+        }
+        DoctorProjectConfigStatus::Invalid(error) => vec![
+            "Config:      .csa/config.toml (invalid)".to_string(),
+            format!("             Error: {error}"),
+        ],
+    }
+}
+
+fn render_effective_config_lines(status: &DoctorEffectiveConfigStatus) -> Vec<String> {
+    match status {
+        DoctorEffectiveConfigStatus::Defaults => {
+            vec!["Effective:   merged config (defaults only)".to_string()]
+        }
+        DoctorEffectiveConfigStatus::Valid(_) => {
+            vec!["Effective:   merged config (valid)".to_string()]
+        }
+        DoctorEffectiveConfigStatus::Invalid(error) => vec![
+            "Effective:   merged config (invalid)".to_string(),
+            format!("             Error: {error}"),
+        ],
+    }
+}
+
+fn render_tool_availability_error_lines(error: &str) -> Vec<String> {
+    vec![
+        "Tool availability unknown (effective config invalid)".to_string(),
+        format!("Reason:      {error}"),
+    ]
+}
+
+fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {
+    crate::run_helpers::resolved_tool_binary_name(tool_name, config)
+        .unwrap_or(tool_name)
+        .to_string()
+}
+
+fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
+    config
+        .and_then(|cfg| cfg.tool_transport("codex"))
+        .map(|transport| match transport {
+            ToolTransport::Cli => CodexTransport::Cli,
+            ToolTransport::Acp => CodexTransport::Acp,
+        })
+        .unwrap_or_else(CodexTransport::default_for_build)
+}
+
+fn load_doctor_project_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
+    ProjectConfig::load_project_only(project_root)
+}
+
+fn load_doctor_effective_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
+    ProjectConfig::load(project_root)
+}
+
+fn inspect_doctor_project_config_from(project_root: &Path) -> DoctorProjectConfigStatus {
+    let config_path = project_root.join(".csa").join("config.toml");
+    if !config_path.exists() {
+        return DoctorProjectConfigStatus::Missing;
+    }
+
+    match load_doctor_project_config_from(project_root) {
+        Ok(Some(config)) => DoctorProjectConfigStatus::Valid(Box::new(config)),
+        Ok(None) => DoctorProjectConfigStatus::Missing,
+        Err(error) => DoctorProjectConfigStatus::Invalid(error.to_string()),
+    }
+}
+
+fn inspect_doctor_effective_config_from(project_root: &Path) -> DoctorEffectiveConfigStatus {
+    match load_doctor_effective_config_from(project_root) {
+        Ok(Some(config)) => DoctorEffectiveConfigStatus::Valid(Box::new(config)),
+        Ok(None) => DoctorEffectiveConfigStatus::Defaults,
+        Err(error) => DoctorEffectiveConfigStatus::Invalid(error.to_string()),
     }
 }
 
@@ -43,18 +244,41 @@ pub async fn run_doctor(format: OutputFormat) -> Result<()> {
 
 /// Run diagnostics with human-readable text output.
 async fn run_doctor_text() -> Result<()> {
+    let cwd = env::current_dir()?;
+    run_doctor_text_from(&cwd).await
+}
+
+async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
+    let project_config_status = inspect_doctor_project_config_from(project_root);
+    let effective_config_status = inspect_doctor_effective_config_from(project_root);
+
     println!("=== CSA Environment Check ===");
     print_platform_info();
     print_state_dir();
     println!();
 
     println!("=== Tool Availability ===");
-    print_tool_availability().await;
+    match effective_config_status.runtime_config() {
+        Some(config) => print_tool_availability(Some(config)).await,
+        None => match effective_config_status.tool_availability_error() {
+            Some(error) => print_tool_availability_error(&error),
+            None => print_tool_availability(None).await,
+        },
+    }
     println!();
 
     println!("=== Project Config ===");
-    print_project_config()?;
+    print_project_config(&project_config_status);
     println!();
+
+    if matches!(
+        effective_config_status,
+        DoctorEffectiveConfigStatus::Invalid(_)
+    ) {
+        println!("=== Effective Config ===");
+        print_effective_config(&effective_config_status);
+        println!();
+    }
 
     println!("=== Resource Status ===");
     print_resource_status();
@@ -69,7 +293,7 @@ async fn run_doctor_text() -> Result<()> {
     println!();
 
     println!("=== Git Hooks ===");
-    print_git_hook_status();
+    print_git_hook_status(project_root);
     println!();
 
     println!("=== Merge Guard ===");
@@ -80,63 +304,46 @@ async fn run_doctor_text() -> Result<()> {
 
 /// Run diagnostics with JSON output.
 async fn run_doctor_json() -> Result<()> {
+    let cwd = env::current_dir()?;
+    let result = build_doctor_json(&cwd);
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
+
+    Ok(())
+}
+
+fn build_doctor_json(project_root: &Path) -> serde_json::Value {
     let os = env::consts::OS;
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
+    let project_config_status = inspect_doctor_project_config_from(project_root);
+    let effective_config_status = inspect_doctor_effective_config_from(project_root);
 
     let state_dir = paths::state_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_default();
 
-    // Check tools
-    let tools = [
-        ("gemini-cli", "gemini"),
-        ("opencode", "opencode"),
-        ("codex", "codex-acp"),
-        ("claude-code", "claude-code-acp"),
-    ];
-
-    let tool_statuses: Vec<serde_json::Value> = tools
-        .iter()
-        .map(|(tool_name, exe_name)| {
-            let status = check_tool_status(tool_name, exe_name);
-            serde_json::json!({
-                "name": status.name,
-                "installed": status.installed,
-                "version": status.version,
+    let tool_statuses: Vec<serde_json::Value> = match effective_config_status.runtime_config() {
+        Some(config) => ["gemini-cli", "opencode", "codex", "claude-code"]
+            .iter()
+            .map(|tool_name| {
+                let status = check_tool_status(tool_name, Some(config));
+                tool_status_json(&status)
             })
-        })
-        .collect();
-
-    // Check project config
-    let cwd = env::current_dir()?;
-    let config_status = match ProjectConfig::load(&cwd) {
-        Ok(Some(config)) => {
-            let mut enabled = Vec::new();
-            let mut disabled = Vec::new();
-            for tool_name in &["gemini-cli", "opencode", "codex", "claude-code"] {
-                if config.is_tool_enabled(tool_name) {
-                    enabled.push(*tool_name);
-                } else {
-                    disabled.push(*tool_name);
-                }
+            .collect(),
+        None => {
+            if effective_config_status.tool_availability_error().is_some() {
+                Vec::new()
+            } else {
+                ["gemini-cli", "opencode", "codex", "claude-code"]
+                    .iter()
+                    .map(|tool_name| {
+                        let status = check_tool_status(tool_name, None);
+                        tool_status_json(&status)
+                    })
+                    .collect()
             }
-            serde_json::json!({
-                "found": true,
-                "valid": true,
-                "enabled_tools": enabled,
-                "disabled_tools": disabled,
-            })
         }
-        Ok(None) => serde_json::json!({
-            "found": false,
-            "valid": false,
-        }),
-        Err(e) => serde_json::json!({
-            "found": true,
-            "valid": false,
-            "error": e.to_string(),
-        }),
     };
 
     // Resource status
@@ -186,7 +393,9 @@ async fn run_doctor_json() -> Result<()> {
         "csa_version": version,
         "state_dir": state_dir,
         "tools": tool_statuses,
-        "config": config_status,
+        "tools_error": effective_config_status.tool_availability_error(),
+        "config": project_config_status.json_value(),
+        "effective_config": effective_config_status.json_value(),
         "resources": {
             "available_memory_bytes": available_memory,
             "free_swap_bytes": free_swap,
@@ -197,9 +406,7 @@ async fn run_doctor_json() -> Result<()> {
         "merge_guard": merge_guard_status,
     });
 
-    println!("{}", serde_json::to_string_pretty(&result)?);
-
-    Ok(())
+    result
 }
 
 /// Print platform information.
@@ -222,20 +429,15 @@ fn print_state_dir() {
 }
 
 /// Check and print tool availability for all 4 tools.
-async fn print_tool_availability() {
-    let tools = [
-        ("gemini-cli", "gemini"),
-        ("opencode", "opencode"),
-        ("codex", "codex-acp"),
-        ("claude-code", "claude-code-acp"),
-    ];
+async fn print_tool_availability(config: Option<&ProjectConfig>) {
+    let tools = ["gemini-cli", "opencode", "codex", "claude-code"];
 
     let mut installed_count = 0;
     let total_count = tools.len();
 
-    for (tool_name, exe_name) in &tools {
-        let status = check_tool_status(tool_name, exe_name);
-        if status.installed {
+    for tool_name in &tools {
+        let status = check_tool_status(tool_name, config);
+        if status.is_ready() {
             installed_count += 1;
         }
         print_tool_status(&status);
@@ -247,29 +449,33 @@ async fn print_tool_availability() {
 }
 
 /// Check if a tool is installed and get its version.
-fn check_tool_status(tool_name: &'static str, exe_name: &str) -> ToolStatus {
-    // First check if executable exists in PATH
-    let installed = Command::new("which")
-        .arg(exe_name)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-
-    if !installed {
-        return ToolStatus {
+fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) -> ToolStatus {
+    let binary_name = tool_exe_name(tool_name, config);
+    match crate::run_helpers::tool_binary_availability(tool_name, config) {
+        crate::run_helpers::ToolBinaryAvailability::Available { .. } => ToolStatus {
             name: tool_name,
-            installed: false,
+            availability: ToolAvailabilityState::Installed,
+            binary_name: binary_name.clone(),
+            version: check_tool_version(&binary_name),
+            hint: None,
+            codex_transport: codex_doctor_status(tool_name, config),
+        },
+        crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } => ToolStatus {
+            name: tool_name,
+            availability: ToolAvailabilityState::Missing,
+            binary_name,
             version: None,
-        };
-    }
-
-    // Try to get version
-    let version = check_tool_version(exe_name);
-
-    ToolStatus {
-        name: tool_name,
-        installed: true,
-        version,
+            hint: Some(hint.into_owned()),
+            codex_transport: codex_doctor_status(tool_name, config),
+        },
+        crate::run_helpers::ToolBinaryAvailability::Unsupported { hint, .. } => ToolStatus {
+            name: tool_name,
+            availability: ToolAvailabilityState::Unsupported,
+            binary_name,
+            version: None,
+            hint: Some(hint.into_owned()),
+            codex_transport: codex_doctor_status(tool_name, config),
+        },
     }
 }
 
@@ -288,76 +494,129 @@ fn check_tool_version(exe_name: &str) -> Option<String> {
 
 /// Print a single tool's status.
 fn print_tool_status(status: &ToolStatus) {
-    let checkmark = if status.installed { "✓" } else { "✗" };
-    let status_msg = if status.installed {
-        if let Some(ref version) = status.version {
-            format!("installed ({version})")
-        } else {
-            "installed (version unknown)".to_string()
-        }
-    } else {
-        "not found".to_string()
+    for line in render_tool_status_lines(status) {
+        println!("{line}");
+    }
+}
+
+fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
+    let checkmark = if status.is_ready() { "✓" } else { "✗" };
+    let status_msg = match status.availability {
+        ToolAvailabilityState::Installed => status
+            .version
+            .as_ref()
+            .map(|version| format!("installed ({version})"))
+            .unwrap_or_else(|| "installed (version unknown)".to_string()),
+        ToolAvailabilityState::Missing => "not found".to_string(),
+        ToolAvailabilityState::Unsupported => "unsupported".to_string(),
     };
 
-    println!(
+    let mut lines = vec![format!(
         "{:<12} {} {}",
         format!("{}:", status.name),
         checkmark,
         status_msg
-    );
+    )];
 
-    // Print install hint if not found
-    if !status.installed {
-        let hint = install_hint(status.name);
-        println!("             Install: {hint}");
+    if let Some(codex_status) = status.codex_transport.as_ref() {
+        lines.push(format!(
+            "             Active transport: {}",
+            codex_transport_label(codex_status.transport_active)
+        ));
+        lines.push(format!(
+            "             ACP compiled in: {}",
+            yes_no(codex_status.acp_compiled_in)
+        ));
+        lines.push(format!(
+            "             Probed binary: {}",
+            codex_status.probed_binary
+        ));
+        if let Some(acp_override_hint) = codex_status.acp_override_hint {
+            lines.push(format!("             ACP override: {acp_override_hint}"));
+        }
+    }
+
+    if !status.is_ready()
+        && let Some(hint) = status.hint.as_deref()
+    {
+        lines.push(format!(
+            "             Expected runtime: {}",
+            status.binary_name
+        ));
+        lines.push(format!("             {hint}"));
+    }
+
+    lines
+}
+
+fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
+    let mut entry = serde_json::json!({
+        "name": status.name,
+        "binary": status.binary_name,
+        "installed": status.is_ready(),
+        "version": status.version,
+        "hint": status.hint,
+    });
+
+    if let Some(codex_status) = status.codex_transport.as_ref()
+        && let Some(object) = entry.as_object_mut()
+    {
+        object.insert(
+            "transport_active".to_string(),
+            serde_json::json!(codex_transport_label(codex_status.transport_active)),
+        );
+        object.insert(
+            "acp_compiled_in".to_string(),
+            serde_json::json!(codex_status.acp_compiled_in),
+        );
+        object.insert(
+            "probed_binary".to_string(),
+            serde_json::json!(codex_status.probed_binary),
+        );
+    }
+
+    entry
+}
+
+fn codex_doctor_status(
+    tool_name: &str,
+    config: Option<&ProjectConfig>,
+) -> Option<CodexDoctorStatus> {
+    if tool_name != "codex" {
+        return None;
+    }
+
+    let transport_active = resolved_codex_transport(config);
+    let acp_compiled_in = CodexRuntimeMetadata::acp_compiled_in();
+
+    Some(CodexDoctorStatus {
+        transport_active,
+        acp_compiled_in,
+        probed_binary: transport_active.runtime_binary_name().to_string(),
+        acp_override_hint: if acp_compiled_in && transport_active != CodexTransport::Acp {
+            Some("set [tools.codex].transport = \"acp\"")
+        } else {
+            None
+        },
+    })
+}
+
+fn codex_transport_label(transport: CodexTransport) -> &'static str {
+    match transport {
+        CodexTransport::Cli => "cli",
+        CodexTransport::Acp => "acp",
     }
 }
 
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
 /// Print project config status.
-fn print_project_config() -> Result<()> {
-    let cwd = env::current_dir()?;
-    let config_path = cwd.join(".csa").join("config.toml");
-
-    if !config_path.exists() {
-        println!("Config:      .csa/config.toml (missing)");
-        println!("             Run 'csa init' to create configuration");
-        return Ok(());
+fn print_project_config(status: &DoctorProjectConfigStatus) {
+    for line in render_project_config_lines(status) {
+        println!("{line}");
     }
-
-    // Try to load config
-    match ProjectConfig::load(&cwd) {
-        Ok(Some(config)) => {
-            println!("Config:      .csa/config.toml (valid)");
-
-            // List enabled and disabled tools
-            let mut enabled = Vec::new();
-            let mut disabled = Vec::new();
-
-            for tool_name in &["gemini-cli", "opencode", "codex", "claude-code"] {
-                if config.is_tool_enabled(tool_name) {
-                    enabled.push(*tool_name);
-                } else {
-                    disabled.push(*tool_name);
-                }
-            }
-
-            if !enabled.is_empty() {
-                println!("Enabled:     {}", enabled.join(", "));
-            }
-            if !disabled.is_empty() {
-                println!("Disabled:    {}", disabled.join(", "));
-            }
-        }
-        Ok(None) => {
-            println!("Config:      .csa/config.toml (missing)");
-        }
-        Err(e) => {
-            println!("Config:      .csa/config.toml (invalid)");
-            println!("             Error: {e}");
-        }
-    }
-
-    Ok(())
 }
 
 /// Print resource status (combined available physical + free swap memory).
@@ -512,10 +771,10 @@ fn print_merge_guard_status() {
 }
 
 /// Print git hook installation status.
-fn print_git_hook_status() {
+fn print_git_hook_status(project_root: &Path) {
     let hooks = [("pre-push", "Blocks push without csa review session")];
     for (hook_name, description) in hooks {
-        let hook_path = std::path::Path::new(".git/hooks").join(hook_name);
+        let hook_path = project_root.join(".git/hooks").join(hook_name);
         if hook_path.is_file() {
             println!("{hook_name}:  installed ({description})");
         } else {
@@ -532,27 +791,5 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0.0 GB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
-        assert_eq!(format_bytes(8 * 1024 * 1024 * 1024), "8.0 GB");
-        assert_eq!(format_bytes(8589934592), "8.0 GB"); // 8 GB in bytes
-    }
-
-    #[test]
-    fn test_check_tool_version_nonexistent() {
-        let version = check_tool_version("nonexistent-tool-12345");
-        assert!(version.is_none());
-    }
-
-    #[test]
-    fn test_check_tool_status_nonexistent() {
-        let status = check_tool_status("nonexistent-tool", "nonexistent-exe-12345");
-        assert!(!status.installed);
-        assert!(status.version.is_none());
-    }
-}
+#[path = "doctor_tests.rs"]
+mod tests;

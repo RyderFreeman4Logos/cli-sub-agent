@@ -8,6 +8,13 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolTransport {
+    Cli,
+    Acp,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
     #[serde(default = "default_true")]
@@ -57,6 +64,11 @@ pub struct ToolConfig {
     /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
+    /// Optional tool transport override.
+    ///
+    /// Currently meaningful for codex only. `None` means use the build default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ToolTransport>,
     /// Codex-only: auto-approve trust dialog during PTY native fork flow.
     /// Defaults to false for explicit safety.
     #[serde(default)]
@@ -88,6 +100,7 @@ impl Default for ToolConfig {
             default_model: None,
             default_thinking: None,
             thinking_lock: None,
+            transport: None,
             codex_auto_trust: false,
             base_url: None,
             api_key: None,
@@ -212,5 +225,22 @@ enabled = true
             .get("claude-code")
             .expect("claude-code missing");
         assert!(tool.filesystem_sandbox.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_tool_transport_override() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            tools: HashMap<String, ToolConfig>,
+        }
+
+        let toml_str = r#"
+[tools.codex]
+transport = "cli"
+"#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("should parse TOML");
+        let tool = wrapper.tools.get("codex").expect("codex missing");
+
+        assert_eq!(tool.transport, Some(ToolTransport::Cli));
     }
 }

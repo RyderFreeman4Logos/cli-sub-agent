@@ -334,6 +334,7 @@ mod tests {
             Executor::Codex {
                 model_override: None,
                 thinking_budget: None,
+                runtime_metadata: csa_executor::codex_runtime_metadata(),
             },
             Executor::ClaudeCode {
                 model_override: None,

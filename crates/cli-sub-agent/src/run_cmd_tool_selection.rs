@@ -13,8 +13,8 @@ use csa_session::{MetaSessionState, SessionPhase, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
 use crate::run_helpers::{
-    detect_parent_tool, is_tool_binary_available, parse_tool_name, read_prompt, resolve_tool,
-    resolve_tool_and_model,
+    detect_parent_tool, is_tool_binary_available_for_config, parse_tool_name, read_prompt,
+    resolve_tool, resolve_tool_and_model,
 };
 use crate::skill_resolver::{self, ResolvedSkill};
 
@@ -269,7 +269,8 @@ fn collect_enabled_tools(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| {
-                cfg.is_tool_auto_selectable(t.as_str()) && is_tool_binary_available(t.as_str())
+                cfg.is_tool_auto_selectable(t.as_str())
+                    && is_tool_binary_available_for_config(t.as_str(), Some(cfg))
             })
             .copied()
             .collect();

@@ -120,6 +120,7 @@ fn test_build_command_codex_sets_csa_env_vars() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
@@ -225,6 +226,7 @@ fn test_build_command_reserved_session_paths_override_extra_env() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let mut extra = HashMap::new();
@@ -560,6 +562,7 @@ fn test_build_command_codex_args_structure() {
     let exec = Executor::Codex {
         model_override: Some("gpt-5".to_string()),
         thinking_budget: Some(ThinkingBudget::Low),
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None);
@@ -579,6 +582,7 @@ fn test_build_command_codex_args_structure() {
         args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
         "Should have sandbox bypass"
     );
+    assert!(args.contains(&"--json".to_string()), "Should emit JSONL");
     assert!(args.contains(&"--model".to_string()), "Should have --model");
     assert!(args.contains(&"gpt-5".to_string()), "Should have model");
     assert!(
@@ -645,134 +649,5 @@ fn test_build_command_opencode_args_structure() {
     );
 }
 
-// ── build_command: session resume ───────────────────────────────
-
-#[test]
-fn test_build_command_with_session_resume_codex() {
-    let exec = Executor::Codex {
-        model_override: None,
-        thinking_budget: None,
-    };
-    let session = make_test_session();
-    let tool_state = ToolState {
-        provider_session_id: Some("thread_abc123".to_string()),
-        last_action_summary: "previous run".to_string(),
-        last_exit_code: 0,
-        updated_at: chrono::Utc::now(),
-        token_usage: None,
-    };
-
-    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None);
-    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
-    let args: Vec<_> = cmd
-        .as_std()
-        .get_args()
-        .map(|a| a.to_string_lossy().to_string())
-        .collect();
-
-    assert!(
-        args.contains(&"--session-id".to_string()),
-        "Codex should use --session-id for resume"
-    );
-    assert!(
-        args.contains(&"thread_abc123".to_string()),
-        "Should pass the session id"
-    );
-}
-
-#[test]
-fn test_build_command_with_session_resume_claude() {
-    let exec = Executor::ClaudeCode {
-        model_override: None,
-        thinking_budget: None,
-    };
-    let session = make_test_session();
-    let tool_state = ToolState {
-        provider_session_id: Some("claude_session_789".to_string()),
-        last_action_summary: "previous".to_string(),
-        last_exit_code: 0,
-        updated_at: chrono::Utc::now(),
-        token_usage: None,
-    };
-
-    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None);
-    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
-    let args: Vec<_> = cmd
-        .as_std()
-        .get_args()
-        .map(|a| a.to_string_lossy().to_string())
-        .collect();
-
-    assert!(
-        args.contains(&"--resume".to_string()),
-        "ClaudeCode should use --resume"
-    );
-    assert!(
-        args.contains(&"claude_session_789".to_string()),
-        "Should pass the session id"
-    );
-}
-
-#[test]
-fn test_build_command_with_session_resume_gemini() {
-    let exec = Executor::GeminiCli {
-        model_override: None,
-        thinking_budget: None,
-    };
-    let session = make_test_session();
-    let tool_state = ToolState {
-        provider_session_id: Some("gemini_session_abc".to_string()),
-        last_action_summary: "previous".to_string(),
-        last_exit_code: 0,
-        updated_at: chrono::Utc::now(),
-        token_usage: None,
-    };
-
-    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None);
-    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
-    let args: Vec<_> = cmd
-        .as_std()
-        .get_args()
-        .map(|a| a.to_string_lossy().to_string())
-        .collect();
-
-    assert!(
-        args.contains(&"-r".to_string()),
-        "GeminiCli should use -r for resume"
-    );
-    assert!(
-        args.contains(&"gemini_session_abc".to_string()),
-        "Should pass the session id"
-    );
-}
-
-#[test]
-fn test_build_command_no_resume_without_provider_session_id() {
-    let exec = Executor::Codex {
-        model_override: None,
-        thinking_budget: None,
-    };
-    let session = make_test_session();
-    let tool_state = ToolState {
-        provider_session_id: None, // No provider session yet
-        last_action_summary: "first run".to_string(),
-        last_exit_code: 0,
-        updated_at: chrono::Utc::now(),
-        token_usage: None,
-    };
-
-    let (cmd, stdin_data) = exec.build_command("start", Some(&tool_state), &session, None);
-    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
-    let args: Vec<_> = cmd
-        .as_std()
-        .get_args()
-        .map(|a| a.to_string_lossy().to_string())
-        .collect();
-
-    assert!(
-        !args.contains(&"--session-id".to_string()),
-        "Should not have --session-id when provider_session_id is None"
-    );
-}
-
+include!("executor_build_cmd_resume_tests.rs");
 include!("executor_build_cmd_tests_part2.rs");

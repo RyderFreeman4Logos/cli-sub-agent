@@ -4,7 +4,7 @@ use chrono::Utc;
 
 use crate::config::{
     CURRENT_SCHEMA_VERSION, EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig,
-    ToolConfig, ToolResourceProfile,
+    ToolConfig, ToolResourceProfile, ToolTransport,
 };
 use crate::config_runtime::default_sandbox_for_tool;
 
@@ -761,6 +761,21 @@ fn tool_default_thinking_reads_tool_override() {
     );
     assert_eq!(cfg.tool_default_thinking("codex"), Some("xhigh"));
     assert_eq!(cfg.tool_default_thinking("claude-code"), None);
+}
+
+#[test]
+fn tool_transport_reads_tool_override() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            transport: Some(ToolTransport::Cli),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(cfg.tool_transport("codex"), Some(ToolTransport::Cli));
+    assert_eq!(cfg.tool_transport("claude-code"), None);
 }
 
 // FS sandbox tests moved to config_runtime_fs_sandbox_tests.rs

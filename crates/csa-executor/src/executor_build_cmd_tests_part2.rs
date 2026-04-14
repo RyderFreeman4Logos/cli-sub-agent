@@ -101,6 +101,7 @@ fn test_build_command_prompt_with_special_characters() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let special_prompt = "Fix the bug in `fn main()` \u{2014} use \"quotes\" & $ENV_VAR\nnewline";
@@ -290,6 +291,7 @@ fn test_build_command_strips_claudecode_for_all_executors() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
         },
         Executor::Opencode {
             model_override: None,
@@ -354,6 +356,7 @@ fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
         },
         Executor::Opencode {
             model_override: None,
@@ -409,6 +412,7 @@ fn test_build_command_non_gemini_does_not_strip_gemini_env() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, _) = exec.build_command("test", None, &session, None);
@@ -480,6 +484,7 @@ fn test_build_execute_in_command_codex_notify_suppressed() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let work_dir = std::path::Path::new("/tmp/test-project");
     let mut extra = HashMap::new();
@@ -507,6 +512,7 @@ fn test_build_execute_in_command_codex_notify_not_suppressed() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let work_dir = std::path::Path::new("/tmp/test-project");
     let mut extra = HashMap::new();
@@ -530,6 +536,7 @@ fn test_codex_dual_c_flags_coexist() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: Some(ThinkingBudget::Low),
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let work_dir = std::path::Path::new("/tmp/test-project");
     let mut extra = HashMap::new();

@@ -7,27 +7,18 @@ use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig, TierStrategy};
 use csa_core::types::OutputFormat;
 use std::env;
-use std::process::Command;
 
 /// Map tool name (from model spec) to its executable binary name.
-fn tool_exe_name(tool: &str) -> &str {
-    match tool {
-        "gemini-cli" => "gemini",
-        "opencode" => "opencode",
-        "codex" => "codex-acp",
-        "claude-code" => "claude-code-acp",
-        _ => tool,
-    }
+fn tool_exe_name(tool: &str, config: &ProjectConfig) -> String {
+    crate::run_helpers::resolved_tool_binary_name(tool, Some(config))
+        .unwrap_or(tool)
+        .to_string()
 }
 
 /// Check if a tool binary is available in PATH.
-fn is_tool_binary_available(tool: &str) -> bool {
-    let exe = tool_exe_name(tool);
-    Command::new("which")
-        .arg(exe)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+fn is_tool_binary_available(tool: &str, config: &ProjectConfig) -> bool {
+    let _binary_name = tool_exe_name(tool, config);
+    crate::run_helpers::is_tool_binary_available_for_config(tool, Some(config))
 }
 
 /// A single entry in the routing table for display.
@@ -107,7 +98,7 @@ fn build_operation_routing(
                 .map(|(i, spec)| {
                     let (tool, provider, model, thinking) = parse_model_spec(spec);
                     let enabled = config.is_tool_enabled(&tool);
-                    let binary_available = is_tool_binary_available(&tool);
+                    let binary_available = is_tool_binary_available(&tool, config);
                     RoutingEntry {
                         rank: i + 1,
                         tool,
@@ -362,11 +353,13 @@ mod tests {
 
     #[test]
     fn test_tool_exe_name_mapping() {
-        assert_eq!(tool_exe_name("gemini-cli"), "gemini");
-        assert_eq!(tool_exe_name("codex"), "codex-acp");
-        assert_eq!(tool_exe_name("claude-code"), "claude-code-acp");
-        assert_eq!(tool_exe_name("opencode"), "opencode");
-        assert_eq!(tool_exe_name("unknown-tool"), "unknown-tool");
+        let config: ProjectConfig = toml::from_str("").unwrap();
+
+        assert_eq!(tool_exe_name("gemini-cli", &config), "gemini");
+        assert_eq!(tool_exe_name("codex", &config), "codex");
+        assert_eq!(tool_exe_name("claude-code", &config), "claude-code-acp");
+        assert_eq!(tool_exe_name("opencode", &config), "opencode");
+        assert_eq!(tool_exe_name("unknown-tool", &config), "unknown-tool");
     }
 
     #[test]

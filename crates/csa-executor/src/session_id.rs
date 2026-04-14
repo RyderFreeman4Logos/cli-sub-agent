@@ -41,18 +41,20 @@ pub fn extract_session_id_from_transport(
 
 /// Extract Codex session ID from JSON output.
 ///
-/// Codex exec returns JSON with "session_id" or "thread_id" field.
-/// Example: {"session_id":"thread_abc123", ...}
+/// Codex exec with `--json` emits JSONL events that may carry a native
+/// session identifier as `session_id`, `thread_id`, or `conversation_id`.
 fn extract_codex_session_id(output: &str) -> Option<String> {
-    // Try simple string search first (faster than regex for simple patterns)
-    if let Some(session_id) = extract_json_field(output, "session_id") {
-        debug!("Extracted Codex session_id: {}", session_id);
-        return Some(session_id);
-    }
-
-    if let Some(thread_id) = extract_json_field(output, "thread_id") {
-        debug!("Extracted Codex thread_id: {}", thread_id);
-        return Some(thread_id);
+    for field_name in [
+        "session_id",
+        "sessionId",
+        "thread_id",
+        "conversation_id",
+        "conversationId",
+    ] {
+        if let Some(session_id) = extract_json_field(output, field_name) {
+            debug!("Extracted Codex {}: {}", field_name, session_id);
+            return Some(session_id);
+        }
     }
 
     debug!("Failed to extract Codex session ID from output");
@@ -127,9 +129,22 @@ mod tests {
 
     #[test]
     fn test_extract_codex_thread_id() {
-        let output = r#"{"thread_id":"thread_xyz789","status":"success"}"#;
+        let output = concat!(
+            r#"{"type":"thread.started","thread_id":"thread_xyz789"}"#,
+            "\n",
+            r#"{"type":"turn.started","turn_id":"turn_123"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}"#
+        );
         let result = extract_codex_session_id(output);
         assert_eq!(result, Some("thread_xyz789".to_string()));
+    }
+
+    #[test]
+    fn test_extract_codex_conversation_id() {
+        let output = r#"{"conversation_id":"conv_123","status":"success"}"#;
+        let result = extract_codex_session_id(output);
+        assert_eq!(result, Some("conv_123".to_string()));
     }
 
     #[test]
@@ -239,7 +254,12 @@ mod tests {
     fn test_extract_session_id_from_transport_falls_back_to_output_parse() {
         let transport_result = TransportResult {
             execution: csa_process::ExecutionResult {
-                output: r#"{"session_id":"thread_from_output"}"#.to_string(),
+                output: concat!(
+                    r#"{"type":"thread.started","thread_id":"thread_from_output"}"#,
+                    "\n",
+                    r#"{"type":"turn.completed","turn_id":"turn_123"}"#
+                )
+                .to_string(),
                 stderr_output: String::new(),
                 summary: "ok".to_string(),
                 exit_code: 0,

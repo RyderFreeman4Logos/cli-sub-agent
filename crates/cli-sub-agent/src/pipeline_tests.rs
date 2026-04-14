@@ -82,6 +82,34 @@ fn load_and_validate_within_depth_returns_some() {
     );
 }
 
+#[cfg(not(feature = "codex-acp"))]
+#[test]
+fn load_and_validate_rejects_invalid_codex_transport_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_dir = tmp.path().join(".csa");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[tools.codex]
+transport = "acp"
+"#,
+    )
+    .unwrap();
+
+    let err = load_and_validate(tmp.path(), 0).unwrap_err();
+    let message = err.to_string();
+
+    assert!(
+        message.contains("[tools.codex].transport"),
+        "pipeline should surface the exact config key: {message}"
+    );
+    assert!(
+        message.contains("codex-acp"),
+        "pipeline should surface the missing feature guidance: {message}"
+    );
+}
+
 #[test]
 fn resolve_idle_timeout_prefers_cli_override() {
     let cfg = ProjectConfig {
@@ -764,5 +792,7 @@ fn enforce_result_toml_contract_now(
 mod contract_tests;
 #[path = "pipeline_tests_initial_response.rs"]
 mod initial_response_tests;
+#[path = "pipeline_tests_locking.rs"]
+mod locking_tests;
 #[path = "pipeline_tests_tail.rs"]
 mod tail_tests;

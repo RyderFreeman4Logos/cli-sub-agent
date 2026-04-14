@@ -110,9 +110,12 @@ See [Architecture](docs/architecture.md) for design principles and dependency gr
 | Tool | Provider | Transport | Context |
 |------|----------|-----------|---------|
 | **claude-code** | Anthropic | ACP | 200K |
-| **codex** | OpenAI | ACP | 200K |
+| **codex** | OpenAI | Legacy CLI (default) | 200K |
 | **gemini-cli** | Google | Legacy CLI | 2M |
 | **opencode** | OpenRouter | Legacy CLI | 200K |
+
+Codex ACP remains available as an opt-in path when CSA is built with
+`--features codex-acp` and `[tools.codex].transport = "acp"`.
 
 ## Documentation
 

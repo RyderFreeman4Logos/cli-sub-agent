@@ -46,6 +46,7 @@ timeout_secs = 1800              # 30 minute default
 
 [tools.codex]
 max_concurrent = 5
+transport = "cli"                # Default; "acp" requires a codex-acp build
 [tools.codex.env]
 OPENAI_API_KEY = "sk-..."
 
@@ -92,6 +93,10 @@ See [Resource Control](resource-control.md) for P95 estimation details.
 [tools.gemini-cli]
 enabled = true
 
+[tools.codex]
+enabled = true
+transport = "cli"                 # or "acp" in a codex-acp build
+
 [tools.gemini-cli.restrictions]
 allow_edit_existing_files = false    # Inject read-only restriction into prompt
 ```
@@ -99,10 +104,34 @@ allow_edit_existing_files = false    # Inject read-only restriction into prompt
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | Boolean | `true` | Whether this tool is available |
+| `transport` | String | `cli` for `codex` | Codex-only transport override: `cli` or `acp` |
 | `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
 Unconfigured tools default to enabled with no restrictions. Setting
 `enabled = false` excludes the tool from tier resolution and auto mode.
+
+`transport` is currently valid only for `codex`. Legal values are `cli` and
+`acp`. The default is `cli`, so codex runs through `LegacyTransport` and
+probes the `codex` binary unless you opt into ACP explicitly.
+
+#### Codex transport override
+
+Set `[tools.codex].transport = "acp"` only when CSA was built with the
+`codex-acp` cargo feature. Config validation is fail-closed: if the running
+binary was compiled without that feature, config load fails immediately with
+a rebuild hint instead of silently falling back.
+
+```toml
+[tools.codex]
+transport = "acp"
+```
+
+Build or install a codex-ACP-enabled binary with:
+
+```bash
+cargo build --features codex-acp
+cargo install --path crates/cli-sub-agent --features codex-acp
+```
 
 ### `[review]` -- Review Tool Selection
 
@@ -193,6 +222,8 @@ CSA validates on load:
 2. **Tier references:** All `tier_mapping` values must reference existing tiers
 3. **Tool names:** Must be one of `gemini-cli`, `codex`, `opencode`, `claude-code`
 4. **Thinking budget:** Must be `low`, `medium`, `high`, `xhigh`, or a number
+5. **Codex transport override:** `[tools.codex].transport` must be `cli` or
+   `acp`, and `acp` is rejected unless CSA was compiled with `codex-acp`
 
 ## Migrations
 
@@ -269,5 +300,6 @@ default = "primary"
 ## Related
 
 - [Getting Started](getting-started.md) -- initial setup
+- [ACP Transport](acp-transport.md) -- codex ACP opt-in and transport behavior
 - [Resource Control](resource-control.md) -- memory limits and P95 estimation
 - [Commands](commands.md) -- `csa config` reference

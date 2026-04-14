@@ -1,12 +1,23 @@
 #[test]
 fn test_transport_factory_create_routes_tools_to_expected_transport() {
-    let legacy_tools = vec![Executor::Opencode {
-        model_override: None,
-        agent: None,
-        thinking_budget: None,
-    }];
+    let legacy_tools = vec![
+        Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        },
+        Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+        },
+    ];
     for executor in legacy_tools {
-        let transport = TransportFactory::create(&executor, None);
+        let transport = TransportFactory::create(&executor, None).expect("transport should build");
         assert!(
             transport.as_ref().as_any().is::<LegacyTransport>(),
             "Expected LegacyTransport for {}",
@@ -14,22 +25,13 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
         );
     }
 
-    let acp_tools = vec![
-        Executor::Codex {
-            model_override: None,
-            thinking_budget: None,
-        },
-        Executor::ClaudeCode {
-            model_override: None,
-            thinking_budget: None,
-        },
-        Executor::GeminiCli {
-            model_override: None,
-            thinking_budget: None,
-        },
-    ];
+    let acp_tools = vec![Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+    }];
     for executor in acp_tools {
-        let transport = TransportFactory::create(&executor, Some(SessionConfig::default()));
+        let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
+            .expect("transport should build");
         assert!(
             transport.as_ref().as_any().is::<AcpTransport>(),
             "Expected AcpTransport for {}",
@@ -40,7 +42,7 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
 
 #[test]
 fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
-    let executor = Executor::Codex {
+    let executor = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
     };
@@ -53,7 +55,8 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
         mcp_proxy_socket: None,
     };
 
-    let transport = TransportFactory::create(&executor, Some(session_config.clone()));
+    let transport = TransportFactory::create(&executor, Some(session_config.clone()))
+        .expect("transport should build");
     let acp = transport
         .as_ref()
         .as_any()
@@ -61,6 +64,66 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
         .expect("expected AcpTransport");
 
     assert_eq!(acp.session_config, Some(session_config));
+}
+
+#[test]
+fn test_transport_factory_create_honors_codex_cli_runtime_transport_override() {
+    let cli_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    };
+    let cli_transport = TransportFactory::create(&cli_executor, Some(SessionConfig::default()))
+        .expect("transport should build");
+    assert!(
+        cli_transport.as_ref().as_any().is::<LegacyTransport>(),
+        "codex cli override should use LegacyTransport"
+    );
+}
+
+#[cfg(feature = "codex-acp")]
+#[test]
+fn test_transport_factory_create_honors_codex_acp_runtime_transport_override() {
+    let acp_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Acp,
+        ),
+    };
+    let acp_transport = TransportFactory::create(&acp_executor, Some(SessionConfig::default()))
+        .expect("transport should build");
+    assert!(
+        acp_transport.as_ref().as_any().is::<AcpTransport>(),
+        "codex acp override should use AcpTransport"
+    );
+}
+
+#[cfg(not(feature = "codex-acp"))]
+#[test]
+fn test_transport_factory_create_rejects_codex_acp_runtime_transport_override() {
+    let acp_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Acp,
+        ),
+    };
+
+    let err = TransportFactory::create(&acp_executor, Some(SessionConfig::default()))
+        .err()
+        .expect("codex ACP must fail closed when feature is disabled");
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.contains("codex-acp"),
+        "error should mention the required cargo feature: {rendered}"
+    );
+    assert!(
+        rendered.contains("cargo build --features codex-acp"),
+        "error should include a rebuild hint: {rendered}"
+    );
 }
 
 #[test]
@@ -89,7 +152,7 @@ fn test_acp_command_for_tool_mappings() {
         AcpTransport::acp_command_for_tool("codex"),
         ("codex-acp".to_string(), vec![])
     );
-    // gemini-cli uses native ACP mode via `gemini --acp`
+    // If ACP transport is constructed explicitly, gemini-cli uses native ACP mode.
     assert_eq!(
         AcpTransport::acp_command_for_tool("gemini-cli"),
         ("gemini".to_string(), vec!["--acp".to_string()])

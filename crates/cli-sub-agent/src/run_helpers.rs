@@ -11,8 +11,14 @@ use csa_session::TokenUsage;
 
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
+#[path = "run_helpers_tool_availability.rs"]
+mod tool_availability;
 
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
+pub(crate) use tool_availability::{
+    ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_tool_binary_name,
+    tool_binary_availability,
+};
 
 #[cfg(test)]
 pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
@@ -229,7 +235,7 @@ pub(crate) fn resolve_tool_and_model(
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
             let enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(name));
-            if enabled && is_tool_binary_available(name) {
+            if enabled && is_tool_binary_available_for_config(name, config) {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
             }
@@ -269,7 +275,9 @@ pub(crate) fn resolve_tool_and_model(
     {
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
-            if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
+            if cfg.is_tool_auto_selectable(name)
+                && is_tool_binary_available_for_config(name, Some(cfg))
+            {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
             }
@@ -349,6 +357,11 @@ pub(crate) fn build_executor(
             let budget = ThinkingBudget::parse(explicit_thinking)?;
             executor.override_thinking_budget(budget);
         }
+    }
+
+    if matches!(executor, Executor::Codex { .. }) {
+        let transport = tool_availability::resolved_codex_transport(config);
+        executor.override_codex_transport(transport);
     }
 
     Ok(executor)
@@ -582,7 +595,9 @@ pub(crate) fn collect_available_tier_models(
             }
             let tool_str = parts[0];
             let tool = parse_tool_name(tool_str).ok()?;
-            if !config.is_tool_enabled(tool_str) || !is_tool_binary_available(tool_str) {
+            if !config.is_tool_enabled(tool_str)
+                || !is_tool_binary_available_for_config(tool_str, Some(config))
+            {
                 return None;
             }
             if let Some(wl) = whitelist
@@ -691,52 +706,6 @@ pub(crate) fn resolve_tool_from_tier(
     Some(available[0].clone())
 }
 
-#[cfg(test)]
-fn assume_tool_binaries_available_for_tests() -> bool {
-    [
-        TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV,
-        TEST_ASSUME_TOOLS_AVAILABLE_ENV,
-    ]
-    .into_iter()
-    .any(|env_name| {
-        std::env::var(env_name)
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
-/// Check if a tool's binary is available on PATH (synchronous).
-///
-/// For ACP-routed tools (codex, claude-code), checks for the ACP adapter
-/// binary (`codex-acp`, `claude-code-acp`). For legacy tools, checks the
-/// native CLI binary.
-pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
-    #[cfg(test)]
-    if assume_tool_binaries_available_for_tests() {
-        return true;
-    }
-
-    // OpenAI-compat is HTTP-only — no binary to check.
-    if tool_name == "openai-compat" {
-        return true;
-    }
-    let binary = match tool_name {
-        "gemini-cli" => "gemini",
-        "opencode" => "opencode",
-        // ACP adapter binaries (npm: @zed-industries/codex-acp, @zed-industries/claude-code-acp)
-        "codex" => "codex-acp",
-        "claude-code" => "claude-code-acp",
-        _ => return false,
-    };
-    std::process::Command::new("which")
-        .arg(binary)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 /// Detect the parent tool context.
 ///
 /// Resolution order:
@@ -772,3 +741,11 @@ mod tests;
 #[cfg(test)]
 #[path = "run_helpers_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_transport_tests.rs"]
+mod transport_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_transport_integration_tests.rs"]
+mod transport_integration_tests;

@@ -292,7 +292,9 @@ fn resolve_debate_tool_from_selection(
         && let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart)
     {
         let counterpart_enabled = project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
-        if counterpart_enabled {
+        let counterpart_available =
+            crate::run_helpers::is_tool_binary_available_for_config(resolved, project_config);
+        if counterpart_enabled && counterpart_available {
             let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                 anyhow::anyhow!(
                     "BUG: auto debate tool resolution returned invalid tool '{resolved}'"
@@ -332,6 +334,9 @@ fn select_auto_debate_tool(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| {
+                crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+            })
             .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();
@@ -340,6 +345,9 @@ fn select_auto_debate_tool(
         let all = csa_config::global::all_known_tools();
         let tools: Vec<_> = all
             .iter()
+            .filter(|t| {
+                crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+            })
             .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();
@@ -368,14 +376,16 @@ fn resolve_same_model_fallback(
     }
 
     // Use the parent tool itself for same-model adversarial debate,
-    // but only if the tool is enabled in project config.
+    // but only if the configured runtime binary is actually available.
     if let Some(parent_str) = parent_tool
         && let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str)
     {
         let enabled = project_config
             .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
             .unwrap_or(true);
-        if enabled {
+        let available =
+            crate::run_helpers::is_tool_binary_available_for_config(tool.as_str(), project_config);
+        if enabled && available {
             return Ok((tool, DebateMode::SameModelAdversarial));
         }
     }
@@ -390,12 +400,9 @@ fn resolve_same_model_fallback(
     } else {
         csa_config::global::all_known_tools().to_vec()
     };
-    // Prefer a tool that is both enabled AND installed on this system.
-    // Fall back to first enabled tool if none are installed (preserves prior behavior).
-    let installed = candidates
-        .iter()
-        .find(|t| crate::run_helpers::is_tool_binary_available(t.as_str()));
-    if let Some(tool) = installed.or(candidates.first()) {
+    if let Some(tool) = candidates.iter().find(|t| {
+        crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+    }) {
         return Ok((*tool, DebateMode::SameModelAdversarial));
     }
 
