@@ -181,3 +181,63 @@ fn handle_session_wait_prefers_late_real_result_status_and_exit_code_over_comple
     assert_eq!(persisted.status, "failure");
     assert_eq!(persisted.exit_code, 7);
 }
+
+#[test]
+fn handle_session_wait_prefers_refreshed_real_result_status_and_exit_code_over_completion_packet() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-refresh-real-result"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write completion packet");
+    #[cfg(unix)]
+    set_file_mtime_seconds_ago(&session_dir.join("daemon-completion.toml"), 2);
+
+    let refreshed_result = SessionResult {
+        summary: "refreshed real terminal result".to_string(),
+        ..make_result("failure", 7)
+    };
+    save_result(project, &session_id, &refreshed_result).expect("save refreshed result");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        1,
+        |_project_root, _current_session_id, _trigger| {
+            panic!("refresh_result_for_wait should short-circuit before reconcile");
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should succeed");
+
+    assert_eq!(exit_code, 7);
+    assert_eq!(
+        emitted_completion,
+        Some((session_id.clone(), "failure".to_string(), 7, false))
+    );
+
+    let persisted = load_result(project, &session_id)
+        .expect("load result")
+        .expect("refreshed real result should persist");
+    assert_eq!(persisted.status, "failure");
+    assert_eq!(persisted.exit_code, 7);
+}

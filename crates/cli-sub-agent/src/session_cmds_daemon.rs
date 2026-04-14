@@ -189,9 +189,22 @@ where
             }
             let refreshed_result = refreshed_result.ok().flatten();
             let mut synthetic = false;
-            let mut completion_status = Cow::Borrowed(completion.status.as_str());
-            let mut exit_code = completion.exit_code;
-            if refreshed_result.is_some() {
+            let refreshed_result_available = refreshed_result.is_some();
+            #[rustfmt::skip]
+            let refreshed_result_newer_than_completion = matches!(
+                (
+                    fs::metadata(session_dir.join(csa_session::result::RESULT_FILE_NAME))
+                        .ok()
+                        .and_then(|metadata| metadata.modified().ok()),
+                    fs::metadata(daemon_completion_path(&session_dir))
+                        .ok()
+                        .and_then(|metadata| metadata.modified().ok())
+                ),
+                (Some(result_modified), Some(completion_modified)) if result_modified > completion_modified
+            );
+            let mut loaded_result =
+                refreshed_result.filter(|_| refreshed_result_newer_than_completion);
+            if refreshed_result_available {
                 let _ = crate::session_cmds::retire_if_dead_with_result(
                     effective_root,
                     &resolved.session_id,
@@ -204,11 +217,6 @@ where
                     "session wait",
                 )?;
                 synthetic = reconciled.synthetic;
-                let mut loaded_result = None;
-                if reconciled.synthetic {
-                    completion_status = Cow::Borrowed("failure");
-                    exit_code = 1;
-                }
                 if reconciled.result_became_available {
                     loaded_result = load_completed_daemon_result_adaptive(
                         effective_root,
@@ -217,15 +225,11 @@ where
                         is_cross_project,
                     )?;
                 }
-                if !reconciled.synthetic
-                    && let Some(result) = loaded_result
-                {
-                    completion_status = Cow::Owned(result.status);
-                    exit_code = result.exit_code;
-                }
             }
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
+            #[rustfmt::skip]
+            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, loaded_result.as_ref());
             emit_completion_signal(
                 &resolved.session_id,
                 completion_status.as_ref(),
@@ -244,14 +248,16 @@ where
         )? {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
+            #[rustfmt::skip]
+            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
             emit_completion_signal(
                 &resolved.session_id,
-                &result.status,
-                result.exit_code,
+                completion_status.as_ref(),
+                exit_code,
                 false,
                 !streamed_output,
             );
-            return Ok(result.exit_code);
+            return Ok(exit_code);
         }
 
         // Synthesize terminal result for dead Active sessions.
@@ -267,10 +273,12 @@ where
         {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
+            #[rustfmt::skip]
+            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
             emit_completion_signal(
                 &resolved.session_id,
-                &result.status,
-                result.exit_code,
+                completion_status.as_ref(),
+                exit_code,
                 reconciled.synthetic,
                 !streamed_output,
             );
@@ -280,7 +288,7 @@ where
                     resolved.session_id,
                 );
             }
-            return Ok(result.exit_code);
+            return Ok(exit_code);
         }
 
         if !session_has_terminal_process(&session_dir) {
@@ -292,14 +300,16 @@ where
             )? {
                 let streamed_output = stream_wait_output(&session_dir)?;
                 emit_wait_next_step_if_needed(&session_dir)?;
+                #[rustfmt::skip]
+                let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
                 emit_completion_signal(
                     &resolved.session_id,
-                    &result.status,
-                    result.exit_code,
+                    completion_status.as_ref(),
+                    exit_code,
                     false,
                     !streamed_output,
                 );
-                return Ok(result.exit_code);
+                return Ok(exit_code);
             }
             eprintln!(
                 "Session {} has no live daemon process and no terminal result packet.",
@@ -428,6 +438,21 @@ fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
         println!("{directive}");
     }
     Ok(())
+}
+
+fn resolve_wait_completion_status_and_exit<'a>(
+    fallback_status: &'a str,
+    fallback_exit_code: i32,
+    synthetic: bool,
+    real_result: Option<&'a csa_session::SessionResult>,
+) -> (Cow<'a, str>, i32) {
+    if synthetic {
+        return (Cow::Borrowed("failure"), 1);
+    }
+    real_result.map_or_else(
+        || (Cow::Borrowed(fallback_status), fallback_exit_code),
+        |result| (Cow::Borrowed(result.status.as_str()), result.exit_code),
+    )
 }
 
 fn load_completed_daemon_result(
