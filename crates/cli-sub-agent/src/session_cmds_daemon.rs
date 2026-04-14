@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 mod attach;
 
 #[cfg(test)]
-use attach::{ATTACH_METADATA_STDOUT_GRACE_WINDOW, attach_primary_output_for_session};
+use attach::{
+    ATTACH_METADATA_STDOUT_GRACE_WINDOW, attach_primary_output_for_session,
+    attach_primary_output_from_metadata,
+};
 use attach::{resolve_attach_terminal_exit, wait_for_attach_live_output_path};
 
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
