@@ -11,6 +11,12 @@ pub struct SessionMetadata {
     /// Whether the tool is locked (prevents other tools from using this session)
     #[serde(default = "default_tool_locked")]
     pub tool_locked: bool,
+    /// Runtime binary last used for this session, when known.
+    ///
+    /// This distinguishes per-session codex CLI sessions (`codex`) from
+    /// codex ACP sessions (`codex-acp`) even though both use tool = "codex".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_binary: Option<String>,
 }
 
 fn default_tool_locked() -> bool {
@@ -31,6 +37,7 @@ mod tests {
         let metadata = SessionMetadata {
             tool: "codex".to_string(),
             tool_locked: true,
+            runtime_binary: Some("codex".to_string()),
         };
 
         let toml_str = toml::to_string_pretty(&metadata).expect("Serialize should succeed");
@@ -39,6 +46,7 @@ mod tests {
 
         assert_eq!(deserialized.tool, "codex");
         assert!(deserialized.tool_locked);
+        assert_eq!(deserialized.runtime_binary.as_deref(), Some("codex"));
     }
 
     #[test]
@@ -49,6 +57,7 @@ mod tests {
         let metadata = SessionMetadata {
             tool: "claude-code".to_string(),
             tool_locked: false,
+            runtime_binary: Some("claude-code-acp".to_string()),
         };
 
         let contents = toml::to_string_pretty(&metadata).unwrap();
@@ -59,6 +68,7 @@ mod tests {
 
         assert_eq!(loaded.tool, "claude-code");
         assert!(!loaded.tool_locked);
+        assert_eq!(loaded.runtime_binary.as_deref(), Some("claude-code-acp"));
     }
 
     // ── Default for tool_locked ────────────────────────────────────
@@ -75,6 +85,7 @@ mod tests {
             metadata.tool_locked,
             "tool_locked should default to true when absent"
         );
+        assert_eq!(metadata.runtime_binary, None);
     }
 
     // ── Error path: missing required field ─────────────────────────

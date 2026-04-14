@@ -387,6 +387,9 @@ fn select_auto_review_tool(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| {
+                crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+            })
             .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();
@@ -395,6 +398,9 @@ fn select_auto_review_tool(
         let all = csa_config::global::all_known_tools();
         let tools: Vec<_> = all
             .iter()
+            .filter(|t| {
+                crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
+            })
             .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();

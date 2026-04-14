@@ -38,6 +38,7 @@ fn attach_primary_output_prefers_output_log_for_acp_tools() {
     let metadata = csa_session::metadata::SessionMetadata {
         tool: "claude-code".to_string(),
         tool_locked: true,
+        runtime_binary: None,
     };
     let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
     std::fs::write(
@@ -58,6 +59,7 @@ fn attach_primary_output_prefers_existing_output_log_for_codex_sessions() {
     let metadata = csa_session::metadata::SessionMetadata {
         tool: "codex".to_string(),
         tool_locked: true,
+        runtime_binary: None,
     };
     let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
     std::fs::write(
@@ -79,6 +81,7 @@ fn attach_primary_output_keeps_stdout_for_legacy_tools() {
     let metadata = csa_session::metadata::SessionMetadata {
         tool: "opencode".to_string(),
         tool_locked: true,
+        runtime_binary: None,
     };
     let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
     std::fs::write(
@@ -90,6 +93,27 @@ fn attach_primary_output_keeps_stdout_for_legacy_tools() {
     assert_eq!(
         attach_primary_output_for_session(td.path()),
         AttachPrimaryOutput::StdoutLog
+    );
+}
+
+#[test]
+fn attach_primary_output_uses_persisted_codex_acp_runtime_binary() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let metadata = csa_session::metadata::SessionMetadata {
+        tool: "codex".to_string(),
+        tool_locked: true,
+        runtime_binary: Some("codex-acp".to_string()),
+    };
+    let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        metadata_toml,
+    )
+    .expect("write metadata");
+
+    assert_eq!(
+        attach_primary_output_for_session(td.path()),
+        AttachPrimaryOutput::OutputLog
     );
 }
 

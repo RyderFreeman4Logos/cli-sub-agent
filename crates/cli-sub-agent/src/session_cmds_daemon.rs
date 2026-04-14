@@ -66,6 +66,9 @@ fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput 
         (false, true) => return AttachPrimaryOutput::StdoutLog,
         _ => {}
     }
+    if metadata.runtime_binary.as_deref() == Some("codex-acp") {
+        return AttachPrimaryOutput::OutputLog;
+    }
     if matches!(
         TransportFactory::mode_for_tool(&metadata.tool),
         TransportMode::Acp

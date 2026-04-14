@@ -2,14 +2,20 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+#[cfg(not(test))]
+use std::process::Command;
 
 use csa_config::ProjectConfig;
+#[cfg(not(test))]
+use csa_config::ToolTransport;
 use csa_config::global::GlobalConfig;
 use csa_core::consensus::{
     AgentResponse, ConsensusResult, ConsensusStrategy, resolve_majority, resolve_unanimous,
     resolve_weighted,
 };
 use csa_core::types::ToolName;
+#[cfg(not(test))]
+use csa_executor::{CodexRuntimeMetadata, CodexTransport};
 use csa_session::review_artifact::{Finding, ReviewArtifact, SeveritySummary};
 
 pub(crate) const CLEAN: &str = "CLEAN";
@@ -20,6 +26,45 @@ pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";
 pub(crate) const RULE_SPEC_DEVIATION: &str = "spec-deviation";
 pub(crate) const RULE_UNVERIFIED_CRITERION: &str = "unverified-criterion";
 pub(crate) const RULE_BOUNDARY_VIOLATION: &str = "boundary-violation";
+
+#[cfg(test)]
+fn reviewer_tool_binary_available(_tool_name: &str, _config: Option<&ProjectConfig>) -> bool {
+    true
+}
+
+#[cfg(not(test))]
+fn reviewer_tool_binary_available(tool_name: &str, config: Option<&ProjectConfig>) -> bool {
+    if tool_name == "openai-compat" {
+        return true;
+    }
+
+    let binary_name = match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "claude-code" => "claude-code-acp",
+        "codex" => {
+            let transport = config
+                .and_then(|cfg| cfg.tool_transport("codex"))
+                .map(|transport| match transport {
+                    ToolTransport::Cli => CodexTransport::Cli,
+                    ToolTransport::Acp => CodexTransport::Acp,
+                })
+                .unwrap_or_else(CodexTransport::default_for_build);
+            if matches!(transport, CodexTransport::Acp) && !CodexRuntimeMetadata::acp_compiled_in()
+            {
+                return false;
+            }
+            transport.runtime_binary_name()
+        }
+        _ => return false,
+    };
+
+    Command::new("which")
+        .arg(binary_name)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
 
 pub(crate) fn build_reviewer_tools(
     explicit_tool: Option<ToolName>,
@@ -42,6 +87,7 @@ pub(crate) fn build_reviewer_tools(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| reviewer_tool_binary_available(t.as_str(), project_config))
             .copied()
             .collect();
         if let Some(gc) = global_config {
@@ -50,13 +96,18 @@ pub(crate) fn build_reviewer_tools(
             tools
         }
     } else if let Some(gc) = global_config {
-        csa_config::global::sort_tools_by_effective_priority(
-            csa_config::global::all_known_tools(),
-            project_config,
-            gc,
-        )
+        let available_tools: Vec<_> = csa_config::global::all_known_tools()
+            .iter()
+            .filter(|t| reviewer_tool_binary_available(t.as_str(), project_config))
+            .copied()
+            .collect();
+        csa_config::global::sort_tools_by_effective_priority(&available_tools, project_config, gc)
     } else {
-        csa_config::global::all_known_tools().to_vec()
+        csa_config::global::all_known_tools()
+            .iter()
+            .filter(|t| reviewer_tool_binary_available(t.as_str(), project_config))
+            .copied()
+            .collect()
     };
 
     let pool = build_reviewer_pool(primary_tool, &enabled_tools);

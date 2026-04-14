@@ -18,29 +18,21 @@ pub use doctor_routing::run_doctor_routing;
 #[derive(Debug)]
 struct ToolStatus {
     name: &'static str,
+    binary_name: String,
     installed: bool,
     version: Option<String>,
+    hint: Option<String>,
 }
 
-/// Get installation hint for a tool.
-fn install_hint(tool_name: &str) -> &'static str {
-    match tool_name {
-        "gemini-cli" => "npm install -g @google/gemini-cli",
-        "opencode" => "go install github.com/sst/opencode@latest",
-        "codex" => "npm install -g @openai/codex",
-        "claude-code" => "npm install -g @zed-industries/claude-code-acp",
-        _ => "unknown tool",
-    }
+fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {
+    crate::run_helpers::resolved_tool_binary_name(tool_name, config)
+        .unwrap_or(tool_name)
+        .to_string()
 }
 
-fn tool_exe_name(tool_name: &str) -> &str {
-    match tool_name {
-        "gemini-cli" => "gemini",
-        "opencode" => "opencode",
-        "codex" => csa_executor::codex_runtime_metadata().runtime_binary_name(),
-        "claude-code" => "claude-code-acp",
-        _ => tool_name,
-    }
+fn load_doctor_project_config() -> Option<ProjectConfig> {
+    let cwd = env::current_dir().ok()?;
+    ProjectConfig::load(&cwd).ok().flatten()
 }
 
 /// Run full environment diagnostics.
@@ -53,13 +45,15 @@ pub async fn run_doctor(format: OutputFormat) -> Result<()> {
 
 /// Run diagnostics with human-readable text output.
 async fn run_doctor_text() -> Result<()> {
+    let project_config = load_doctor_project_config();
+
     println!("=== CSA Environment Check ===");
     print_platform_info();
     print_state_dir();
     println!();
 
     println!("=== Tool Availability ===");
-    print_tool_availability().await;
+    print_tool_availability(project_config.as_ref()).await;
     println!();
 
     println!("=== Project Config ===");
@@ -94,6 +88,8 @@ async fn run_doctor_json() -> Result<()> {
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
 
+    let project_config = load_doctor_project_config();
+
     let state_dir = paths::state_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_default();
@@ -104,11 +100,13 @@ async fn run_doctor_json() -> Result<()> {
     let tool_statuses: Vec<serde_json::Value> = tools
         .iter()
         .map(|tool_name| {
-            let status = check_tool_status(tool_name, tool_exe_name(tool_name));
+            let status = check_tool_status(tool_name, project_config.as_ref());
             serde_json::json!({
                 "name": status.name,
+                "binary": status.binary_name,
                 "installed": status.installed,
                 "version": status.version,
+                "hint": status.hint,
             })
         })
         .collect();
@@ -227,14 +225,14 @@ fn print_state_dir() {
 }
 
 /// Check and print tool availability for all 4 tools.
-async fn print_tool_availability() {
+async fn print_tool_availability(config: Option<&ProjectConfig>) {
     let tools = ["gemini-cli", "opencode", "codex", "claude-code"];
 
     let mut installed_count = 0;
     let total_count = tools.len();
 
     for tool_name in &tools {
-        let status = check_tool_status(tool_name, tool_exe_name(tool_name));
+        let status = check_tool_status(tool_name, config);
         if status.installed {
             installed_count += 1;
         }
@@ -247,29 +245,24 @@ async fn print_tool_availability() {
 }
 
 /// Check if a tool is installed and get its version.
-fn check_tool_status(tool_name: &'static str, exe_name: &str) -> ToolStatus {
-    // First check if executable exists in PATH
-    let installed = Command::new("which")
-        .arg(exe_name)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-
-    if !installed {
-        return ToolStatus {
+fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) -> ToolStatus {
+    let binary_name = tool_exe_name(tool_name, config);
+    match crate::run_helpers::tool_binary_availability(tool_name, config) {
+        crate::run_helpers::ToolBinaryAvailability::Available { .. } => ToolStatus {
             name: tool_name,
+            binary_name: binary_name.clone(),
+            installed: true,
+            version: check_tool_version(&binary_name),
+            hint: None,
+        },
+        crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. }
+        | crate::run_helpers::ToolBinaryAvailability::Unsupported { hint, .. } => ToolStatus {
+            name: tool_name,
+            binary_name,
             installed: false,
             version: None,
-        };
-    }
-
-    // Try to get version
-    let version = check_tool_version(exe_name);
-
-    ToolStatus {
-        name: tool_name,
-        installed: true,
-        version,
+            hint: Some(hint.into_owned()),
+        },
     }
 }
 
@@ -306,10 +299,11 @@ fn print_tool_status(status: &ToolStatus) {
         status_msg
     );
 
-    // Print install hint if not found
-    if !status.installed {
-        let hint = install_hint(status.name);
-        println!("             Install: {hint}");
+    if !status.installed
+        && let Some(hint) = status.hint.as_deref()
+    {
+        println!("             Expected runtime: {}", status.binary_name);
+        println!("             {hint}");
     }
 }
 
@@ -534,6 +528,7 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::ScopedTestEnvVar;
 
     #[test]
     fn test_format_bytes() {
@@ -551,8 +546,39 @@ mod tests {
 
     #[test]
     fn test_check_tool_status_nonexistent() {
-        let status = check_tool_status("nonexistent-tool", "nonexistent-exe-12345");
+        let status = check_tool_status("nonexistent-tool", None);
         assert!(!status.installed);
         assert!(status.version.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_build_doctor_accepts_codex_cli_runtime() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let td = tempfile::tempdir().expect("tempdir");
+        let bin_dir = td.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let codex_path = bin_dir.join("codex");
+        fs::write(&codex_path, "#!/bin/sh\necho 'codex 1.2.3'\n").expect("write codex stub");
+        let mut perms = fs::metadata(&codex_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&codex_path, perms).expect("chmod codex");
+
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let joined = std::env::join_paths(
+            std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&path)),
+        )
+        .expect("join PATH");
+        let _path_guard = ScopedTestEnvVar::set("PATH", joined);
+
+        let status = check_tool_status("codex", None);
+        assert!(
+            status.installed,
+            "doctor should accept the default codex CLI"
+        );
+        assert_eq!(status.binary_name, "codex");
+        assert!(status.hint.is_none());
     }
 }
