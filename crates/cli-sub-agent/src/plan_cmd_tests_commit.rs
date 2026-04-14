@@ -207,3 +207,18 @@ fn commit_workflow_auto_pr_step_exits_before_push_in_executor_mode() {
         "executor-mode auto PR step must exit before invoking git/gh, got: {log_contents}"
     );
 }
+
+#[test]
+fn commit_pattern_step1_bridges_csa_skip_publish_to_skip_publish() {
+    let pattern_path = workspace_root().join("patterns/commit/PATTERN.md");
+    let pattern = std::fs::read_to_string(&pattern_path).unwrap();
+
+    assert!(
+        pattern.contains(": \"${FILES}\" \"${SCOPE}\" \"${BRANCH}\" \"${COMMIT_SUBJECT}\" \"${COMMIT_BODY}\" \"${COMMIT_MESSAGE_FILE}\" \"${IS_MILESTONE}\" \"${ENABLE_REVIEW_LOOP}\" \"${AUDIT_FAIL}\" \"${AUDIT_PASS_DEFERRED}\" \"${REVIEW_HAS_ISSUES}\" \"${PR_BODY}\" \"${SKIP_PUBLISH}\""),
+        "PATTERN.md Step 1 must initialize SKIP_PUBLISH alongside the other mirrored workflow variables"
+    );
+    assert!(
+        pattern.contains("if [ \"${CSA_SKIP_PUBLISH:-}\" = \"true\" ]; then\n  SKIP_PUBLISH=true"),
+        "PATTERN.md Step 1 must bridge CSA_SKIP_PUBLISH=true into SKIP_PUBLISH=true"
+    );
+}

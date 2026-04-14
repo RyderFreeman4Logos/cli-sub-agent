@@ -33,7 +33,23 @@ Initialize and declare workflow variables.
 
 ```bash
 # Force weave to pick up these variables
-: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}"
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}" "${SKIP_PUBLISH}"
+
+# Bridge CSA_SKIP_PUBLISH env var to workflow variable.
+# When parent workflow (mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true, auto-PR is skipped.
+# When standalone, CSA_SKIP_PUBLISH is unset → auto-PR runs after commit.
+# Also auto-skip in executor mode (`CSA_DEPTH>0` + `CSA_INTERNAL_INVOCATION=1`) —
+# the Layer 0 orchestrator owns publish/pr-bot. Letting an employee session
+# invoke /pr-bot nests another `csa plan run` and can trip the recursion-ceiling
+# guard or leak grandchild processes if the chain fails mid-flight (see #752 Bug 4).
+if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
+  SKIP_PUBLISH=true
+elif [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
+     { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+  SKIP_PUBLISH=true
+else
+  : "${SKIP_PUBLISH:=false}"
+fi
 echo "Variables initialized."
 ```
 
