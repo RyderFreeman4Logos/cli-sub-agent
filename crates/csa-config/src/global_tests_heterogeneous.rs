@@ -389,3 +389,10 @@ fn test_global_default_template_mentions_execution() {
         "Default template should mention min_timeout_seconds"
     );
 }
+
+#[test]
+fn debate_config_default_require_heterogeneous_is_false() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert!(!config.debate.require_heterogeneous);
+    assert!(config.debate.is_default());
+}

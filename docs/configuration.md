@@ -43,6 +43,7 @@ tool = "auto"                    # Enforce heterogeneous review
 [debate]
 tool = "auto"                    # Enforce heterogeneous debate
 timeout_secs = 1800              # 30 minute default
+require_heterogeneous = false    # Warn on narrowing; set true to fail fast
 
 [tools.codex]
 max_concurrent = 5
@@ -57,6 +58,10 @@ max_concurrent = 3
 show_command = "bat -l md --paging=always"
 diff_command = "delta"
 ```
+
+`[debate].require_heterogeneous` defaults to `false`.
+Use it to prevent silent collapse from a multi-tool tier into a single surviving tool.
+Leave it off if soft fallback is acceptable; turn it on when debate diversity is a hard requirement.
 
 ## Project Config
 

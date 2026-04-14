@@ -2,6 +2,7 @@
 //!
 //! Extracted from `debate_cmd.rs` to stay under the 800-line monolith limit.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::debate_cmd::DebateMode;
@@ -9,6 +10,7 @@ use anyhow::{Context, Result};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
+use tracing::warn;
 
 /// Returns (tool, debate_mode, optional_model_spec). When tier resolves, model_spec is set.
 #[allow(clippy::too_many_arguments)]
@@ -141,6 +143,15 @@ pub(crate) fn resolve_debate_tool(
             }
         }
 
+        let filtered_tools =
+            crate::run_helpers::collect_available_tier_models(tier, cfg, whitelist, &[]);
+        maybe_guard_debate_narrowing(
+            tier,
+            &tier_tools,
+            &filtered_tools,
+            global_config.debate.require_heterogeneous,
+        )?;
+
         if let Some(resolution) =
             crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
         {
@@ -151,8 +162,6 @@ pub(crate) fn resolve_debate_tool(
             ));
         }
 
-        let filtered_tools =
-            crate::run_helpers::collect_available_tier_models(tier, cfg, whitelist, &[]);
         let configured_tools: Vec<&str> = tier_tools
             .iter()
             .map(|(tool_name, _)| tool_name.as_str())
@@ -434,4 +443,56 @@ Choose one:\n\
 3) CLI override: csa debate --sa-mode <true|false> --tool codex\n\n\
 Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
+}
+
+fn maybe_guard_debate_narrowing(
+    tier_name: &str,
+    declared_tier_tools: &[(String, String)],
+    filtered_tools: &[crate::run_helpers::TierToolResolution],
+    require_heterogeneous: bool,
+) -> Result<()> {
+    if declared_tier_tools.len() < 2 {
+        return Ok(());
+    }
+
+    let declared_unique_tools: BTreeSet<&str> = declared_tier_tools
+        .iter()
+        .map(|(tool_name, _)| tool_name.as_str())
+        .collect();
+    if declared_unique_tools.len() < 2 {
+        return Ok(());
+    }
+
+    let surviving_tools: BTreeSet<&str> = filtered_tools.iter().map(|r| r.tool.as_str()).collect();
+    if surviving_tools.len() != 1 {
+        return Ok(());
+    }
+
+    let surviving_tool = surviving_tools
+        .iter()
+        .next()
+        .copied()
+        .expect("single surviving tool");
+    warn!(
+        "debate panel narrowed to single tool `{}` (tier `{}` declared {} models); set `[debate].require_heterogeneous = true` to fail-fast",
+        surviving_tool,
+        tier_name,
+        declared_tier_tools.len()
+    );
+
+    if require_heterogeneous {
+        let declared_models: Vec<&str> = declared_tier_tools
+            .iter()
+            .map(|(_, model_spec)| model_spec.as_str())
+            .collect();
+        anyhow::bail!(
+            "Debate tier '{}' narrowed to a single surviving tool '{}'. Declared models: [{}]. \
+             Set `require_heterogeneous = false` to allow soft fallback, or configure backup tools.",
+            tier_name,
+            surviving_tool,
+            declared_models.join(", ")
+        );
+    }
+
+    Ok(())
 }

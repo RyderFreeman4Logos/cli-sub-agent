@@ -254,6 +254,12 @@ pub struct DebateConfig {
     /// Set to `false` to require heterogeneous models (strict mode).
     #[serde(default = "default_true_debate")]
     pub same_model_fallback: bool,
+    /// Fail fast when a multi-tool debate tier collapses to a single surviving tool.
+    ///
+    /// Default: false. When true, tier resolution errors instead of silently
+    /// proceeding with a narrowed single-tool panel.
+    #[serde(default)]
+    pub require_heterogeneous: bool,
     /// Tier-based tool selection. When set, the debate tool is resolved from the
     /// named tier's models list with heterogeneous preference. Takes priority
     /// over `tool` when both are set. The tier must exist in `[tiers]`.
@@ -282,6 +288,7 @@ impl Default for DebateConfig {
             model: None,
             thinking: None,
             same_model_fallback: true,
+            require_heterogeneous: false,
             tier: None,
             readonly_sandbox: None,
         }
@@ -296,6 +303,7 @@ impl DebateConfig {
             && self.model.is_none()
             && self.thinking.is_none()
             && self.same_model_fallback
+            && !self.require_heterogeneous
             && self.tier.is_none()
             && self.readonly_sandbox.is_none()
     }

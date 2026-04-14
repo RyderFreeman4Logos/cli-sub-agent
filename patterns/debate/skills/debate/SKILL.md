@@ -174,6 +174,7 @@ For the selected tier, build the `models[]` list:
 
 - Start with `tiers[chosen_tier].models`
 - If a debate tool is resolved (Step 1), **filter** to only model specs whose tool prefix matches the debate tool
+- If that filtering/runtime availability collapses a multi-tool tier to one surviving tool, CSA warns; set `[debate].require_heterogeneous = true` in global config to fail-fast instead of soft fallback
 - Validate the filtered `models[]` has >= 2 entries (proposal + critique)
 - If it has < 2 entries, try the next higher tier; if no tier works, **STOP** and instruct the user to add >=2 models for the debate tool to a tier
 
