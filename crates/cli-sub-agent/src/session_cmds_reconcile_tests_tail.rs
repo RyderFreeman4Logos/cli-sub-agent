@@ -304,6 +304,72 @@ fn reconcile_failure_rolls_back_new_unpushed_commit_sidecar() {
 }
 
 #[test]
+fn reconcile_failure_restores_preexisting_unpushed_commit_sidecar() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path().join("project");
+    let origin = td.path().join("origin.git");
+    fs::create_dir_all(&project).unwrap();
+
+    run_git(&project, &["init", "--initial-branch", "main"]);
+    run_git(&project, &["config", "user.email", "test@example.com"]);
+    run_git(&project, &["config", "user.name", "Test User"]);
+    fs::write(project.join("README.md"), "base\n").unwrap();
+    run_git(&project, &["add", "README.md"]);
+    run_git(&project, &["commit", "-m", "init"]);
+
+    run_git(td.path(), &["init", "--bare", origin.to_str().unwrap()]);
+    run_git(
+        &project,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    run_git(&project, &["push", "-u", "origin", "main"]);
+
+    run_git(&project, &["checkout", "-b", "fix/session-progress"]);
+    fs::write(project.join("progress.txt"), "first\n").unwrap();
+    run_git(&project, &["add", "progress.txt"]);
+    run_git(&project, &["commit", "-m", "feat: first progress"]);
+
+    let session = create_session(
+        &project,
+        Some("rollback-preexisting-sidecar"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&project, &session_id).unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    let sidecar_path = session_dir.join("output").join("unpushed_commits.json");
+    fs::create_dir_all(sidecar_path.parent().unwrap()).unwrap();
+    let original_contents = br#"{"recovery_command":"git push -u origin fix/original-sidecar"}"#;
+    fs::write(&sidecar_path, original_contents).unwrap();
+
+    let err = ensure_terminal_result_for_dead_active_session_impl(
+        &project,
+        &session_id,
+        "session wait",
+        &session_dir,
+        SyntheticResultHooks {
+            before_write: &noop_path,
+            after_publish: &noop_path,
+        },
+        |_| {},
+        &|_, _| Err(anyhow::anyhow!("persist session failed")),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("persist session failed"));
+    assert_eq!(fs::read(&sidecar_path).unwrap(), original_contents);
+    assert!(
+        !session_dir
+            .join(csa_session::result::RESULT_FILE_NAME)
+            .exists(),
+        "rollback should remove the synthetic result when session persistence fails"
+    );
+}
+
+#[test]
 fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
     let td = tempdir().expect("tempdir");
     let _env = SessionTestEnv::new(&td);

@@ -697,22 +697,12 @@ fn persist_daemon_completion_from_env_writes_packet_for_seeded_session() {
     assert!(packet.contains("status = \"failure\""));
 }
 
+#[rustfmt::skip]
 #[cfg(unix)]
 #[test]
 fn synthesized_wait_next_step_returns_directive_for_clean_cumulative_review() {
-    let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
-    let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
-    let _home_guard = EnvVarGuard::set("HOME", td.path());
-    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
-    let project = td.path();
-    let session = create_session(project, Some("wait-next-step"), None, Some("codex")).unwrap();
-    let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
-
-    std::fs::write(
-        session_dir.join("review_meta.json"),
-        r#"{
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned"); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
   "head_sha": "deadbeef",
   "decision": "pass",
@@ -723,34 +713,16 @@ fn synthesized_wait_next_step_returns_directive_for_clean_cumulative_review() {
   "fix_attempted": false,
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
-}"#,
-    )
-    .unwrap();
-
-    let directive = synthesized_wait_next_step(&session_dir)
-        .unwrap()
-        .expect("directive should be synthesized");
-    assert!(directive.contains("CSA:NEXT_STEP"));
-    assert!(directive.contains("pr-bot"));
+}"#).unwrap();
+    let directive = synthesized_wait_next_step(&session_dir).unwrap().expect("directive should be synthesized"); assert!(directive.contains("CSA:NEXT_STEP")); assert!(directive.contains("pr-bot"));
 }
 
+#[rustfmt::skip]
 #[cfg(unix)]
 #[test]
 fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
-    let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
-    let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
-    let _home_guard = EnvVarGuard::set("HOME", td.path());
-    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
-    let project = td.path();
-    let session =
-        create_session(project, Some("wait-next-step-skip"), None, Some("codex")).unwrap();
-    let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
-
-    std::fs::write(
-        session_dir.join("review_meta.json"),
-        r#"{
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned"); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-skip"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
   "head_sha": "deadbeef",
   "decision": "pass",
@@ -761,14 +733,9 @@ fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
   "fix_attempted": false,
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
-}"#,
-    )
-    .unwrap();
+}"#).unwrap();
     assert!(synthesized_wait_next_step(&session_dir).unwrap().is_none());
-
-    std::fs::write(
-        session_dir.join("review_meta.json"),
-        r#"{
+    std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
   "head_sha": "deadbeef",
   "decision": "pass",
@@ -779,13 +746,27 @@ fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
   "fix_attempted": false,
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
-}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        session_dir.join("stdout.log"),
-        "<!-- CSA:NEXT_STEP cmd=\"custom\" required=false -->\n",
-    )
-    .unwrap();
-    assert!(synthesized_wait_next_step(&session_dir).unwrap().is_none());
+}"#).unwrap();
+    std::fs::write(session_dir.join("stdout.log"), "<!-- CSA:NEXT_STEP cmd=\"custom\" required=false -->\n").unwrap(); assert!(synthesized_wait_next_step(&session_dir).unwrap().is_none());
+}
+
+#[rustfmt::skip]
+#[cfg(unix)]
+#[test]
+fn synthesized_wait_next_step_ignores_malformed_unpushed_commit_sidecar() {
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned"); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-malformed-sidecar"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    std::fs::write(session_dir.join("review_meta.json"), r#"{
+  "session_id": "01TEST",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 0,
+  "fix_attempted": false,
+  "fix_rounds": 0,
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("unpushed_commits.json"), "{\"recovery_command\":").unwrap();
+    let directive = synthesized_wait_next_step(&session_dir).unwrap().expect("malformed sidecar should fall back to review handoff"); assert!(directive.contains("CSA:NEXT_STEP")); assert!(directive.contains("pr-bot"));
 }
