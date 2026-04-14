@@ -373,7 +373,7 @@ impl Executor {
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),
         };
-        let transport = self.transport(session_config);
+        let transport = self.transport(session_config)?;
         let mut result = transport
             .execute(prompt, tool_state, session, extra_env, transport_options)
             .await?;
@@ -543,7 +543,7 @@ impl Executor {
         }
     }
 
-    fn transport(&self, session_config: Option<SessionConfig>) -> Box<dyn Transport> {
+    fn transport(&self, session_config: Option<SessionConfig>) -> Result<Box<dyn Transport>> {
         TransportFactory::create(self, session_config)
     }
 

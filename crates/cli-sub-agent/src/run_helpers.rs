@@ -6,7 +6,7 @@ use std::path::Path;
 
 use csa_config::{GlobalConfig, ProjectConfig, ToolTransport};
 use csa_core::types::ToolName;
-use csa_executor::{CodexTransport, Executor, ModelSpec, ThinkingBudget};
+use csa_executor::{CodexTransport, Executor, ModelSpec, ThinkingBudget, codex_runtime_metadata};
 use csa_session::TokenUsage;
 
 #[path = "run_helpers_edit_requirement.rs"]
@@ -718,9 +718,9 @@ fn assume_tool_binaries_available_for_tests() -> bool {
 
 /// Check if a tool's binary is available on PATH (synchronous).
 ///
-/// For ACP-routed tools (codex, claude-code), checks for the ACP adapter
-/// binary (`codex-acp`, `claude-code-acp`). For legacy tools, checks the
-/// native CLI binary.
+/// For codex, this checks the current build default binary (`codex`).
+/// Explicit codex ACP overrides are validated later from the resolved executor.
+/// Claude Code always checks the ACP adapter binary; legacy tools check native CLI.
 pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
     #[cfg(test)]
     if assume_tool_binaries_available_for_tests() {
@@ -734,8 +734,7 @@ pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
     let binary = match tool_name {
         "gemini-cli" => "gemini",
         "opencode" => "opencode",
-        // ACP adapter binaries (npm: @zed-industries/codex-acp, @zed-industries/claude-code-acp)
-        "codex" => "codex-acp",
+        "codex" => codex_runtime_metadata().runtime_binary_name(),
         "claude-code" => "claude-code-acp",
         _ => return false,
     };

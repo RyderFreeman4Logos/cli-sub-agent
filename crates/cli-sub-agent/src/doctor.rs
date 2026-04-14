@@ -27,9 +27,19 @@ fn install_hint(tool_name: &str) -> &'static str {
     match tool_name {
         "gemini-cli" => "npm install -g @google/gemini-cli",
         "opencode" => "go install github.com/sst/opencode@latest",
-        "codex" => "npm install -g @zed-industries/codex-acp",
+        "codex" => "npm install -g @openai/codex",
         "claude-code" => "npm install -g @zed-industries/claude-code-acp",
         _ => "unknown tool",
+    }
+}
+
+fn tool_exe_name(tool_name: &str) -> &str {
+    match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "codex" => csa_executor::codex_runtime_metadata().runtime_binary_name(),
+        "claude-code" => "claude-code-acp",
+        _ => tool_name,
     }
 }
 
@@ -89,17 +99,12 @@ async fn run_doctor_json() -> Result<()> {
         .unwrap_or_default();
 
     // Check tools
-    let tools = [
-        ("gemini-cli", "gemini"),
-        ("opencode", "opencode"),
-        ("codex", "codex-acp"),
-        ("claude-code", "claude-code-acp"),
-    ];
+    let tools = ["gemini-cli", "opencode", "codex", "claude-code"];
 
     let tool_statuses: Vec<serde_json::Value> = tools
         .iter()
-        .map(|(tool_name, exe_name)| {
-            let status = check_tool_status(tool_name, exe_name);
+        .map(|tool_name| {
+            let status = check_tool_status(tool_name, tool_exe_name(tool_name));
             serde_json::json!({
                 "name": status.name,
                 "installed": status.installed,
@@ -223,18 +228,13 @@ fn print_state_dir() {
 
 /// Check and print tool availability for all 4 tools.
 async fn print_tool_availability() {
-    let tools = [
-        ("gemini-cli", "gemini"),
-        ("opencode", "opencode"),
-        ("codex", "codex-acp"),
-        ("claude-code", "claude-code-acp"),
-    ];
+    let tools = ["gemini-cli", "opencode", "codex", "claude-code"];
 
     let mut installed_count = 0;
     let total_count = tools.len();
 
-    for (tool_name, exe_name) in &tools {
-        let status = check_tool_status(tool_name, exe_name);
+    for tool_name in &tools {
+        let status = check_tool_status(tool_name, tool_exe_name(tool_name));
         if status.installed {
             installed_count += 1;
         }

@@ -14,7 +14,7 @@ fn tool_exe_name(tool: &str) -> &str {
     match tool {
         "gemini-cli" => "gemini",
         "opencode" => "opencode",
-        "codex" => "codex-acp",
+        "codex" => csa_executor::codex_runtime_metadata().runtime_binary_name(),
         "claude-code" => "claude-code-acp",
         _ => tool,
     }
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn test_tool_exe_name_mapping() {
         assert_eq!(tool_exe_name("gemini-cli"), "gemini");
-        assert_eq!(tool_exe_name("codex"), "codex-acp");
+        assert_eq!(tool_exe_name("codex"), "codex");
         assert_eq!(tool_exe_name("claude-code"), "claude-code-acp");
         assert_eq!(tool_exe_name("opencode"), "opencode");
         assert_eq!(tool_exe_name("unknown-tool"), "unknown-tool");

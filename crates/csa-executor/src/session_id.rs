@@ -44,15 +44,17 @@ pub fn extract_session_id_from_transport(
 /// Codex exec returns JSON with "session_id" or "thread_id" field.
 /// Example: {"session_id":"thread_abc123", ...}
 fn extract_codex_session_id(output: &str) -> Option<String> {
-    // Try simple string search first (faster than regex for simple patterns)
-    if let Some(session_id) = extract_json_field(output, "session_id") {
-        debug!("Extracted Codex session_id: {}", session_id);
-        return Some(session_id);
-    }
-
-    if let Some(thread_id) = extract_json_field(output, "thread_id") {
-        debug!("Extracted Codex thread_id: {}", thread_id);
-        return Some(thread_id);
+    for field_name in [
+        "session_id",
+        "sessionId",
+        "thread_id",
+        "conversation_id",
+        "conversationId",
+    ] {
+        if let Some(session_id) = extract_json_field(output, field_name) {
+            debug!("Extracted Codex {}: {}", field_name, session_id);
+            return Some(session_id);
+        }
     }
 
     debug!("Failed to extract Codex session ID from output");
@@ -130,6 +132,13 @@ mod tests {
         let output = r#"{"thread_id":"thread_xyz789","status":"success"}"#;
         let result = extract_codex_session_id(output);
         assert_eq!(result, Some("thread_xyz789".to_string()));
+    }
+
+    #[test]
+    fn test_extract_codex_conversation_id() {
+        let output = r#"{"conversation_id":"conv_123","status":"success"}"#;
+        let result = extract_codex_session_id(output);
+        assert_eq!(result, Some("conv_123".to_string()));
     }
 
     #[test]

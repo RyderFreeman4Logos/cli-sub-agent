@@ -7,7 +7,8 @@ use anyhow::Error;
 use csa_core::error::AppError;
 
 const HINT_INSTALL_GEMINI: &str = "hint: install gemini-cli: npm install -g @google/gemini-cli";
-const HINT_INSTALL_CODEX: &str =
+const HINT_INSTALL_CODEX: &str = "hint: install codex CLI: npm install -g @openai/codex";
+const HINT_INSTALL_CODEX_ACP: &str =
     "hint: install codex ACP adapter: npm install -g @zed-industries/codex-acp";
 const HINT_INSTALL_CLAUDE: &str =
     "hint: install claude-code ACP adapter: npm install -g @zed-industries/claude-code-acp";
@@ -49,6 +50,9 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
     if has_not_installed_or_not_found {
         if chain_text.contains("gemini") {
             return Some(HINT_INSTALL_GEMINI.to_string());
+        }
+        if chain_text.contains("codex-acp") {
+            return Some(HINT_INSTALL_CODEX_ACP.to_string());
         }
         if chain_text.contains("codex") {
             return Some(HINT_INSTALL_CODEX.to_string());
@@ -98,6 +102,9 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
 
 fn tool_install_hint(tool_name: &str) -> Option<&'static str> {
     let tool = tool_name.to_lowercase();
+    if tool.contains("codex-acp") {
+        return Some(HINT_INSTALL_CODEX_ACP);
+    }
     if tool.contains("gemini") {
         return Some(HINT_INSTALL_GEMINI);
     }
@@ -128,8 +135,8 @@ mod tests {
         let err = anyhow::anyhow!("tool codex not found");
         let hint = suggest_fix(&err).unwrap();
         assert!(
-            hint.contains("codex-acp"),
-            "should mention ACP adapter: {hint}"
+            hint.contains("@openai/codex"),
+            "should mention the default codex CLI: {hint}"
         );
     }
 

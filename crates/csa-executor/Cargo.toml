@@ -26,7 +26,7 @@ regex.workspace = true
 reqwest.workspace = true
 
 [features]
-default = ["codex-acp"]
+default = []
 codex-acp = []
 codex-pty-fork = ["csa-process/codex-pty-fork"]
 

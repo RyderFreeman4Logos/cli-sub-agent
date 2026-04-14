@@ -36,6 +36,26 @@ impl Drop for EnvVarGuard {
 fn attach_primary_output_prefers_output_log_for_acp_tools() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {
+        tool: "claude-code".to_string(),
+        tool_locked: true,
+    };
+    let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        metadata_toml,
+    )
+    .expect("write metadata");
+
+    assert_eq!(
+        attach_primary_output_for_session(td.path()),
+        AttachPrimaryOutput::OutputLog
+    );
+}
+
+#[test]
+fn attach_primary_output_prefers_existing_output_log_for_codex_sessions() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let metadata = csa_session::metadata::SessionMetadata {
         tool: "codex".to_string(),
         tool_locked: true,
     };
@@ -45,6 +65,7 @@ fn attach_primary_output_prefers_output_log_for_acp_tools() {
         metadata_toml,
     )
     .expect("write metadata");
+    std::fs::write(td.path().join("output.log"), "").expect("write output log");
 
     assert_eq!(
         attach_primary_output_for_session(td.path()),

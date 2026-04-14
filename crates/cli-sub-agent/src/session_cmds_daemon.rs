@@ -59,6 +59,13 @@ fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput 
     let Ok(metadata) = toml::from_str::<csa_session::metadata::SessionMetadata>(&contents) else {
         return AttachPrimaryOutput::StdoutLog;
     };
+    let output_log = session_dir.join("output.log");
+    let stdout_log = session_dir.join("stdout.log");
+    match (output_log.is_file(), stdout_log.is_file()) {
+        (true, false) => return AttachPrimaryOutput::OutputLog,
+        (false, true) => return AttachPrimaryOutput::StdoutLog,
+        _ => {}
+    }
     if matches!(
         TransportFactory::mode_for_tool(&metadata.tool),
         TransportMode::Acp

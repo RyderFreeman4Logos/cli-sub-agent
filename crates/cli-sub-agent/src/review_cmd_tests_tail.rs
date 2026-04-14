@@ -719,16 +719,16 @@ fn fix_gate_allows_when_no_config() {
     assert!(can_edit, "absent config must default to allowing fix");
 }
 
-// --- gemini-cli ACP transport routing (#512, #515) ---
+// --- transport routing defaults ---
 
 #[test]
-fn gemini_cli_routes_to_acp_transport() {
+fn gemini_cli_routes_to_legacy_transport() {
     use csa_executor::transport::TransportFactory;
     let mode = TransportFactory::mode_for_tool("gemini-cli");
     assert_eq!(
         mode,
-        csa_executor::transport::TransportMode::Acp,
-        "gemini-cli must route to ACP transport"
+        csa_executor::transport::TransportMode::Legacy,
+        "gemini-cli must route to Legacy transport"
     );
 }
 
