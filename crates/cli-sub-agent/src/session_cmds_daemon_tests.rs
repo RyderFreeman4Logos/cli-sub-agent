@@ -409,6 +409,16 @@ fn spawn_daemon_like_process(session_id: &str) -> std::process::Child {
     cmd.spawn().expect("spawn daemon-like child")
 }
 
+#[cfg(target_os = "linux")]
+fn attach_test_daemon_pid_record(pid: u32) -> String {
+    format!("{pid}\n")
+}
+
+#[cfg(target_os = "macos")]
+fn attach_test_daemon_pid_record(pid: u32) -> String {
+    format!("{pid} 0\n")
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packet() {
@@ -440,8 +450,11 @@ fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packe
     .expect("write completion packet");
 
     let mut child = spawn_daemon_like_process(&session_id);
-    std::fs::write(session_dir.join("daemon.pid"), format!("{}\n", child.id()))
-        .expect("write daemon pid");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        attach_test_daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
     let daemon_visible = (0..20).any(|_| {
         if csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir) {
             true

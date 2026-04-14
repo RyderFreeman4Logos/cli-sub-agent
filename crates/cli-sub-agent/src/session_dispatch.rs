@@ -462,10 +462,11 @@ daemon_wait_seconds = 600
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
-        let global_dir = config_root.join("cli-sub-agent");
-        std::fs::create_dir_all(&global_dir).unwrap();
+        let global_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(global_path.parent().expect("config parent")).unwrap();
         std::fs::write(
-            global_dir.join("config.toml"),
+            global_path,
             r#"
 schema_version = 1
 [session]
