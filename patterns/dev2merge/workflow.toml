@@ -163,8 +163,14 @@ skip mktd/mktsk/debate but keep L1/L2 quality checks.
 ```bash
 set -euo pipefail
 CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
+TOTAL_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -c . || true)"
 TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
-if [ "${CODE_FILES}" -eq 0 ] && [ "${TOTAL_INSERTIONS:-0}" -lt 100 ]; then
+if [ "${TOTAL_FILES}" -eq 0 ]; then
+  # Empty diff means HEAD matches the base branch; do not treat that as docs-only,
+  # or the workflow will skip planning and then hit no-op commit/version-bump steps.
+  echo "Full pipeline: branch has no diff vs ${DEFAULT_BRANCH}; running plan."
+  echo "CSA_VAR:FAST_PATH=false"
+elif [ "${CODE_FILES}" -eq 0 ] && [ "${TOTAL_INSERTIONS:-0}" -lt 100 ]; then
   echo "FAST_PATH: docs/config-only changes detected. Skipping mktd/mktsk."
   echo "CSA_VAR:FAST_PATH=true"
 else
@@ -271,6 +277,8 @@ LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
 LIGHT_THRESHOLD_LINES="${PLANNING_LIGHT_THRESHOLD_LINES:-50}"
 PLAN_CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
 PLAN_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
+# Audit note: empty diff also lands in "light", but that is fine here because this
+# block only chooses mktd intensity after Step 2 has already forced the full plan path.
 if [ "${PLAN_CODE_FILES}" -le "${LIGHT_THRESHOLD_FILES}" ] && [ "${PLAN_INSERTIONS:-0}" -lt "${LIGHT_THRESHOLD_LINES}" ]; then
   MKTD_INTENSITY="light"
   echo "Planning intensity: light (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
