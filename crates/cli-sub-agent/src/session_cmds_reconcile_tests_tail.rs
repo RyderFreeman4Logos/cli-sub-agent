@@ -303,6 +303,102 @@ fn reconcile_failure_rolls_back_new_unpushed_commit_sidecar() {
     );
 }
 
+#[test]
+fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path().join("project");
+    let origin = td.path().join("origin.git");
+    fs::create_dir_all(&project).unwrap();
+
+    run_git(&project, &["init", "--initial-branch", "main"]);
+    run_git(&project, &["config", "user.email", "test@example.com"]);
+    run_git(&project, &["config", "user.name", "Test User"]);
+    fs::write(project.join("README.md"), "base\n").unwrap();
+    run_git(&project, &["add", "README.md"]);
+    run_git(&project, &["commit", "-m", "init"]);
+
+    run_git(td.path(), &["init", "--bare", origin.to_str().unwrap()]);
+    run_git(
+        &project,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    run_git(&project, &["push", "-u", "origin", "main"]);
+
+    run_git(&project, &["checkout", "-b", "fix/session-progress"]);
+    fs::write(project.join("progress.txt"), "first\n").unwrap();
+    run_git(&project, &["add", "progress.txt"]);
+    run_git(&project, &["commit", "-m", "feat: first progress"]);
+
+    let session = create_session(
+        &project,
+        Some("late-result-sidecar-cleanup"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&project, &session_id).unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    let now = chrono::Utc::now();
+    csa_session::write_review_meta(
+        &session_dir,
+        &csa_session::ReviewSessionMeta {
+            session_id: session_id.clone(),
+            head_sha: "deadbeef".to_string(),
+            decision: "pass".to_string(),
+            verdict: "CLEAN".to_string(),
+            tool: "codex".to_string(),
+            scope: "range:main...HEAD".to_string(),
+            exit_code: 0,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: now,
+            diff_fingerprint: None,
+        },
+    )
+    .unwrap();
+
+    let real_result = toml::to_string_pretty(&csa_session::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "real terminal result".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+    })
+    .unwrap();
+
+    let reconciled = ensure_terminal_result_for_dead_active_session_with_before_write(
+        &project,
+        &session_id,
+        "session wait",
+        |result_path| fs::write(result_path, &real_result).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::LateResultRetired
+    );
+    assert!(
+        !session_dir
+            .join("output")
+            .join("unpushed_commits.json")
+            .exists(),
+        "late real result should clean up the sidecar created by this reconcile attempt"
+    );
+
+    let directive = crate::session_cmds_daemon::synthesized_wait_next_step(&session_dir)
+        .unwrap()
+        .expect("review handoff should still synthesize a next-step directive");
+    assert!(directive.contains("pr-bot"));
+}
+
 #[cfg(unix)]
 #[test]
 fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {

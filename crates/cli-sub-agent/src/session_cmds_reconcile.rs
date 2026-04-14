@@ -334,7 +334,6 @@ where
         }
         Err(err) => return Err(err),
     }
-
     let now = chrono::Utc::now();
     let tool_name = session
         .tools
@@ -342,21 +341,21 @@ where
         .max_by_key(|(_, state)| state.updated_at)
         .map(|(tool, _)| tool.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    let sidecar_rollback_guard =
-        match persist_unpushed_commits_sidecar(project_root, &session, session_dir) {
-            Ok(rollback_guard) => rollback_guard,
-            Err(err) => {
-                warn!(
-                    session_id = %session_id,
-                    trigger = %trigger,
-                    error = %err,
-                    "Failed to persist unpushed commit recovery sidecar"
-                );
-                None
-            }
-        };
-    let artifacts =
-        crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
+    #[rustfmt::skip]
+    let sidecar_rollback_guard = match persist_unpushed_commits_sidecar(project_root, &session, session_dir) {
+        Ok(rollback_guard) => rollback_guard,
+        Err(err) => {
+            warn!(
+                session_id = %session_id,
+                trigger = %trigger,
+                error = %err,
+                "Failed to persist unpushed commit recovery sidecar"
+            );
+            None
+        }
+    };
+    #[rustfmt::skip]
+    let artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
     let output_log_mtime = format_optional_file_mtime(&session_dir.join("output.log"));
     let summary_prefix = format!(
         "synthetic failure by {trigger}: process dead, result.toml missing (reconciliation_reason=true_missing_result, output_log_mtime={})",
@@ -376,10 +375,19 @@ where
         artifacts,
         peak_memory_mb: None,
     };
-    let result_contents = toml::to_string_pretty(&fallback)
-        .map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
+    #[rustfmt::skip]
+    let result_contents = toml::to_string_pretty(&fallback).map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
     match persist_new_result_file(&result_path, &result_contents, before_write)? {
         SyntheticResultPersistOutcome::AlreadyExists => {
+            if let Err(err) = remove_created_sidecar_if_unchanged(sidecar_rollback_guard.as_ref()) {
+                warn!(
+                    session_id = %session_id,
+                    trigger = %trigger,
+                    reconciliation_reason = "late_result_write_sidecar_cleanup_failed",
+                    error = %err,
+                    "Failed to clean up reconcile-owned unpushed commit sidecar after late result.toml write"
+                );
+            }
             let retired = retire_if_dead_with_result_impl(
                 project_root,
                 session_id,
@@ -572,12 +580,10 @@ fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionSta
     })?;
     Ok(())
 }
-
 #[rustfmt::skip]
 fn remove_synthetic_result_if_unchanged(result_path: &Path, expected_contents: &[u8]) -> std::io::Result<()> {
     remove_artifact_if_unchanged(result_path, expected_contents, ArtifactRollbackLabels { removed_cleanup: "removed_synthetic_result", missing_after_match_cleanup: "result_missing_after_match", remove_failed_cleanup: "remove_failed", preserved_cleanup: "late_real_result_preserved", missing_cleanup: "result_missing", read_failed_cleanup: "read_failed", artifact_label: "synthetic result.toml" })
 }
-
 #[rustfmt::skip]
 fn remove_created_sidecar_if_unchanged(rollback_guard: Option<&CreatedArtifactRollbackGuard>) -> std::io::Result<()> {
     let Some(rollback_guard) = rollback_guard else {
@@ -585,13 +591,11 @@ fn remove_created_sidecar_if_unchanged(rollback_guard: Option<&CreatedArtifactRo
     };
     remove_artifact_if_unchanged(&rollback_guard.artifact_path, rollback_guard.expected_contents.as_slice(), ArtifactRollbackLabels { removed_cleanup: "removed_unpushed_commits_sidecar", missing_after_match_cleanup: "sidecar_missing_after_match", remove_failed_cleanup: "sidecar_remove_failed", preserved_cleanup: "preexisting_sidecar_preserved", missing_cleanup: "sidecar_missing", read_failed_cleanup: "sidecar_read_failed", artifact_label: "unpushed_commits.json sidecar" })
 }
-
 #[rustfmt::skip]
 fn rollback_reconciliation_artifacts(result_path: &Path, result_contents: &[u8], sidecar_rollback_guard: Option<&CreatedArtifactRollbackGuard>) -> std::io::Result<()> {
     remove_synthetic_result_if_unchanged(result_path, result_contents)?;
     remove_created_sidecar_if_unchanged(sidecar_rollback_guard)
 }
-
 fn remove_artifact_if_unchanged(
     artifact_path: &Path,
     expected_contents: &[u8],
