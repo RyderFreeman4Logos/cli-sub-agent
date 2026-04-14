@@ -330,6 +330,117 @@ transport = "cli"
     );
 }
 
+#[tokio::test]
+async fn doctor_text_reports_invalid_effective_config() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
+    let td = tempfile::tempdir().expect("tempdir");
+    let config_root = td.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
+        .expect("create user config dir");
+    std::fs::write(
+        &user_config_path,
+        r#"
+[tools.claude-code]
+transport = "cli"
+"#,
+    )
+    .expect("write invalid user config");
+
+    write_project_config(
+        td.path(),
+        r#"
+[tools.codex]
+transport = "cli"
+"#,
+    );
+
+    let effective_status = inspect_doctor_effective_config_from(td.path());
+    let rendered = render_effective_config_lines(&effective_status).join("\n");
+    let tool_lines = render_tool_availability_error_lines(
+        &effective_status
+            .tool_availability_error()
+            .expect("tool availability error should be present"),
+    )
+    .join("\n");
+
+    assert!(
+        matches!(effective_status, DoctorEffectiveConfigStatus::Invalid(_)),
+        "doctor should classify merged config failures explicitly: {rendered}"
+    );
+    assert!(
+        rendered.contains("Effective:   merged config (invalid)"),
+        "doctor text should surface the invalid effective-config branch: {rendered}"
+    );
+    assert!(
+        rendered.contains("[tools.claude-code].transport"),
+        "doctor text should surface the exact merged-config key: {rendered}"
+    );
+    assert!(
+        tool_lines.contains("Tool availability unknown (effective config invalid)"),
+        "doctor text should not pretend defaults are ready when merged config failed: {tool_lines}"
+    );
+
+    run_doctor_text_from(td.path())
+        .await
+        .expect("doctor text should keep running when effective config is invalid");
+}
+
+#[test]
+fn doctor_json_reports_invalid_effective_config() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
+    let td = tempfile::tempdir().expect("tempdir");
+    let config_root = td.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
+        .expect("create user config dir");
+    std::fs::write(
+        &user_config_path,
+        r#"
+[tools.claude-code]
+transport = "cli"
+"#,
+    )
+    .expect("write invalid user config");
+
+    write_project_config(
+        td.path(),
+        r#"
+[tools.codex]
+transport = "cli"
+"#,
+    );
+
+    let report = build_doctor_json(td.path());
+    let effective = &report["effective_config"];
+    let effective_error = effective["error"]
+        .as_str()
+        .expect("doctor JSON should include effective-config error text");
+    let tools_error = report["tools_error"]
+        .as_str()
+        .expect("doctor JSON should include tool availability error text");
+
+    assert_eq!(report["config"]["valid"], serde_json::json!(true));
+    assert_eq!(effective["valid"], serde_json::json!(false));
+    assert!(
+        effective_error.contains("[tools.claude-code].transport"),
+        "doctor JSON should surface the exact merged-config key: {effective_error}"
+    );
+    assert!(
+        tools_error.contains("Tool availability unknown (effective config invalid)"),
+        "doctor JSON should mark tool availability unknown when merged config fails: {tools_error}"
+    );
+    assert_eq!(report["tools"], serde_json::json!([]));
+}
+
 #[cfg(all(unix, feature = "codex-acp"))]
 #[test]
 fn feature_build_doctor_text_output_reports_acp_compile_status() {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -17,6 +18,15 @@ pub trait Transport: Send + Sync {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         options: TransportOptions<'_>,
+    ) -> Result<TransportResult>;
+
+    async fn execute_in(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+        stream_mode: csa_process::StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<TransportResult>;
 
     #[cfg(test)]

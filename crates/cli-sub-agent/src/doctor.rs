@@ -12,8 +12,11 @@ use std::path::Path;
 use std::process::Command;
 use sysinfo::System;
 
+#[path = "doctor_output_helpers.rs"]
+mod doctor_output_helpers;
 #[path = "doctor_routing.rs"]
 mod doctor_routing;
+use doctor_output_helpers::{print_effective_config, print_tool_availability_error};
 pub use doctor_routing::run_doctor_routing;
 
 /// Tool availability status.
@@ -55,6 +58,13 @@ enum DoctorProjectConfigStatus {
     Invalid(String),
 }
 
+#[derive(Debug)]
+enum DoctorEffectiveConfigStatus {
+    Defaults,
+    Valid(Box<ProjectConfig>),
+    Invalid(String),
+}
+
 impl DoctorProjectConfigStatus {
     fn json_value(&self) -> serde_json::Value {
         match self {
@@ -73,6 +83,42 @@ impl DoctorProjectConfigStatus {
             }
             Self::Invalid(error) => serde_json::json!({
                 "found": true,
+                "valid": false,
+                "error": error,
+            }),
+        }
+    }
+}
+
+impl DoctorEffectiveConfigStatus {
+    fn runtime_config(&self) -> Option<&ProjectConfig> {
+        match self {
+            Self::Valid(config) => Some(config.as_ref()),
+            Self::Defaults | Self::Invalid(_) => None,
+        }
+    }
+
+    fn tool_availability_error(&self) -> Option<String> {
+        match self {
+            Self::Defaults | Self::Valid(_) => None,
+            Self::Invalid(error) => Some(format!(
+                "Tool availability unknown (effective config invalid): {error}"
+            )),
+        }
+    }
+
+    fn json_value(&self) -> serde_json::Value {
+        match self {
+            Self::Defaults => serde_json::json!({
+                "loaded": false,
+                "valid": true,
+            }),
+            Self::Valid(_) => serde_json::json!({
+                "loaded": true,
+                "valid": true,
+            }),
+            Self::Invalid(error) => serde_json::json!({
+                "loaded": false,
                 "valid": false,
                 "error": error,
             }),
@@ -121,6 +167,28 @@ fn render_project_config_lines(status: &DoctorProjectConfigStatus) -> Vec<String
     }
 }
 
+fn render_effective_config_lines(status: &DoctorEffectiveConfigStatus) -> Vec<String> {
+    match status {
+        DoctorEffectiveConfigStatus::Defaults => {
+            vec!["Effective:   merged config (defaults only)".to_string()]
+        }
+        DoctorEffectiveConfigStatus::Valid(_) => {
+            vec!["Effective:   merged config (valid)".to_string()]
+        }
+        DoctorEffectiveConfigStatus::Invalid(error) => vec![
+            "Effective:   merged config (invalid)".to_string(),
+            format!("             Error: {error}"),
+        ],
+    }
+}
+
+fn render_tool_availability_error_lines(error: &str) -> Vec<String> {
+    vec![
+        "Tool availability unknown (effective config invalid)".to_string(),
+        format!("Reason:      {error}"),
+    ]
+}
+
 fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {
     crate::run_helpers::resolved_tool_binary_name(tool_name, config)
         .unwrap_or(tool_name)
@@ -141,6 +209,10 @@ fn load_doctor_project_config_from(project_root: &Path) -> Result<Option<Project
     ProjectConfig::load_project_only(project_root)
 }
 
+fn load_doctor_effective_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
+    ProjectConfig::load(project_root)
+}
+
 fn inspect_doctor_project_config_from(project_root: &Path) -> DoctorProjectConfigStatus {
     let config_path = project_root.join(".csa").join("config.toml");
     if !config_path.exists() {
@@ -151,6 +223,14 @@ fn inspect_doctor_project_config_from(project_root: &Path) -> DoctorProjectConfi
         Ok(Some(config)) => DoctorProjectConfigStatus::Valid(Box::new(config)),
         Ok(None) => DoctorProjectConfigStatus::Missing,
         Err(error) => DoctorProjectConfigStatus::Invalid(error.to_string()),
+    }
+}
+
+fn inspect_doctor_effective_config_from(project_root: &Path) -> DoctorEffectiveConfigStatus {
+    match load_doctor_effective_config_from(project_root) {
+        Ok(Some(config)) => DoctorEffectiveConfigStatus::Valid(Box::new(config)),
+        Ok(None) => DoctorEffectiveConfigStatus::Defaults,
+        Err(error) => DoctorEffectiveConfigStatus::Invalid(error.to_string()),
     }
 }
 
@@ -170,7 +250,7 @@ async fn run_doctor_text() -> Result<()> {
 
 async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
     let project_config_status = inspect_doctor_project_config_from(project_root);
-    let runtime_config = ProjectConfig::load(project_root).ok().flatten();
+    let effective_config_status = inspect_doctor_effective_config_from(project_root);
 
     println!("=== CSA Environment Check ===");
     print_platform_info();
@@ -178,12 +258,27 @@ async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
     println!();
 
     println!("=== Tool Availability ===");
-    print_tool_availability(runtime_config.as_ref()).await;
+    match effective_config_status.runtime_config() {
+        Some(config) => print_tool_availability(Some(config)).await,
+        None => match effective_config_status.tool_availability_error() {
+            Some(error) => print_tool_availability_error(&error),
+            None => print_tool_availability(None).await,
+        },
+    }
     println!();
 
     println!("=== Project Config ===");
     print_project_config(&project_config_status);
     println!();
+
+    if matches!(
+        effective_config_status,
+        DoctorEffectiveConfigStatus::Invalid(_)
+    ) {
+        println!("=== Effective Config ===");
+        print_effective_config(&effective_config_status);
+        println!();
+    }
 
     println!("=== Resource Status ===");
     print_resource_status();
@@ -222,19 +317,34 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
     let project_config_status = inspect_doctor_project_config_from(project_root);
-    let runtime_config = ProjectConfig::load(project_root).ok().flatten();
+    let effective_config_status = inspect_doctor_effective_config_from(project_root);
 
     let state_dir = paths::state_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_default();
 
-    let tool_statuses: Vec<serde_json::Value> = ["gemini-cli", "opencode", "codex", "claude-code"]
-        .iter()
-        .map(|tool_name| {
-            let status = check_tool_status(tool_name, runtime_config.as_ref());
-            tool_status_json(&status)
-        })
-        .collect();
+    let tool_statuses: Vec<serde_json::Value> = match effective_config_status.runtime_config() {
+        Some(config) => ["gemini-cli", "opencode", "codex", "claude-code"]
+            .iter()
+            .map(|tool_name| {
+                let status = check_tool_status(tool_name, Some(config));
+                tool_status_json(&status)
+            })
+            .collect(),
+        None => {
+            if effective_config_status.tool_availability_error().is_some() {
+                Vec::new()
+            } else {
+                ["gemini-cli", "opencode", "codex", "claude-code"]
+                    .iter()
+                    .map(|tool_name| {
+                        let status = check_tool_status(tool_name, None);
+                        tool_status_json(&status)
+                    })
+                    .collect()
+            }
+        }
+    };
 
     // Resource status
     let mut sys = System::new();
@@ -283,7 +393,9 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
         "csa_version": version,
         "state_dir": state_dir,
         "tools": tool_statuses,
+        "tools_error": effective_config_status.tool_availability_error(),
         "config": project_config_status.json_value(),
+        "effective_config": effective_config_status.json_value(),
         "resources": {
             "available_memory_bytes": available_memory,
             "free_swap_bytes": free_swap,

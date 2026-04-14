@@ -13,8 +13,7 @@ use tokio::process::Command;
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
-    LegacyTransport, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
-    TransportResult,
+    SandboxTransportConfig, Transport, TransportFactory, TransportOptions, TransportResult,
 };
 #[path = "executor_arg_helpers.rs"]
 mod arg_helpers;
@@ -413,8 +412,8 @@ impl Executor {
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
-        let legacy = LegacyTransport::new(self.clone());
-        let mut result = legacy
+        let transport = self.transport(None)?;
+        let mut result = transport
             .execute_in(
                 prompt,
                 work_dir,
@@ -543,7 +542,10 @@ impl Executor {
         }
     }
 
-    fn transport(&self, session_config: Option<SessionConfig>) -> Result<Box<dyn Transport>> {
+    pub(crate) fn transport(
+        &self,
+        session_config: Option<SessionConfig>,
+    ) -> Result<Box<dyn Transport>> {
         TransportFactory::create(self, session_config)
     }
 
