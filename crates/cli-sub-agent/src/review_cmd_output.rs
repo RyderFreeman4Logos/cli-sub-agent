@@ -201,7 +201,7 @@ pub(super) fn persist_review_verdict(
 fn load_review_findings_from_output(
     session_dir: &Path,
 ) -> Result<Option<Vec<Finding>>, anyhow::Error> {
-    let findings_path = session_dir.join("output").join("review-findings.json");
+    let findings_path = session_dir.join("review-findings.json");
     if !findings_path.exists() {
         return Ok(None);
     }
@@ -396,7 +396,7 @@ mod tests {
         let project_root = temp_project_root("persist-review-verdict-findings");
         let session_id = "01TESTFINDINGS000000000000";
         let session_dir = create_session_dir(&project_root, session_id);
-        let findings_path = session_dir.join("output").join("review-findings.json");
+        let findings_path = session_dir.join("review-findings.json");
         let findings = vec![
             make_finding(Severity::High, "high"),
             make_finding(Severity::Low, "low"),
@@ -433,7 +433,8 @@ mod tests {
         let artifact: ReviewVerdictArtifact =
             serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
                 .expect("parse verdict");
-        assert!(artifact.severity_counts.is_empty());
+        assert_eq!(artifact.severity_counts.len(), 5);
+        assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
         fs::remove_dir_all(project_root).expect("remove temp project root");
     }

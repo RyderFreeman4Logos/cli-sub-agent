@@ -101,6 +101,15 @@ impl ReviewVerdictArtifact {
         prior_round_refs: Vec<String>,
     ) -> Self {
         let mut severity_counts = BTreeMap::new();
+        for severity in [
+            Severity::Critical,
+            Severity::High,
+            Severity::Medium,
+            Severity::Low,
+            Severity::Info,
+        ] {
+            severity_counts.insert(severity, 0);
+        }
         for finding in findings {
             *severity_counts.entry(finding.severity.clone()).or_insert(0) += 1;
         }
