@@ -442,6 +442,18 @@ fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packe
     let mut child = spawn_daemon_like_process(&session_id);
     std::fs::write(session_dir.join("daemon.pid"), format!("{}\n", child.id()))
         .expect("write daemon pid");
+    let daemon_visible = (0..20).any(|_| {
+        if csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir) {
+            true
+        } else {
+            std::thread::sleep(Duration::from_millis(25));
+            false
+        }
+    });
+    assert!(
+        daemon_visible,
+        "fixture must observe daemon.pid liveness before attach starts"
+    );
 
     let (tx, rx) = mpsc::channel();
     let attach_session = session_id.clone();
