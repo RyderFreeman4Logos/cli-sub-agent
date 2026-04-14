@@ -1,4 +1,5 @@
 use super::*;
+use crate::codex_runtime::codex_runtime_metadata;
 
 #[test]
 fn test_tool_name() {
@@ -99,7 +100,7 @@ fn test_install_hint() {
             thinking_budget: None,
         }
         .install_hint(),
-        "Install ACP adapter: npm install -g @zed-industries/codex-acp"
+        codex_runtime_metadata().install_hint()
     );
     assert_eq!(
         Executor::ClaudeCode {
@@ -138,7 +139,7 @@ fn test_runtime_binary_name() {
             thinking_budget: None,
         }
         .runtime_binary_name(),
-        "codex-acp"
+        codex_runtime_metadata().runtime_binary_name()
     );
     assert_eq!(
         Executor::ClaudeCode {

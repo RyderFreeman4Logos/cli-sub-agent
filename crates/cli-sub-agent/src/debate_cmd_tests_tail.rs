@@ -328,10 +328,15 @@ fn debate_cli_rejects_zero_rounds() {
 
 #[test]
 fn debate_stream_mode_default_non_tty_is_buffer_only() {
-    // In test environment (non-TTY stderr), default should be BufferOnly.
-    // Note: in interactive TTY, default would be TeeToStderr (symmetric with review, #139)
+    // Default should follow is_terminal() on stderr
+    use std::io::IsTerminal;
+    let expected = if std::io::stderr().is_terminal() {
+        csa_process::StreamMode::TeeToStderr
+    } else {
+        csa_process::StreamMode::BufferOnly
+    };
     let mode = resolve_debate_stream_mode(false, false);
-    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+    assert!(matches!(mode, m if m == expected));
 }
 
 #[test]

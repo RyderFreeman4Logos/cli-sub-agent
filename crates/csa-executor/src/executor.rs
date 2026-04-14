@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
+use crate::codex_runtime::codex_runtime_metadata;
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     LegacyTransport, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
@@ -87,7 +88,7 @@ impl Executor {
         match self {
             Self::GeminiCli { .. } => "gemini",
             Self::Opencode { .. } => "opencode",
-            Self::Codex { .. } => "codex-acp",
+            Self::Codex { .. } => codex_runtime_metadata().runtime_binary_name(),
             Self::ClaudeCode { .. } => "claude-code-acp",
             Self::OpenaiCompat { .. } => "openai-compat", // no binary; HTTP-only
         }
@@ -98,7 +99,7 @@ impl Executor {
         match self {
             Self::GeminiCli { .. } => "Install: npm install -g @anthropic-ai/gemini-cli",
             Self::Opencode { .. } => "Install: go install github.com/anthropics/opencode@latest",
-            Self::Codex { .. } => "Install ACP adapter: npm install -g @zed-industries/codex-acp",
+            Self::Codex { .. } => codex_runtime_metadata().install_hint(),
             Self::ClaudeCode { .. } => {
                 "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
             }

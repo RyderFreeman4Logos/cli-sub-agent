@@ -1,6 +1,7 @@
 //! Executor enum for AI tools with unified model spec.
 
 pub mod agent_backend_adapter;
+pub mod codex_runtime;
 pub mod context_loader;
 pub mod design_context;
 pub mod executor;
@@ -12,6 +13,7 @@ pub(crate) mod transport_gemini_retry;
 pub mod transport_openai_compat;
 
 pub use agent_backend_adapter::ExecutorAgentBackend;
+pub use codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 pub use context_loader::{
     ContextFile, ContextLoadOptions, format_context_for_prompt, load_project_context,
     structured_output_instructions, structured_output_instructions_for_fork_call,
