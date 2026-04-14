@@ -1,9 +1,14 @@
+use std::{collections::BTreeMap, path::Path};
+
 use chrono::{DateTime, Utc};
+use csa_core::types::ReviewDecision;
 use serde::{Deserialize, Serialize};
 
 fn default_schema_version() -> String {
     "1.0".to_string()
 }
+
+pub const REVIEW_VERDICT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -75,10 +80,62 @@ pub struct ReviewArtifact {
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ReviewVerdictArtifact {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub decision: ReviewDecision,
+    pub verdict_legacy: String,
+    pub severity_counts: BTreeMap<Severity, u32>,
+    #[serde(default)]
+    pub prior_round_refs: Vec<String>,
+}
+
+impl ReviewVerdictArtifact {
+    pub fn from_parts(
+        session_id: impl Into<String>,
+        decision: ReviewDecision,
+        verdict_legacy: impl Into<String>,
+        findings: &[Finding],
+        prior_round_refs: Vec<String>,
+    ) -> Self {
+        let mut severity_counts = BTreeMap::new();
+        for finding in findings {
+            *severity_counts.entry(finding.severity.clone()).or_insert(0) += 1;
+        }
+
+        Self {
+            schema_version: REVIEW_VERDICT_SCHEMA_VERSION,
+            session_id: session_id.into(),
+            timestamp: Utc::now(),
+            decision,
+            verdict_legacy: verdict_legacy.into(),
+            severity_counts,
+            prior_round_refs,
+        }
+    }
+}
+
+pub fn write_review_verdict(
+    session_dir: &Path,
+    artifact: &ReviewVerdictArtifact,
+) -> std::io::Result<()> {
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir)?;
+    let path = output_dir.join("review-verdict.json");
+    let json = serde_json::to_vec_pretty(artifact)?;
+    std::fs::write(path, json)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Finding, ReviewArtifact, Severity, SeveritySummary};
+    use super::{
+        Finding, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewVerdictArtifact, Severity,
+        SeveritySummary,
+    };
     use chrono::Utc;
+    use csa_core::types::ReviewDecision;
 
     fn sample_findings() -> Vec<Finding> {
         vec![
@@ -175,6 +232,25 @@ mod tests {
             serde_json::from_str(&json).expect("artifact deserialize should succeed");
 
         assert_eq!(decoded, artifact);
+    }
+
+    #[test]
+    fn review_verdict_artifact_serde_roundtrip() {
+        let artifact = ReviewVerdictArtifact::from_parts(
+            "01JABCDEF0123456789ABCDEFG",
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+            &sample_findings(),
+            vec!["01JPRIORROUND0123456789ABCD".to_string()],
+        );
+
+        let json =
+            serde_json::to_string(&artifact).expect("verdict artifact serialize should succeed");
+        let decoded: ReviewVerdictArtifact =
+            serde_json::from_str(&json).expect("verdict artifact deserialize should succeed");
+
+        assert_eq!(decoded, artifact);
+        assert_eq!(decoded.schema_version, REVIEW_VERDICT_SCHEMA_VERSION);
     }
 
     #[test]

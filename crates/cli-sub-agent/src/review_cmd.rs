@@ -24,7 +24,7 @@ use tracing::{debug, error, warn};
 mod output;
 use output::{
     ReviewerOutcome, detect_tool_diagnostic, is_review_output_empty, is_worktree_submodule,
-    persist_review_meta, print_reviewer_outcomes, sanitize_review_output,
+    persist_review_meta, persist_review_verdict, print_reviewer_outcomes, sanitize_review_output,
 };
 
 #[path = "review_cmd_fix.rs"]
@@ -418,23 +418,22 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             result.execution.exit_code
         };
         let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
-        persist_review_meta(
-            &project_root,
-            &ReviewSessionMeta {
-                session_id: result.meta_session_id.clone(),
-                head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
-                decision: decision.as_str().to_string(),
-                verdict: verdict.to_string(),
-                tool: tool.to_string(),
-                scope: scope.clone(),
-                exit_code: effective_exit_code,
-                fix_attempted: args.fix,
-                fix_rounds: 0,
-                review_iterations,
-                timestamp: chrono::Utc::now(),
-                diff_fingerprint,
-            },
-        );
+        let review_meta = ReviewSessionMeta {
+            session_id: result.meta_session_id.clone(),
+            head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
+            decision: decision.as_str().to_string(),
+            verdict: verdict.to_string(),
+            tool: tool.to_string(),
+            scope: scope.clone(),
+            exit_code: effective_exit_code,
+            fix_attempted: args.fix,
+            fix_rounds: 0,
+            review_iterations,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint,
+        };
+        persist_review_meta(&project_root, &review_meta);
+        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
 
         let is_cumulative_review = review_scope_is_cumulative(&scope);
 
@@ -690,25 +689,24 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
 
     for outcome in &outcomes {
-        persist_review_meta(
-            &project_root,
-            &ReviewSessionMeta {
-                session_id: outcome.session_id.clone(),
-                head_sha: head_sha.clone(),
-                decision: review_decision_from_verdict(outcome.verdict)
-                    .as_str()
-                    .to_string(),
-                verdict: outcome.verdict.to_string(),
-                tool: outcome.tool.as_str().to_string(),
-                scope: scope.clone(),
-                exit_code: outcome.exit_code,
-                fix_attempted: false,
-                fix_rounds: 0,
-                review_iterations,
-                timestamp: review_meta_timestamp,
-                diff_fingerprint: diff_fingerprint.clone(),
-            },
-        );
+        let review_meta = ReviewSessionMeta {
+            session_id: outcome.session_id.clone(),
+            head_sha: head_sha.clone(),
+            decision: review_decision_from_verdict(outcome.verdict)
+                .as_str()
+                .to_string(),
+            verdict: outcome.verdict.to_string(),
+            tool: outcome.tool.as_str().to_string(),
+            scope: scope.clone(),
+            exit_code: outcome.exit_code,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations,
+            timestamp: review_meta_timestamp,
+            diff_fingerprint: diff_fingerprint.clone(),
+        };
+        persist_review_meta(&project_root, &review_meta);
+        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
     }
 
     if let Err(err) = write_multi_reviewer_consolidated_artifact(reviewers) {

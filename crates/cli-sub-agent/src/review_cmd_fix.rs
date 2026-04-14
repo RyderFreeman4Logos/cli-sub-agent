@@ -12,7 +12,9 @@ use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 
 use super::CLEAN;
-use super::output::{is_review_output_empty, persist_review_meta, sanitize_review_output};
+use super::output::{
+    is_review_output_empty, persist_review_meta, persist_review_verdict, sanitize_review_output,
+};
 use super::resolve::ANTI_RECURSION_PREAMBLE;
 
 /// All context needed to run the fix loop after a review finds issues.
@@ -170,45 +172,43 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
 
         if gate_passed && !fix_empty {
             info!(round, "Fix round succeeded — quality gate passed");
-            persist_review_meta(
-                ctx.project_root,
-                &ReviewSessionMeta {
-                    session_id: session_id.clone(),
-                    head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
-                    decision: "pass".to_string(),
-                    verdict: CLEAN.to_string(),
-                    tool: ctx.tool.to_string(),
-                    scope: ctx.scope.clone(),
-                    exit_code: 0,
-                    fix_attempted: true,
-                    fix_rounds: u32::from(round),
-                    review_iterations: ctx.review_iterations,
-                    timestamp: chrono::Utc::now(),
-                    diff_fingerprint: None,
-                },
-            );
+            let review_meta = ReviewSessionMeta {
+                session_id: session_id.clone(),
+                head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
+                decision: "pass".to_string(),
+                verdict: CLEAN.to_string(),
+                tool: ctx.tool.to_string(),
+                scope: ctx.scope.clone(),
+                exit_code: 0,
+                fix_attempted: true,
+                fix_rounds: u32::from(round),
+                review_iterations: ctx.review_iterations,
+                timestamp: chrono::Utc::now(),
+                diff_fingerprint: None,
+            };
+            persist_review_meta(ctx.project_root, &review_meta);
+            persist_review_verdict(ctx.project_root, &review_meta, &[], Vec::new());
             return Ok(0);
         }
     }
 
     // All fix rounds exhausted; gate still fails.
-    persist_review_meta(
-        ctx.project_root,
-        &ReviewSessionMeta {
-            session_id,
-            head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
-            decision: ctx.decision,
-            verdict: ctx.verdict,
-            tool: ctx.tool.to_string(),
-            scope: ctx.scope,
-            exit_code: 1,
-            fix_attempted: true,
-            fix_rounds: u32::from(ctx.max_rounds),
-            review_iterations: ctx.review_iterations,
-            timestamp: chrono::Utc::now(),
-            diff_fingerprint: None,
-        },
-    );
+    let review_meta = ReviewSessionMeta {
+        session_id,
+        head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
+        decision: ctx.decision,
+        verdict: ctx.verdict,
+        tool: ctx.tool.to_string(),
+        scope: ctx.scope,
+        exit_code: 1,
+        fix_attempted: true,
+        fix_rounds: u32::from(ctx.max_rounds),
+        review_iterations: ctx.review_iterations,
+        timestamp: chrono::Utc::now(),
+        diff_fingerprint: None,
+    };
+    persist_review_meta(ctx.project_root, &review_meta);
+    persist_review_verdict(ctx.project_root, &review_meta, &[], Vec::new());
     error!(
         max_rounds = ctx.max_rounds,
         "All fix rounds exhausted — quality gate still failing"

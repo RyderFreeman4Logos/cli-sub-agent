@@ -1,7 +1,9 @@
 use std::path::Path;
+use std::str::FromStr;
 
-use csa_core::types::ToolName;
+use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
+use csa_session::{Finding, ReviewVerdictArtifact, write_review_verdict};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
 use tracing::{debug, warn};
 
@@ -130,6 +132,46 @@ pub(super) fn persist_review_meta(project_root: &Path, meta: &ReviewSessionMeta)
         }
         Err(e) => {
             warn!(session_id = %meta.session_id, error = %e, "Cannot resolve session dir for review meta");
+        }
+    }
+}
+
+/// Persist a [`ReviewVerdictArtifact`] to `{session_dir}/output/review-verdict.json`.
+///
+/// Best-effort: failures are logged as warnings but do not fail the review.
+pub(super) fn persist_review_verdict(
+    project_root: &Path,
+    meta: &ReviewSessionMeta,
+    findings: &[Finding],
+    prior_round_refs: Vec<String>,
+) {
+    match csa_session::get_session_dir(project_root, &meta.session_id) {
+        Ok(session_dir) => {
+            let decision =
+                ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain);
+            let artifact = ReviewVerdictArtifact::from_parts(
+                meta.session_id.clone(),
+                decision,
+                meta.verdict.clone(),
+                findings,
+                prior_round_refs,
+            );
+            if let Err(e) = write_review_verdict(&session_dir, &artifact) {
+                warn!(
+                    session_id = %meta.session_id,
+                    error = %e,
+                    "Failed to write output/review-verdict.json"
+                );
+            } else {
+                debug!(session_id = %meta.session_id, "Wrote output/review-verdict.json");
+            }
+        }
+        Err(e) => {
+            warn!(
+                session_id = %meta.session_id,
+                error = %e,
+                "Cannot resolve session dir for review verdict"
+            );
         }
     }
 }

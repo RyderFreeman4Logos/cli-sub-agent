@@ -88,6 +88,40 @@ mandatory and must remain ReviewArtifact-compatible:
 
 Additional rich fields are allowed and will be ignored by the consolidator when not needed.
 
+## output/review-verdict.json
+
+```json
+{
+  "schema_version": 1,
+  "session_id": "string",
+  "timestamp": "RFC3339 string",
+  "decision": "pass|fail|skip|uncertain",
+  "verdict_legacy": "CLEAN|HAS_ISSUES",
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "prior_round_refs": ["01KM..."]
+}
+```
+
+- `schema_version` is fixed at `1`.
+- `decision` uses the structured four-value review verdict.
+- `verdict_legacy` preserves the legacy binary token for compatibility.
+- `severity_counts` is a map keyed by severity name with finding counts.
+- `prior_round_refs` lists earlier related review session IDs when available.
+
+Whitelist constraints:
+
+- NO file contents
+- NO diff
+- NO env
+- NO api_key
+- NO user TOML
+
 ### generated_outputs
 
 Optional outputs generated when the review finds **no P0 or P1 issues**:
