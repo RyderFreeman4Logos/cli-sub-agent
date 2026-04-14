@@ -105,7 +105,10 @@ All commits created by this workflow must use:
 ### AI Reviewer Metadata
 - **Design Intent**: <Why this change was made, what problem it solves. Context not obvious from the diff.>
 - **Key Decisions**: <Significant architectural or implementation choices made during the task.>
-- **Reviewer Guidance**: <Areas needing careful review, edge cases handled, potential risks.>
+- **Reviewer Guidance**: List areas needing careful review, with REQUIRED sub-fields:
+  - **Timing/Race Scenarios**: any timing-sensitive ordering, concurrency race, file-system race, or async ordering the change must survive. Cite the scenario + the test that exercises it.
+  - **Boundary Cases**: null/empty/max/min/off-by-one inputs, and the test(s) that cover them.
+  - **Risk Areas**: the parts of the change that, if wrong, would not be caught by compile + unit tests.
 ```
 
 ## Example Usage

@@ -160,6 +160,15 @@ Apply these dimensions in all review passes in addition to the general checklist
   - lifetime correctness and borrow-checker-compliant ownership flow
   - panic-free library paths (`unwrap`/`expect`/panic in non-test code)
   - serde compatibility for serialized/deserialized domain types
+  - Concurrency-aware checks from the PR #655 post-mortem also apply when Rust code coordinates
+    multi-writer state or rollback-on-failure publication flows.
+  - `Concurrent-Writer`: whenever two or more threads/tasks/processes may write to the same
+    resource (file, database row, shared map, synthetic file like `result.toml`), check for
+    TOCTOU, lost-update, and race window violations. Call out the writer set explicitly in findings.
+  - `Compensating-Transaction`: for any "publish -> try -> undo" pattern (synthetic-before-real
+    publish, then rollback-on-failure), check that the rollback path cannot overwrite a legitimate
+    concurrent success. Prefer atomic primitives (`rename(2)`, `O_CREAT|O_EXCL`, compare-and-swap)
+    over compensating rollbacks.
 - `node` focus:
   - SSR and hydration correctness (server/client render parity)
   - bundle size impact of new dependencies/import patterns
