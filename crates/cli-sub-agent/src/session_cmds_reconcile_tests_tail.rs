@@ -182,6 +182,7 @@ fn ensure_terminal_result_for_dead_active_session_writes_unpushed_commit_sidecar
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_shell_escapes_recovery_command() {
     let td = tempdir().expect("tempdir");
@@ -242,6 +243,7 @@ fn ensure_terminal_result_for_dead_active_session_shell_escapes_recovery_command
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn reconcile_failure_rolls_back_new_unpushed_commit_sidecar() {
     let td = tempdir().expect("tempdir");
@@ -303,6 +305,7 @@ fn reconcile_failure_rolls_back_new_unpushed_commit_sidecar() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn reconcile_failure_restores_preexisting_unpushed_commit_sidecar() {
     let td = tempdir().expect("tempdir");
@@ -369,6 +372,7 @@ fn reconcile_failure_restores_preexisting_unpushed_commit_sidecar() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
     let td = tempdir().expect("tempdir");
@@ -542,6 +546,24 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
     assert_eq!(persisted.termination_reason.as_deref(), Some("completed"));
 }
 
+#[test]
+fn write_sidecar_atomically_replaces_preexisting_contents() {
+    let td = tempdir().expect("tempdir");
+    let sidecar_path = td.path().join("output").join("unpushed_commits.json");
+    fs::create_dir_all(sidecar_path.parent().expect("sidecar parent"))
+        .expect("create sidecar parent");
+
+    let first = br#"{"recovery_command":"git push -u origin fix/first"}"#;
+    let second = br#"{"recovery_command":"git push -u origin fix/second"}"#;
+
+    write_sidecar_atomically(&sidecar_path, first).expect("first sidecar write succeeds");
+    write_sidecar_atomically(&sidecar_path, second)
+        .expect("second sidecar write replaces preexisting file");
+
+    assert_eq!(fs::read(&sidecar_path).expect("read final sidecar"), second);
+}
+
+#[cfg(unix)]
 #[test]
 fn inspect_unpushed_commits_uses_session_branch_not_checked_out_head() {
     let td = tempdir().expect("tempdir");

@@ -622,18 +622,12 @@ fn artifact_rollback_guard(artifact_path: &Path, expected_contents: &[u8]) -> st
 #[rustfmt::skip]
 fn write_sidecar_atomically(sidecar_path: &Path, contents: &[u8]) -> Result<()> {
     let sidecar_dir = sidecar_path.parent().ok_or_else(|| anyhow!("Unpushed commit sidecar path has no parent: {}", sidecar_path.display()))?;
-    let temp_path = sidecar_dir.join(format!("{}.tmp.{}", sidecar_path.file_name().and_then(|name| name.to_str()).unwrap_or("unpushed_commits.json"), std::process::id()));
-    let write_result = (|| -> Result<()> {
-        let mut temp_file = OpenOptions::new().write(true).create_new(true).open(&temp_path).with_context(|| format!("Failed to create temporary unpushed commit sidecar: {}", temp_path.display()))?;
-        temp_file.write_all(contents).with_context(|| format!("Failed to write temporary unpushed commit sidecar: {}", temp_path.display()))?;
-        temp_file.sync_all().with_context(|| format!("Failed to sync temporary unpushed commit sidecar: {}", temp_path.display()))?;
-        preserve_existing_permissions_if_present(&mut temp_file, sidecar_path, "unpushed commit sidecar")?;
-        drop(temp_file);
-        fs::rename(&temp_path, sidecar_path).with_context(|| format!("Failed to publish unpushed commit sidecar {} from {}", sidecar_path.display(), temp_path.display()))?;
-        Ok(())
-    })();
-    if write_result.is_err() { let _ = fs::remove_file(&temp_path); }
-    write_result
+    let mut temp_file = tempfile::NamedTempFile::new_in(sidecar_dir).with_context(|| format!("Failed to create temporary unpushed commit sidecar in {}", sidecar_dir.display()))?;
+    temp_file.as_file_mut().write_all(contents).with_context(|| format!("Failed to write temporary unpushed commit sidecar for {}", sidecar_path.display()))?;
+    temp_file.as_file_mut().sync_all().with_context(|| format!("Failed to sync temporary unpushed commit sidecar for {}", sidecar_path.display()))?;
+    preserve_existing_permissions_if_present(temp_file.as_file_mut(), sidecar_path, "unpushed commit sidecar")?;
+    temp_file.persist(sidecar_path).map_err(|err| anyhow!("Failed to publish unpushed commit sidecar {}: {}", sidecar_path.display(), err.error))?;
+    Ok(())
 }
 
 #[rustfmt::skip]
