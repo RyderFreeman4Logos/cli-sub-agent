@@ -8,6 +8,7 @@ use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_c
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
 use std::env;
+use std::path::Path;
 use std::process::Command;
 use sysinfo::System;
 
@@ -63,9 +64,13 @@ fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
         .unwrap_or_else(CodexTransport::default_for_build)
 }
 
-fn load_doctor_project_config() -> Option<ProjectConfig> {
-    let cwd = env::current_dir().ok()?;
-    ProjectConfig::load(&cwd).ok().flatten()
+fn load_doctor_project_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
+    ProjectConfig::load(project_root)
+}
+
+fn load_doctor_project_config() -> Result<Option<ProjectConfig>> {
+    let cwd = env::current_dir()?;
+    load_doctor_project_config_from(&cwd)
 }
 
 /// Run full environment diagnostics.
@@ -78,7 +83,7 @@ pub async fn run_doctor(format: OutputFormat) -> Result<()> {
 
 /// Run diagnostics with human-readable text output.
 async fn run_doctor_text() -> Result<()> {
-    let project_config = load_doctor_project_config();
+    let project_config = load_doctor_project_config()?;
 
     println!("=== CSA Environment Check ===");
     print_platform_info();
@@ -121,7 +126,7 @@ async fn run_doctor_json() -> Result<()> {
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
 
-    let project_config = load_doctor_project_config();
+    let project_config = load_doctor_project_config()?;
 
     let state_dir = paths::state_dir()
         .map(|d| d.display().to_string())
@@ -140,7 +145,7 @@ async fn run_doctor_json() -> Result<()> {
 
     // Check project config
     let cwd = env::current_dir()?;
-    let config_status = match ProjectConfig::load(&cwd) {
+    let config_status = match load_doctor_project_config_from(&cwd) {
         Ok(Some(config)) => {
             let mut enabled = Vec::new();
             let mut disabled = Vec::new();

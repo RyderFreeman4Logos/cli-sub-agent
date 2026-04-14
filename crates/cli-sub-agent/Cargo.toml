@@ -52,5 +52,5 @@ xurl-core.workspace = true
 serial_test = "3.4"
 
 [features]
-codex-acp = ["csa-executor/codex-acp"]
+codex-acp = ["csa-config/codex-acp", "csa-executor/codex-acp"]
 codex-pty-fork = ["csa-executor/codex-pty-fork"]

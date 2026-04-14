@@ -253,9 +253,11 @@ impl ProjectConfig {
         // Check for deprecated keys before deserializing (serde silently ignores them)
         if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             warn_deprecated_keys(&raw, &path.display().to_string());
+            crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)?;
         }
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
+        crate::validate::validate_tool_transport_overrides(&config)?;
         Ok(Some(config))
     }
 
@@ -311,11 +313,13 @@ impl ProjectConfig {
         // cannot reverse — this prevents stale project configs from resurrecting
         // tools the user explicitly disabled at the global level.
         enforce_global_tool_disables(&base_val, &mut merged);
+        crate::validate::validate_tool_transport_overrides_in_raw_config(&merged)?;
 
         // Roundtrip through string for reliable deserialization
         let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;
         let config: Self =
             toml::from_str(&merged_str).context("Failed to deserialize merged config")?;
+        crate::validate::validate_tool_transport_overrides(&config)?;
         Ok(Some(config))
     }
 

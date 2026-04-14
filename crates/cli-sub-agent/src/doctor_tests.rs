@@ -155,6 +155,34 @@ fn explicit_codex_acp_transport_reports_rebuild_hint() {
     );
 }
 
+#[cfg(not(feature = "codex-acp"))]
+#[test]
+fn doctor_load_rejects_invalid_codex_transport_override() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let config_dir = td.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[tools.codex]
+transport = "acp"
+"#,
+    )
+    .expect("write config");
+
+    let err = load_doctor_project_config_from(td.path()).unwrap_err();
+    let message = err.to_string();
+
+    assert!(
+        message.contains("[tools.codex].transport"),
+        "doctor should surface the exact config key: {message}"
+    );
+    assert!(
+        message.contains("codex-acp"),
+        "doctor should surface the missing feature guidance: {message}"
+    );
+}
+
 #[cfg(all(unix, feature = "codex-acp"))]
 #[test]
 fn feature_build_doctor_text_output_reports_acp_compile_status() {

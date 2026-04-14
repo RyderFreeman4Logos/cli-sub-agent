@@ -2,7 +2,17 @@ use anyhow::{Result, bail};
 use std::path::Path;
 
 use crate::config::ProjectConfig;
+use crate::config_tool::ToolTransport;
 use crate::global::ToolSelection;
+
+const KNOWN_TOOLS: &[&str] = &[
+    "gemini-cli",
+    "opencode",
+    "codex",
+    "claude-code",
+    "openai-compat",
+];
+const LEGAL_TRANSPORT_VALUES: &str = "cli, acp";
 
 /// Validate a project configuration file.
 /// Returns Ok(()) if valid, or Err with descriptive messages.
@@ -36,6 +46,47 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     validate_debate(&config)?;
     validate_tiers(&config)?;
     warn_unknown_tool_priority(&config);
+
+    Ok(())
+}
+
+pub(crate) fn validate_tool_transport_overrides_in_raw_config(raw: &toml::Value) -> Result<()> {
+    let Some(tools) = raw.get("tools").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+
+    for (tool_name, tool_value) in tools {
+        if !KNOWN_TOOLS.contains(&tool_name.as_str()) {
+            continue;
+        }
+
+        let Some(tool_table) = tool_value.as_table() else {
+            continue;
+        };
+        let Some(transport_value) = tool_table.get("transport") else {
+            continue;
+        };
+
+        let key = transport_key(tool_name);
+        let Some(raw_transport) = transport_value.as_str() else {
+            bail!("Invalid {key}: expected a string; legal values are: {LEGAL_TRANSPORT_VALUES}.");
+        };
+
+        validate_tool_transport_override_value(tool_name, raw_transport)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_tool_transport_overrides(config: &ProjectConfig) -> Result<()> {
+    for (tool_name, tool_config) in &config.tools {
+        if !KNOWN_TOOLS.contains(&tool_name.as_str()) {
+            continue;
+        }
+        if let Some(transport) = tool_config.transport {
+            validate_tool_transport_override(tool_name, transport)?;
+        }
+    }
 
     Ok(())
 }
@@ -137,16 +188,12 @@ fn validate_acp(config: &ProjectConfig) -> Result<()> {
 }
 
 fn validate_tools(config: &ProjectConfig) -> Result<()> {
-    let known_tools = [
-        "gemini-cli",
-        "opencode",
-        "codex",
-        "claude-code",
-        "openai-compat",
-    ];
     for (tool_name, tool_config) in &config.tools {
-        if !known_tools.contains(&tool_name.as_str()) {
-            bail!("Unknown tool '{tool_name}'. Known tools: {known_tools:?}");
+        if !KNOWN_TOOLS.contains(&tool_name.as_str()) {
+            bail!("Unknown tool '{tool_name}'. Known tools: {KNOWN_TOOLS:?}");
+        }
+        if let Some(transport) = tool_config.transport {
+            validate_tool_transport_override(tool_name, transport)?;
         }
         // Validate per-tool sandbox memory overrides.
         if let Some(mem) = tool_config.memory_max_mb
@@ -182,6 +229,47 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_tool_transport_override_value(tool_name: &str, raw_transport: &str) -> Result<()> {
+    let transport = match raw_transport {
+        "cli" => ToolTransport::Cli,
+        "acp" => ToolTransport::Acp,
+        _ => {
+            let key = transport_key(tool_name);
+            bail!(
+                "Invalid {key}: unknown transport \"{raw_transport}\" for tool \"{tool_name}\"; legal values are: {LEGAL_TRANSPORT_VALUES}."
+            );
+        }
+    };
+
+    validate_tool_transport_override(tool_name, transport)
+}
+
+fn validate_tool_transport_override(tool_name: &str, transport: ToolTransport) -> Result<()> {
+    let key = transport_key(tool_name);
+
+    if tool_name != "codex" {
+        bail!(
+            "Invalid {key}: tool \"{tool_name}\" does not support transport override; this field is only valid for codex."
+        );
+    }
+
+    if matches!(transport, ToolTransport::Acp) && !codex_acp_compiled_in() {
+        bail!(
+            "Invalid {key}: transport = \"acp\" requires the `codex-acp` feature, but this CSA build was compiled without it. Rebuild with `cargo build --features codex-acp` or `cargo install --path crates/cli-sub-agent --features codex-acp`, or set [tools.codex].transport = \"cli\" (or remove the field)."
+        );
+    }
+
+    Ok(())
+}
+
+const fn codex_acp_compiled_in() -> bool {
+    cfg!(feature = "codex-acp")
+}
+
+fn transport_key(tool_name: &str) -> String {
+    format!("[tools.{tool_name}].transport")
 }
 
 /// Validate a `ToolSelection` value for review/debate config.
@@ -348,3 +436,7 @@ mod tests;
 #[cfg(test)]
 #[path = "validate_tests_tail.rs"]
 mod tests_tail;
+
+#[cfg(test)]
+#[path = "validate_tests_transport.rs"]
+mod tests_transport;
