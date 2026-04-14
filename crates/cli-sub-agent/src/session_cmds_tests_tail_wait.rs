@@ -241,3 +241,75 @@ fn handle_session_wait_prefers_refreshed_real_result_status_and_exit_code_over_c
     assert_eq!(persisted.status, "failure");
     assert_eq!(persisted.exit_code, 7);
 }
+
+#[cfg(unix)]
+#[test]
+fn handle_session_wait_errors_when_refresh_branch_cannot_persist_retired_phase() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-refresh-retire-save-failure"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write completion packet");
+    set_file_mtime_seconds_ago(&session_dir.join("daemon-completion.toml"), 2);
+
+    let refreshed_result = SessionResult {
+        summary: "refreshed real terminal result".to_string(),
+        ..make_result("failure", 7)
+    };
+    save_result(project, &session_id, &refreshed_result).expect("save refreshed result");
+
+    let lock_path = session_dir.join(".reconcile.lock");
+    std::fs::create_dir(&lock_path).expect("poison reconcile lock path with a directory");
+
+    let mut emitted_completion = false;
+    let wait_err = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        1,
+        |_project_root, _current_session_id, _trigger| {
+            panic!("refresh_result_for_wait should short-circuit before reconcile");
+        },
+        |_sid: &str, _status: &str, _exit_code, _synthetic, _mirror_to_stdout| {
+            emitted_completion = true;
+        },
+    )
+    .expect_err("wait should fail when retire persistence fails");
+
+    assert!(
+        wait_err
+            .to_string()
+            .contains("Failed to open reconciliation lock file"),
+        "unexpected error: {wait_err:#}"
+    );
+    assert!(
+        !emitted_completion,
+        "wait should not emit completion when retire persistence fails"
+    );
+
+    let persisted = load_session(project, &session_id).expect("load session");
+    assert_eq!(persisted.phase, SessionPhase::Active);
+    assert_eq!(persisted.termination_reason, None);
+
+    let result = load_result(project, &session_id)
+        .expect("load result")
+        .expect("refreshed real result should still exist");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 7);
+}

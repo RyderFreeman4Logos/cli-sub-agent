@@ -205,11 +205,11 @@ where
             let mut loaded_result =
                 refreshed_result.filter(|_| refreshed_result_newer_than_completion);
             if refreshed_result_available {
-                let _ = crate::session_cmds::retire_if_dead_with_result(
+                crate::session_cmds::retire_if_dead_with_result(
                     effective_root,
                     &resolved.session_id,
                     "session wait",
-                );
+                )?;
             } else {
                 let reconciled = reconcile_dead_active_session(
                     effective_root,
