@@ -250,6 +250,67 @@ fn wait_for_attach_live_output_path_keeps_waiting_past_sixty_seconds_for_codex_o
 }
 
 #[test]
+fn wait_for_attach_live_output_path_recovers_after_metadata_becomes_readable() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    use std::time::Duration;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+        "tool = \n",
+    )
+    .expect("write unreadable metadata");
+    std::fs::write(td.path().join("stdout.log"), "live stdout\n").expect("write stdout log");
+    std::fs::create_dir_all(td.path().join("locks")).expect("create locks dir");
+    std::fs::write(
+        td.path().join("locks").join("codex.lock"),
+        format!("{{\"pid\":{}}}", std::process::id()),
+    )
+    .expect("write codex lock");
+
+    let stdout_path = td.path().join("stdout.log");
+    let output_path = td.path().join("output.log");
+    let elapsed_ms = Arc::new(AtomicU64::new(0));
+    let sleep_elapsed_ms = Arc::clone(&elapsed_ms);
+    let metadata_path = td.path().join(csa_session::metadata::METADATA_FILE_NAME);
+
+    let resolved = wait_for_attach_live_output_path(
+        td.path(),
+        "attach-unreadable-metadata",
+        &stdout_path,
+        &output_path,
+        || Duration::from_millis(elapsed_ms.load(Ordering::Relaxed)),
+        move |duration| {
+            let elapsed = sleep_elapsed_ms
+                .fetch_add(duration.as_millis() as u64, Ordering::Relaxed)
+                + duration.as_millis() as u64;
+            if elapsed >= 61_000 {
+                let metadata = csa_session::metadata::SessionMetadata {
+                    tool: "codex".to_string(),
+                    tool_locked: true,
+                    runtime_binary: Some("codex".to_string()),
+                };
+                std::fs::write(
+                    &metadata_path,
+                    toml::to_string_pretty(&metadata).expect("metadata toml"),
+                )
+                .expect("rewrite metadata");
+            }
+        },
+    )
+    .expect("wait should not fail");
+
+    assert_eq!(resolved, Some(stdout_path));
+    assert!(
+        elapsed_ms.load(Ordering::Relaxed) >= 61_000,
+        "attach should keep polling metadata instead of failing at 30s"
+    );
+}
+
+#[test]
 fn attach_primary_output_uses_stdout_for_persisted_codex_cli_runtime_binary() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {

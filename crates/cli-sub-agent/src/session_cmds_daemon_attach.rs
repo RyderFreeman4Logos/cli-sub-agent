@@ -10,6 +10,7 @@ use super::{
 
 const ATTACH_ROUTE_RESOLUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const ATTACH_ROUTE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+const ATTACH_METADATA_RETRY_MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub(super) fn wait_for_attach_live_output_path<E, S>(
     session_dir: &Path,
@@ -23,21 +24,28 @@ where
     E: FnMut() -> std::time::Duration,
     S: FnMut(std::time::Duration),
 {
+    let mut unresolved_metadata_poll_interval = ATTACH_ROUTE_POLL_INTERVAL;
+
     loop {
         let primary_output = attach_primary_output_for_session(session_dir);
         let candidate = match primary_output {
             AttachPrimaryOutput::StdoutLog => stdout_path,
             AttachPrimaryOutput::OutputLog => output_path,
-            AttachPrimaryOutput::Pending => {
-                if elapsed() > ATTACH_ROUTE_RESOLUTION_TIMEOUT {
-                    anyhow::bail!(
-                        "session output routing not resolved after 30s — session {session_id} may still be starting",
-                    );
-                }
-                sleep(ATTACH_ROUTE_POLL_INTERVAL);
+            AttachPrimaryOutput::AwaitMetadata => {
+                // Keep polling until metadata becomes readable or the session
+                // exits; a transient metadata write failure must not force a
+                // 30s attach failure while route selection is still unknown.
+                sleep(unresolved_metadata_poll_interval);
+                unresolved_metadata_poll_interval = std::cmp::min(
+                    unresolved_metadata_poll_interval
+                        .checked_mul(2)
+                        .unwrap_or(ATTACH_METADATA_RETRY_MAX_INTERVAL),
+                    ATTACH_METADATA_RETRY_MAX_INTERVAL,
+                );
                 continue;
             }
         };
+        unresolved_metadata_poll_interval = ATTACH_ROUTE_POLL_INTERVAL;
 
         if candidate.exists() {
             return Ok(Some(candidate.to_path_buf()));

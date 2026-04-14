@@ -26,7 +26,7 @@ const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-b
 enum AttachPrimaryOutput {
     StdoutLog,
     OutputLog,
-    Pending,
+    AwaitMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ fn attach_output_fallback(
     session_active: bool,
 ) -> AttachPrimaryOutput {
     if session_active && stdout_log_exists && !output_log_exists {
-        AttachPrimaryOutput::Pending
+        AttachPrimaryOutput::AwaitMetadata
     } else if output_log_exists {
         AttachPrimaryOutput::OutputLog
     } else {
