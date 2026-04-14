@@ -1,8 +1,14 @@
 use super::*;
 use crate::test_env_lock::TEST_ENV_LOCK;
+#[cfg(unix)]
+use chrono::Utc;
 use csa_session::{create_session, get_session_dir, load_result};
+#[cfg(unix)]
+use csa_session::{load_session, save_result};
+#[cfg(unix)]
 use std::ffi::CString;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use tempfile::tempdir;
 
@@ -174,6 +180,83 @@ fn ensure_terminal_result_for_dead_active_session_writes_unpushed_commit_sidecar
             .any(|artifact| artifact.path == "output/unpushed_commits.json"),
         "synthetic result should advertise the recovery sidecar"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("late-real-result"), None, Some("codex")).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    let now = Utc::now();
+    save_result(
+        project,
+        &session_id,
+        &csa_session::SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "real terminal result".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+        },
+    )
+    .unwrap();
+
+    csa_session::write_review_meta(
+        &session_dir,
+        &csa_session::ReviewSessionMeta {
+            session_id: session_id.clone(),
+            head_sha: "deadbeef".to_string(),
+            decision: "pass".to_string(),
+            verdict: "CLEAN".to_string(),
+            tool: "codex".to_string(),
+            scope: "range:main...HEAD".to_string(),
+            exit_code: 0,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: now,
+            diff_fingerprint: None,
+        },
+    )
+    .unwrap();
+
+    let retired = retire_if_dead_with_result_impl(
+        project,
+        &session_id,
+        "session wait",
+        &session_dir,
+        &persist_session_state_atomically,
+    )
+    .unwrap();
+    assert!(retired);
+    assert!(
+        !session_dir
+            .join("output")
+            .join("unpushed_commits.json")
+            .exists(),
+        "real-result retirement must not leave an unpushed-commit recovery sidecar"
+    );
+
+    let directive = crate::session_cmds_daemon::synthesized_wait_next_step(&session_dir)
+        .unwrap()
+        .expect("cumulative review should still synthesize a next-step directive");
+    assert!(directive.contains("CSA:NEXT_STEP"));
+    assert!(directive.contains("pr-bot"));
+
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, csa_session::SessionPhase::Retired);
+    assert_eq!(persisted.termination_reason.as_deref(), Some("completed"));
 }
 
 #[test]

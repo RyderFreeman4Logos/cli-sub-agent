@@ -495,14 +495,6 @@ fn retire_if_dead_with_result_impl(
     {
         return Ok(false);
     }
-    if let Err(err) = persist_unpushed_commits_sidecar(project_root, &session, session_dir) {
-        warn!(
-            session_id = %session_id,
-            trigger = %trigger,
-            error = %err,
-            "Failed to persist unpushed commit recovery sidecar"
-        );
-    }
     if session
         .apply_phase_event(csa_session::PhaseEvent::Retired)
         .is_err()
