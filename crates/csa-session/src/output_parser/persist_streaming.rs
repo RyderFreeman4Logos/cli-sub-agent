@@ -4,17 +4,18 @@
 //! multi-GB output files from long codex sessions.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use tempfile::NamedTempFile;
 
 use crate::output_section::{OutputIndex, OutputSection};
 
 use super::{
     MARKER_END_SUFFIX, MARKER_PREFIX, MARKER_SUFFIX, Marker, deduplicate_file_paths,
-    estimate_tokens, id_to_title, persist_structured_output, sanitize_section_id,
+    estimate_tokens, id_to_title, sanitize_section_id,
 };
 
 /// Maximum number of sections to parse from a single output file.
@@ -48,12 +49,19 @@ pub fn persist_structured_output_from_file(
     session_dir: &Path,
     output_log_path: &Path,
 ) -> Result<OutputIndex> {
-    if let Some(flattened) = flatten_transcript_for_sections(output_log_path)? {
-        return persist_structured_output(session_dir, &flattened);
+    if let Some(flattened) = flatten_transcript_to_temp(session_dir, output_log_path)? {
+        return persist_structured_output_from_scan_path(session_dir, flattened.path());
     }
 
-    let file = fs::File::open(output_log_path)
-        .with_context(|| format!("Failed to open {}", output_log_path.display()))?;
+    persist_structured_output_from_scan_path(session_dir, output_log_path)
+}
+
+fn persist_structured_output_from_scan_path(
+    session_dir: &Path,
+    scan_path: &Path,
+) -> Result<OutputIndex> {
+    let file = fs::File::open(scan_path)
+        .with_context(|| format!("Failed to open {}", scan_path.display()))?;
     let reader = BufReader::new(file);
 
     // Pass 1: scan markers and count lines.
@@ -163,7 +171,7 @@ pub fn persist_structured_output_from_file(
     let output_dir = session_dir.join("output");
     fs::create_dir_all(&output_dir)?;
 
-    let file2 = fs::File::open(output_log_path)?;
+    let file2 = fs::File::open(scan_path)?;
     let reader2 = BufReader::new(file2);
 
     // Prepare writers for each section.
@@ -175,7 +183,7 @@ pub fn persist_structured_output_from_file(
             let path = output_dir.join(fp);
             let file = fs::File::create(&path)
                 .with_context(|| format!("Failed to create section file: {}", path.display()))?;
-            Some(std::io::BufWriter::new(file))
+            Some(BufWriter::new(file))
         } else {
             None
         };
@@ -195,7 +203,6 @@ pub fn persist_structured_output_from_file(
             }
             if line_num >= start && line_num <= end {
                 if let Some(ref mut writer) = section_writers[si] {
-                    use std::io::Write;
                     if line_num > start {
                         writeln!(writer)?;
                     }
@@ -208,7 +215,6 @@ pub fn persist_structured_output_from_file(
 
     // Flush all writers.
     for w in section_writers.iter_mut().flatten() {
-        use std::io::Write;
         w.flush()?;
     }
 
@@ -232,14 +238,19 @@ pub fn persist_structured_output_from_file(
     Ok(index)
 }
 
-fn flatten_transcript_for_sections(output_log_path: &Path) -> Result<Option<String>> {
+fn flatten_transcript_to_temp(
+    session_dir: &Path,
+    output_log_path: &Path,
+) -> Result<Option<NamedTempFile>> {
     let file = fs::File::open(output_log_path)
         .with_context(|| format!("Failed to open {}", output_log_path.display()))?;
     let reader = BufReader::new(file);
 
     let mut first_non_empty_line = None;
     let mut saw_json_line = false;
-    let mut flattened = String::new();
+    let mut flattened = NamedTempFile::new_in(session_dir)
+        .with_context(|| format!("Failed to create temp file in {}", session_dir.display()))?;
+    let mut wrote_text = false;
 
     for line_result in reader.lines() {
         let line = line_result
@@ -268,14 +279,19 @@ fn flatten_transcript_for_sections(output_log_path: &Path) -> Result<Option<Stri
             && item.item_type == "agent_message"
             && let Some(text) = item.text
         {
-            if !flattened.is_empty() {
-                flattened.push('\n');
+            if wrote_text {
+                writeln!(flattened)?;
             }
-            flattened.push_str(&text);
+            write!(flattened, "{text}")?;
+            wrote_text = true;
         }
     }
 
     if saw_json_line {
+        flattened
+            .as_file_mut()
+            .flush()
+            .context("Failed to flush flattened transcript temp file")?;
         Ok(Some(flattened))
     } else {
         Ok(None)
@@ -311,6 +327,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("output.log"), contents).unwrap();
         tmp
+    }
+
+    #[test]
+    fn flatten_transcript_to_temp_matches_round_1_flattened_text() {
+        let tmp = write_output_log(concat!(
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"line 1\nline 2"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"tool_result","text":"ignored"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->"}}"#,
+        ));
+
+        let flattened =
+            flatten_transcript_to_temp(tmp.path(), &tmp.path().join("output.log")).unwrap();
+        let flattened = flattened.expect("json transcript should flatten");
+
+        assert_eq!(
+            fs::read_to_string(flattened.path()).unwrap(),
+            "line 1\nline 2\n<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->"
+        );
     }
 
     #[test]
