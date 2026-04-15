@@ -1,4 +1,7 @@
 use super::*;
+use crate::run_cmd::shell::{
+    command_contains_forbidden_lefthook_bypass, segment_contains_forbidden_lefthook_bypass,
+};
 use csa_core::types::OutputFormat;
 
 #[test]
@@ -153,6 +156,76 @@ fn apply_lefthook_bypass_policy_blocks_export_in_shell_wrapper() {
         result.summary,
         "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
     );
+}
+
+#[test]
+fn command_contains_forbidden_lefthook_bypass_ignores_quoted_argument_mentions() {
+    assert!(!command_contains_forbidden_lefthook_bypass(
+        "echo \"do not set LEFTHOOK=0\""
+    ));
+    assert!(!command_contains_forbidden_lefthook_bypass(
+        "grep -r \"LEFTHOOK=0\" ."
+    ));
+    assert!(!command_contains_forbidden_lefthook_bypass(
+        "echo \"LEFTHOOK_SKIP is forbidden\""
+    ));
+    assert!(!command_contains_forbidden_lefthook_bypass(
+        "sed -i 's/LEFTHOOK=0//' file"
+    ));
+    assert!(!command_contains_forbidden_lefthook_bypass(
+        "echo 'cat <<EOF\nLEFTHOOK=0\nEOF'"
+    ));
+}
+
+#[test]
+fn command_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignments() {
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "LEFTHOOK=0 git commit -m \"msg\""
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "env LEFTHOOK=0 git commit"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "export LEFTHOOK=0"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"export LEFTHOOK=0; git commit\""
+    ));
+}
+
+#[test]
+fn segment_contains_forbidden_lefthook_bypass_ignores_argument_mentions() {
+    assert!(!segment_contains_forbidden_lefthook_bypass(
+        "echo \"do not set LEFTHOOK=0\""
+    ));
+    assert!(!segment_contains_forbidden_lefthook_bypass(
+        "grep -r \"LEFTHOOK=0\" ."
+    ));
+    assert!(!segment_contains_forbidden_lefthook_bypass(
+        "echo \"LEFTHOOK_SKIP is forbidden\""
+    ));
+    assert!(!segment_contains_forbidden_lefthook_bypass(
+        "sed -i 's/LEFTHOOK=0//' file"
+    ));
+    assert!(!segment_contains_forbidden_lefthook_bypass(
+        "echo 'cat <<EOF\nLEFTHOOK=0\nEOF'"
+    ));
+}
+
+#[test]
+fn segment_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignments() {
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "LEFTHOOK=0 git commit -m \"msg\""
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "env LEFTHOOK=0 git commit"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "export LEFTHOOK=0"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"export LEFTHOOK=0; git commit\""
+    ));
 }
 
 #[test]

@@ -633,7 +633,7 @@ fn long_option_is_message_like(token: &str) -> bool {
 /// Forbidden LEFTHOOK env var names that disable pre-commit hooks.
 const FORBIDDEN_LEFTHOOK_ENV_VARS: &[&str] = &["LEFTHOOK", "LEFTHOOK_SKIP"];
 
-fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
+pub(crate) fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
     split_shell_segments_preserving_quotes(command)
         .into_iter()
         .any(|segment| segment_contains_forbidden_lefthook_bypass(&segment))
@@ -646,7 +646,7 @@ fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
 /// - `export LEFTHOOK=0`
 /// - `env LEFTHOOK=0 git commit ...`
 /// - `LEFTHOOK_SKIP=... git push ...`
-fn segment_contains_forbidden_lefthook_bypass(segment: &str) -> bool {
+pub(crate) fn segment_contains_forbidden_lefthook_bypass(segment: &str) -> bool {
     let tokens = tokenize_shell_tokens(segment);
     if tokens.is_empty() {
         return false;
@@ -674,28 +674,46 @@ fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
 ///   - `export LEFTHOOK=0`
 ///   - `env LEFTHOOK=0 git ...`
 fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
-    for (idx, token) in tokens.iter().enumerate() {
-        let t = token.as_str();
+    let Some(first_token) = tokens.first() else {
+        return false;
+    };
+    let mut idx = 0usize;
+    let token = first_token.as_str();
 
-        // Inline env assignment: `LEFTHOOK=0 cmd`, `LEFTHOOK_SKIP=... cmd`
-        if is_lefthook_env_assignment(t) {
-            return true;
-        }
-
-        // `export LEFTHOOK=0` / `export LEFTHOOK_SKIP=...`
-        if t.eq_ignore_ascii_case("export") {
-            for next in &tokens[idx + 1..] {
-                let n = next.as_str();
-                if is_lefthook_env_assignment(n) {
-                    return true;
-                }
-                // export can chain multiple assignments; stop at non-assignment
-                if !is_env_assignment(n) {
-                    break;
-                }
-            }
-        }
+    if is_env_assignment(token) {
+        return is_lefthook_env_assignment(token);
     }
+
+    if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+        idx += 1;
+        while idx < tokens.len() {
+            let next = tokens[idx].as_str();
+            if !is_env_assignment(next) {
+                return false;
+            }
+            if is_lefthook_env_assignment(next) {
+                return true;
+            }
+            idx += 1;
+        }
+        return false;
+    }
+
+    if token.eq_ignore_ascii_case("export") {
+        idx += 1;
+        while idx < tokens.len() {
+            let next = tokens[idx].as_str();
+            if !is_env_assignment(next) {
+                return false;
+            }
+            if is_lefthook_env_assignment(next) {
+                return true;
+            }
+            idx += 1;
+        }
+        return false;
+    }
+
     false
 }
 
