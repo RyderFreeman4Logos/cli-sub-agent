@@ -440,3 +440,32 @@ async fn test_gemini_3phase_all_fail_returns_last_error() {
         "API key should be injected on attempts 2 and 3"
     );
 }
+
+#[test]
+fn test_acp_build_env_injects_parent_session_dir_for_child_sessions() {
+    let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
+    let _parent_tool_guard = ScopedEnvVar::set("CSA_TOOL", "parent-tool");
+    let transport = AcpTransport::new("claude-code", None);
+    let mut session = crate::transport::build_ephemeral_meta_session(std::path::Path::new(
+        "/tmp/test",
+    ));
+    session.meta_session_id = "01HTEST000000000000000000".to_string();
+    session.genealogy.parent_session_id = Some("01HPARENT000000000000000000".to_string());
+
+    let env = transport.build_env(&session, Some(&HashMap::from([(
+        csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
+        "/tmp/spoofed-parent-session-dir".to_string(),
+    )])));
+
+    let parent_session_dir = env
+        .get(csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY)
+        .expect("CSA_PARENT_SESSION_DIR should be present for child sessions");
+    assert!(
+        parent_session_dir.contains("/sessions/"),
+        "CSA_PARENT_SESSION_DIR should be recomputed after merge, got: {parent_session_dir}"
+    );
+    assert!(
+        parent_session_dir.contains("01HPARENT000000000000000000"),
+        "CSA_PARENT_SESSION_DIR should include the parent session ID, got: {parent_session_dir}"
+    );
+}
