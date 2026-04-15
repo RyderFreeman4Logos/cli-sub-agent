@@ -715,13 +715,11 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
         if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
-            let mut saw_separator = false;
             while idx < tokens.len() {
                 let next = tokens[idx].as_str();
                 if is_command_separator_token(next) {
                     idx += 1;
                     idx = skip_command_wrapper_tokens(tokens, idx);
-                    saw_separator = true;
                     break;
                 }
                 if !is_env_assignment(next) {
@@ -733,21 +731,16 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
                 }
                 idx += 1;
             }
-            if saw_separator {
-                continue;
-            }
-            return false;
+            continue;
         }
 
         if token.eq_ignore_ascii_case("export") {
             idx += 1;
-            let mut saw_separator = false;
             while idx < tokens.len() {
                 let next = tokens[idx].as_str();
                 if is_command_separator_token(next) {
                     idx += 1;
                     idx = skip_command_wrapper_tokens(tokens, idx);
-                    saw_separator = true;
                     break;
                 }
                 if !is_env_assignment(next) {
@@ -759,10 +752,7 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
                 }
                 idx += 1;
             }
-            if saw_separator {
-                continue;
-            }
-            return false;
+            continue;
         }
 
         if is_env_assignment(token) {

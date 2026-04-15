@@ -222,6 +222,23 @@ fn command_contains_forbidden_lefthook_bypass_blocks_shell_wrapped_separator_res
 }
 
 #[test]
+fn command_contains_forbidden_lefthook_bypass_blocks_separator_resets_after_env_and_export_clauses()
+{
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "env FOO=1 cmd ; LEFTHOOK=0 other_cmd"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "export FOO=1 BAR ; LEFTHOOK=0 other_cmd"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"env FOO=1 cmd ; LEFTHOOK=0 other_cmd\""
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"export FOO=1 BAR ; LEFTHOOK=0 other_cmd\""
+    ));
+}
+
+#[test]
 fn command_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms() {
     assert!(command_contains_forbidden_lefthook_bypass(
         "command env LEFTHOOK=0 git commit"
@@ -317,6 +334,23 @@ fn segment_contains_forbidden_lefthook_bypass_blocks_shell_wrapped_separator_res
     ));
     assert!(!segment_contains_forbidden_lefthook_bypass(
         "sh -c \"echo 'LEFTHOOK=0'; git commit\""
+    ));
+}
+
+#[test]
+fn segment_contains_forbidden_lefthook_bypass_blocks_separator_resets_after_env_and_export_clauses()
+{
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "env FOO=1 cmd ; LEFTHOOK=0 other_cmd"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "export FOO=1 BAR ; LEFTHOOK=0 other_cmd"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"env FOO=1 cmd ; LEFTHOOK=0 other_cmd\""
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"export FOO=1 BAR ; LEFTHOOK=0 other_cmd\""
     ));
 }
 
