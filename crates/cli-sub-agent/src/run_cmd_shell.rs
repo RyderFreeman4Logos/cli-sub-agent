@@ -401,10 +401,28 @@ fn is_command_separator_token(token: &str) -> bool {
         || token.ends_with('&')
 }
 
-fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
+fn skip_command_prefix_tokens(tokens: &[String], idx: usize) -> usize {
+    skip_command_prefix_tokens_with_mode(tokens, idx, PrefixSkipMode::FullCommandPrefix)
+}
+
+fn skip_command_wrapper_tokens(tokens: &[String], idx: usize) -> usize {
+    skip_command_prefix_tokens_with_mode(tokens, idx, PrefixSkipMode::WrapperOnly)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PrefixSkipMode {
+    FullCommandPrefix,
+    WrapperOnly,
+}
+
+fn skip_command_prefix_tokens_with_mode(
+    tokens: &[String],
+    mut idx: usize,
+    mode: PrefixSkipMode,
+) -> usize {
     while idx < tokens.len() {
         let token = tokens[idx].as_str();
-        if is_env_assignment(token) {
+        if mode == PrefixSkipMode::FullCommandPrefix && is_env_assignment(token) {
             idx += 1;
             continue;
         }
@@ -413,7 +431,9 @@ fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
             idx = skip_prefixed_command_options(tokens, idx, sudo_option_consumes_value);
             continue;
         }
-        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+        if mode == PrefixSkipMode::FullCommandPrefix
+            && (token.eq_ignore_ascii_case("env") || token.ends_with("/env"))
+        {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
             while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
@@ -633,7 +653,7 @@ fn long_option_is_message_like(token: &str) -> bool {
 /// Forbidden LEFTHOOK env var names that disable pre-commit hooks.
 const FORBIDDEN_LEFTHOOK_ENV_VARS: &[&str] = &["LEFTHOOK", "LEFTHOOK_SKIP"];
 
-fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
+pub(crate) fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
     split_shell_segments_preserving_quotes(command)
         .into_iter()
         .any(|segment| segment_contains_forbidden_lefthook_bypass(&segment))
@@ -646,7 +666,7 @@ fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
 /// - `export LEFTHOOK=0`
 /// - `env LEFTHOOK=0 git commit ...`
 /// - `LEFTHOOK_SKIP=... git push ...`
-fn segment_contains_forbidden_lefthook_bypass(segment: &str) -> bool {
+pub(crate) fn segment_contains_forbidden_lefthook_bypass(segment: &str) -> bool {
     let tokens = tokenize_shell_tokens(segment);
     if tokens.is_empty() {
         return false;
@@ -667,6 +687,13 @@ fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
     tokens_contain_lefthook_bypass(&script_tokens)
 }
 
+fn skip_to_next_command_boundary(tokens: &[String], mut idx: usize) -> usize {
+    while idx < tokens.len() && !is_command_separator_token(tokens[idx].as_str()) {
+        idx += 1;
+    }
+    idx
+}
+
 /// Scan a flat token list for any LEFTHOOK bypass env assignment.
 ///
 /// Handles:
@@ -674,28 +701,71 @@ fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
 ///   - `export LEFTHOOK=0`
 ///   - `env LEFTHOOK=0 git ...`
 fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
-    for (idx, token) in tokens.iter().enumerate() {
-        let t = token.as_str();
+    let mut idx = skip_command_wrapper_tokens(tokens, 0);
 
-        // Inline env assignment: `LEFTHOOK=0 cmd`, `LEFTHOOK_SKIP=... cmd`
-        if is_lefthook_env_assignment(t) {
-            return true;
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+
+        if is_command_separator_token(token) {
+            idx += 1;
+            idx = skip_command_wrapper_tokens(tokens, idx);
+            continue;
         }
 
-        // `export LEFTHOOK=0` / `export LEFTHOOK_SKIP=...`
-        if t.eq_ignore_ascii_case("export") {
-            for next in &tokens[idx + 1..] {
-                let n = next.as_str();
-                if is_lefthook_env_assignment(n) {
-                    return true;
-                }
-                // export can chain multiple assignments; stop at non-assignment
-                if !is_env_assignment(n) {
+        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
+            while idx < tokens.len() {
+                let next = tokens[idx].as_str();
+                if is_command_separator_token(next) {
+                    idx += 1;
+                    idx = skip_command_wrapper_tokens(tokens, idx);
                     break;
                 }
+                if !is_env_assignment(next) {
+                    idx = skip_to_next_command_boundary(tokens, idx + 1);
+                    break;
+                }
+                if is_lefthook_env_assignment(next) {
+                    return true;
+                }
+                idx += 1;
             }
+            continue;
         }
+
+        if token.eq_ignore_ascii_case("export") {
+            idx += 1;
+            while idx < tokens.len() {
+                let next = tokens[idx].as_str();
+                if is_command_separator_token(next) {
+                    idx += 1;
+                    idx = skip_command_wrapper_tokens(tokens, idx);
+                    break;
+                }
+                if !is_env_assignment(next) {
+                    idx = skip_to_next_command_boundary(tokens, idx + 1);
+                    break;
+                }
+                if is_lefthook_env_assignment(next) {
+                    return true;
+                }
+                idx += 1;
+            }
+            continue;
+        }
+
+        if is_env_assignment(token) {
+            if is_lefthook_env_assignment(token) {
+                return true;
+            }
+            idx += 1;
+            continue;
+        }
+
+        idx = skip_to_next_command_boundary(tokens, idx + 1);
     }
+
     false
 }
 
