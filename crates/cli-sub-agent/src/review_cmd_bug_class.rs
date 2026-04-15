@@ -11,7 +11,7 @@ use crate::bug_class::{
 };
 use crate::review_consensus::build_consolidated_artifact;
 
-const REVIEW_CONSOLIDATED_ARTIFACT_FILE: &str = "review-consolidated.json";
+const REVIEW_CONSOLIDATED_ARTIFACT_FILE: &str = "review-findings-consolidated.json";
 const REVIEW_FINDINGS_ARTIFACT_FILE: &str = "review-findings.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,7 +129,7 @@ fn collapse_bug_class_review_artifacts(
     let mut grouped = BTreeMap::<ReviewArtifactGroupKey, Vec<GroupedReviewArtifact>>::new();
 
     for artifact in review_artifacts {
-        // Parent review-consolidated.json duplicates child reviewer findings but
+        // Parent review-findings-consolidated.json duplicates child reviewer findings but
         // does not carry review_meta.json. Skip only that parent artifact shape;
         // child reviewer sessions can legitimately have consolidated output too.
         if should_skip_bug_class_artifact(project_root, &artifact.session_id)? {

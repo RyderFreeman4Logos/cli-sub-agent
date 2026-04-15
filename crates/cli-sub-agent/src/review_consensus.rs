@@ -444,7 +444,7 @@ pub(crate) fn write_consolidated_artifact(
     artifact: &ReviewArtifact,
     output_dir: &Path,
 ) -> Result<()> {
-    let artifact_path = output_dir.join("review-consolidated.json");
+    let artifact_path = output_dir.join("review-findings-consolidated.json");
     let payload = serde_json::to_string_pretty(artifact)
         .context("failed to serialize consolidated review artifact")?;
     fs::write(&artifact_path, payload).with_context(|| {

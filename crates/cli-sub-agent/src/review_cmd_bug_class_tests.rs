@@ -1,6 +1,7 @@
 use super::*;
 use crate::bug_class::classify_recurring_bug_classes;
 use crate::review_cmd::bug_class_pipeline::load_bug_class_review_artifacts;
+use crate::review_consensus::write_consolidated_artifact;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use csa_session::state::ReviewSessionMeta;
@@ -355,7 +356,7 @@ fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion(
 
     write_review_artifact_file(
         &parent_dir,
-        "review-consolidated.json",
+        "review-findings-consolidated.json",
         &sample_review_artifact(&parent.meta_session_id, Severity::High, "rust/002"),
     );
     write_review_artifact(
@@ -421,7 +422,7 @@ fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists(
 
     write_review_artifact_file(
         &child_dir,
-        "review-consolidated.json",
+        "review-findings-consolidated.json",
         &sample_review_artifact(&child.meta_session_id, Severity::High, "rust/002"),
     );
     write_review_meta(
@@ -448,4 +449,49 @@ fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists(
 
     assert_eq!(review_artifacts.len(), 1);
     assert_eq!(review_artifacts[0].session_id, child.meta_session_id);
+}
+
+#[test]
+fn bug_class_loader_reads_exact_consolidated_path_written_by_consensus_writer() {
+    let temp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    let session = create_session(&project_root, Some("review session"), None, Some("codex"))
+        .expect("session should be created");
+    let session_dir = get_session_dir(&project_root, &session.meta_session_id).unwrap();
+    let artifact = sample_review_artifact(&session.meta_session_id, Severity::High, "rust/002");
+
+    write_consolidated_artifact(&artifact, &session_dir)
+        .expect("consensus writer should persist artifact");
+    write_review_meta(
+        &session_dir,
+        &ReviewSessionMeta {
+            session_id: session.meta_session_id.clone(),
+            head_sha: "deadbeef".to_string(),
+            decision: "fail".to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            tool: "codex".to_string(),
+            scope: "base:main".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: Some("sha256:shared".to_string()),
+        },
+    )
+    .expect("review meta");
+
+    let writer_path = session_dir.join("review-findings-consolidated.json");
+    assert!(
+        writer_path.is_file(),
+        "writer should use consolidated findings path"
+    );
+
+    let loaded = load_bug_class_review_artifacts(&project_root)
+        .expect("bug-class loader should read consolidated artifact");
+
+    assert_eq!(loaded, vec![artifact]);
 }

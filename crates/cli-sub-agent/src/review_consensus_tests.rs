@@ -551,7 +551,7 @@ fn write_consolidated_artifact_creates_json_file_at_expected_path() {
 
     write_consolidated_artifact(&artifact, temp.path()).expect("artifact should be written");
 
-    let artifact_path = temp.path().join("review-consolidated.json");
+    let artifact_path = temp.path().join("review-findings-consolidated.json");
     assert!(artifact_path.exists());
     let contents = std::fs::read_to_string(&artifact_path).expect("json file should be readable");
     let parsed: ReviewArtifact =
