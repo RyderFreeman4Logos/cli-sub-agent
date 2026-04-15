@@ -8,12 +8,13 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 
 use crate::output_section::{OutputIndex, OutputSection};
 
 use super::{
     MARKER_END_SUFFIX, MARKER_PREFIX, MARKER_SUFFIX, Marker, deduplicate_file_paths,
-    estimate_tokens, id_to_title, sanitize_section_id,
+    estimate_tokens, id_to_title, persist_structured_output, sanitize_section_id,
 };
 
 /// Maximum number of sections to parse from a single output file.
@@ -21,6 +22,22 @@ use super::{
 /// Prevents file-descriptor exhaustion from malformed or adversarial output
 /// containing thousands of section markers.
 const MAX_SECTIONS: usize = 64;
+
+#[derive(Debug, Deserialize)]
+struct TranscriptEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    item: Option<TranscriptItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptItem {
+    #[serde(rename = "type")]
+    item_type: String,
+    #[serde(default)]
+    text: Option<String>,
+}
 
 /// Parse output.log from a file path using streaming reads.
 ///
@@ -31,6 +48,10 @@ pub fn persist_structured_output_from_file(
     session_dir: &Path,
     output_log_path: &Path,
 ) -> Result<OutputIndex> {
+    if let Some(flattened) = flatten_transcript_for_sections(output_log_path)? {
+        return persist_structured_output(session_dir, &flattened);
+    }
+
     let file = fs::File::open(output_log_path)
         .with_context(|| format!("Failed to open {}", output_log_path.display()))?;
     let reader = BufReader::new(file);
@@ -211,6 +232,56 @@ pub fn persist_structured_output_from_file(
     Ok(index)
 }
 
+fn flatten_transcript_for_sections(output_log_path: &Path) -> Result<Option<String>> {
+    let file = fs::File::open(output_log_path)
+        .with_context(|| format!("Failed to open {}", output_log_path.display()))?;
+    let reader = BufReader::new(file);
+
+    let mut first_non_empty_line = None;
+    let mut saw_json_line = false;
+    let mut flattened = String::new();
+
+    for line_result in reader.lines() {
+        let line = line_result
+            .with_context(|| format!("Failed to read line from {}", output_log_path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        if first_non_empty_line.is_none() {
+            first_non_empty_line = Some(line.clone());
+            if serde_json::from_str::<TranscriptEvent>(&line).is_err() {
+                return Ok(None);
+            }
+        }
+
+        let Ok(event) = serde_json::from_str::<TranscriptEvent>(&line) else {
+            return Ok(None);
+        };
+        saw_json_line = true;
+
+        let Some(item) = event.item else {
+            continue;
+        };
+
+        if event.event_type == "item.completed"
+            && item.item_type == "agent_message"
+            && let Some(text) = item.text
+        {
+            if !flattened.is_empty() {
+                flattened.push('\n');
+            }
+            flattened.push_str(&text);
+        }
+    }
+
+    if saw_json_line {
+        Ok(Some(flattened))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Build an OutputSection without content (for streaming two-pass approach).
 fn build_section_no_content(id: &str, content_start: usize, content_end: usize) -> OutputSection {
     let safe_id = sanitize_section_id(id);
@@ -228,5 +299,92 @@ fn build_section_no_content(id: &str, content_start: usize, content_end: usize) 
         line_end,
         token_estimate: 0,
         file_path: Some(format!("{safe_id}.md")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_output_log(contents: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("output.log"), contents).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn persist_structured_output_from_file_extracts_summary_from_json_transcript() {
+        let tmp = write_output_log(
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->"}}"#,
+        );
+
+        let index = persist_structured_output_from_file(tmp.path(), &tmp.path().join("output.log"))
+            .unwrap();
+
+        assert_eq!(index.sections.len(), 1);
+        assert_eq!(index.sections[0].id, "summary");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("output/summary.md")).unwrap(),
+            "PASS"
+        );
+    }
+
+    #[test]
+    fn persist_structured_output_from_file_extracts_multiple_sections_from_json_transcript() {
+        let tmp = write_output_log(concat!(
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"<!-- CSA:SECTION:details -->\nFound issue details\n<!-- CSA:SECTION:details:END -->"}}"#,
+        ));
+
+        let index = persist_structured_output_from_file(tmp.path(), &tmp.path().join("output.log"))
+            .unwrap();
+
+        assert_eq!(index.sections.len(), 2);
+        assert!(tmp.path().join("output/summary.md").exists());
+        assert!(tmp.path().join("output/details.md").exists());
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("output/summary.md")).unwrap(),
+            "PASS"
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("output/details.md")).unwrap(),
+            "Found issue details"
+        );
+    }
+
+    #[test]
+    fn persist_structured_output_from_file_keeps_plain_text_path() {
+        let tmp = write_output_log(
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
+        );
+
+        let index = persist_structured_output_from_file(tmp.path(), &tmp.path().join("output.log"))
+            .unwrap();
+
+        assert_eq!(index.sections.len(), 1);
+        assert_eq!(index.sections[0].id, "summary");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("output/summary.md")).unwrap(),
+            "PASS"
+        );
+    }
+
+    #[test]
+    fn persist_structured_output_from_file_falls_back_on_malformed_json_like_input() {
+        let tmp = write_output_log(
+            "{not valid json\n<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
+        );
+
+        let index = persist_structured_output_from_file(tmp.path(), &tmp.path().join("output.log"))
+            .unwrap();
+
+        assert_eq!(index.sections.len(), 1);
+        assert_eq!(index.sections[0].id, "summary");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("output/summary.md")).unwrap(),
+            "PASS"
+        );
     }
 }
