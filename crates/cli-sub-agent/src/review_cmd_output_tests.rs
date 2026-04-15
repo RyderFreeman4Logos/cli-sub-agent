@@ -24,6 +24,17 @@ fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
     }
 }
 
+fn make_review_meta_with_decision(
+    session_id: &str,
+    decision: ReviewDecision,
+    verdict: &str,
+) -> ReviewSessionMeta {
+    let mut meta = make_review_meta(session_id);
+    meta.decision = decision.as_str().to_string();
+    meta.verdict = verdict.to_string();
+    meta
+}
+
 fn make_finding(severity: Severity, fid: &str) -> Finding {
     Finding {
         severity,
@@ -158,6 +169,41 @@ fn persist_review_verdict_falls_back_to_full_output_transcript_counts() {
 }
 
 #[test]
+fn persist_review_verdict_falls_back_to_priority_markers_in_full_output() {
+    let project_root = temp_project_root("persist-review-verdict-priority-markers");
+    let session_id = "01TESTPRIORITYMARKERS000000";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let full_output = [json!({"type":"item.completed","item":{
+        "id":"item_1",
+        "type":"agent_message",
+        "text":"<!-- CSA:SECTION:summary -->\nFAIL\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nFindings\n1. [P0][correctness] first\n2. [P1][regression] second\n3. [P2][test-gap] third\n4. [P3][style] fourth\n5. [P4][nit] fifth\n6. [Info][maintainability] sixth\n\nOverall risk: high\n<!-- CSA:SECTION:details:END -->"
+    }})]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write full output transcript");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&2));
+    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn persist_review_verdict_marks_clean_transcript_as_pass() {
     let project_root = temp_project_root("persist-review-verdict-pass");
     let session_id = "01TESTPASS0000000000000000";
@@ -246,6 +292,37 @@ fn persist_review_verdict_concrete_findings_override_uncertain_token() {
     assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
+    let project_root = temp_project_root("persist-review-verdict-empty-findings-uncertain");
+    let session_id = "01TESTEMPTYFINDINGSUNCERTAIN";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let findings_path = session_dir.join("review-findings.json");
+    let artifact = json!({
+        "findings": [],
+        "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+        "overall_risk": "low"
+    });
+    fs::write(
+        &findings_path,
+        serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
+    )
+    .expect("write findings artifact");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Uncertain, "UNCERTAIN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
+    assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

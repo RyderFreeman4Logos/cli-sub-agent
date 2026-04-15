@@ -237,6 +237,7 @@ fn derive_review_verdict_artifact(
         let decision = derive_decision_from_findings(
             artifact.findings.is_empty(),
             artifact.overall_risk.as_deref(),
+            ReviewDecision::from_str(&meta.decision).ok(),
         );
         return Ok(build_review_verdict_artifact(
             meta.session_id.clone(),
@@ -375,7 +376,8 @@ fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
 }
 
 fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity, u32> {
-    let marker_re = Regex::new(r"(?i)\[(critical|high|medium|low|info)\]").expect("valid regex");
+    let marker_re =
+        Regex::new(r"(?i)\[(critical|high|medium|low|info|p[0-4])\]").expect("valid regex");
     let mut counts = zero_severity_counts();
 
     for captures in marker_re.captures_iter(text) {
@@ -385,6 +387,10 @@ fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity,
             Some(level) if level == "medium" => Severity::Medium,
             Some(level) if level == "low" => Severity::Low,
             Some(level) if level == "info" => Severity::Info,
+            Some(level) if level == "p0" => Severity::Critical,
+            Some(level) if level == "p1" => Severity::High,
+            Some(level) if level == "p2" => Severity::Medium,
+            Some(level) if level == "p3" || level == "p4" => Severity::Low,
             _ => continue,
         };
         *counts.entry(severity).or_insert(0) += 1;
@@ -405,12 +411,31 @@ fn parse_overall_risk_from_text(text: &str) -> Option<String> {
 fn derive_decision_from_findings(
     findings_empty: bool,
     overall_risk: Option<&str>,
+    meta_decision: Option<ReviewDecision>,
 ) -> ReviewDecision {
-    if findings_empty && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) {
-        ReviewDecision::Pass
-    } else {
-        ReviewDecision::Fail
+    if findings_empty {
+        match meta_decision {
+            Some(
+                meta_decision @ (ReviewDecision::Skip
+                | ReviewDecision::Uncertain
+                | ReviewDecision::Fail),
+            ) => {
+                return meta_decision;
+            }
+            Some(ReviewDecision::Pass)
+                if overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) =>
+            {
+                return ReviewDecision::Pass;
+            }
+            Some(ReviewDecision::Pass) => return ReviewDecision::Fail,
+            None if overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) => {
+                return ReviewDecision::Uncertain;
+            }
+            None => return ReviewDecision::Fail,
+        }
     }
+
+    ReviewDecision::Fail
 }
 
 fn derive_decision_from_text(
