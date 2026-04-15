@@ -183,6 +183,12 @@ fn command_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignmen
         "LEFTHOOK=0 git commit -m \"msg\""
     ));
     assert!(command_contains_forbidden_lefthook_bypass(
+        "FOO=1 LEFTHOOK=0 git commit -m \"msg\""
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "A=1 B=2 LEFTHOOK_SKIP=pre-commit git push"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
         "env LEFTHOOK=0 git commit"
     ));
     assert!(command_contains_forbidden_lefthook_bypass(
@@ -191,12 +197,18 @@ fn command_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignmen
     assert!(command_contains_forbidden_lefthook_bypass(
         "sh -c \"export LEFTHOOK=0; git commit\""
     ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"FOO=1 LEFTHOOK=0 git commit\""
+    ));
 }
 
 #[test]
 fn command_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms() {
     assert!(command_contains_forbidden_lefthook_bypass(
         "command env LEFTHOOK=0 git commit"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "command env A=1 LEFTHOOK=0 git commit"
     ));
     assert!(command_contains_forbidden_lefthook_bypass(
         "time env LEFTHOOK=0 git commit"
@@ -231,6 +243,12 @@ fn segment_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignmen
         "LEFTHOOK=0 git commit -m \"msg\""
     ));
     assert!(segment_contains_forbidden_lefthook_bypass(
+        "FOO=1 LEFTHOOK=0 git commit -m \"msg\""
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "A=1 B=2 LEFTHOOK_SKIP=pre-commit git push"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
         "env LEFTHOOK=0 git commit"
     ));
     assert!(segment_contains_forbidden_lefthook_bypass(
@@ -247,10 +265,20 @@ fn segment_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms(
         "command env LEFTHOOK=0 git commit"
     ));
     assert!(segment_contains_forbidden_lefthook_bypass(
+        "command env A=1 LEFTHOOK=0 git commit"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
         "time env LEFTHOOK=0 git commit"
     ));
     assert!(segment_contains_forbidden_lefthook_bypass(
         "sudo env LEFTHOOK=0 git commit"
+    ));
+}
+
+#[test]
+fn segment_contains_forbidden_lefthook_bypass_blocks_shell_wrapped_multi_assignment_prefixes() {
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"FOO=1 LEFTHOOK=0 git commit\""
     ));
 }
 

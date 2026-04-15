@@ -694,44 +694,50 @@ fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
 ///   - `export LEFTHOOK=0`
 ///   - `env LEFTHOOK=0 git ...`
 fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
-    let idx = skip_command_wrapper_tokens(tokens, 0);
-    let Some(first_token) = tokens.get(idx) else {
-        return false;
-    };
-    let token = first_token.as_str();
+    let mut idx = skip_command_wrapper_tokens(tokens, 0);
 
-    if is_env_assignment(token) {
-        return is_lefthook_env_assignment(token);
-    }
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
 
-    if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
-        let mut env_idx = idx + 1;
-        env_idx = skip_prefixed_command_options(tokens, env_idx, env_option_consumes_value);
-        while env_idx < tokens.len() {
-            let next = tokens[env_idx].as_str();
-            if !is_env_assignment(next) {
-                return false;
+        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
+            while idx < tokens.len() {
+                let next = tokens[idx].as_str();
+                if !is_env_assignment(next) {
+                    return false;
+                }
+                if is_lefthook_env_assignment(next) {
+                    return true;
+                }
+                idx += 1;
             }
-            if is_lefthook_env_assignment(next) {
+            return false;
+        }
+
+        if token.eq_ignore_ascii_case("export") {
+            idx += 1;
+            while idx < tokens.len() {
+                let next = tokens[idx].as_str();
+                if !is_env_assignment(next) {
+                    return false;
+                }
+                if is_lefthook_env_assignment(next) {
+                    return true;
+                }
+                idx += 1;
+            }
+            return false;
+        }
+
+        if is_env_assignment(token) {
+            if is_lefthook_env_assignment(token) {
                 return true;
             }
-            env_idx += 1;
+            idx += 1;
+            continue;
         }
-        return false;
-    }
 
-    if token.eq_ignore_ascii_case("export") {
-        let mut export_idx = idx + 1;
-        while export_idx < tokens.len() {
-            let next = tokens[export_idx].as_str();
-            if !is_env_assignment(next) {
-                return false;
-            }
-            if is_lefthook_env_assignment(next) {
-                return true;
-            }
-            export_idx += 1;
-        }
         return false;
     }
 
