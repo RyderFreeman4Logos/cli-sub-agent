@@ -220,7 +220,11 @@ fn find_latest_branch_review_meta(
             let meta = load_review_meta(project_root, &candidate.meta_session_id)?;
             Some((candidate.meta_session_id, meta))
         })
-        .max_by(|a, b| a.1.timestamp.cmp(&b.1.timestamp))
+        .max_by(|a, b| {
+            a.1.timestamp
+                .cmp(&b.1.timestamp)
+                .then_with(|| a.0.cmp(&b.0))
+        })
 }
 
 fn load_review_meta(project_root: &Path, session_id: &str) -> Option<ReviewSessionMeta> {
@@ -693,6 +697,46 @@ mod tests {
         assert!(rendered.contains("[high]"));
         assert!(rendered.contains("src/lib.rs:42"));
         assert!(rendered.contains("no unwrap"));
+    }
+
+    #[test]
+    fn find_latest_branch_review_meta_breaks_timestamp_ties_by_session_id() {
+        use crate::test_session_sandbox::ScopedSessionSandbox;
+        use csa_session::{create_session, get_session_dir, write_review_meta};
+
+        let project = setup_git_repo_with_branch("feat/tie-break");
+        let _sandbox = ScopedSessionSandbox::new(&project);
+        let shared_timestamp = chrono::Utc::now();
+
+        let session_a = create_session(project.path(), Some("review-a"), None, Some("codex"))
+            .expect("session a created");
+        let session_b = create_session(project.path(), Some("review-b"), None, Some("codex"))
+            .expect("session b created");
+
+        let session_a_dir = get_session_dir(project.path(), &session_a.meta_session_id).unwrap();
+        let session_b_dir = get_session_dir(project.path(), &session_b.meta_session_id).unwrap();
+
+        let mut meta_a = make_review_meta(&session_a.meta_session_id, "fail", 1);
+        meta_a.timestamp = shared_timestamp;
+        let mut meta_b = make_review_meta(&session_b.meta_session_id, "pass", 2);
+        meta_b.timestamp = shared_timestamp;
+
+        write_review_meta(&session_a_dir, &meta_a).expect("write session a review meta");
+        write_review_meta(&session_b_dir, &meta_b).expect("write session b review meta");
+
+        let expected_session_id = std::cmp::max(
+            session_a.meta_session_id.clone(),
+            session_b.meta_session_id.clone(),
+        );
+
+        for _ in 0..5 {
+            let (selected_session_id, selected_meta) =
+                find_latest_branch_review_meta(project.path(), "feat/tie-break", None)
+                    .expect("latest prior review session");
+            assert_eq!(selected_session_id, expected_session_id);
+            assert_eq!(selected_meta.session_id, expected_session_id);
+            assert_eq!(selected_meta.timestamp, shared_timestamp);
+        }
     }
 
     #[test]
