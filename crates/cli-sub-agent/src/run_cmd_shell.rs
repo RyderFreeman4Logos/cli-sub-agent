@@ -687,6 +687,13 @@ fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
     tokens_contain_lefthook_bypass(&script_tokens)
 }
 
+fn skip_to_next_command_boundary(tokens: &[String], mut idx: usize) -> usize {
+    while idx < tokens.len() && !is_command_separator_token(tokens[idx].as_str()) {
+        idx += 1;
+    }
+    idx
+}
+
 /// Scan a flat token list for any LEFTHOOK bypass env assignment.
 ///
 /// Handles:
@@ -699,33 +706,61 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
     while idx < tokens.len() {
         let token = tokens[idx].as_str();
 
+        if is_command_separator_token(token) {
+            idx += 1;
+            idx = skip_command_wrapper_tokens(tokens, idx);
+            continue;
+        }
+
         if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
+            let mut saw_separator = false;
             while idx < tokens.len() {
                 let next = tokens[idx].as_str();
+                if is_command_separator_token(next) {
+                    idx += 1;
+                    idx = skip_command_wrapper_tokens(tokens, idx);
+                    saw_separator = true;
+                    break;
+                }
                 if !is_env_assignment(next) {
-                    return false;
+                    idx = skip_to_next_command_boundary(tokens, idx + 1);
+                    break;
                 }
                 if is_lefthook_env_assignment(next) {
                     return true;
                 }
                 idx += 1;
             }
+            if saw_separator {
+                continue;
+            }
             return false;
         }
 
         if token.eq_ignore_ascii_case("export") {
             idx += 1;
+            let mut saw_separator = false;
             while idx < tokens.len() {
                 let next = tokens[idx].as_str();
+                if is_command_separator_token(next) {
+                    idx += 1;
+                    idx = skip_command_wrapper_tokens(tokens, idx);
+                    saw_separator = true;
+                    break;
+                }
                 if !is_env_assignment(next) {
-                    return false;
+                    idx = skip_to_next_command_boundary(tokens, idx + 1);
+                    break;
                 }
                 if is_lefthook_env_assignment(next) {
                     return true;
                 }
                 idx += 1;
+            }
+            if saw_separator {
+                continue;
             }
             return false;
         }
@@ -738,7 +773,7 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
             continue;
         }
 
-        return false;
+        idx = skip_to_next_command_boundary(tokens, idx + 1);
     }
 
     false

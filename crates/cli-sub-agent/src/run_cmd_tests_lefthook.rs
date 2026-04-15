@@ -203,6 +203,25 @@ fn command_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignmen
 }
 
 #[test]
+fn command_contains_forbidden_lefthook_bypass_blocks_shell_wrapped_separator_resets() {
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"git status; LEFTHOOK=0 git commit\""
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"git rev-parse HEAD && LEFTHOOK=0 git commit\""
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"git commit && export LEFTHOOK=0\""
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sh -c \"echo hello | LEFTHOOK=0 git commit\""
+    ));
+    assert!(!command_contains_forbidden_lefthook_bypass(
+        "sh -c \"echo 'LEFTHOOK=0'; git commit\""
+    ));
+}
+
+#[test]
 fn command_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms() {
     assert!(command_contains_forbidden_lefthook_bypass(
         "command env LEFTHOOK=0 git commit"
@@ -279,6 +298,25 @@ fn segment_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms(
 fn segment_contains_forbidden_lefthook_bypass_blocks_shell_wrapped_multi_assignment_prefixes() {
     assert!(segment_contains_forbidden_lefthook_bypass(
         "sh -c \"FOO=1 LEFTHOOK=0 git commit\""
+    ));
+}
+
+#[test]
+fn segment_contains_forbidden_lefthook_bypass_blocks_shell_wrapped_separator_resets() {
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"git status; LEFTHOOK=0 git commit\""
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"git rev-parse HEAD && LEFTHOOK=0 git commit\""
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"git commit && export LEFTHOOK=0\""
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"echo hello | LEFTHOOK=0 git commit\""
+    ));
+    assert!(!segment_contains_forbidden_lefthook_bypass(
+        "sh -c \"echo 'LEFTHOOK=0'; git commit\""
     ));
 }
 
