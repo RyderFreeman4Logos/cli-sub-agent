@@ -263,7 +263,7 @@ fn parse_review_verdict_accepts_clean_phrase_without_explicit_token() {
 }
 
 #[test]
-fn build_multi_reviewer_instruction_prefers_parent_session_dir_env() {
+fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_exist() {
     let _env_lock = REVIEWER_ENV_LOCK
         .lock()
         .expect("reviewer env lock poisoned");
@@ -272,24 +272,41 @@ fn build_multi_reviewer_instruction_prefers_parent_session_dir_env() {
 
     let prompt = build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex);
 
-    assert!(prompt.contains("/tmp/parent-session/reviewer-2/review-findings.json"));
+    assert!(prompt.contains("/tmp/child-session/reviewer-2/review-findings.json"));
     assert!(
-        !prompt.contains("/tmp/child-session/reviewer-2/review-findings.json"),
-        "parent session dir should override child session dir when both exist"
+        !prompt.contains("/tmp/parent-session/reviewer-2/review-findings.json"),
+        "current session dir should override parent session dir when both exist"
     );
 }
 
 #[test]
-fn build_multi_reviewer_instruction_falls_back_to_session_dir_env() {
+fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
+    let _env_lock = REVIEWER_ENV_LOCK
+        .lock()
+        .expect("reviewer env lock poisoned");
+    let _parent_guard = ScopedEnvVar::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
+    let _session_guard = ScopedEnvVar::unset(CSA_SESSION_DIR_ENV_KEY);
+
+    let prompt = build_multi_reviewer_instruction("Base prompt", 3, ToolName::Codex);
+
+    assert!(prompt.contains("/tmp/parent-session/reviewer-3/review-findings.json"));
+}
+
+#[test]
+fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_missing() {
     let _env_lock = REVIEWER_ENV_LOCK
         .lock()
         .expect("reviewer env lock poisoned");
     let _parent_guard = ScopedEnvVar::unset(CSA_PARENT_SESSION_DIR_ENV_KEY);
-    let _session_guard = ScopedEnvVar::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/current-session");
+    let _session_guard = ScopedEnvVar::unset(CSA_SESSION_DIR_ENV_KEY);
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 3, ToolName::Codex);
+    let prompt = build_multi_reviewer_instruction("Base prompt", 4, ToolName::Codex);
 
-    assert!(prompt.contains("/tmp/current-session/reviewer-3/review-findings.json"));
+    assert!(
+        prompt.contains(
+            "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-4/review-findings.json"
+        )
+    );
 }
 
 #[test]

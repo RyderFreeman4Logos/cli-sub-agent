@@ -174,8 +174,8 @@ Reviewer tool hint: {}.",
 
 fn reviewer_output_dir(reviewer_index: usize) -> String {
     let reviewer_dir = format!("reviewer-{reviewer_index}");
-    std::env::var(CSA_PARENT_SESSION_DIR_ENV_KEY)
-        .or_else(|_| std::env::var(CSA_SESSION_DIR_ENV_KEY))
+    std::env::var(CSA_SESSION_DIR_ENV_KEY)
+        .or_else(|_| std::env::var(CSA_PARENT_SESSION_DIR_ENV_KEY))
         .map(|session_dir| {
             Path::new(&session_dir)
                 .join(&reviewer_dir)
@@ -184,7 +184,7 @@ fn reviewer_output_dir(reviewer_index: usize) -> String {
         })
         .unwrap_or_else(|_| {
             format!(
-                "${{{CSA_PARENT_SESSION_DIR_ENV_KEY}:-${CSA_SESSION_DIR_ENV_KEY}}}/{reviewer_dir}"
+                "${{{CSA_SESSION_DIR_ENV_KEY}:-${CSA_PARENT_SESSION_DIR_ENV_KEY}}}/{reviewer_dir}"
             )
         })
 }
