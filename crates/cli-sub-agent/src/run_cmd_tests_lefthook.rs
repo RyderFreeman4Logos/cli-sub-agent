@@ -194,6 +194,19 @@ fn command_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignmen
 }
 
 #[test]
+fn command_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms() {
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "command env LEFTHOOK=0 git commit"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "time env LEFTHOOK=0 git commit"
+    ));
+    assert!(command_contains_forbidden_lefthook_bypass(
+        "sudo env LEFTHOOK=0 git commit"
+    ));
+}
+
+#[test]
 fn segment_contains_forbidden_lefthook_bypass_ignores_argument_mentions() {
     assert!(!segment_contains_forbidden_lefthook_bypass(
         "echo \"do not set LEFTHOOK=0\""
@@ -225,6 +238,19 @@ fn segment_contains_forbidden_lefthook_bypass_still_blocks_real_prefix_assignmen
     ));
     assert!(segment_contains_forbidden_lefthook_bypass(
         "sh -c \"export LEFTHOOK=0; git commit\""
+    ));
+}
+
+#[test]
+fn segment_contains_forbidden_lefthook_bypass_blocks_wrapper_prefixed_env_forms() {
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "command env LEFTHOOK=0 git commit"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "time env LEFTHOOK=0 git commit"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "sudo env LEFTHOOK=0 git commit"
     ));
 }
 

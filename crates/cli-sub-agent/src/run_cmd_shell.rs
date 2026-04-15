@@ -401,10 +401,28 @@ fn is_command_separator_token(token: &str) -> bool {
         || token.ends_with('&')
 }
 
-fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
+fn skip_command_prefix_tokens(tokens: &[String], idx: usize) -> usize {
+    skip_command_prefix_tokens_with_mode(tokens, idx, PrefixSkipMode::FullCommandPrefix)
+}
+
+fn skip_command_wrapper_tokens(tokens: &[String], idx: usize) -> usize {
+    skip_command_prefix_tokens_with_mode(tokens, idx, PrefixSkipMode::WrapperOnly)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PrefixSkipMode {
+    FullCommandPrefix,
+    WrapperOnly,
+}
+
+fn skip_command_prefix_tokens_with_mode(
+    tokens: &[String],
+    mut idx: usize,
+    mode: PrefixSkipMode,
+) -> usize {
     while idx < tokens.len() {
         let token = tokens[idx].as_str();
-        if is_env_assignment(token) {
+        if mode == PrefixSkipMode::FullCommandPrefix && is_env_assignment(token) {
             idx += 1;
             continue;
         }
@@ -413,7 +431,9 @@ fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
             idx = skip_prefixed_command_options(tokens, idx, sudo_option_consumes_value);
             continue;
         }
-        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+        if mode == PrefixSkipMode::FullCommandPrefix
+            && (token.eq_ignore_ascii_case("env") || token.ends_with("/env"))
+        {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
             while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
@@ -674,10 +694,10 @@ fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
 ///   - `export LEFTHOOK=0`
 ///   - `env LEFTHOOK=0 git ...`
 fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
-    let Some(first_token) = tokens.first() else {
+    let idx = skip_command_wrapper_tokens(tokens, 0);
+    let Some(first_token) = tokens.get(idx) else {
         return false;
     };
-    let mut idx = 0usize;
     let token = first_token.as_str();
 
     if is_env_assignment(token) {
@@ -685,31 +705,32 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
     }
 
     if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
-        idx += 1;
-        while idx < tokens.len() {
-            let next = tokens[idx].as_str();
+        let mut env_idx = idx + 1;
+        env_idx = skip_prefixed_command_options(tokens, env_idx, env_option_consumes_value);
+        while env_idx < tokens.len() {
+            let next = tokens[env_idx].as_str();
             if !is_env_assignment(next) {
                 return false;
             }
             if is_lefthook_env_assignment(next) {
                 return true;
             }
-            idx += 1;
+            env_idx += 1;
         }
         return false;
     }
 
     if token.eq_ignore_ascii_case("export") {
-        idx += 1;
-        while idx < tokens.len() {
-            let next = tokens[idx].as_str();
+        let mut export_idx = idx + 1;
+        while export_idx < tokens.len() {
+            let next = tokens[export_idx].as_str();
             if !is_env_assignment(next) {
                 return false;
             }
             if is_lefthook_env_assignment(next) {
                 return true;
             }
-            idx += 1;
+            export_idx += 1;
         }
         return false;
     }
