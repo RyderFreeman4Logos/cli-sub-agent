@@ -297,13 +297,7 @@ fn infer_review_verdict_from_full_output(
     };
 
     if !has_structured_review_content(&review_text) {
-        return Ok(Some(build_review_verdict_artifact(
-            meta.session_id.clone(),
-            ReviewDecision::Uncertain,
-            meta.verdict.clone(),
-            zero_severity_counts(),
-            Vec::new(),
-        )));
+        return Ok(None);
     }
 
     let counts = severity_counts_from_text(&review_text);
@@ -424,12 +418,6 @@ fn derive_decision_from_text(
     counts: &std::collections::BTreeMap<Severity, u32>,
     overall_risk: Option<&str>,
 ) -> ReviewDecision {
-    if contains_verdict_token(text, "UNCERTAIN") {
-        return ReviewDecision::Uncertain;
-    }
-    if contains_verdict_token(text, "SKIP") {
-        return ReviewDecision::Skip;
-    }
     if counts.values().any(|count| *count > 0) {
         return ReviewDecision::Fail;
     }
@@ -448,6 +436,12 @@ fn derive_decision_from_text(
         && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
     {
         return ReviewDecision::Pass;
+    }
+    if contains_verdict_token(text, "SKIP") {
+        return ReviewDecision::Skip;
+    }
+    if contains_verdict_token(text, "UNCERTAIN") {
+        return ReviewDecision::Uncertain;
     }
     ReviewDecision::Uncertain
 }

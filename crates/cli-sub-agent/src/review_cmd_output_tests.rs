@@ -189,15 +189,51 @@ fn persist_review_verdict_marks_clean_transcript_as_pass() {
 }
 
 #[test]
-fn persist_review_verdict_marks_unstructured_full_output_as_uncertain() {
-    let project_root = temp_project_root("persist-review-verdict-uncertain");
-    let session_id = "01TESTUNCERTAIN00000000000";
+fn persist_review_verdict_plain_text_full_output_falls_back_to_review_meta_findings() {
+    let project_root = temp_project_root("persist-review-verdict-meta-fallback");
+    let session_id = "01TESTMETAFALLBACK000000000";
     let session_dir = create_session_dir(&project_root, session_id);
     fs::write(
         session_dir.join("output").join("full.md"),
-        "review finished but reporter only emitted raw full output",
+        "Findings\n1. [High][regression] fallback path should preserve review_meta\nOverall risk: high",
     )
-    .expect("write malformed full output");
+    .expect("write plain-text full output");
+
+    let meta = make_review_meta(session_id);
+    let findings = vec![make_finding(Severity::High, "fallback-high")];
+    persist_review_verdict(&project_root, &meta, &findings, Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_verdict_concrete_findings_override_uncertain_token() {
+    let project_root = temp_project_root("persist-review-verdict-concrete-over-uncertain");
+    let session_id = "01TESTCONCRETEOVERUNCERTAIN";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let full_output = [json!({"type":"item.completed","item":{
+        "id":"item_1",
+        "type":"agent_message",
+        "text":"<!-- CSA:SECTION:summary -->\nUNCERTAIN\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNot-applicable to fuzzing, but there is still one concrete issue.\n1. [High][regression] parser disagreement remains user-visible.\nOverall risk: high\n<!-- CSA:SECTION:details:END -->"
+    }})]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write mixed verdict full output");
 
     let meta = make_review_meta(session_id);
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
@@ -206,9 +242,10 @@ fn persist_review_verdict_marks_unstructured_full_output_as_uncertain() {
     let artifact: ReviewVerdictArtifact =
         serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
             .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
     assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
-    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
