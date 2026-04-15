@@ -328,6 +328,46 @@ fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
 }
 
 #[test]
+fn persist_review_verdict_json_transcript_without_review_message_falls_back_to_review_meta() {
+    let project_root = temp_project_root("persist-review-verdict-json-no-review-message");
+    let session_id = "01TESTJSONNOREVIEWMESSAGE00";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let full_output = [
+        json!({"type":"thread.started","thread_id":"thread-1"}),
+        json!({"type":"item.completed","item":{
+            "id":"tool_1",
+            "type":"tool_call",
+            "name":"shell",
+            "arguments":"echo checking"
+        }}),
+        json!({"type":"item.completed","item":{
+            "id":"tool_2",
+            "type":"tool_result",
+            "output":"ok"
+        }}),
+    ]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write tool-only full output transcript");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn persisted_review_artifact_deserializes_optional_overall_risk() {
     let artifact: PersistedReviewArtifact = serde_json::from_value(json!({
         "findings": [],

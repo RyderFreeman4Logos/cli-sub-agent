@@ -288,13 +288,7 @@ fn infer_review_verdict_from_full_output(
     let raw_output = fs::read_to_string(&full_output_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
     let Some(review_text) = extract_review_text(&raw_output) else {
-        return Ok(Some(build_review_verdict_artifact(
-            meta.session_id.clone(),
-            ReviewDecision::Uncertain,
-            meta.verdict.clone(),
-            zero_severity_counts(),
-            Vec::new(),
-        )));
+        return Ok(None);
     };
 
     if !has_structured_review_content(&review_text) {
