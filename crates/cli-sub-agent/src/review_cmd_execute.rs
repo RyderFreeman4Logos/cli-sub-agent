@@ -1,11 +1,15 @@
 //! Review execution helpers extracted from `review_cmd.rs`.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_session::{SessionResult, load_result, load_session, save_result, save_session};
+use csa_session::{
+    SessionResult, get_session_dir, load_result, load_session, save_result, save_session,
+};
 use tracing::{info, warn};
 
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
@@ -48,6 +52,7 @@ pub(super) async fn execute_review(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
 ) -> Result<crate::pipeline::SessionExecutionResult> {
+    let execution_started_at = Utc::now();
     let enforce_tier =
         tier_name.is_some() && tier_model_spec.is_some() && !force_ignore_tier_setting;
     let executor = crate::pipeline::build_and_validate_executor(
@@ -101,7 +106,7 @@ pub(super) async fn execute_review(
         effective_prompt = format!("{guard}\n\n{effective_prompt}");
     }
 
-    let mut execution = crate::pipeline::execute_with_session_and_meta_with_parent_source(
+    let mut execution = match crate::pipeline::execute_with_session_and_meta_with_parent_source(
         &executor,
         &tool,
         &effective_prompt,
@@ -127,12 +132,155 @@ pub(super) async fn execute_review(
         readonly_project_root,
         extra_writable,
     )
-    .await?;
+    .await
+    {
+        Ok(execution) => execution,
+        Err(err) => {
+            maybe_synthesize_missing_review_result(project_root, tool, execution_started_at, &err);
+            return Err(err);
+        }
+    };
 
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
     repair_completed_review_restriction_result(project_root, tool, &mut execution)?;
 
     Ok(execution)
+}
+
+fn maybe_synthesize_missing_review_result(
+    project_root: &Path,
+    tool: ToolName,
+    started_at: DateTime<Utc>,
+    error: &anyhow::Error,
+) {
+    let Some(session_id) = extract_meta_session_id_from_error(error) else {
+        return;
+    };
+
+    match load_result(project_root, &session_id) {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(load_err) => {
+            warn!(
+                session_id = %session_id,
+                error = %load_err,
+                "Failed to check for existing review result.toml before fallback synthesis"
+            );
+        }
+    }
+
+    let session_dir = match get_session_dir(project_root, &session_id) {
+        Ok(path) => path,
+        Err(session_dir_err) => {
+            warn!(
+                session_id = %session_id,
+                error = %session_dir_err,
+                "Failed to resolve review session dir for fallback result synthesis"
+            );
+            return;
+        }
+    };
+
+    let stderr_excerpt = read_review_failure_excerpt(&session_dir)
+        .unwrap_or_else(|| truncate_for_summary(&format!("{error:#}"), 500));
+    let (status, exit_code, error_kind) = classify_review_failure(error, &stderr_excerpt);
+    let summary = truncate_for_summary(
+        &format!("review {error_kind}: {}", stderr_excerpt.trim()),
+        200,
+    );
+    let completed_at = Utc::now();
+    let fallback_result = SessionResult {
+        status: status.to_string(),
+        exit_code,
+        summary,
+        tool: tool.to_string(),
+        started_at,
+        completed_at,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+    };
+
+    if let Err(save_err) = save_result(project_root, &session_id, &fallback_result) {
+        warn!(
+            session_id = %session_id,
+            error = %save_err,
+            "Failed to synthesize missing review result.toml"
+        );
+        return;
+    }
+
+    csa_session::write_cooldown_marker_for_project(project_root, &session_id, completed_at);
+    warn!(
+        session_id = %session_id,
+        error_kind,
+        "Synthesized missing review result.toml after execution error"
+    );
+}
+
+fn extract_meta_session_id_from_error(error: &anyhow::Error) -> Option<String> {
+    const MARKER: &str = "meta_session_id=";
+    for cause in error.chain() {
+        let message = cause.to_string();
+        let Some(idx) = message.find(MARKER) else {
+            continue;
+        };
+        let suffix = &message[idx + MARKER.len()..];
+        let session_id: String = suffix
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric())
+            .collect();
+        if !session_id.is_empty() {
+            return Some(session_id);
+        }
+    }
+    None
+}
+
+fn read_review_failure_excerpt(session_dir: &Path) -> Option<String> {
+    let stderr_path = session_dir.join("stderr.log");
+    let contents = fs::read_to_string(stderr_path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_for_summary(trimmed, 500))
+}
+
+fn classify_review_failure(
+    error: &anyhow::Error,
+    excerpt: &str,
+) -> (&'static str, i32, &'static str) {
+    let mut combined = excerpt.to_ascii_lowercase();
+    for cause in error.chain() {
+        combined.push('\n');
+        combined.push_str(&cause.to_string().to_ascii_lowercase());
+    }
+
+    if combined.contains("initial_response_timeout")
+        || combined.contains("timed out")
+        || combined.contains("timeout")
+    {
+        ("timeout", 124, "timeout")
+    } else if combined.contains("sigkill")
+        || combined.contains("sigterm")
+        || combined.contains("killed")
+        || combined.contains("terminated by signal")
+    {
+        ("signal", 137, "signal")
+    } else if combined.contains("fork")
+        || combined.contains("spawn")
+        || combined.contains("provider_session_id")
+    {
+        ("failure", 1, "spawn_fail")
+    } else {
+        ("failure", 1, "tool_crash")
+    }
+}
+
+fn truncate_for_summary(text: &str, max_chars: usize) -> String {
+    let truncated: String = text.chars().take(max_chars).collect();
+    truncated.trim().replace('\n', " ")
 }
 
 fn repair_completed_review_restriction_result(
@@ -245,6 +393,7 @@ mod tests {
     use crate::review_cmd::tests::{
         ScopedEnvVarRestore, project_config_with_enabled_tools, setup_git_repo,
     };
+    use crate::session_cmds_result::{StructuredOutputOpts, handle_session_result};
     use crate::test_session_sandbox::ScopedSessionSandbox;
     use csa_config::{GlobalConfig, ProjectProfile, ToolRestrictions};
     use csa_core::types::ToolName;
@@ -428,5 +577,48 @@ printf '%s\\n' \
             "expected structured review output, got: {}",
             result.execution.output
         );
+    }
+
+    #[test]
+    fn synthesize_missing_review_result_makes_session_result_readable() {
+        let td = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new(&td);
+        let project_root = td.path();
+
+        let session =
+            csa_session::create_session(project_root, Some("review-failure"), None, Some("codex"))
+                .expect("session creation");
+        let session_id = session.meta_session_id.clone();
+        let session_dir = csa_session::get_session_dir(project_root, &session_id).unwrap();
+        std::fs::write(
+            session_dir.join("stderr.log"),
+            "codex daemon fork-from failed: provider session bootstrap failed",
+        )
+        .unwrap();
+
+        let started_at = Utc::now();
+        let err = anyhow::anyhow!("codex daemon fork-from failed")
+            .context(format!("meta_session_id={session_id}"));
+
+        maybe_synthesize_missing_review_result(project_root, ToolName::Codex, started_at, &err);
+
+        let result = csa_session::load_result(project_root, &session.meta_session_id)
+            .unwrap()
+            .expect("synthetic result.toml should exist");
+        assert_eq!(result.status, "failure");
+        assert_eq!(result.exit_code, 1);
+        assert!(
+            result.summary.contains("spawn_fail"),
+            "expected classified summary, got: {}",
+            result.summary
+        );
+
+        handle_session_result(
+            session.meta_session_id,
+            false,
+            Some(project_root.to_string_lossy().into_owned()),
+            StructuredOutputOpts::default(),
+        )
+        .expect("session result should read the synthetic review failure");
     }
 }
