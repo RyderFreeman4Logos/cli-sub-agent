@@ -443,6 +443,15 @@ fn derive_decision_from_text(
     if contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES") {
         return ReviewDecision::Fail;
     }
+    if contains_verdict_token(text, "SKIP") {
+        return ReviewDecision::Skip;
+    }
+    if contains_verdict_token(text, "UNCERTAIN") {
+        return ReviewDecision::Uncertain;
+    }
+    if counts.values().any(|count| *count > 0) {
+        return ReviewDecision::Fail;
+    }
     if (contains_verdict_token(text, "PASS")
         || contains_verdict_token(text, "CLEAN")
         || contains_clean_phrase(text))
@@ -455,12 +464,6 @@ fn derive_decision_from_text(
         && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
     {
         return ReviewDecision::Pass;
-    }
-    if contains_verdict_token(text, "SKIP") {
-        return ReviewDecision::Skip;
-    }
-    if contains_verdict_token(text, "UNCERTAIN") {
-        return ReviewDecision::Uncertain;
     }
     ReviewDecision::Uncertain
 }

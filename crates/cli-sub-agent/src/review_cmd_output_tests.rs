@@ -1,8 +1,9 @@
-use super::{PersistedReviewArtifact, persist_review_verdict};
+use super::{PersistedReviewArtifact, derive_decision_from_text, persist_review_verdict};
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,6 +63,39 @@ fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
         csa_session::get_session_dir(project_root, session_id).expect("resolve session dir");
     fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
     session_dir
+}
+
+#[test]
+fn derive_decision_from_text_skip_token_beats_clean_phrase() {
+    let decision = derive_decision_from_text(
+        "summary=skip\nNo blocking issues found in this scope.",
+        &BTreeMap::new(),
+        Some("low"),
+    );
+
+    assert_eq!(decision, ReviewDecision::Skip);
+}
+
+#[test]
+fn derive_decision_from_text_uncertain_without_findings_stays_uncertain() {
+    let decision = derive_decision_from_text(
+        "summary=uncertain\nReview did not complete.",
+        &BTreeMap::new(),
+        Some("low"),
+    );
+
+    assert_eq!(decision, ReviewDecision::Uncertain);
+}
+
+#[test]
+fn derive_decision_from_text_clean_phrase_without_skip_stays_pass() {
+    let decision = derive_decision_from_text(
+        "No blocking issues found in this scope.\nOverall risk: low",
+        &BTreeMap::new(),
+        Some("low"),
+    );
+
+    assert_eq!(decision, ReviewDecision::Pass);
 }
 
 #[test]
