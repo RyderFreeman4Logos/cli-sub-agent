@@ -4,8 +4,12 @@ use std::str::FromStr;
 
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
-use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, write_review_verdict};
+use csa_session::{
+    Finding, ReviewVerdictArtifact, Severity, SeveritySummary, write_review_verdict,
+};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
+use regex::Regex;
+use serde::Deserialize;
 use tracing::{debug, warn};
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
@@ -21,6 +25,32 @@ pub(super) struct ReviewerOutcome {
     pub verdict: &'static str,
     /// Tool-level diagnostic when the review failed due to tool issues (e.g. MCP).
     pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistedReviewArtifact {
+    #[serde(default)]
+    findings: Vec<Finding>,
+    #[serde(default)]
+    severity_summary: SeveritySummary,
+    #[serde(default)]
+    overall_risk: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    item: Option<TranscriptItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptItem {
+    #[serde(rename = "type")]
+    item_type: String,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 /// Prefer structured review sections (summary/details) when available to avoid
@@ -157,27 +187,27 @@ pub(super) fn persist_review_verdict(
                 );
                 return;
             }
-            let decision =
-                ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain);
-            let synthesized_findings = match load_review_findings_from_output(&session_dir) {
-                Ok(Some(loaded_findings)) => loaded_findings,
-                Ok(None) => findings.to_vec(),
+            let artifact = match derive_review_verdict_artifact(&session_dir, meta, findings) {
+                Ok(mut artifact) => {
+                    artifact.prior_round_refs = prior_round_refs.clone();
+                    artifact
+                }
                 Err(error) => {
                     debug!(
                         session_id = %meta.session_id,
                         error = %error,
-                        "Failed to load output/review-findings.json; synthesizing empty review-verdict sidecar"
+                        "Failed to derive review-verdict artifact; falling back to review_meta defaults"
                     );
-                    findings.to_vec()
+                    ReviewVerdictArtifact::from_parts(
+                        meta.session_id.clone(),
+                        ReviewDecision::from_str(&meta.decision)
+                            .unwrap_or(ReviewDecision::Uncertain),
+                        meta.verdict.clone(),
+                        findings,
+                        prior_round_refs.clone(),
+                    )
                 }
             };
-            let artifact = ReviewVerdictArtifact::from_parts(
-                meta.session_id.clone(),
-                decision,
-                meta.verdict.clone(),
-                &synthesized_findings,
-                prior_round_refs,
-            );
             if let Err(e) = write_review_verdict(&session_dir, &artifact) {
                 warn!(
                     session_id = %meta.session_id,
@@ -198,9 +228,41 @@ pub(super) fn persist_review_verdict(
     }
 }
 
-fn load_review_findings_from_output(
+fn derive_review_verdict_artifact(
     session_dir: &Path,
-) -> Result<Option<Vec<Finding>>, anyhow::Error> {
+    meta: &ReviewSessionMeta,
+    findings: &[Finding],
+) -> Result<ReviewVerdictArtifact, anyhow::Error> {
+    if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
+        let decision = derive_decision_from_findings(
+            artifact.findings.is_empty(),
+            artifact.overall_risk.as_deref(),
+        );
+        return Ok(build_review_verdict_artifact(
+            meta.session_id.clone(),
+            decision,
+            legacy_verdict_for_decision(decision, &meta.verdict),
+            severity_counts_from_summary(&artifact.severity_summary),
+            Vec::new(),
+        ));
+    }
+
+    if let Some(artifact) = infer_review_verdict_from_full_output(session_dir, meta)? {
+        return Ok(artifact);
+    }
+
+    Ok(ReviewVerdictArtifact::from_parts(
+        meta.session_id.clone(),
+        ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain),
+        meta.verdict.clone(),
+        findings,
+        Vec::new(),
+    ))
+}
+
+fn load_review_artifact_from_output(
+    session_dir: &Path,
+) -> Result<Option<PersistedReviewArtifact>, anyhow::Error> {
     let findings_path = session_dir.join("review-findings.json");
     if !findings_path.exists() {
         return Ok(None);
@@ -208,9 +270,212 @@ fn load_review_findings_from_output(
 
     let contents = fs::read_to_string(&findings_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
-    let artifact = serde_json::from_str::<ReviewArtifact>(&contents)
+    let artifact = serde_json::from_str::<PersistedReviewArtifact>(&contents)
         .map_err(|error| anyhow::anyhow!("parse {}: {error}", findings_path.display()))?;
-    Ok(Some(artifact.findings))
+    Ok(Some(artifact))
+}
+
+fn infer_review_verdict_from_full_output(
+    session_dir: &Path,
+    meta: &ReviewSessionMeta,
+) -> Result<Option<ReviewVerdictArtifact>, anyhow::Error> {
+    let full_output_path = session_dir.join("output").join("full.md");
+    if !full_output_path.exists() {
+        return Ok(None);
+    }
+
+    let raw_output = fs::read_to_string(&full_output_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
+    let Some(review_text) = extract_review_text(&raw_output) else {
+        return Ok(Some(build_review_verdict_artifact(
+            meta.session_id.clone(),
+            ReviewDecision::Uncertain,
+            meta.verdict.clone(),
+            zero_severity_counts(),
+            Vec::new(),
+        )));
+    };
+
+    if !has_structured_review_content(&review_text) {
+        return Ok(Some(build_review_verdict_artifact(
+            meta.session_id.clone(),
+            ReviewDecision::Uncertain,
+            meta.verdict.clone(),
+            zero_severity_counts(),
+            Vec::new(),
+        )));
+    }
+
+    let counts = severity_counts_from_text(&review_text);
+    let overall_risk = parse_overall_risk_from_text(&review_text);
+    let decision = derive_decision_from_text(&review_text, &counts, overall_risk.as_deref());
+    Ok(Some(build_review_verdict_artifact(
+        meta.session_id.clone(),
+        decision,
+        legacy_verdict_for_decision(decision, &meta.verdict),
+        counts,
+        Vec::new(),
+    )))
+}
+
+fn extract_review_text(raw_output: &str) -> Option<String> {
+    let mut transcript_messages = Vec::new();
+    let mut saw_json_line = false;
+
+    for line in raw_output.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(event) = serde_json::from_str::<TranscriptEvent>(line) else {
+            return Some(raw_output.to_string());
+        };
+        saw_json_line = true;
+        let Some(item) = event.item else {
+            continue;
+        };
+        if event.event_type == "item.completed"
+            && item.item_type == "agent_message"
+            && let Some(text) = item.text.filter(|text| looks_like_review_message(text))
+        {
+            transcript_messages.push(text);
+        }
+    }
+
+    if transcript_messages.is_empty() {
+        return if saw_json_line {
+            None
+        } else {
+            Some(raw_output.to_string())
+        };
+    }
+
+    transcript_messages.pop()
+}
+
+fn looks_like_review_message(text: &str) -> bool {
+    has_structured_review_content(text)
+        || contains_verdict_token(text, "PASS")
+        || contains_verdict_token(text, "CLEAN")
+        || contains_verdict_token(text, "FAIL")
+        || contains_verdict_token(text, "HAS_ISSUES")
+        || contains_verdict_token(text, "UNCERTAIN")
+        || contains_clean_phrase(text)
+        || text.lines().any(|line| {
+            is_findings_header(line) || line.to_ascii_lowercase().contains("overall risk")
+        })
+}
+
+fn severity_counts_from_summary(
+    summary: &SeveritySummary,
+) -> std::collections::BTreeMap<Severity, u32> {
+    [
+        (Severity::Critical, summary.critical),
+        (Severity::High, summary.high),
+        (Severity::Medium, summary.medium),
+        (Severity::Low, summary.low),
+        (Severity::Info, summary.info),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
+    severity_counts_from_summary(&SeveritySummary::default())
+}
+
+fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity, u32> {
+    let marker_re = Regex::new(r"(?i)\[(critical|high|medium|low|info)\]").expect("valid regex");
+    let mut counts = zero_severity_counts();
+
+    for captures in marker_re.captures_iter(text) {
+        let severity = match captures.get(1).map(|m| m.as_str().to_ascii_lowercase()) {
+            Some(level) if level == "critical" => Severity::Critical,
+            Some(level) if level == "high" => Severity::High,
+            Some(level) if level == "medium" => Severity::Medium,
+            Some(level) if level == "low" => Severity::Low,
+            Some(level) if level == "info" => Severity::Info,
+            _ => continue,
+        };
+        *counts.entry(severity).or_insert(0) += 1;
+    }
+
+    counts
+}
+
+fn parse_overall_risk_from_text(text: &str) -> Option<String> {
+    let risk_re = Regex::new(r"(?im)\boverall risk\b\s*:?\s*(critical|high|medium|low)\b")
+        .expect("valid regex");
+    risk_re
+        .captures(text)
+        .and_then(|captures| captures.get(1))
+        .map(|level| level.as_str().to_ascii_lowercase())
+}
+
+fn derive_decision_from_findings(
+    findings_empty: bool,
+    overall_risk: Option<&str>,
+) -> ReviewDecision {
+    if findings_empty && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) {
+        ReviewDecision::Pass
+    } else {
+        ReviewDecision::Fail
+    }
+}
+
+fn derive_decision_from_text(
+    text: &str,
+    counts: &std::collections::BTreeMap<Severity, u32>,
+    overall_risk: Option<&str>,
+) -> ReviewDecision {
+    if contains_verdict_token(text, "UNCERTAIN") {
+        return ReviewDecision::Uncertain;
+    }
+    if contains_verdict_token(text, "SKIP") {
+        return ReviewDecision::Skip;
+    }
+    if counts.values().any(|count| *count > 0) {
+        return ReviewDecision::Fail;
+    }
+    if contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES") {
+        return ReviewDecision::Fail;
+    }
+    if (contains_verdict_token(text, "PASS")
+        || contains_verdict_token(text, "CLEAN")
+        || contains_clean_phrase(text))
+        && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
+    {
+        return ReviewDecision::Pass;
+    }
+    if text.lines().any(is_findings_header)
+        && contains_clean_phrase(text)
+        && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
+    {
+        return ReviewDecision::Pass;
+    }
+    ReviewDecision::Uncertain
+}
+
+fn build_review_verdict_artifact(
+    session_id: String,
+    decision: ReviewDecision,
+    verdict_legacy: String,
+    severity_counts: std::collections::BTreeMap<Severity, u32>,
+    prior_round_refs: Vec<String>,
+) -> ReviewVerdictArtifact {
+    ReviewVerdictArtifact {
+        schema_version: csa_session::review_artifact::REVIEW_VERDICT_SCHEMA_VERSION,
+        session_id,
+        timestamp: chrono::Utc::now(),
+        decision,
+        verdict_legacy,
+        severity_counts,
+        prior_round_refs,
+    }
+}
+
+fn legacy_verdict_for_decision(decision: ReviewDecision, fallback: &str) -> String {
+    match decision {
+        ReviewDecision::Pass => "CLEAN".to_string(),
+        ReviewDecision::Fail => "HAS_ISSUES".to_string(),
+        ReviewDecision::Skip | ReviewDecision::Uncertain => fallback.to_string(),
+    }
 }
 
 /// Detect whether `project_root` resides inside a git worktree submodule.
@@ -317,133 +582,73 @@ fn truncate_review_result_summary(line: &str) -> String {
     line.chars().take(REVIEW_RESULT_SUMMARY_MAX_CHARS).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::persist_review_verdict;
-    use csa_core::types::ReviewDecision;
-    use csa_session::state::ReviewSessionMeta;
-    use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
-        ReviewSessionMeta {
-            session_id: session_id.to_string(),
-            head_sha: String::new(),
-            decision: ReviewDecision::Fail.as_str().to_string(),
-            verdict: "HAS_ISSUES".to_string(),
-            tool: "codex".to_string(),
-            scope: "diff".to_string(),
-            exit_code: 1,
-            fix_attempted: false,
-            fix_rounds: 0,
-            review_iterations: 1,
-            timestamp: chrono::Utc::now(),
-            diff_fingerprint: None,
-        }
-    }
-
-    fn make_finding(severity: Severity, fid: &str) -> Finding {
-        Finding {
-            severity,
-            fid: fid.to_string(),
-            file: "src/lib.rs".to_string(),
-            line: Some(1),
-            rule_id: format!("rule.{fid}"),
-            summary: format!("summary {fid}"),
-            engine: "reviewer".to_string(),
-        }
-    }
-
-    fn temp_project_root(test_name: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before unix epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("csa-{test_name}-{suffix}"));
-        fs::create_dir_all(&path).expect("create temp project root");
-        path
-    }
-
-    fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
-        let session_dir =
-            csa_session::get_session_dir(project_root, session_id).expect("resolve session dir");
-        fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
-        session_dir
-    }
-
-    #[test]
-    fn persist_review_verdict_skips_when_ai_file_exists() {
-        let project_root = temp_project_root("persist-review-verdict-skip");
-        let session_id = "01TESTSKIP0000000000000000";
-        let session_dir = create_session_dir(&project_root, session_id);
-        let verdict_path = session_dir.join("output").join("review-verdict.json");
-        let ai_payload = r#"{"ai":"preserved"}"#;
-        fs::write(&verdict_path, ai_payload).expect("write AI verdict artifact");
-
-        let meta = make_review_meta(session_id);
-        persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-        let actual = fs::read_to_string(&verdict_path).expect("read verdict artifact");
-        assert_eq!(actual, ai_payload);
-
-        fs::remove_dir_all(project_root).expect("remove temp project root");
-    }
-
-    #[test]
-    fn persist_review_verdict_synthesizes_from_findings_json() {
-        let project_root = temp_project_root("persist-review-verdict-findings");
-        let session_id = "01TESTFINDINGS000000000000";
-        let session_dir = create_session_dir(&project_root, session_id);
-        let findings_path = session_dir.join("review-findings.json");
-        let findings = vec![
-            make_finding(Severity::High, "high"),
-            make_finding(Severity::Low, "low"),
-        ];
-        let artifact = ReviewArtifact {
-            severity_summary: SeveritySummary::from_findings(&findings),
-            findings: findings.clone(),
-            review_mode: None,
-            schema_version: "1.0".to_string(),
-            session_id: session_id.to_string(),
-            timestamp: chrono::Utc::now(),
-        };
-        fs::write(
-            &findings_path,
-            serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
-        )
-        .expect("write findings artifact");
-
-        let meta = make_review_meta(session_id);
-        persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-        let verdict_path = session_dir.join("output").join("review-verdict.json");
-        let artifact: ReviewVerdictArtifact =
-            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
-                .expect("parse verdict");
-        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
-        assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&1));
-
-        fs::remove_dir_all(project_root).expect("remove temp project root");
-    }
-
-    #[test]
-    fn persist_review_verdict_empty_sidecar_when_findings_missing() {
-        let project_root = temp_project_root("persist-review-verdict-empty");
-        let session_id = "01TESTEMPTY000000000000000";
-        let session_dir = create_session_dir(&project_root, session_id);
-        let meta = make_review_meta(session_id);
-
-        persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-        let verdict_path = session_dir.join("output").join("review-verdict.json");
-        let artifact: ReviewVerdictArtifact =
-            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
-                .expect("parse verdict");
-        assert_eq!(artifact.severity_counts.len(), 5);
-        assert!(artifact.severity_counts.values().all(|value| *value == 0));
-
-        fs::remove_dir_all(project_root).expect("remove temp project root");
-    }
+fn contains_verdict_token(haystack: &str, token: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|part| part.eq_ignore_ascii_case(token))
 }
+
+fn contains_clean_phrase(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    [
+        "no issues found",
+        "no issues were found",
+        "no blocking issues",
+        "no findings",
+        "\u{672a}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
+        "\u{6ca1}\u{6709}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
+        "\u{65e0}\u{963b}\u{585e}\u{95ee}\u{9898}",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+        || contains_positive_no_issue_clause(&lower)
+}
+
+fn contains_positive_no_issue_clause(lower: &str) -> bool {
+    const NOUNS: &[&str] = &[
+        "issue", "issues", "finding", "findings", "concern", "concerns",
+    ];
+    const TAIL_VERBS: &[&str] = &["found", "identified", "detected", "introduced"];
+    const MAX_TOKENS_BEFORE_NOUN: usize = 6;
+    const MAX_TOKENS_AFTER_NOUN: usize = 4;
+
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    for (no_index, token) in tokens.iter().enumerate() {
+        if *token != "no" {
+            continue;
+        }
+
+        let search_end = (no_index + 1 + MAX_TOKENS_BEFORE_NOUN).min(tokens.len());
+        let Some(relative_noun_index) = tokens[no_index + 1..search_end]
+            .iter()
+            .position(|candidate| NOUNS.contains(candidate))
+        else {
+            continue;
+        };
+        let noun_index = no_index + 1 + relative_noun_index;
+        let tail_end = (noun_index + 1 + MAX_TOKENS_AFTER_NOUN).min(tokens.len());
+        if tokens[noun_index + 1..tail_end]
+            .iter()
+            .any(|candidate| TAIL_VERBS.contains(candidate))
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_findings_header(line: &str) -> bool {
+    let trimmed = line.trim();
+    let normalized = trimmed.trim_start_matches('#').trim();
+    normalized.eq_ignore_ascii_case("findings")
+        || normalized.eq_ignore_ascii_case("review findings")
+}
+
+#[cfg(test)]
+#[path = "review_cmd_output_tests.rs"]
+mod tests;
