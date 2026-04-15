@@ -11,6 +11,7 @@ use super::prompt_guard::emit_prompt_guard_to_caller;
 use super::result_contract::{
     clear_expected_result_artifacts_for_prompt, enforce_result_toml_path_contract,
 };
+use super::session_exec_failover::apply_transport_failover_overrides;
 use super::{
     MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
     resolve_liveness_dead_seconds, resolve_mcp_servers, run_pipeline_hook,
@@ -32,8 +33,6 @@ use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{
     ToolState, compute_cooldown_wait, create_session, create_session_fresh, get_session_dir,
 };
-
-use super::session_exec_failover::apply_transport_failover_overrides;
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
 
@@ -472,7 +471,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     });
 
-    let merged_env = crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
+    let mut merged_env =
+        crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
+    crate::pipeline_env::apply_review_target_dir(task_type, &session_dir, &mut merged_env);
     let merged_env_ref = if merged_env.is_empty() {
         None
     } else {

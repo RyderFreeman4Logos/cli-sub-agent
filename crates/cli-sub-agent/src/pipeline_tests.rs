@@ -794,5 +794,7 @@ mod contract_tests;
 mod initial_response_tests;
 #[path = "pipeline_tests_locking.rs"]
 mod locking_tests;
+#[path = "pipeline_tests_review_target.rs"]
+mod review_target_tests;
 #[path = "pipeline_tests_tail.rs"]
 mod tail_tests;
