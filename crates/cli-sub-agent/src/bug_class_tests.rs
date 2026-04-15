@@ -213,7 +213,7 @@ fn loader_prefers_consolidated_artifacts_and_skips_sessions_without_reviews() {
     );
     write_review_artifact(
         &consolidated_dir,
-        "review-consolidated.json",
+        "review-findings-consolidated.json",
         &sample_artifact(
             &consolidated_session.meta_session_id,
             vec![sample_finding(

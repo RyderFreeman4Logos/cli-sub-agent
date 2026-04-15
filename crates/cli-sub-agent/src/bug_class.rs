@@ -16,7 +16,7 @@ pub(crate) use sanitization::{
     SANITIZED_CONTENT_PLACEHOLDER, sanitize_code_for_skill, sanitize_text_for_skill,
 };
 
-const CONSOLIDATED_REVIEW_ARTIFACT_FILE: &str = "review-consolidated.json";
+const CONSOLIDATED_REVIEW_ARTIFACT_FILE: &str = "review-findings-consolidated.json";
 const SINGLE_REVIEW_ARTIFACT_FILE: &str = "review-findings.json";
 const REVIEW_DETAILS_CONTEXT_FILE: &str = "output/details.md";
 const BUG_CLASS_RECURRENCE_THRESHOLD: u32 = 2;
