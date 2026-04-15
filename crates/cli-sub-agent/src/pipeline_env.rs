@@ -55,3 +55,16 @@ pub(crate) fn build_merged_env(
 
     merged_env
 }
+
+pub(crate) fn apply_review_target_dir(
+    task_type: Option<&str>,
+    session_dir: &std::path::Path,
+    merged_env: &mut HashMap<String, String>,
+) {
+    if matches!(task_type, Some("review")) {
+        merged_env.insert(
+            "CARGO_TARGET_DIR".to_string(),
+            session_dir.join("target").display().to_string(),
+        );
+    }
+}
