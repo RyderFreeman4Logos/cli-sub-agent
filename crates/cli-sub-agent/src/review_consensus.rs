@@ -13,6 +13,7 @@ use csa_core::consensus::{
     AgentResponse, ConsensusResult, ConsensusStrategy, resolve_majority, resolve_unanimous,
     resolve_weighted,
 };
+use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_core::types::ToolName;
 #[cfg(not(test))]
 use csa_executor::{CodexRuntimeMetadata, CodexTransport};
@@ -150,7 +151,7 @@ pub(crate) fn build_multi_reviewer_instruction(
     reviewer_index: usize,
     tool: ToolName,
 ) -> String {
-    let output_dir = format!("$CSA_SESSION_DIR/reviewer-{reviewer_index}");
+    let output_dir = reviewer_output_dir(reviewer_index);
     format!(
         "{base_prompt}\n\
 You are reviewer {reviewer_index}. Emit exactly one final verdict token: \
@@ -169,6 +170,23 @@ When spec/contract context is provided, use rule_id values: \
 Reviewer tool hint: {}.",
         tool.as_str()
     )
+}
+
+fn reviewer_output_dir(reviewer_index: usize) -> String {
+    let reviewer_dir = format!("reviewer-{reviewer_index}");
+    std::env::var(CSA_PARENT_SESSION_DIR_ENV_KEY)
+        .or_else(|_| std::env::var(CSA_SESSION_DIR_ENV_KEY))
+        .map(|session_dir| {
+            Path::new(&session_dir)
+                .join(&reviewer_dir)
+                .display()
+                .to_string()
+        })
+        .unwrap_or_else(|_| {
+            format!(
+                "${{{CSA_PARENT_SESSION_DIR_ENV_KEY}:-${CSA_SESSION_DIR_ENV_KEY}}}/{reviewer_dir}"
+            )
+        })
 }
 
 pub(crate) fn parse_consensus_strategy(raw: &str) -> Result<ConsensusStrategy> {

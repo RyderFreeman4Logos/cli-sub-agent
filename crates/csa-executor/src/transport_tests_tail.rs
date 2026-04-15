@@ -220,6 +220,7 @@ fn test_acp_build_env_propagates_extra_env() {
     );
 }
 
+
 #[test]
 fn test_acp_build_env_includes_csa_session_dir() {
     let transport = AcpTransport::new("claude-code", None);

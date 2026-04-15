@@ -579,3 +579,89 @@ fn current_git_branch_for_review(project_root: &Path) -> Option<String> {
     let backend = csa_session::vcs_backends::create_vcs_backend(project_root);
     backend.current_branch(project_root).ok().flatten()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::write_multi_reviewer_consolidated_artifact;
+    use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
+    use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
+    use std::fs;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    static REVIEW_RESOLVE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by REVIEW_RESOLVE_ENV_LOCK.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation guarded by REVIEW_RESOLVE_ENV_LOCK.
+            unsafe {
+                match self.original.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn write_multi_reviewer_consolidated_artifact_reads_parent_reviewer_dir() {
+        let _env_lock = REVIEW_RESOLVE_ENV_LOCK
+            .lock()
+            .expect("review resolve env lock poisoned");
+        let temp = tempdir().expect("tempdir should be created");
+        let session_dir = temp.path().display().to_string();
+        let _session_dir_guard = ScopedEnvVar::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+        let _session_id_guard = ScopedEnvVar::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+
+        let reviewer_dir = temp.path().join("reviewer-1");
+        fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+        let findings = vec![Finding {
+            severity: Severity::High,
+            fid: "FID-1".to_string(),
+            file: "src/lib.rs".to_string(),
+            line: Some(7),
+            rule_id: "rule.review.parent-path".to_string(),
+            summary: "parent-path finding".to_string(),
+            engine: "reviewer".to_string(),
+        }];
+        let artifact = ReviewArtifact {
+            severity_summary: SeveritySummary::from_findings(&findings),
+            findings: findings.clone(),
+            review_mode: Some("diff".to_string()),
+            schema_version: "1.0".to_string(),
+            session_id: "01CHILDSESSION0000000000000".to_string(),
+            timestamp: chrono::Utc::now(),
+        };
+        fs::write(
+            reviewer_dir.join("review-findings.json"),
+            serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
+        )
+        .expect("review artifact should be written");
+
+        write_multi_reviewer_consolidated_artifact(1)
+            .expect("consolidated artifact should be produced");
+
+        let consolidated_path = temp.path().join("review-findings-consolidated.json");
+        let consolidated: ReviewArtifact = serde_json::from_str(
+            &fs::read_to_string(&consolidated_path).expect("consolidated artifact should exist"),
+        )
+        .expect("consolidated artifact should parse");
+        assert_eq!(consolidated.findings.len(), 1);
+        assert_eq!(consolidated.findings[0].fid, "FID-1");
+        assert_eq!(consolidated.severity_summary.high, 1);
+    }
+}

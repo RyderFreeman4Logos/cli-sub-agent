@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use csa_acp::SessionConfig;
+use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_resource::isolation_plan::IsolationPlan;
 use csa_session::state::MetaSessionState;
 
@@ -22,7 +23,6 @@ const CSA_IS_SUBPROCESS_ENV: &str = "CSA_IS_SUBPROCESS";
 const CSA_PARENT_TOOL_ENV: &str = "CSA_PARENT_TOOL";
 const CSA_PARENT_SESSION_ENV: &str = "CSA_PARENT_SESSION";
 const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
-const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
 const CSA_OWNED_ENV_KEYS: &[&str] = &[
     CSA_SESSION_ID_ENV,
     CSA_DEPTH_ENV,
@@ -32,7 +32,8 @@ const CSA_OWNED_ENV_KEYS: &[&str] = &[
     CSA_PARENT_TOOL_ENV,
     CSA_PARENT_SESSION_ENV,
     CSA_FS_SANDBOXED_ENV,
-    CSA_SESSION_DIR_ENV,
+    CSA_SESSION_DIR_ENV_KEY,
+    CSA_PARENT_SESSION_DIR_ENV_KEY,
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
 ];
 
@@ -188,12 +189,12 @@ impl AcpTransport {
         env: &mut HashMap<String, String>,
         session: &MetaSessionState,
     ) {
-        if let Ok(dir) = csa_session::manager::get_session_dir(
-            Path::new(&session.project_path),
-            &session.meta_session_id,
-        ) {
+        let project_path = Path::new(&session.project_path);
+        if let Ok(dir) =
+            csa_session::manager::get_session_dir(project_path, &session.meta_session_id)
+        {
             env.insert(
-                CSA_SESSION_DIR_ENV.to_string(),
+                CSA_SESSION_DIR_ENV_KEY.to_string(),
                 dir.to_string_lossy().into_owned(),
             );
             env.insert(
@@ -204,6 +205,24 @@ impl AcpTransport {
             );
         } else {
             tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
+        }
+
+        if let Some(parent_session_id) = session.genealogy.parent_session_id.as_deref() {
+            match csa_session::manager::get_session_dir(project_path, parent_session_id) {
+                Ok(parent_dir) => {
+                    env.insert(
+                        CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
+                        parent_dir.to_string_lossy().into_owned(),
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        parent_session_id,
+                        error = %error,
+                        "failed to compute CSA_PARENT_SESSION_DIR for ACP env"
+                    );
+                }
+            }
         }
     }
 }
@@ -701,8 +720,12 @@ mod tests {
             ),
             (CSA_FS_SANDBOXED_ENV.to_string(), "0".to_string()),
             (
-                CSA_SESSION_DIR_ENV.to_string(),
+                CSA_SESSION_DIR_ENV_KEY.to_string(),
                 "/tmp/spoofed-session-dir".to_string(),
+            ),
+            (
+                CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
+                "/tmp/spoofed-parent-session-dir".to_string(),
             ),
             (
                 csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
@@ -746,7 +769,7 @@ mod tests {
         );
 
         let session_dir = env
-            .get(CSA_SESSION_DIR_ENV)
+            .get(CSA_SESSION_DIR_ENV_KEY)
             .expect("CSA_SESSION_DIR should be present");
         assert!(
             session_dir.contains("/sessions/"),

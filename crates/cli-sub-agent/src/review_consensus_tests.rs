@@ -1,7 +1,44 @@
 use super::*;
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
+use std::sync::Mutex;
 use tempfile::tempdir;
+
+static REVIEWER_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct ScopedEnvVar {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by REVIEWER_ENV_LOCK.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by REVIEWER_ENV_LOCK.
+        unsafe { std::env::remove_var(key) };
+        Self { key, original }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation guarded by REVIEWER_ENV_LOCK.
+        unsafe {
+            match self.original.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -223,6 +260,36 @@ fn parse_review_verdict_accepts_clean_phrase_without_explicit_token() {
         parse_review_verdict("\u{672a}\u{53d1}\u{73b0}\u{95ee}\u{9898}\u{3002}", 0),
         CLEAN
     );
+}
+
+#[test]
+fn build_multi_reviewer_instruction_prefers_parent_session_dir_env() {
+    let _env_lock = REVIEWER_ENV_LOCK
+        .lock()
+        .expect("reviewer env lock poisoned");
+    let _parent_guard = ScopedEnvVar::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
+    let _session_guard = ScopedEnvVar::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/child-session");
+
+    let prompt = build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex);
+
+    assert!(prompt.contains("/tmp/parent-session/reviewer-2/review-findings.json"));
+    assert!(
+        !prompt.contains("/tmp/child-session/reviewer-2/review-findings.json"),
+        "parent session dir should override child session dir when both exist"
+    );
+}
+
+#[test]
+fn build_multi_reviewer_instruction_falls_back_to_session_dir_env() {
+    let _env_lock = REVIEWER_ENV_LOCK
+        .lock()
+        .expect("reviewer env lock poisoned");
+    let _parent_guard = ScopedEnvVar::unset(CSA_PARENT_SESSION_DIR_ENV_KEY);
+    let _session_guard = ScopedEnvVar::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/current-session");
+
+    let prompt = build_multi_reviewer_instruction("Base prompt", 3, ToolName::Codex);
+
+    assert!(prompt.contains("/tmp/current-session/reviewer-3/review-findings.json"));
 }
 
 #[test]
