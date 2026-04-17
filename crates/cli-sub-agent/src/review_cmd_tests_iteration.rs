@@ -58,6 +58,7 @@ fn make_review_meta(session_id: &str, decision: &str, review_iterations: u32) ->
         head_sha: "deadbeef".to_string(),
         decision: decision.to_string(),
         verdict: decision.to_ascii_uppercase(),
+        status_reason: None,
         tool: "codex".to_string(),
         scope: "uncommitted".to_string(),
         exit_code: 0,

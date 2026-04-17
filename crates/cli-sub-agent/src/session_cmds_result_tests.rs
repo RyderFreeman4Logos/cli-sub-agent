@@ -341,6 +341,7 @@ fn build_result_json_payload_includes_review_iterations() {
         head_sha: "deadbeef".to_string(),
         decision: "pass".to_string(),
         verdict: "CLEAN".to_string(),
+        status_reason: None,
         tool: "codex".to_string(),
         scope: "range:main...HEAD".to_string(),
         exit_code: 0,

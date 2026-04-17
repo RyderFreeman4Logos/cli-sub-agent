@@ -618,6 +618,7 @@ mod tests {
             head_sha: "abc123".to_string(),
             decision: decision.to_string(),
             verdict: "HAS_ISSUES".to_string(),
+            status_reason: None,
             tool: "codex".to_string(),
             scope: "base:main".to_string(),
             exit_code: 1,

@@ -1,5 +1,8 @@
-use super::{PersistedReviewArtifact, derive_decision_from_text, persist_review_verdict};
-use csa_core::types::ReviewDecision;
+use super::{
+    PersistedReviewArtifact, ToolReviewFailureKind, derive_decision_from_text,
+    detect_tool_review_failure, persist_review_verdict,
+};
+use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
 use serde_json::json;
@@ -14,6 +17,7 @@ fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
         head_sha: String::new(),
         decision: ReviewDecision::Fail.as_str().to_string(),
         verdict: "HAS_ISSUES".to_string(),
+        status_reason: None,
         tool: "codex".to_string(),
         scope: "diff".to_string(),
         exit_code: 1,
@@ -96,6 +100,32 @@ fn derive_decision_from_text_clean_phrase_without_skip_stays_pass() {
     );
 
     assert_eq!(decision, ReviewDecision::Pass);
+}
+
+#[test]
+fn detect_tool_review_failure_flags_gemini_oauth_prompt_without_real_turn() {
+    let stdout = "Opening authentication page\nDo you want to continue? [Y/n]\n";
+    let detected = detect_tool_review_failure(ToolName::GeminiCli, stdout);
+    assert_eq!(
+        detected,
+        Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
+    );
+}
+
+#[test]
+fn detect_tool_review_failure_ignores_normal_review_output() {
+    let stdout = concat!(
+        "{\"type\":\"turn.completed\",\"turn_id\":\"turn_123\"}\n",
+        "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
+        "output_tokens: 12\n"
+    );
+    assert!(detect_tool_review_failure(ToolName::GeminiCli, stdout).is_none());
+}
+
+#[test]
+fn detect_tool_review_failure_never_fires_for_non_gemini_tools() {
+    let stdout = "Opening authentication page\nDo you want to continue? [Y/n]\n";
+    assert!(detect_tool_review_failure(ToolName::Codex, stdout).is_none());
 }
 
 #[test]

@@ -138,6 +138,10 @@ pub struct ReviewSessionMeta {
     pub decision: String,
     /// Legacy verdict string (CLEAN, HAS_ISSUES, etc.) for backward compatibility.
     pub verdict: String,
+    /// Optional machine-readable reason when the review result is not a real verdict
+    /// (for example, an auth/setup failure that prevented the review from running).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
     /// Tool used for this review (e.g., "claude-code", "codex").
     pub tool: String,
     /// Review scope (e.g., "uncommitted", "range:main...HEAD", "base:main").

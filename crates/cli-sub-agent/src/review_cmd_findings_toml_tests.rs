@@ -16,6 +16,7 @@ fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
         head_sha: String::new(),
         decision: ReviewDecision::Fail.as_str().to_string(),
         verdict: "HAS_ISSUES".to_string(),
+        status_reason: None,
         tool: "codex".to_string(),
         scope: "diff".to_string(),
         exit_code: 1,
