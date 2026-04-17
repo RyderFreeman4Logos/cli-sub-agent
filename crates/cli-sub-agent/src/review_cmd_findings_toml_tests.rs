@@ -345,6 +345,66 @@ start = 425
 }
 
 #[test]
+fn persist_review_findings_toml_reads_output_log_when_full_md_is_missing() {
+    let project_root = temp_project_root("persist-review-findings-output-log");
+    let session_id = "01TESTFINDINGSTOMLOUTPUTLOG";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let full_output = [json!({"type":"item.completed","item":{
+        "id":"item_1",
+        "type":"agent_message",
+        "text": r#"<!-- CSA:SECTION:summary -->
+FAIL
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+One issue found.
+<!-- CSA:SECTION:details:END -->
+
+```toml findings.toml
+[[findings]]
+id = "f-output-log"
+severity = "high"
+description = "Findings fence lives outside structured sections."
+
+[[findings.file_ranges]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml.rs"
+start = 88
+```"#
+    }})]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(session_dir.join("output.log"), full_output).expect("write output.log");
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "One issue found.\n",
+    )
+    .expect("write details.md");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let findings_path = session_dir.join("output").join("findings.toml");
+    let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse findings.toml");
+    assert_eq!(
+        parsed,
+        FindingsFile {
+            findings: vec![sample_finding(
+                "f-output-log",
+                FindingSeverity::High,
+                "crates/cli-sub-agent/src/review_cmd_findings_toml.rs",
+                88,
+                "Findings fence lives outside structured sections."
+            )],
+        }
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn persist_review_findings_toml_writes_synthetic_empty_for_findings_fence_without_toml_extension() {
     let project_root = temp_project_root("persist-review-findings-no-extension");
     let session_id = "01TESTFINDINGSTOMLNOEXT00";

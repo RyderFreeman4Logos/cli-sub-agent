@@ -75,16 +75,21 @@ fn derive_findings_toml_artifact(
 fn load_review_text_for_findings(session_dir: &Path) -> Result<Option<String>, anyhow::Error> {
     let details_path = session_dir.join("output").join("details.md");
     if details_path.exists() {
-        let details = fs::read_to_string(&details_path)
-            .map_err(|error| anyhow::anyhow!("read {}: {error}", details_path.display()))?;
-        let full_path = session_dir.join("output").join("full.md");
-        if full_path.exists() {
-            let raw_output = fs::read_to_string(&full_path)
-                .map_err(|error| anyhow::anyhow!("read {}: {error}", full_path.display()))?;
+        for candidate in [
+            session_dir.join("output").join("full.md"),
+            session_dir.join("output.log"),
+        ] {
+            if !candidate.exists() {
+                continue;
+            }
+            let raw_output = fs::read_to_string(&candidate)
+                .map_err(|error| anyhow::anyhow!("read {}: {error}", candidate.display()))?;
             if let Some(review_text) = extract_review_text(&raw_output) {
                 return Ok(Some(review_text));
             }
         }
+        let details = fs::read_to_string(&details_path)
+            .map_err(|error| anyhow::anyhow!("read {}: {error}", details_path.display()))?;
         return Ok(Some(details));
     }
 
