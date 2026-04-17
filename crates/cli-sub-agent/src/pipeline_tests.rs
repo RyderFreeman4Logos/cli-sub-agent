@@ -768,8 +768,6 @@ async fn build_and_validate_executor_enforce_tier_false_skips_model_name_check()
     )
     .await;
 
-    // Actual error fragment from enforce_tier_model_name (config.rs):
-    //   "is not configured in any tier"
     if let Err(e) = &result {
         let msg = e.to_string();
         assert!(
@@ -796,5 +794,7 @@ mod initial_response_tests;
 mod locking_tests;
 #[path = "pipeline_tests_review_target.rs"]
 mod review_target_tests;
+#[path = "pipeline_tests_run_target.rs"]
+mod run_target_tests;
 #[path = "pipeline_tests_tail.rs"]
 mod tail_tests;

@@ -279,7 +279,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     };
 
-    // Acquire lock with truncated prompt as reason
     let lock_reason = truncate_prompt(prompt, 80);
     let _lock = match acquire_lock(&session_dir, executor.tool_name(), &lock_reason) {
         Ok(lock) => lock,
@@ -307,7 +306,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         })
     });
 
-    // Check resource availability
     if let Some(ref mut guard) = resource_guard
         && let Err(e) = guard.check_availability(executor.tool_name())
     {
@@ -329,7 +327,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             60,
         );
     }
-    // Token budget is observability-only (never a kill gate).
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {
             warn!(
@@ -435,7 +432,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         None
     };
 
-    // Resolve tool state for session resume.
     let tool_state = session
         .tools
         .get(executor.tool_name())
@@ -454,7 +450,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
 
     let result_file_cleared = clear_expected_result_artifacts_for_prompt(prompt, &session_dir);
     let execution_start_time = chrono::Utc::now();
-    // Build session config with MCP servers (if global config provided).
     let session_config = global_config.map(|gc| {
         let mcp_servers = resolve_mcp_servers(project_root, gc);
         if !mcp_servers.is_empty() {
@@ -473,7 +468,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
 
     let mut merged_env =
         crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
-    crate::pipeline_env::apply_review_target_dir(task_type, &session_dir, &mut merged_env);
+    crate::pipeline_env::apply_task_target_dir_guards(
+        task_type,
+        executor.tool_name(),
+        project_root,
+        &session_dir,
+        &mut merged_env,
+    );
     let merged_env_ref = if merged_env.is_empty() {
         None
     } else {
@@ -491,7 +492,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         global_hooks_path().as_deref(),
         project_hook_overrides.as_ref(),
     );
-    // PreRun hook: fires before tool execution starts.
     let sessions_root = session_dir
         .parent()
         .unwrap_or(&session_dir)
