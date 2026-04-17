@@ -487,7 +487,10 @@ fn prepare_gemini_acp_runtime_resolves_mise_shims_via_mise_which() {
     )
     .expect("prepare runtime");
 
-    assert_eq!(launch.command, node_dir.join("node").to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.command)),
+        canonicalize_if_exists(&node_dir.join("node"))
+    );
     assert_eq!(launch.args[1], real_script.to_string_lossy());
     let prepared_path = env.get("PATH").expect("prepared path");
     assert_eq!(
@@ -574,7 +577,10 @@ fn prepare_gemini_acp_runtime_passes_project_dir_to_mise_which() {
     )
     .expect("prepare runtime");
 
-    assert_eq!(launch.command, node_dir.join("node").to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.command)),
+        canonicalize_if_exists(&node_dir.join("node"))
+    );
     assert_eq!(env.get("TMPDIR"), Some(&runtime_tmp.to_string_lossy().into_owned()));
 }
 
@@ -681,4 +687,9 @@ fn resolve_first_path_entry(name: &str, path_env: &str) -> Option<PathBuf> {
     std::env::split_paths(OsStr::new(path_env))
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+        .map(|candidate| canonicalize_if_exists(&candidate))
+}
+
+fn canonicalize_if_exists(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
