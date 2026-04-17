@@ -1,8 +1,5 @@
 use std::path::Path;
 
-use chrono::{Duration, Utc};
-use csa_session::{ReviewSessionMeta, get_session_root};
-
 use super::review_iteration_resolver::try_max_review_iterations_for_branch;
 
 const REVIEW_ITERATION_HEADER: &str = "## Review iteration context";
@@ -18,7 +15,7 @@ pub(crate) fn count_prior_reviews_for_branch(project_root: &Path, branch: Option
         )
         .map(|iterations| iterations as usize)
         .unwrap_or(0),
-        None => count_recent_reviews(project_root, current_session_id.as_deref()),
+        None => 0,
     }
 }
 
@@ -38,49 +35,4 @@ pub(crate) fn render_review_iteration_context(project_root: &Path, branch: &str)
         rendered.push('\n');
     }
     Some(rendered)
-}
-
-fn count_recent_reviews(project_root: &Path, exclude_session_id: Option<&str>) -> usize {
-    let cutoff = Utc::now() - Duration::hours(24);
-    let session_dirs = match list_session_dirs(project_root) {
-        Ok(session_dirs) => session_dirs,
-        Err(_) => return 0,
-    };
-
-    session_dirs
-        .into_iter()
-        .filter(|session_dir| {
-            exclude_session_id != session_dir.file_name().and_then(|name| name.to_str())
-        })
-        .filter_map(|session_dir| load_review_meta_from_dir(&session_dir))
-        .filter(|meta| meta.timestamp >= cutoff)
-        .count()
-}
-
-fn list_session_dirs(project_root: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
-    let session_root = get_session_root(project_root)
-        .map_err(std::io::Error::other)?
-        .join("sessions");
-    if !session_root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut session_dirs = Vec::new();
-    for entry in std::fs::read_dir(session_root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            session_dirs.push(entry.path());
-        }
-    }
-    Ok(session_dirs)
-}
-
-fn load_review_meta_from_dir(session_dir: &Path) -> Option<ReviewSessionMeta> {
-    let review_meta_path = session_dir.join("review_meta.json");
-    if !review_meta_path.is_file() {
-        return None;
-    }
-
-    let content = std::fs::read_to_string(review_meta_path).ok()?;
-    serde_json::from_str(&content).ok()
 }

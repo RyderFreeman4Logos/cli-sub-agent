@@ -267,7 +267,7 @@ fn count_prior_reviews_does_not_pull_reviews_from_other_branches() {
 }
 
 #[test]
-fn count_prior_reviews_branch_unknown_falls_back_to_recent_reviews() {
+fn count_prior_reviews_branch_unknown_returns_safe_zero() {
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-unknown");
     create_mock_review_session(
@@ -285,7 +285,9 @@ fn count_prior_reviews_branch_unknown_falls_back_to_recent_reviews() {
         2,
     );
 
-    assert_eq!(count_prior_reviews_for_branch(project_dir.path(), None), 2);
+    // Branch-unknown must yield zero to avoid cross-branch contamination; mirror
+    // review_context.rs:187 behavior.
+    assert_eq!(count_prior_reviews_for_branch(project_dir.path(), None), 0);
 }
 
 #[test]
