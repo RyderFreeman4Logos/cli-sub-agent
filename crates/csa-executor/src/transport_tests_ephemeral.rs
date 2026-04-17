@@ -16,9 +16,19 @@ fn test_execute_in_timeout_resolver_defaults_codex_to_300_seconds() {
         "direct execute_in codex calls should inherit the 300s watchdog by default"
     );
     assert_eq!(
+        super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(0)),
+        None,
+        "explicit 0 should preserve the disabled sentinel for direct codex execute_in calls"
+    );
+    assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(42)),
         Some(42),
         "explicit execute_in overrides should win over the codex default"
+    );
+    assert_eq!(
+        super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(450)),
+        Some(450),
+        "positive execute_in overrides should pass through unchanged for codex"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&gemini_executor, None),

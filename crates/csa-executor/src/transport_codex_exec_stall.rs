@@ -26,11 +26,13 @@ pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
 ) -> Option<u64> {
-    let configured_timeout_seconds = configured_timeout_seconds.filter(|&seconds| seconds > 0);
-    if matches!(executor, Executor::Codex { .. }) {
-        configured_timeout_seconds.or(Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS))
-    } else {
-        configured_timeout_seconds
+    match configured_timeout_seconds {
+        Some(0) => None,
+        Some(seconds) => Some(seconds),
+        None if matches!(executor, Executor::Codex { .. }) => {
+            Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+        }
+        None => None,
     }
 }
 
