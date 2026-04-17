@@ -13,6 +13,8 @@ use csa_session::{
 };
 
 use crate::plan_cmd::shell_escape_for_command;
+#[path = "session_cmds_reconcile_cleanup.rs"]
+mod reconcile_cleanup;
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
 const UNPUSHED_COMMITS_SIDECAR_PATH: &str = "output/unpushed_commits.json";
@@ -521,6 +523,7 @@ fn retire_if_dead_with_result_impl(
         .get_or_insert_with(|| "completed".to_string());
     persist_session(session_dir, &session)
         .with_context(|| format!("Failed to persist retired session state for {session_id}"))?;
+    reconcile_cleanup::cleanup_retired_session_target_dir(session_dir)?;
     info!(
         session_id = %session_id,
         trigger = %trigger,

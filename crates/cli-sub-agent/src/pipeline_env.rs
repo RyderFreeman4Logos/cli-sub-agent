@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
+use tracing::info;
 
 /// Read the current CSA recursion depth from the environment.
 pub(crate) fn current_csa_depth() -> u32 {
@@ -62,9 +64,37 @@ pub(crate) fn apply_review_target_dir(
     merged_env: &mut HashMap<String, String>,
 ) {
     if matches!(task_type, Some("review")) {
+        let project_root = resolve_review_project_root(session_dir)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let repo_target_dir = project_root.join("target");
+        let user_configured_target = std::fs::symlink_metadata(&repo_target_dir)
+            .map(|metadata| metadata.is_dir() || metadata.file_type().is_symlink())
+            .unwrap_or(false);
+
+        if user_configured_target {
+            info!(
+                project_target = %repo_target_dir.display(),
+                "Review session: ./target already configured by user (detected symlink/dir), leaving CARGO_TARGET_DIR untouched"
+            );
+            return;
+        }
+
+        let review_target_dir = session_dir.join("target");
+        info!(
+            "Review session: no user-configured ./target, routing CARGO_TARGET_DIR to {}",
+            review_target_dir.display()
+        );
         merged_env.insert(
             "CARGO_TARGET_DIR".to_string(),
-            session_dir.join("target").display().to_string(),
+            review_target_dir.display().to_string(),
         );
     }
+}
+
+fn resolve_review_project_root(session_dir: &Path) -> Option<PathBuf> {
+    let state_path = session_dir.join("state.toml");
+    let state_contents = std::fs::read_to_string(state_path).ok()?;
+    let state_value: toml::Value = toml::from_str(&state_contents).ok()?;
+    let project_path = state_value.get("project_path")?.as_str()?;
+    Some(PathBuf::from(project_path))
 }
