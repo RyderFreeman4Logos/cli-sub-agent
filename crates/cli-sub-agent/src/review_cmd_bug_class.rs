@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use csa_session::ReviewSessionMeta;
 use csa_session::review_artifact::ReviewArtifact;
 use tracing::{info, warn};
 
@@ -10,6 +9,9 @@ use crate::bug_class::{
     SkillExtractor, classify_recurring_bug_classes, load_review_artifacts_for_project,
 };
 use crate::review_consensus::build_consolidated_artifact;
+use crate::review_consensus::review_iteration_resolver::{
+    load_review_meta, try_max_review_iterations_for_branch,
+};
 
 const REVIEW_CONSOLIDATED_ARTIFACT_FILE: &str = "review-findings-consolidated.json";
 const REVIEW_FINDINGS_ARTIFACT_FILE: &str = "review-findings.json";
@@ -243,39 +245,8 @@ pub(super) fn try_resolve_review_iterations(project_root: &Path, session_id: &st
         return Ok(1);
     };
 
-    let max_review_iterations = csa_session::list_sessions(project_root, None)?
-        .into_iter()
-        .filter(|candidate| candidate.meta_session_id != session_id)
-        .filter(|candidate| {
-            candidate.resolved_identity().ref_name.as_deref() == Some(branch.as_str())
-        })
-        .try_fold(0_u32, |max_review_iterations, candidate| {
-            let review_iterations =
-                load_review_iterations(project_root, &candidate.meta_session_id)?.unwrap_or(0);
-            Ok::<u32, anyhow::Error>(max_review_iterations.max(review_iterations))
-        })?;
+    let max_review_iterations =
+        try_max_review_iterations_for_branch(project_root, &branch, Some(session_id))?;
 
     Ok(std::cmp::max(1, max_review_iterations.saturating_add(1)))
-}
-
-fn load_review_iterations(project_root: &Path, session_id: &str) -> Result<Option<u32>> {
-    Ok(
-        load_review_meta(project_root, session_id)?
-            .map(|review_meta| review_meta.review_iterations),
-    )
-}
-
-fn load_review_meta(project_root: &Path, session_id: &str) -> Result<Option<ReviewSessionMeta>> {
-    let session_dir = csa_session::get_session_dir(project_root, session_id)
-        .with_context(|| format!("failed to resolve review session dir for {session_id}"))?;
-    let review_meta_path = session_dir.join("review_meta.json");
-    if !review_meta_path.is_file() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&review_meta_path)
-        .with_context(|| format!("failed to read {}", review_meta_path.display()))?;
-    let review_meta: ReviewSessionMeta = serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse {}", review_meta_path.display()))?;
-    Ok(Some(review_meta))
 }

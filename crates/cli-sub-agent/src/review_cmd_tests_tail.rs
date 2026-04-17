@@ -336,12 +336,13 @@ fn test_build_review_instruction_no_diff_content() {
         None,
     );
     assert!(
-        result.len() < 900,
-        "Instruction should be concise (preamble + params), got {} chars",
+        result.len() < 2200,
+        "Instruction should stay bounded even with the design anchor, got {} chars",
         result.len()
     );
     assert!(!result.contains("git diff"));
     assert!(!result.contains("Pass 1:"));
+    assert!(result.contains("Design preferences vs correctness bugs"));
 }
 
 #[test]
@@ -794,3 +795,6 @@ fn build_review_instruction_for_project_omits_checklist_when_missing() {
         "instruction should not contain review-checklist tag when file is missing"
     );
 }
+
+#[path = "review_cmd_tests_iteration.rs"]
+mod review_cmd_tests_iteration;
