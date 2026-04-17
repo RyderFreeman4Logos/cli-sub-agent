@@ -547,7 +547,12 @@ async fn execute_task(
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
     let initial_response_timeout_seconds =
-        crate::pipeline::resolve_initial_response_timeout_seconds(config, None);
+        crate::pipeline::resolve_initial_response_timeout_for_tool(
+            config,
+            None,
+            None,
+            executor.tool_name(),
+        );
 
     // Acquire global slot to enforce concurrency limit (fail-fast)
     let max_concurrent = global_config.max_concurrent(executor.tool_name());

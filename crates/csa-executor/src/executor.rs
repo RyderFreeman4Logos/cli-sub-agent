@@ -393,6 +393,7 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<ExecutionResult> {
         Ok(self
             .execute_in_with_transport(
@@ -401,6 +402,7 @@ impl Executor {
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
             )
             .await?
             .execution)
@@ -414,6 +416,7 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         let transport = self.transport(None)?;
         let mut result = transport
@@ -423,6 +426,7 @@ impl Executor {
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
             )
             .await?;
         result.execution.consolidate_stderr_retries();

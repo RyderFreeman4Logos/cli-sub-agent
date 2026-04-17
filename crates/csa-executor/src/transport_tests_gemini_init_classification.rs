@@ -117,6 +117,7 @@ exit 1
             Some(&env),
             StreamMode::BufferOnly,
             30,
+            None,
         )
         .await
         .expect_err("fake gemini should fail before ACP handshake");

@@ -12,7 +12,8 @@ use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
 use crate::review_routing::ReviewRoutingMetadata;
 use anyhow::{Context, Result};
 #[cfg(test)]
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::GlobalConfig;
+use csa_config::ProjectConfig;
 use csa_core::consensus::AgentResponse;
 use csa_core::types::ReviewDecision;
 #[cfg(test)]
@@ -336,10 +337,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
-    let initial_response_timeout_seconds = crate::pipeline::resolve_initial_response_timeout(
+    let initial_response_timeout_seconds = resolve_review_initial_response_timeout_seconds(
         config.as_ref(),
         args.initial_response_timeout,
         args.idle_timeout,
+        tool.as_str(),
     );
 
     // Resolve readonly_project_root from config (default: false).
@@ -605,6 +607,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             });
         let reviewer_tier_name = resolved_tier_name.clone();
         let reviewer_thinking = review_thinking.clone();
+        let reviewer_initial_response_timeout_seconds =
+            resolve_review_initial_response_timeout_seconds(
+                reviewer_config.as_ref(),
+                args.initial_response_timeout,
+                args.idle_timeout,
+                reviewer_tool.as_str(),
+            );
         join_set.spawn(async move {
             let session_result = execute_review(
                 reviewer_tool,
@@ -621,7 +630,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_routing,
                 stream_mode,
                 idle_timeout_seconds,
-                initial_response_timeout_seconds,
+                reviewer_initial_response_timeout_seconds,
                 reviewer_force_override,
                 args.force_ignore_tier_setting,
                 args.no_failover,
@@ -752,6 +761,23 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     Ok(if final_verdict == CLEAN { 0 } else { 1 })
 }
+
+fn resolve_review_initial_response_timeout_seconds(
+    config: Option<&ProjectConfig>,
+    cli_initial_response_timeout: Option<u64>,
+    cli_idle_timeout: Option<u64>,
+    tool_name: &str,
+) -> Option<u64> {
+    crate::pipeline::resolve_initial_response_timeout_for_tool(
+        config,
+        cli_initial_response_timeout,
+        cli_idle_timeout,
+        tool_name,
+    )
+}
 #[cfg(test)]
 #[path = "review_cmd_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "review_cmd_timeout_tests.rs"]
+mod timeout_tests;

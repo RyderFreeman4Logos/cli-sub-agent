@@ -52,6 +52,57 @@ impl Transport for LegacyTransport {
                 attempt = attempt.saturating_add(1);
                 continue;
             }
+            if let Some(classification) = classify_codex_exec_initial_stall(
+                &executor,
+                &result.execution,
+                codex_initial_response_timeout_seconds(&executor, options.initial_response_timeout_seconds),
+            ) {
+                if let Some(retry_budget) = classification.retry_effort.clone() {
+                    let mut downgraded_executor = executor.clone();
+                    downgraded_executor.override_thinking_budget(retry_budget.clone());
+                    tracing::info!(
+                        original_effort = classification.effort,
+                        fallback_effort = retry_budget.codex_effort(),
+                        "retrying codex exec after initial-response stall"
+                    );
+                    let mut retry_result = self
+                        .execute_single_attempt(
+                            &downgraded_executor,
+                            prompt,
+                            tool_state,
+                            session,
+                            attempt_env,
+                            options.clone(),
+                        )
+                        .await?;
+                    if let Some(retry_classification) = classify_codex_exec_initial_stall(
+                        &downgraded_executor,
+                        &retry_result.execution,
+                        codex_initial_response_timeout_seconds(
+                            &downgraded_executor,
+                            options.initial_response_timeout_seconds,
+                        ),
+                    )
+                    {
+                        apply_codex_exec_initial_stall_summary(
+                            &mut retry_result.execution,
+                            &retry_classification,
+                            true,
+                            Some(classification.effort),
+                        );
+                    }
+                    return Ok(retry_result);
+                }
+
+                let mut result = result;
+                apply_codex_exec_initial_stall_summary(
+                    &mut result.execution,
+                    &classification,
+                    false,
+                    None,
+                );
+                return Ok(result);
+            }
             return Ok(result);
         }
     }
@@ -63,6 +114,7 @@ impl Transport for LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         LegacyTransport::execute_in(
             self,
@@ -71,6 +123,7 @@ impl Transport for LegacyTransport {
             extra_env,
             stream_mode,
             idle_timeout_seconds,
+            initial_response_timeout_seconds,
         )
         .await
     }

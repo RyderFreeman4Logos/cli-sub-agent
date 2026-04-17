@@ -76,6 +76,7 @@ async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
+            None,
         )
         .await
         .expect("execute_in should succeed with api key fallback");
@@ -151,6 +152,7 @@ async fn test_execute_in_new_invocation_restarts_with_oauth_before_fallback() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
+            None,
         )
         .await
         .expect("first invocation should return the last failed attempt");
@@ -163,6 +165,7 @@ async fn test_execute_in_new_invocation_restarts_with_oauth_before_fallback() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
+            None,
         )
         .await
         .expect("second invocation should return the last failed attempt");
@@ -205,6 +208,7 @@ async fn test_execute_in_non_quota_failure_does_not_trigger_api_key_fallback() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
+            None,
         )
         .await
         .expect("non-quota failures should be returned directly");

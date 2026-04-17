@@ -50,6 +50,7 @@ pub(crate) use session_exec::{
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
+pub(crate) const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParentSessionSource {
@@ -92,24 +93,36 @@ pub(crate) fn resolve_initial_response_timeout_seconds(
     raw.filter(|&v| v > 0)
 }
 
-/// Resolve the initial-response timeout with idle-timeout awareness.
-///
-/// When the user explicitly sets `--idle-timeout` but does NOT set
-/// `--initial-response-timeout`, the initial-response timeout is disabled
-/// so that the user's explicit idle timeout is always respected.
-/// This prevents the config default (120s) from silently overriding a
-/// longer `--idle-timeout` value (e.g., 1200s).
-pub(crate) fn resolve_initial_response_timeout(
+pub(crate) fn resolve_initial_response_timeout_for_tool(
     config: Option<&ProjectConfig>,
     cli_initial_response_timeout: Option<u64>,
     cli_idle_timeout: Option<u64>,
+    tool_name: &str,
 ) -> Option<u64> {
     if cli_idle_timeout.is_some() && cli_initial_response_timeout.is_none() {
-        // User explicitly set --idle-timeout but not --initial-response-timeout.
-        // Disable the two-phase timeout to honor the user's intent.
         return None;
     }
-    resolve_initial_response_timeout_seconds(config, cli_initial_response_timeout)
+
+    if let Some(cli_override) = cli_initial_response_timeout {
+        return (cli_override > 0).then_some(cli_override);
+    }
+
+    if tool_name == "codex" {
+        if let Some(seconds) =
+            config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name))
+        {
+            return (seconds > 0).then_some(seconds);
+        }
+
+        return config
+            .and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
+            .map_or(
+                Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS),
+                |seconds| (seconds > 0).then_some(seconds),
+            );
+    }
+
+    resolve_initial_response_timeout_seconds(config, None)
 }
 
 pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {

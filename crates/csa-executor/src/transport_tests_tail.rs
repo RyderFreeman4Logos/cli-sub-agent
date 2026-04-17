@@ -595,6 +595,7 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
+            None,
         )
         .await
         .expect("execute_in should succeed on attempt 3");

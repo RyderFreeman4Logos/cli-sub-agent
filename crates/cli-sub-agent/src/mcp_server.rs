@@ -557,7 +557,12 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     let global_config = csa_config::GlobalConfig::load()?;
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
     let initial_response_timeout_seconds =
-        crate::pipeline::resolve_initial_response_timeout_seconds(config.as_ref(), None);
+        crate::pipeline::resolve_initial_response_timeout_for_tool(
+            config.as_ref(),
+            None,
+            None,
+            executor.tool_name(),
+        );
     let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
@@ -606,6 +611,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
                 extra_env_ref,
                 csa_process::StreamMode::BufferOnly,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
             )
             .await?
     } else {

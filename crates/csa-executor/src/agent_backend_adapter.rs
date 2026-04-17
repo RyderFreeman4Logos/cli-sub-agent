@@ -224,7 +224,6 @@ impl AgentSession for ExecutorAgentSession {
         } else {
             Some(&self.env)
         };
-
         match self
             .executor
             .execute_in(
@@ -233,6 +232,7 @@ impl AgentSession for ExecutorAgentSession {
                 extra_env,
                 csa_process::StreamMode::BufferOnly,
                 csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
+                None,
             )
             .await
         {

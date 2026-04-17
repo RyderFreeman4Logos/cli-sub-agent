@@ -1,13 +1,5 @@
-//! Execution loop for `csa run`.
-//!
-//! Extracted from `run_cmd.rs` to keep module sizes manageable.
-
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-
+//! Execution loop for `csa run`, extracted from `run_cmd.rs` to keep module sizes manageable.
 use anyhow::Result;
-use tracing::{info, warn};
-
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName, ToolSelectionStrategy};
 use csa_executor::structured_output_instructions_for_fork_call;
@@ -15,7 +7,22 @@ use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
     try_acquire_slot,
 };
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
+use tracing::{info, warn};
 
+use super::attempt_exec::{
+    AttemptExecution, EphemeralRunRequest, run_ephemeral_with_timeout,
+    run_ephemeral_without_timeout, run_persistent_with_timeout, run_persistent_without_timeout,
+};
+use super::policy::is_post_run_commit_policy_block;
+use super::resume::{
+    build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
+    resolve_remaining_run_timeout, run_error_timeout_seconds, signal_interruption_exit_code,
+    signal_name_from_exit_code,
+};
 use crate::pipeline;
 use crate::run_cmd_fork::{
     ForkResolution, cleanup_pre_created_fork_session, pre_create_native_fork_session, resolve_fork,
@@ -27,17 +34,6 @@ use crate::run_cmd_tool_selection::{
     resolve_slot_wait_timeout_seconds, take_next_runtime_fallback_tool,
 };
 use crate::run_helpers::{is_tool_binary_available_for_config, parse_tool_name};
-
-use super::attempt_exec::{
-    AttemptExecution, run_ephemeral_with_timeout, run_ephemeral_without_timeout,
-    run_persistent_with_timeout, run_persistent_without_timeout,
-};
-use super::policy::is_post_run_commit_policy_block;
-use super::resume::{
-    build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
-    resolve_remaining_run_timeout, run_error_timeout_seconds, signal_interruption_exit_code,
-    signal_name_from_exit_code,
-};
 
 pub(crate) struct RunLoopRequest<'a> {
     pub(crate) strategy: ToolSelectionStrategy,
@@ -391,12 +387,15 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         let attempt_execution = if let Some(timeout_duration) = remaining_run_timeout {
             if request.ephemeral {
                 run_ephemeral_with_timeout(
-                    &executor,
-                    &effective_prompt,
-                    request.project_root,
-                    extra_env.as_ref(),
-                    request.stream_mode,
-                    request.idle_timeout_seconds,
+                    EphemeralRunRequest {
+                        executor: &executor,
+                        effective_prompt: &effective_prompt,
+                        project_root: request.project_root,
+                        extra_env: extra_env.as_ref(),
+                        stream_mode: request.stream_mode,
+                        idle_timeout_seconds: request.idle_timeout_seconds,
+                        initial_response_timeout_seconds: request.initial_response_timeout_seconds,
+                    },
                     timeout_duration,
                 )
                 .await
@@ -430,14 +429,15 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 .await
             }
         } else if request.ephemeral {
-            run_ephemeral_without_timeout(
-                &executor,
-                &effective_prompt,
-                request.project_root,
-                extra_env.as_ref(),
-                request.stream_mode,
-                request.idle_timeout_seconds,
-            )
+            run_ephemeral_without_timeout(EphemeralRunRequest {
+                executor: &executor,
+                effective_prompt: &effective_prompt,
+                project_root: request.project_root,
+                extra_env: extra_env.as_ref(),
+                stream_mode: request.stream_mode,
+                idle_timeout_seconds: request.idle_timeout_seconds,
+                initial_response_timeout_seconds: request.initial_response_timeout_seconds,
+            })
             .await
         } else {
             run_persistent_without_timeout(
