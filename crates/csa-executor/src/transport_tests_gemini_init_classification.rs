@@ -1,3 +1,32 @@
+static GEMINI_INIT_ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
+struct GeminiInitScopedEnvVar {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl GeminiInitScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by GEMINI_INIT_ENV_LOCK.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for GeminiInitScopedEnvVar {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation guarded by GEMINI_INIT_ENV_LOCK.
+        unsafe {
+            match self.original.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[test]
 fn test_classify_gemini_acp_init_failure_detects_oom() {
     let env = HashMap::new();
@@ -10,27 +39,18 @@ fn test_classify_gemini_acp_init_failure_detects_oom() {
 
 #[test]
 fn test_classify_gemini_acp_init_failure_detects_auth_env() {
-    let original_api_key = std::env::var(csa_core::gemini::API_KEY_ENV).ok();
-    let original_base_url = std::env::var(csa_core::gemini::BASE_URL_ENV).ok();
-    unsafe {
-        std::env::set_var(csa_core::gemini::API_KEY_ENV, "test-key");
-        std::env::set_var(csa_core::gemini::BASE_URL_ENV, "http://127.0.0.1:8317");
-    }
+    let _env_lock = GEMINI_INIT_ENV_LOCK
+        .lock()
+        .expect("gemini init env lock poisoned");
+    let _api_key = GeminiInitScopedEnvVar::set(csa_core::gemini::API_KEY_ENV, "test-key");
+    let _base_url =
+        GeminiInitScopedEnvVar::set(csa_core::gemini::BASE_URL_ENV, "http://127.0.0.1:8317");
 
     let env = HashMap::new();
     let classification = classify_gemini_acp_init_failure(
         "ACP initialization failed: authentication failed: missing credentials",
         &env,
     );
-
-    match original_api_key {
-        Some(value) => unsafe { std::env::set_var(csa_core::gemini::API_KEY_ENV, value) },
-        None => unsafe { std::env::remove_var(csa_core::gemini::API_KEY_ENV) },
-    }
-    match original_base_url {
-        Some(value) => unsafe { std::env::set_var(csa_core::gemini::BASE_URL_ENV, value) },
-        None => unsafe { std::env::remove_var(csa_core::gemini::BASE_URL_ENV) },
-    }
 
     assert_eq!(classification.code, "gemini_acp_init_auth_env");
     assert_eq!(
