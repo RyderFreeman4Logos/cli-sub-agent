@@ -310,6 +310,15 @@ fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_m
 }
 
 #[test]
+fn build_multi_reviewer_instruction_does_not_duplicate_findings_contract_from_base_prompt() {
+    let base_prompt = format!("Base prompt\n\n{REVIEW_FINDINGS_TOML_INSTRUCTION}");
+
+    let prompt = build_multi_reviewer_instruction(&base_prompt, 4, ToolName::Codex, None);
+
+    assert_eq!(prompt.matches(REVIEW_FINDINGS_TOML_INSTRUCTION).count(), 1);
+}
+
+#[test]
 fn parse_review_verdict_is_case_insensitive_and_token_aware() {
     assert_eq!(
         parse_review_verdict("final verdict: clean.", 1),

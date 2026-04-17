@@ -206,8 +206,10 @@ Reviewer tool hint: {}.",
         prompt.push_str("\n\n");
         prompt.push_str(prior_rounds_section);
     }
-    prompt.push_str("\n\n");
-    prompt.push_str(REVIEW_FINDINGS_TOML_INSTRUCTION);
+    if !base_prompt.contains(REVIEW_FINDINGS_TOML_INSTRUCTION) {
+        prompt.push_str("\n\n");
+        prompt.push_str(REVIEW_FINDINGS_TOML_INSTRUCTION);
+    }
     prompt
 }
 
