@@ -1,9 +1,7 @@
 use super::*;
 use crate::test_env_lock::TEST_ENV_LOCK;
-#[cfg(unix)]
 use chrono::Utc;
-use csa_session::{create_session, get_session_dir, load_result};
-#[cfg(unix)]
+use csa_session::{SessionResult, create_session, get_session_dir, load_result};
 use csa_session::{load_session, save_result};
 #[cfg(unix)]
 use std::ffi::CString;
@@ -56,6 +54,21 @@ impl SessionTestEnv {
             _home_guard: home_guard,
             _state_guard: state_guard,
         }
+    }
+}
+
+fn make_result(status: &str, exit_code: i32) -> SessionResult {
+    let now = Utc::now();
+    SessionResult {
+        status: status.to_string(),
+        exit_code,
+        summary: "summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
     }
 }
 
@@ -241,6 +254,38 @@ fn ensure_terminal_result_for_dead_active_session_shell_escapes_recovery_command
         parsed.cmd.as_deref(),
         Some("git push -u origin 'feat/$(touch-pwn)'")
     );
+}
+
+#[test]
+fn retire_if_dead_with_result_removes_session_target_dir() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("retire-cleans-target"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    save_result(project, &session_id, &make_result("success", 0)).unwrap();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let target_dir = session_dir.join("target");
+    std::fs::create_dir_all(target_dir.join("debug")).unwrap();
+    std::fs::write(target_dir.join("debug").join("artifact.bin"), b"payload").unwrap();
+
+    let retired = retire_if_dead_with_result_impl(
+        project,
+        &session_id,
+        "session list",
+        &session_dir,
+        &persist_session_state_atomically,
+    )
+    .unwrap();
+
+    assert!(retired, "session should retire");
+    assert!(
+        !target_dir.exists(),
+        "retired session target directory should be removed"
+    );
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, SessionPhase::Retired);
 }
 
 #[cfg(unix)]
