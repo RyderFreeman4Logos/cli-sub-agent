@@ -239,6 +239,45 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
 
     assert!(prompt.contains("Prior review count on this branch: 3."));
     assert!(prompt.contains("Multiple prior rounds have fired on this branch."));
+    assert!(prompt.contains("Oscillating DESIGN choices"));
+    assert!(prompt.contains("Still broken from last round is still broken."));
+}
+
+#[test]
+fn multi_round_escalation_keeps_persistent_correctness_bugs_blocking() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
+    let project_dir = tempdir().unwrap();
+    init_git_repo_with_branch(project_dir.path(), "feat/iter-persistent-bug");
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000041",
+        Some("feat/iter-persistent-bug"),
+        "fail",
+        1,
+    );
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000042",
+        Some("feat/iter-persistent-bug"),
+        "fail",
+        2,
+    );
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000043",
+        Some("feat/iter-persistent-bug"),
+        "pass",
+        3,
+    );
+
+    let _cwd = CurrentDirGuard::change_to(project_dir.path());
+    let prompt = crate::review_consensus::build_multi_reviewer_instruction(
+        "Base prompt",
+        2,
+        ToolName::Codex,
+    );
+
+    assert!(prompt.contains("persistent correctness bugs remain blocking"));
 }
 
 #[test]
