@@ -55,10 +55,10 @@ use post_review::{build_post_review_output, emit_post_review_output, review_scop
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
-    build_review_instruction_for_project, derive_scope, resolve_review_model,
-    resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
-    resolve_review_tool, review_scope_allows_auto_discovery, verify_review_skill_available,
-    write_multi_reviewer_consolidated_artifact,
+    ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope,
+    resolve_review_model, resolve_review_stream_mode, resolve_review_thinking,
+    resolve_review_tier_name, resolve_review_tool, review_scope_allows_auto_discovery,
+    verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
 use reviewers::resolve_multi_reviewer_pool;
 
@@ -237,6 +237,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         "review: {}",
         crate::run_helpers::truncate_prompt(&scope, 80)
     );
+    let prior_rounds_section = args
+        .prior_rounds_summary
+        .as_deref()
+        .map(crate::review_prior_rounds::load_prior_rounds_section)
+        .transpose()?;
 
     // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
     let (mut prompt, review_routing) = build_review_instruction_for_project(
@@ -246,7 +251,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         review_mode,
         context.as_ref(),
         &project_root,
-        config.as_ref(),
+        ReviewProjectPromptOptions {
+            project_config: config.as_ref(),
+            prior_rounds_section: prior_rounds_section.as_deref(),
+        },
     );
 
     // 4b. Inject gate pipeline results into review prompt for reviewer awareness
@@ -571,8 +579,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
-        let reviewer_prompt =
-            build_multi_reviewer_instruction(&prompt, reviewer_index + 1, reviewer_tool);
+        let reviewer_prompt = build_multi_reviewer_instruction(
+            &prompt,
+            reviewer_index + 1,
+            reviewer_tool,
+            prior_rounds_section.as_deref(),
+        );
         let reviewer_model = review_model.clone();
         let reviewer_project_root = project_root.clone();
         let reviewer_config = config.clone();

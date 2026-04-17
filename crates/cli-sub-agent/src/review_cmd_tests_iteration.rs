@@ -127,7 +127,10 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
         ReviewMode::Standard,
         None,
         project_dir.path(),
-        None,
+        resolve::ReviewProjectPromptOptions {
+            project_config: None,
+            prior_rounds_section: None,
+        },
     );
 
     assert!(instruction.contains("Design preferences vs correctness bugs"));
@@ -139,6 +142,7 @@ fn build_multi_reviewer_instruction_contains_design_preference_anchor() {
         "Base prompt",
         1,
         ToolName::Codex,
+        None,
     );
 
     assert!(prompt.contains("Design preferences vs correctness bugs"));
@@ -161,7 +165,10 @@ fn count_prior_reviews_zero_omits_iteration_block() {
         ReviewMode::Standard,
         None,
         project_dir.path(),
-        None,
+        resolve::ReviewProjectPromptOptions {
+            project_config: None,
+            prior_rounds_section: None,
+        },
     );
 
     assert!(!instruction.contains("## Review iteration context"));
@@ -191,7 +198,10 @@ fn count_prior_reviews_one_injects_iteration_two() {
         ReviewMode::Standard,
         None,
         project_dir.path(),
-        None,
+        resolve::ReviewProjectPromptOptions {
+            project_config: None,
+            prior_rounds_section: None,
+        },
     );
 
     assert!(instruction.contains("This is review iteration 2 on branch 'feat/iter-one'."));
@@ -235,6 +245,7 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
         "Base prompt",
         2,
         ToolName::Codex,
+        None,
     );
 
     assert!(prompt.contains("Prior review count on this branch: 3."));
@@ -275,6 +286,7 @@ fn multi_round_escalation_keeps_persistent_correctness_bugs_blocking() {
         "Base prompt",
         2,
         ToolName::Codex,
+        None,
     );
 
     assert!(prompt.contains("persistent correctness bugs remain blocking"));
@@ -349,3 +361,8 @@ fn count_prior_reviews_uses_canonical_max_after_more_than_ten_prior_reviews() {
         12
     );
 }
+
+#[path = "review_cmd_tests_checklist.rs"]
+mod review_cmd_tests_checklist;
+#[path = "review_cmd_tests_prior_rounds.rs"]
+mod review_cmd_tests_prior_rounds;

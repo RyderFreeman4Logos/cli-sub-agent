@@ -446,6 +446,7 @@ fn default_review_args() -> ReviewArgs {
         no_fs_sandbox: false,
         extra_writable: vec![],
         prompt_file: None,
+        prior_rounds_summary: None,
         daemon: false,
         no_daemon: true,
         daemon_child: false,
@@ -784,17 +785,13 @@ fn has_structured_review_content_requires_non_empty_sections() {
     assert!(has_structured_review_content(structured));
 }
 
-#[path = "review_cmd_tier_tests.rs"]
-mod tier_tests;
-
-#[path = "review_cmd_tests_tail.rs"]
-mod tail_tests;
-
-#[path = "review_cmd_tests_transport_tail.rs"]
-mod transport_tail_tests;
-
-#[path = "review_cmd_tests_no_failover.rs"]
-mod no_failover_tests;
-
 #[path = "review_cmd_bug_class_tests.rs"]
 mod bug_class_tests;
+#[path = "review_cmd_tests_no_failover.rs"]
+mod no_failover_tests;
+#[path = "review_cmd_tests_tail.rs"]
+mod tail_tests;
+#[path = "review_cmd_tier_tests.rs"]
+mod tier_tests;
+#[path = "review_cmd_tests_transport_tail.rs"]
+mod transport_tail_tests;
