@@ -12,6 +12,7 @@ use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 
 use super::CLEAN;
+use super::findings_toml::persist_review_findings_toml;
 use super::output::{
     is_review_output_empty, persist_review_meta, persist_review_verdict, sanitize_review_output,
 };
@@ -186,8 +187,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: None,
             };
-            persist_review_meta(ctx.project_root, &review_meta);
-            persist_review_verdict(ctx.project_root, &review_meta, &[], Vec::new());
+            persist_fix_final_artifacts(ctx.project_root, &review_meta);
             return Ok(0);
         }
     }
@@ -207,11 +207,20 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
     };
-    persist_review_meta(ctx.project_root, &review_meta);
-    persist_review_verdict(ctx.project_root, &review_meta, &[], Vec::new());
+    persist_fix_final_artifacts(ctx.project_root, &review_meta);
     error!(
         max_rounds = ctx.max_rounds,
         "All fix rounds exhausted — quality gate still failing"
     );
     Ok(1)
 }
+
+fn persist_fix_final_artifacts(project_root: &Path, review_meta: &ReviewSessionMeta) {
+    persist_review_meta(project_root, review_meta);
+    persist_review_verdict(project_root, review_meta, &[], Vec::new());
+    persist_review_findings_toml(project_root, review_meta);
+}
+
+#[cfg(test)]
+#[path = "review_cmd_fix_tests.rs"]
+mod tests;
