@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use csa_session::state::{MetaSessionState, ToolState};
 
 use super::{AcpTransport, TransportOptions, TransportResult};
@@ -161,6 +161,106 @@ fn format_memory_limit(memory_max_mb: Option<u64>) -> String {
     }
 }
 
+fn memory_limit_config_key(tool_name: &str) -> String {
+    format!("[tools.{tool_name}].memory_max_mb")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodexAcpCrashKind {
+    Oom,
+    Runtime,
+}
+
+impl CodexAcpCrashKind {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Oom => "codex_acp_crash_oom",
+            Self::Runtime => "codex_acp_crash_runtime",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexAcpCrashClassification {
+    pub(crate) kind: CodexAcpCrashKind,
+    pub(crate) rendered_hint: String,
+}
+
+pub(crate) fn classify_codex_acp_crash(
+    stderr_or_context: &str,
+    exit_code: Option<i32>,
+    cgroup_state: Option<&str>,
+    memory_max_mb: Option<u64>,
+) -> CodexAcpCrashClassification {
+    let stderr_lower = stderr_or_context.to_ascii_lowercase();
+    let cgroup_lower = cgroup_state.map(str::to_ascii_lowercase);
+    let config_key = memory_limit_config_key("codex");
+    let current_limit = format_memory_limit(memory_max_mb);
+
+    let signal_kill = matches!(exit_code, Some(137) | Some(9) | Some(-9));
+    let stderr_exact_killed = stderr_lower
+        .rsplit_once("stderr:")
+        .is_some_and(|(_, tail)| tail.trim() == "killed");
+    let plain_killed_line = stderr_or_context
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("killed"));
+    let cgroup_oom = cgroup_lower.as_deref().is_some_and(|state| {
+        state.contains("memory.max")
+            || state.contains("oom")
+            || state.contains("out of memory")
+            || state.contains("killed")
+    });
+    let oom_signature = is_oom_lowered(&stderr_lower)
+        || stderr_exact_killed
+        || plain_killed_line
+        || cgroup_oom
+        || signal_kill;
+
+    let (kind, rendered_hint) = if oom_signature {
+        (
+            CodexAcpCrashKind::Oom,
+            format!(
+                "{}: Codex ACP child died post-init and looks OOM-killed. \
+                 Current limit: {current_limit} ({config_key}). \
+                 For read-only forensic / rg-heavy work, consider claude-code native Agent tool as a lower-memory alternative. \
+                 Suggestions: (1) raise {config_key}, (2) reduce tool output/context size, (3) switch tools for this workload.",
+                CodexAcpCrashKind::Oom.code()
+            ),
+        )
+    } else {
+        (
+            CodexAcpCrashKind::Runtime,
+            format!(
+                "{}: Codex ACP child died post-init without a confirmed OOM signature. \
+                 Current limit: {current_limit} ({config_key}). \
+                 If this keeps reproducing, inspect stderr/output tail and reduce context or switch tools.",
+                CodexAcpCrashKind::Runtime.code()
+            ),
+        )
+    };
+
+    CodexAcpCrashClassification {
+        kind,
+        rendered_hint,
+    }
+}
+
+pub(crate) fn format_codex_acp_crash(
+    classification: &CodexAcpCrashClassification,
+    error: anyhow::Error,
+    attempts: u8,
+) -> anyhow::Error {
+    let retry_prefix = if attempts > 1 {
+        format!("ACP crash retry exhausted ({attempts} attempts) for codex. ")
+    } else {
+        String::new()
+    };
+    anyhow!(
+        "{retry_prefix}{}\nOriginal error: {error:#}",
+        classification.rendered_hint
+    )
+}
+
 /// Format a user-facing error message for a non-retryable OOM crash.
 pub(crate) fn format_oom_crash(
     error: anyhow::Error,
@@ -233,6 +333,9 @@ pub(super) async fn execute_with_crash_retry(
             Ok(tr) => return Ok(tr),
             Err(error) => {
                 let error_display = format!("{error:#}");
+                let memory_max_mb = options
+                    .sandbox
+                    .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
 
                 if is_retryable_acp_crash(&error_display) && attempt < max_attempts {
                     tracing::warn!(
@@ -247,14 +350,25 @@ pub(super) async fn execute_with_crash_retry(
                     continue;
                 }
 
-                if is_oom_error(&error_display) {
-                    let memory_max_mb = options
-                        .sandbox
-                        .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
-                    return Err(format_oom_crash(error, &transport.tool_name, memory_max_mb));
-                }
                 if is_auth_error(&error_display) {
                     return Err(format_auth_failure(error, &transport.tool_name));
+                }
+                if transport.tool_name == "codex" && is_crash_lowered(&error_display.to_lowercase())
+                {
+                    let classification =
+                        classify_codex_acp_crash(&error_display, None, None, memory_max_mb);
+                    tracing::warn!(
+                        classified_reason = classification.kind.code(),
+                        memory_max_mb,
+                        attempt,
+                        max_attempts,
+                        tool = %transport.tool_name,
+                        "classified codex ACP crash"
+                    );
+                    return Err(format_codex_acp_crash(&classification, error, attempt));
+                }
+                if is_oom_error(&error_display) {
+                    return Err(format_oom_crash(error, &transport.tool_name, memory_max_mb));
                 }
                 if attempt > 1 {
                     return Err(format_crash_retry_exhausted(
@@ -459,5 +573,117 @@ mod tests {
         assert!(msg.contains("authentication or permission error"));
         assert!(msg.contains("scopes"));
         assert!(msg.contains("--tier"));
+    }
+
+    #[test]
+    fn test_classify_codex_acp_crash_oom_from_killed_stderr() {
+        let classification = classify_codex_acp_crash(
+            "server shut down unexpectedly\nKilled\n",
+            None,
+            None,
+            Some(6144),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+        assert!(classification.rendered_hint.contains("codex_acp_crash_oom"));
+        assert!(classification.rendered_hint.contains("6144MB"));
+        assert!(
+            classification
+                .rendered_hint
+                .contains("[tools.codex].memory_max_mb")
+        );
+        assert!(
+            classification
+                .rendered_hint
+                .contains("claude-code native Agent tool")
+        );
+    }
+
+    #[test]
+    fn test_classify_codex_acp_crash_oom_from_stderr_tail_killed() {
+        let classification = classify_codex_acp_crash(
+            "ACP prompt failed: Internal error: \"server shut down unexpectedly\"; stderr: Killed",
+            None,
+            None,
+            Some(6144),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+    }
+
+    #[test]
+    fn test_classify_codex_acp_crash_oom_from_cgroup_state() {
+        let classification = classify_codex_acp_crash(
+            "server shut down unexpectedly",
+            None,
+            Some("memory.max exceeded"),
+            Some(4096),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+        assert!(classification.rendered_hint.contains("4096MB"));
+    }
+
+    #[test]
+    fn test_classify_codex_acp_crash_runtime_without_oom_signature() {
+        let classification = classify_codex_acp_crash(
+            "ACP prompt failed: Internal error: \"server shut down unexpectedly\"",
+            None,
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Runtime);
+        assert!(
+            classification
+                .rendered_hint
+                .contains("codex_acp_crash_runtime")
+        );
+        assert!(classification.rendered_hint.contains("3072MB"));
+        assert!(
+            classification
+                .rendered_hint
+                .contains("[tools.codex].memory_max_mb")
+        );
+    }
+
+    #[test]
+    fn test_classify_codex_acp_crash_signal_11_stays_runtime() {
+        let classification = classify_codex_acp_crash(
+            "ACP process exited unexpectedly: killed by signal 11 (SIGSEGV)",
+            None,
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Runtime);
+    }
+
+    #[test]
+    fn test_classify_codex_acp_crash_signal_90_stays_runtime() {
+        let classification = classify_codex_acp_crash(
+            "ACP process exited unexpectedly: killed by signal 90",
+            None,
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Runtime);
+    }
+
+    #[test]
+    fn test_format_codex_acp_crash_includes_hint_and_original_error() {
+        let classification = classify_codex_acp_crash("Killed", Some(137), None, Some(2048));
+        let err = anyhow::anyhow!("server shut down unexpectedly");
+        let formatted = format_codex_acp_crash(&classification, err, 1);
+        let msg = formatted.to_string();
+        assert!(msg.contains("codex_acp_crash_oom"));
+        assert!(msg.contains("2048MB"));
+        assert!(msg.contains("Original error"));
+    }
+
+    #[test]
+    fn test_format_codex_acp_crash_retry_exhausted_preserves_failover_anchor() {
+        let classification =
+            classify_codex_acp_crash("server shut down unexpectedly", None, None, Some(2048));
+        let err = anyhow::anyhow!("server shut down unexpectedly");
+        let formatted = format_codex_acp_crash(&classification, err, 2);
+        let msg = formatted.to_string().to_ascii_lowercase();
+        assert!(msg.contains("acp crash retry exhausted"));
+        assert!(msg.contains("codex_acp_crash_runtime"));
     }
 }
