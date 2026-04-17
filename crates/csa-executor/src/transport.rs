@@ -32,9 +32,9 @@ mod transport_gemini_helpers;
 use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
-    apply_gemini_sandbox_runtime_env_overrides, classify_join_error,
-    ensure_gemini_runtime_home_writable_path, gemini_phase_desc,
-    gemini_sandbox_runtime_env_overrides,
+    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
+    classify_join_error, ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
+    gemini_phase_desc, gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
 };
 
 #[path = "transport_gemini_acp_runtime.rs"]
@@ -431,6 +431,15 @@ impl AcpTransport {
         }
         let gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
+        let gemini_env_allowlist_applied = gemini_sandbox_env_overrides
+            .as_ref()
+            .map(|overrides| {
+                let mut keys = overrides.keys().cloned().collect::<Vec<_>>();
+                keys.sort();
+                keys.join(",")
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let gemini_classification_env = (self.tool_name == "gemini-cli").then(|| env.clone());
 
         let sandbox_plan = options.sandbox.map(|s| {
             let mut isolation_plan = s.isolation_plan.clone();
@@ -588,6 +597,32 @@ impl AcpTransport {
             .await
             .map_err(classify_join_error)?
             .map_err(|error| {
+                if self.tool_name == "gemini-cli" {
+                    let error_display = format!("{error:#}");
+                    if is_gemini_acp_init_failure(&error_display) {
+                        let memory_max_mb = options
+                            .sandbox
+                            .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
+                        let classification = classify_gemini_acp_init_failure(
+                            &error_display,
+                            gemini_classification_env
+                                .as_ref()
+                                .expect("gemini classification env"),
+                        );
+                        tracing::warn!(
+                            classified_reason = classification.code,
+                            memory_max_mb,
+                            env_allowlist_applied = %gemini_env_allowlist_applied,
+                            missing_env_vars = %classification.missing_env_vars.join(","),
+                            "classified gemini ACP initialization failure"
+                        );
+                        return format_gemini_acp_init_failure(
+                            &classification,
+                            error,
+                            memory_max_mb,
+                        );
+                    }
+                }
                 if let Some(path) = acp_payload_debug_path.as_deref() {
                     error.context(format!(
                         "ACP payload debug written to {}",
@@ -627,6 +662,7 @@ mod tests {
     include!("transport_tests_tail.rs");
     include!("transport_tests_ephemeral.rs");
     include!("transport_tests_gemini_fallback.rs");
+    include!("transport_tests_gemini_init_classification.rs");
     include!("transport_tests_extra.rs");
 }
 

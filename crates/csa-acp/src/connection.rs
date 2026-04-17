@@ -143,7 +143,13 @@ impl AcpConnection {
 
         match result {
             Some(Ok(_response)) => Ok(()),
-            Some(Err(err)) => Err(AcpError::InitializationFailed(err.to_string())),
+            Some(Err(err)) => {
+                let stderr = self.stderr();
+                Err(AcpError::InitializationFailed(format!(
+                    "{err}{}",
+                    Self::format_stderr(&stderr)
+                )))
+            }
             None => {
                 let stderr = self.stderr();
                 let _ = self.kill().await;
@@ -185,7 +191,13 @@ impl AcpConnection {
 
         match result {
             Some(Ok(response)) => Ok(response.session_id.0.to_string()),
-            Some(Err(err)) => Err(AcpError::SessionFailed(err.to_string())),
+            Some(Err(err)) => {
+                let stderr = self.stderr();
+                Err(AcpError::SessionFailed(format!(
+                    "{err}{}",
+                    Self::format_stderr(&stderr)
+                )))
+            }
             None => {
                 let stderr = self.stderr();
                 let _ = self.kill().await;
@@ -222,7 +234,13 @@ impl AcpConnection {
 
         match result {
             Some(Ok(_response)) => Ok(session_id.to_string()),
-            Some(Err(err)) => Err(AcpError::SessionFailed(err.to_string())),
+            Some(Err(err)) => {
+                let stderr = self.stderr();
+                Err(AcpError::SessionFailed(format!(
+                    "{err}{}",
+                    Self::format_stderr(&stderr)
+                )))
+            }
             None => {
                 // Unlike initialize/new_session, do NOT kill the process here.
                 // load_session is an optional optimisation (resume vs create new).
@@ -603,15 +621,10 @@ fn maybe_emit_heartbeat(
     *last_heartbeat = now;
 }
 
-/// Maximum bytes a line buffer may hold before being force-flushed.
-/// Prevents unbounded memory growth on long non-newline output (base64,
-/// minified JSON, etc.).
+/// Maximum bytes buffered before a newline-free chunk is force-flushed.
 pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
 
-/// Flush complete lines (terminated by `\n`) from `buf`, each prefixed with
-/// `prefix`.  Incomplete trailing content stays in `buf` for the next call,
-/// unless the buffer exceeds [`LINE_BUF_CAP`], in which case the entire
-/// remainder is force-flushed.
+/// Flush complete lines; keep incomplete tails unless the buffer exceeds [`LINE_BUF_CAP`].
 fn flush_complete_lines(buf: &mut String, prefix: &str) {
     while let Some(pos) = buf.find('\n') {
         let line: String = buf.drain(..=pos).collect();
@@ -624,8 +637,7 @@ fn flush_complete_lines(buf: &mut String, prefix: &str) {
     }
 }
 
-/// Flush any remaining content from `buf` (for end-of-stream or stream-type
-/// switch).  Appends a newline so the log entry is properly terminated.
+/// Flush any remaining buffered content, appending a terminating newline.
 fn flush_remaining_buf(buf: &mut String, prefix: &str) {
     if !buf.is_empty() {
         let remainder = std::mem::take(buf);
@@ -642,10 +654,7 @@ fn stream_new_agent_messages(
     stdout_line_buf: &mut String,
     thought_line_buf: &mut String,
 ) {
-    // Iterate new retained events by total event count.  Older events may be
-    // dropped from the front once retention reaches `MAX_RETAINED_EVENTS`, so
-    // the processing cursor is tracked against the total number of events seen
-    // rather than the retained deque length.
+    // Track progress against total seen events because the retained deque can evict old entries.
     let events_ref = events.borrow();
     metadata.sync_from_store(&events_ref);
     if *processed_event_count >= events_ref.total_events_count() {
@@ -661,8 +670,7 @@ fn stream_new_agent_messages(
             processed = *processed_event_count,
             "ACP event ring buffer overrun: {skipped} events were evicted before being streamed to spool/stderr"
         );
-        // Clear partial line buffers so we don't splice stale content with
-        // the first retained chunk after the gap (PR #440 P3).
+        // Avoid splicing pre-overrun partial lines with the first retained chunk.
         stdout_line_buf.clear();
         thought_line_buf.clear();
     }
@@ -672,7 +680,6 @@ fn stream_new_agent_messages(
         match event {
             SessionEvent::AgentMessage(chunk) => {
                 if stream_stdout_to_stderr {
-                    // Flush thought buffer on stream-type switch.
                     flush_remaining_buf(thought_line_buf, "[thought] ");
                     stdout_line_buf.push_str(chunk);
                     flush_complete_lines(stdout_line_buf, "[stdout] ");
@@ -682,7 +689,6 @@ fn stream_new_agent_messages(
             }
             SessionEvent::AgentThought(chunk) => {
                 if stream_stdout_to_stderr {
-                    // Flush stdout buffer on stream-type switch.
                     flush_remaining_buf(stdout_line_buf, "[stdout] ");
                     thought_line_buf.push_str(chunk);
                     flush_complete_lines(thought_line_buf, "[thought] ");
@@ -731,10 +737,7 @@ fn stream_new_agent_messages(
         }
     }
 
-    // Debounce: flush any accumulated partial line at the end of each poll
-    // cycle to maintain progressive output visibility.  This ensures one
-    // coalesced [stdout] tag per ~200ms poll instead of per-token, while
-    // still showing progress for newline-free output (PR #440 P2).
+    // Flush partial lines once per poll so newline-free output still streams progressively.
     if stream_stdout_to_stderr {
         flush_remaining_buf(stdout_line_buf, "[stdout] ");
         flush_remaining_buf(thought_line_buf, "[thought] ");
@@ -747,24 +750,11 @@ fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut St
     if let Some(writer) = spool {
         let _ = writer.write(bytes);
         metadata.spool_bytes_written = writer.bytes_written();
-        // BufWriter flushes automatically when the buffer fills (64 KiB).
-        // No per-chunk flush — the final flush happens on drop or when the
-        // prompt_with_io loop ends.
-        //
-        // Note: no size cap on the spool file.  Disk usage is managed by
-        // `csa gc`, not here.  A HEAD-only cap would truncate tail markers
-        // (e.g. return-packet), breaking fork call chains.  RAM is bounded
-        // by the StreamingMetadata tail buffer instead.
+        // Let BufWriter flush on capacity/drop; spool retention is managed by `csa gc`.
     }
 }
 
-/// Collect agent output for the caller (stdout / summary extraction).
-///
-/// Prefers `message_text` (actual agent output).  When no message text was
-/// produced but thought text exists, falls back to thought text with a
-/// `[thought-fallback]` prefix so callers know the output is derived from
-/// internal reasoning rather than visible agent messages.  This handles
-/// models (e.g. gemini) that produce thoughts but no visible message content.
+/// Collect agent-visible output, falling back to thought text when no message text exists.
 fn collect_agent_output(metadata: &mut StreamingMetadata) -> String {
     let message = metadata.message_text.trim();
     if !message.is_empty() {
@@ -777,8 +767,7 @@ fn collect_agent_output(metadata: &mut StreamingMetadata) -> String {
             thought_bytes = metadata.thought_text.len(),
             "agent produced no message output; falling back to thought text"
         );
-        // Put the marker on its own line so CSA section markers
-        // (<!-- CSA:SECTION:... -->) in the thought text remain parseable.
+        // Keep the marker on its own line so CSA section markers remain parseable.
         return format!("[thought-fallback]\n{}", metadata.thought_text);
     }
     String::new()
