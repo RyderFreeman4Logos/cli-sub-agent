@@ -50,6 +50,7 @@ pub(crate) use session_exec::{
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
+pub(crate) const DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,8 +90,11 @@ pub(crate) fn resolve_initial_response_timeout_seconds(
 ) -> Option<u64> {
     let raw = cli_override
         .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
-    // 0 means explicitly disabled.
-    raw.filter(|&v| v > 0)
+    match raw {
+        Some(0) => None,
+        Some(seconds) => Some(seconds),
+        None => Some(DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS),
+    }
 }
 
 pub(crate) fn resolve_initial_response_timeout_for_tool(
@@ -110,6 +114,11 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
     if tool_name == "codex" {
         if let Some(seconds) =
             config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name))
+        {
+            return (seconds > 0).then_some(seconds);
+        }
+
+        if let Some(seconds) = config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
         {
             return (seconds > 0).then_some(seconds);
         }

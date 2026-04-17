@@ -28,7 +28,7 @@ pub struct ResourcesConfig {
     /// When set, uses a shorter timeout until the first output is received,
     /// then falls back to `idle_timeout_seconds`.  This detects "backend never
     /// started" much faster than waiting the full idle timeout.
-    #[serde(default = "default_initial_response_timeout_seconds")]
+    #[serde(default)]
     pub initial_response_timeout_seconds: Option<u64>,
     /// Deprecated: initial memory estimates per tool.
     /// Retained for backward-compatible deserialization of old configs.
@@ -84,10 +84,6 @@ fn default_termination_grace_period_seconds() -> u64 {
     5
 }
 
-fn default_initial_response_timeout_seconds() -> Option<u64> {
-    Some(120)
-}
-
 impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
@@ -97,7 +93,7 @@ impl Default for ResourcesConfig {
             slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
             stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
             termination_grace_period_seconds: default_termination_grace_period_seconds(),
-            initial_response_timeout_seconds: default_initial_response_timeout_seconds(),
+            initial_response_timeout_seconds: None,
             initial_estimates: HashMap::new(),
             enforcement_mode: None,
             memory_max_mb: None,
@@ -121,7 +117,7 @@ impl ResourcesConfig {
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.termination_grace_period_seconds == default_termination_grace_period_seconds()
-            && self.initial_response_timeout_seconds == default_initial_response_timeout_seconds()
+            && self.initial_response_timeout_seconds.is_none()
             && self.enforcement_mode.is_none()
             && self.memory_max_mb.is_none()
             && self.memory_swap_max_mb.is_none()

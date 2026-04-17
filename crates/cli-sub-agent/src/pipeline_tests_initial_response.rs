@@ -89,8 +89,11 @@ fn test_resolve_initial_response_timeout_config_zero_disables() {
 
 #[test]
 fn test_resolve_initial_response_timeout_no_config_no_cli() {
-    // No config, no CLI → None (function returns what config provides).
-    assert_eq!(resolve_initial_response_timeout_seconds(None, None), None);
+    // No config, no CLI → generic resources fallback (120s).
+    assert_eq!(
+        resolve_initial_response_timeout_seconds(None, None),
+        Some(DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+    );
 }
 
 #[test]
@@ -229,38 +232,6 @@ fn test_resolve_initial_response_timeout_for_tool_falls_through_without_idle_tim
 }
 
 #[test]
-fn test_resolve_initial_response_timeout_for_codex_ignores_default_resource_timeout() {
-    let cfg = ProjectConfig {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project: ProjectMeta::default(),
-        resources: ResourcesConfig {
-            initial_response_timeout_seconds: Some(120),
-            ..Default::default()
-        },
-        acp: Default::default(),
-        tools: HashMap::new(),
-        review: None,
-        debate: None,
-        tiers: HashMap::new(),
-        tier_mapping: HashMap::new(),
-        aliases: HashMap::new(),
-        tool_aliases: HashMap::new(),
-        preferences: None,
-        session: Default::default(),
-        memory: Default::default(),
-        hooks: Default::default(),
-        execution: Default::default(),
-        vcs: Default::default(),
-        filesystem_sandbox: Default::default(),
-    };
-
-    assert_eq!(
-        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex"),
-        Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS)
-    );
-}
-
-#[test]
 fn test_resolve_initial_response_timeout_for_codex_defaults_to_300_without_overrides() {
     let cfg = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -289,6 +260,38 @@ fn test_resolve_initial_response_timeout_for_codex_defaults_to_300_without_overr
     assert_eq!(
         resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex"),
         Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+    );
+}
+
+#[test]
+fn test_resolve_initial_response_timeout_for_codex_uses_explicit_resource_timeout() {
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig {
+            initial_response_timeout_seconds: Some(240),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    assert_eq!(
+        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex"),
+        Some(240)
     );
 }
 
@@ -330,7 +333,7 @@ fn test_resolve_initial_response_timeout_for_codex_uses_tool_override() {
 }
 
 #[test]
-fn test_resolve_initial_response_timeout_for_codex_tool_override_beats_default_resource_timeout() {
+fn test_resolve_initial_response_timeout_for_codex_tool_override_beats_resource_timeout() {
     let mut tools = HashMap::new();
     tools.insert(
         "codex".to_string(),
@@ -343,7 +346,7 @@ fn test_resolve_initial_response_timeout_for_codex_tool_override_beats_default_r
         schema_version: CURRENT_SCHEMA_VERSION,
         project: ProjectMeta::default(),
         resources: ResourcesConfig {
-            initial_response_timeout_seconds: Some(120),
+            initial_response_timeout_seconds: Some(240),
             ..Default::default()
         },
         acp: Default::default(),
@@ -407,7 +410,7 @@ fn test_resolve_initial_response_timeout_for_codex_tool_zero_disables() {
 }
 
 #[test]
-fn test_resolve_initial_response_timeout_for_codex_ignores_global_zero_override() {
+fn test_resolve_initial_response_timeout_for_codex_global_zero_disables() {
     let cfg = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
         project: ProjectMeta::default(),
@@ -434,7 +437,7 @@ fn test_resolve_initial_response_timeout_for_codex_ignores_global_zero_override(
 
     assert_eq!(
         resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex"),
-        Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+        None
     );
 }
 

@@ -187,9 +187,9 @@ fn test_session_config_is_default_reflects_spool_overrides() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_resources_config_default_has_initial_response_timeout_120() {
+fn test_resources_config_default_has_no_initial_response_timeout() {
     let cfg = ResourcesConfig::default();
-    assert_eq!(cfg.initial_response_timeout_seconds, Some(120));
+    assert_eq!(cfg.initial_response_timeout_seconds, None);
 }
 
 #[test]
@@ -226,10 +226,10 @@ initial_response_timeout_seconds = 0
 }
 
 #[test]
-fn test_resources_config_deser_initial_response_timeout_omitted_defaults_to_120() {
+fn test_resources_config_deser_initial_response_timeout_omitted_defaults_to_none() {
     let toml_str = r#"
 idle_timeout_seconds = 250
 "#;
     let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
-    assert_eq!(cfg.initial_response_timeout_seconds, Some(120));
+    assert_eq!(cfg.initial_response_timeout_seconds, None);
 }
