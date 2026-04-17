@@ -752,3 +752,6 @@ fn claude_code_also_routes_to_acp_transport() {
 
 #[path = "review_cmd_tests_iteration.rs"]
 mod review_cmd_tests_iteration;
+
+#[path = "review_cmd_tests_pre_exec.rs"]
+mod review_cmd_tests_pre_exec;

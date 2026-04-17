@@ -15,7 +15,9 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
-use csa_core::types::{ReviewDecision, ToolName};
+use csa_core::types::ReviewDecision;
+#[cfg(test)]
+use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
@@ -42,6 +44,9 @@ mod reviewers;
 #[path = "review_cmd_execute.rs"]
 mod execute;
 
+#[path = "review_cmd_prior_rounds.rs"]
+mod prior_rounds;
+
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
 #[path = "review_cmd_resolve.rs"]
@@ -52,6 +57,9 @@ use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_rev
 use execute::{compute_diff_fingerprint, execute_review};
 use findings_toml::persist_review_findings_toml;
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
+use prior_rounds::{
+    explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id,
+};
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
@@ -61,15 +69,6 @@ use resolve::{
     verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
 use reviewers::resolve_multi_reviewer_pool;
-
-fn explicit_review_tool(args: &ReviewArgs) -> Option<ToolName> {
-    args.tool.or_else(|| {
-        args.model_spec
-            .as_deref()
-            .and_then(|spec| spec.split('/').next())
-            .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
-    })
-}
 
 fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
     if verdict == CLEAN {
@@ -237,11 +236,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         "review: {}",
         crate::run_helpers::truncate_prompt(&scope, 80)
     );
-    let prior_rounds_section = args
-        .prior_rounds_summary
-        .as_deref()
-        .map(crate::review_prior_rounds::load_prior_rounds_section)
-        .transpose()?;
+    let prior_rounds_section =
+        load_prior_rounds_section_or_persist_error(&args, &project_root, &review_description)?;
 
     // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
     let (mut prompt, review_routing) = build_review_instruction_for_project(
@@ -282,7 +278,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             return Err(crate::session_guard::persist_pre_exec_error_result(
                 crate::session_guard::PreExecErrorCtx {
                     project_root: &project_root,
-                    session_id: args.session.as_deref(),
+                    session_id: review_pre_exec_session_id(&args),
                     description: Some(review_description.as_str()),
                     parent: None,
                     tool_name: explicit_review_tool(&args).map(|tool| tool.as_str()),
