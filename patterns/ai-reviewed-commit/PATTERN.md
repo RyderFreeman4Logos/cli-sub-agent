@@ -13,7 +13,7 @@ Automated fix-and-retry loop: review → fix → re-review → repeat until clea
 Maximum 3 iterations.
 Because this pattern invokes the downstream `commit` skill, the AI reviewer should verify the
 `Reviewer Guidance` schema required there, including `Timing/Race Scenarios`, `Boundary Cases`,
-and `Risk Areas`.
+and `Regression Tests Added`.
 
 ## Step 1: Stage Changes
 
@@ -101,6 +101,9 @@ bash scripts/csa/session-wait-until-done.sh "$SID"
 The review MUST include AGENTS.md compliance checklist:
 - Discover AGENTS.md chain (root-to-leaf) for each staged file
 - Check every applicable rule
+- If the staged diff or generated commit body lists concrete `Timing/Race Scenarios`, verify that
+  matching regression tests exist and are named under `Regression Tests Added`. Missing or
+  mismatched tests are a blocking review failure.
 - If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`
 - If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`
 - Zero unchecked items before proceeding to commit

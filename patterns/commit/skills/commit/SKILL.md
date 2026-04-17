@@ -106,9 +106,9 @@ All commits created by this workflow must use:
 - **Design Intent**: <Why this change was made, what problem it solves. Context not obvious from the diff.>
 - **Key Decisions**: <Significant architectural or implementation choices made during the task.>
 - **Reviewer Guidance**: List areas needing careful review, with REQUIRED sub-fields:
-  - **Timing/Race Scenarios**: any timing-sensitive ordering, concurrency race, file-system race, or async ordering the change must survive. Cite the scenario + the test that exercises it.
-  - **Boundary Cases**: null/empty/max/min/off-by-one inputs, and the test(s) that cover them.
-  - **Risk Areas**: the parts of the change that, if wrong, would not be caught by compile + unit tests.
+  - **Timing/Race Scenarios**: any timing-sensitive ordering, concurrency race, file-system race, or async ordering the change must survive. List the concrete input/orderings to verify. Use `none` when not applicable.
+  - **Boundary Cases**: null/empty/max/min/off-by-one inputs and other edge conditions that require explicit checking. Use `none` when not applicable.
+  - **Regression Tests Added**: list the concrete test names that cover the timing/race and boundary guidance above. This field is REQUIRED. If `Timing/Race Scenarios` is not `none`, this list MUST be non-empty and the pre-commit review MUST fail when matching tests are missing.
 ```
 
 ## Example Usage

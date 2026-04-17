@@ -222,3 +222,61 @@ fn commit_pattern_step1_bridges_csa_skip_publish_to_skip_publish() {
         "PATTERN.md Step 1 must bridge CSA_SKIP_PUBLISH=true into SKIP_PUBLISH=true"
     );
 }
+
+#[test]
+fn commit_reviewer_guidance_schema_requires_regression_tests_for_timing_scenarios() {
+    let commit_pattern =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/PATTERN.md")).unwrap();
+    let commit_workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/workflow.toml")).unwrap();
+    let commit_skill =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/skills/commit/SKILL.md"))
+            .unwrap();
+    let review_pattern =
+        std::fs::read_to_string(workspace_root().join("patterns/ai-reviewed-commit/PATTERN.md"))
+            .unwrap();
+    let review_workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/ai-reviewed-commit/workflow.toml"))
+            .unwrap();
+    let review_skill = std::fs::read_to_string(
+        workspace_root().join("patterns/ai-reviewed-commit/skills/ai-reviewed-commit/SKILL.md"),
+    )
+    .unwrap();
+    let commit_msg_script =
+        std::fs::read_to_string(workspace_root().join("scripts/gen_commit_msg.sh")).unwrap();
+
+    for content in [
+        &commit_pattern,
+        &commit_workflow,
+        &commit_skill,
+        &review_pattern,
+        &review_workflow,
+        &review_skill,
+        &commit_msg_script,
+    ] {
+        assert!(
+            content.contains("Regression Tests Added"),
+            "updated reviewer-guidance schema must mention Regression Tests Added"
+        );
+    }
+
+    for content in [&commit_pattern, &commit_workflow] {
+        assert!(
+            content.contains("Regression Tests Added must list concrete test names when Timing/Race Scenarios is not 'none'."),
+            "commit gate must reject timing/race guidance without named regression tests"
+        );
+    }
+
+    for content in [&review_pattern, &review_workflow, &review_skill] {
+        assert!(
+            content.contains("matching regression tests exist")
+                && content.contains("Regression Tests Added"),
+            "ai-reviewed-commit review guidance must require matching regression tests"
+        );
+    }
+
+    assert!(
+        !commit_pattern.contains("Risk Areas:") && !commit_workflow.contains("Risk Areas:"),
+        "commit pattern/workflow should no longer require the old Risk Areas reviewer-guidance field"
+    );
+}

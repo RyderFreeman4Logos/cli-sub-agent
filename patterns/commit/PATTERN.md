@@ -197,6 +197,11 @@ Run the staged-diff review directly in this CSA step.
   - Other-authored changes: review with the `csa review --diff --allow-fallback` standard.
 - Check the applicable AGENTS.md chain for every staged file.
 - Explicitly check rule 009 (error handling), rule 014 (security), and rule 016 (testing).
+- Enforce the `Reviewer Guidance` schema in the generated commit body:
+  - `Timing/Race Scenarios`, `Boundary Cases`, and `Regression Tests Added` must all be present.
+  - If `Timing/Race Scenarios` is not `none`, `Regression Tests Added` must list concrete test names.
+  - Missing tests, empty test lists, or tests that do not match the stated timing/race scenarios are
+    blocking review failures.
 - If staged changes touch `PATTERN.md` or `workflow.toml`, check rule 027 `pattern-workflow-sync`.
 - If staged changes touch process spawning or lifecycle code, check Rust rule 015 `subprocess-lifecycle`.
 - If the implementation session is available, you may optionally use fork-based self-review guidance such as `csa review --fork-from <impl-session-id> --diff` for zero-cost context reuse.
@@ -212,6 +217,8 @@ Verify changes comply with all applicable AGENTS.md rules for this task.
 If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`.
 If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`.
 Explicitly check: error handling (009), security (014), testing (016).
+If `Reviewer Guidance` lists concrete `Timing/Race Scenarios`, the review MUST verify matching
+tests exist and are named in `Regression Tests Added`; otherwise the review MUST fail.
 Fix-and-retry loop (max 3 rounds).
 
 ### Fork-Based Self-Review (Optional)
@@ -306,12 +313,27 @@ do
   fi
 done
 
-for required_guidance in 'Timing/Race Scenarios:' 'Boundary Cases:' 'Risk Areas:'; do
+for required_guidance in 'Timing/Race Scenarios:' 'Boundary Cases:' 'Regression Tests Added:'; do
   if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- "${required_guidance}"; then
     echo "ERROR: Commit body Reviewer Guidance must include the required '${required_guidance}' sub-field." >&2
     exit 1
   fi
 done
+
+timing_guidance="$(printf '%s\n' "${COMMIT_BODY_LOCAL}" | sed -n 's/^  - \*\*Timing\/Race Scenarios\*\*: //p' | head -n1)"
+regression_tests_guidance="$(printf '%s\n' "${COMMIT_BODY_LOCAL}" | sed -n 's/^  - \*\*Regression Tests Added\*\*: //p' | head -n1)"
+
+if [ -z "${timing_guidance}" ] || [ -z "${regression_tests_guidance}" ]; then
+  echo "ERROR: Commit body Reviewer Guidance must populate both Timing/Race Scenarios and Regression Tests Added." >&2
+  exit 1
+fi
+
+if ! printf '%s\n' "${timing_guidance}" | grep -Eiq '^(none|n/a|na|not applicable)([[:space:][:punct:]].*)?$'; then
+  if printf '%s\n' "${regression_tests_guidance}" | grep -Eiq '^(none|n/a|na|not applicable)([[:space:][:punct:]].*)?$'; then
+    echo "ERROR: Regression Tests Added must list concrete test names when Timing/Race Scenarios is not 'none'." >&2
+    exit 1
+  fi
+fi
 
 if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | awk '
   BEGIN { found = 0; has_summary = 0 }

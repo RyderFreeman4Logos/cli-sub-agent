@@ -58,7 +58,7 @@ breaks prompt-guard propagation.
    - Self-authored: `csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself."`
    - Other-authored: `csa review --diff --allow-fallback`
 5. **Fix loop** (if issues found, max 3 rounds): Dispatch sub-agent to fix issues, re-stage, re-review. Preserve original code intent -- do NOT delete code to silence warnings.
-6. **AGENTS.md compliance**: Discover AGENTS.md chain for each staged file. Check every applicable rule. Zero unchecked items before proceeding.
+6. **AGENTS.md compliance**: Discover AGENTS.md chain for each staged file. Check every applicable rule. If the staged diff or generated commit body lists concrete `Timing/Race Scenarios`, verify that matching regression tests exist and are named under `Regression Tests Added`; missing or mismatched tests are a blocking failure. Zero unchecked items before proceeding.
 7. **Generate commit message**: `csa run "Run 'git diff --staged' and generate a Conventional Commits message"` (tier-1).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 
