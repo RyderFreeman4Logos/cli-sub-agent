@@ -54,6 +54,14 @@ pub mod policy;
 pub mod runner;
 pub mod waiver;
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{LazyLock, Mutex};
+
+    /// Process-wide lock for tests that mutate shared process environment.
+    pub(crate) static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+}
+
 // Re-export key types
 pub use audit::{MergeAuditEvent, audit_log_path, emit_merge_completed_event};
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};

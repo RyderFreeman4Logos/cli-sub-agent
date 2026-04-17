@@ -1,10 +1,7 @@
 use super::*;
+use crate::test_support::ENV_LOCK;
 use std::io::Write as _;
-use std::sync::{LazyLock, Mutex};
 use tempfile::NamedTempFile;
-
-/// Process-wide lock for tests that mutate `XDG_STATE_HOME`.
-static GUARD_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// RAII guard that sets `XDG_STATE_HOME` to a temp path and restores
 /// the original value on drop — even if the test panics.
@@ -15,7 +12,7 @@ struct ScopedXdgOverride {
 
 impl ScopedXdgOverride {
     fn new(tmp: &tempfile::TempDir) -> Self {
-        let lock = GUARD_ENV_LOCK.lock().expect("env lock poisoned");
+        let lock = ENV_LOCK.lock().expect("env lock poisoned");
         let orig = std::env::var("XDG_STATE_HOME").ok();
         // SAFETY: test-scoped env mutation protected by GUARD_ENV_LOCK.
         unsafe {
