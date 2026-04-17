@@ -23,6 +23,8 @@ use csa_session::review_artifact::{Finding, ReviewArtifact, SeveritySummary};
 pub(crate) mod review_design_anchor;
 #[path = "review_iteration.rs"]
 pub(crate) mod review_iteration;
+#[path = "review_iteration_resolver.rs"]
+pub(crate) mod review_iteration_resolver;
 
 pub(crate) const CLEAN: &str = "CLEAN";
 pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";

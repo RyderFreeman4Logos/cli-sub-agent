@@ -287,3 +287,24 @@ fn count_prior_reviews_branch_unknown_falls_back_to_recent_reviews() {
 
     assert_eq!(count_prior_reviews_for_branch(project_dir.path(), None), 2);
 }
+
+#[test]
+fn count_prior_reviews_uses_canonical_max_after_more_than_ten_prior_reviews() {
+    let project_dir = tempdir().unwrap();
+    init_git_repo_with_branch(project_dir.path(), "feat/iter-many");
+
+    for iteration in 1..=12 {
+        create_mock_review_session(
+            project_dir.path(),
+            &format!("01K7ER7A0E{:016}", iteration),
+            Some("feat/iter-many"),
+            "fail",
+            iteration,
+        );
+    }
+
+    assert_eq!(
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-many")),
+        12
+    );
+}
