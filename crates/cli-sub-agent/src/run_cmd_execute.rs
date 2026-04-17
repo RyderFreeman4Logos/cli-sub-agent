@@ -326,17 +326,6 @@ pub(crate) async fn handle_run(
     let resolved_model = strategy_result.model;
     let strategy_resolved_tier_name = strategy_result.resolved_tier_name;
     let resolved_tool = strategy_result.tool;
-    let initial_response_timeout_seconds = if no_idle_timeout {
-        None
-    } else {
-        pipeline::resolve_initial_response_timeout_for_tool(
-            config.as_ref(),
-            initial_response_timeout,
-            idle_timeout,
-            resolved_tool.as_str(),
-        )
-    };
-
     if session_arg.is_none()
         && !is_fork
         && !fork_call
@@ -479,7 +468,9 @@ pub(crate) async fn handle_run(
         no_failover,
         wait,
         idle_timeout_seconds,
-        initial_response_timeout_seconds,
+        cli_idle_timeout: idle_timeout,
+        cli_initial_response_timeout: initial_response_timeout,
+        no_idle_timeout,
         run_timeout_seconds,
         run_started_at,
         is_fork,
