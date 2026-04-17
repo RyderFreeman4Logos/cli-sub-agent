@@ -1,47 +1,34 @@
 use std::path::Path;
 
 use chrono::{Duration, Utc};
-use csa_session::{
-    ReviewSessionMeta, find_sessions, get_session_dir, get_session_root, list_sessions,
-};
+use csa_session::{ReviewSessionMeta, find_sessions, get_session_dir, get_session_root};
 
 const REVIEW_ITERATION_HEADER: &str = "## Review iteration context";
 const MULTI_ROUND_ESCALATION: &str = "Multiple prior rounds have fired on this branch. Oscillating verdicts across rounds indicate design residuals, not bugs. Strongly prefer PASS for any finding that overlaps with prior rounds' concerns — FAIL only for NEW correctness bugs (crash, data loss, contract violation) not previously raised.";
 
-pub(crate) fn count_prior_reviews_for_branch(project_root: &Path, branch: &str) -> usize {
+pub(crate) fn count_prior_reviews_for_branch(project_root: &Path, branch: Option<&str>) -> usize {
     let current_session_id = std::env::var("CSA_SESSION_ID").ok();
-    let sessions = match find_sessions(project_root, Some(branch), None, None, None) {
-        Ok(sessions) => sessions,
-        Err(_) => return 0,
-    };
+    match branch {
+        Some(branch) => {
+            let sessions = match find_sessions(project_root, Some(branch), None, None, None) {
+                Ok(sessions) => sessions,
+                Err(_) => return 0,
+            };
 
-    if sessions.is_empty() {
-        let all_sessions = match list_sessions(project_root, None) {
-            Ok(sessions) => sessions,
-            Err(_) => return 0,
-        };
-        let saw_branch_metadata = all_sessions
-            .iter()
-            .any(|session| session.resolved_identity().ref_name.is_some());
-        if !saw_branch_metadata {
-            // Older session state may not persist branch/ref metadata reliably.
-            // Fall back to counting recent review sessions so repeated same-day
-            // review loops still receive anti-flip guidance instead of silently
-            // dropping all iteration context.
-            return count_recent_reviews(project_root, current_session_id.as_deref());
+            sessions
+                .into_iter()
+                .filter(|session| {
+                    current_session_id.as_deref() != Some(session.meta_session_id.as_str())
+                })
+                .filter_map(|session| load_review_meta(project_root, &session.meta_session_id))
+                .count()
         }
-        return count_recent_reviews(project_root, current_session_id.as_deref());
+        None => count_recent_reviews(project_root, current_session_id.as_deref()),
     }
-
-    sessions
-        .into_iter()
-        .filter(|session| current_session_id.as_deref() != Some(session.meta_session_id.as_str()))
-        .filter_map(|session| load_review_meta(project_root, &session.meta_session_id))
-        .count()
 }
 
 pub(crate) fn render_review_iteration_context(project_root: &Path, branch: &str) -> Option<String> {
-    let prior_count = count_prior_reviews_for_branch(project_root, branch);
+    let prior_count = count_prior_reviews_for_branch(project_root, Some(branch));
     if prior_count == 0 {
         return None;
     }

@@ -3,7 +3,11 @@ use crate::review_consensus::review_iteration::count_prior_reviews_for_branch;
 use crate::test_env_lock::TEST_ENV_LOCK;
 use chrono::Utc;
 use csa_core::types::ToolName;
-use csa_session::{ReviewSessionMeta, get_session_root, write_review_meta};
+use csa_session::{
+    Genealogy, MetaSessionState, ReviewSessionMeta, SessionPhase, TaskContext, get_session_root,
+    save_session, write_review_meta,
+};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
@@ -68,12 +72,44 @@ fn make_review_meta(session_id: &str, decision: &str, review_iterations: u32) ->
 fn create_mock_review_session(
     project_root: &Path,
     session_id: &str,
+    branch: Option<&str>,
     decision: &str,
     review_iterations: u32,
 ) {
     let session_root = get_session_root(project_root).expect("resolve session root");
     let session_dir = session_root.join("sessions").join(session_id);
     std::fs::create_dir_all(&session_dir).expect("create mock session dir");
+    save_session(&MetaSessionState {
+        meta_session_id: session_id.to_string(),
+        description: None,
+        project_path: project_root.display().to_string(),
+        branch: branch.map(str::to_string),
+        created_at: Utc::now(),
+        last_accessed: Utc::now(),
+        genealogy: Genealogy {
+            parent_session_id: None,
+            depth: 0,
+            ..Default::default()
+        },
+        tools: HashMap::new(),
+        context_status: Default::default(),
+        total_token_usage: None,
+        phase: SessionPhase::Available,
+        task_context: TaskContext::default(),
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+        termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
+        last_return_packet: None,
+        change_id: None,
+        spec_id: None,
+        vcs_identity: None,
+        identity_version: 1,
+        fork_call_timestamps: Vec::new(),
+    })
+    .expect("write mock session state");
     write_review_meta(
         &session_dir,
         &make_review_meta(session_id, decision, review_iterations),
@@ -114,7 +150,7 @@ fn count_prior_reviews_zero_omits_iteration_block() {
     init_git_repo_with_branch(project_dir.path(), "feat/iter-zero");
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), "feat/iter-zero"),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-zero")),
         0
     );
 
@@ -135,10 +171,16 @@ fn count_prior_reviews_zero_omits_iteration_block() {
 fn count_prior_reviews_one_injects_iteration_two() {
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-one");
-    create_mock_review_session(project_dir.path(), "01KITERONE0000000000000001", "fail", 1);
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000001",
+        Some("feat/iter-one"),
+        "fail",
+        1,
+    );
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), "feat/iter-one"),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-one")),
         1
     );
 
@@ -161,12 +203,30 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-three");
-    create_mock_review_session(project_dir.path(), "01KITERTHREE00000000000001", "fail", 1);
-    create_mock_review_session(project_dir.path(), "01KITERTHREE00000000000002", "fail", 2);
-    create_mock_review_session(project_dir.path(), "01KITERTHREE00000000000003", "pass", 3);
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000011",
+        Some("feat/iter-three"),
+        "fail",
+        1,
+    );
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000012",
+        Some("feat/iter-three"),
+        "fail",
+        2,
+    );
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000013",
+        Some("feat/iter-three"),
+        "pass",
+        3,
+    );
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), "feat/iter-three"),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-three")),
         3
     );
 
@@ -179,4 +239,51 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
 
     assert!(prompt.contains("Prior review count on this branch: 3."));
     assert!(prompt.contains("Multiple prior rounds have fired on this branch."));
+}
+
+#[test]
+fn count_prior_reviews_does_not_pull_reviews_from_other_branches() {
+    let project_dir = tempdir().unwrap();
+    init_git_repo_with_branch(project_dir.path(), "feat/iter-current");
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000021",
+        Some("feat/iter-other"),
+        "fail",
+        1,
+    );
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000022",
+        Some("feat/iter-other"),
+        "pass",
+        2,
+    );
+
+    assert_eq!(
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-current")),
+        0
+    );
+}
+
+#[test]
+fn count_prior_reviews_branch_unknown_falls_back_to_recent_reviews() {
+    let project_dir = tempdir().unwrap();
+    init_git_repo_with_branch(project_dir.path(), "feat/iter-unknown");
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000031",
+        Some("feat/iter-a"),
+        "fail",
+        1,
+    );
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000032",
+        Some("feat/iter-b"),
+        "pass",
+        2,
+    );
+
+    assert_eq!(count_prior_reviews_for_branch(project_dir.path(), None), 2);
 }
