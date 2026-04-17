@@ -99,7 +99,6 @@ fn load_review_text_for_findings(session_dir: &Path) -> Result<Option<String>, a
 }
 
 pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile> {
-    let mut blocks = Vec::new();
     let mut in_block = false;
     let mut block_info = String::new();
     let mut block_content = Vec::new();
@@ -116,8 +115,12 @@ pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile
         }
 
         if trimmed.starts_with("```") {
-            let content = block_content.join("\n");
-            blocks.push((block_info.clone(), content));
+            if is_findings_toml_fence_label(&block_info) {
+                let content = block_content.join("\n");
+                if let Ok(artifact) = toml::from_str::<FindingsFile>(&content) {
+                    return Some(artifact);
+                }
+            }
             in_block = false;
             block_info.clear();
             block_content.clear();
@@ -127,31 +130,12 @@ pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile
         block_content.push(line.to_string());
     }
 
-    let mut prioritized = blocks
-        .into_iter()
-        .filter_map(|(info, content)| {
-            let info_lower = info.to_ascii_lowercase();
-            if !info_lower.contains("toml") {
-                return None;
-            }
-
-            let priority = if info_lower.contains(FINDINGS_TOML_FENCE_LABEL) {
-                0
-            } else {
-                1
-            };
-            Some((priority, content))
-        })
-        .collect::<Vec<_>>();
-    prioritized.sort_by_key(|(priority, _)| *priority);
-
-    for (_, content) in prioritized {
-        if let Ok(artifact) = toml::from_str::<FindingsFile>(&content) {
-            return Some(artifact);
-        }
-    }
-
     None
+}
+
+fn is_findings_toml_fence_label(info: &str) -> bool {
+    info.split_ascii_whitespace()
+        .any(|token| token.eq_ignore_ascii_case(FINDINGS_TOML_FENCE_LABEL))
 }
 
 #[cfg(test)]

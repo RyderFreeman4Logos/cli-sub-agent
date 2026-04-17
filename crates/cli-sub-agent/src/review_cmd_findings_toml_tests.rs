@@ -146,6 +146,42 @@ end = 80
 }
 
 #[test]
+fn extract_findings_toml_from_text_accepts_single_token_findings_toml_fence() {
+    let review_text = r#"```findings.toml
+[[findings]]
+id = "f1"
+severity = "high"
+description = "Regression drops the retry path."
+
+[[findings.file_ranges]]
+path = "crates/foo/src/bar.rs"
+start = 73
+end = 80
+```"#;
+
+    let parsed =
+        extract_findings_toml_from_text(review_text).expect("findings.toml block should parse");
+
+    assert_eq!(
+        parsed,
+        FindingsFile {
+            findings: vec![ReviewFinding {
+                id: "f1".to_string(),
+                severity: FindingSeverity::High,
+                file_ranges: vec![ReviewFindingFileRange {
+                    path: "crates/foo/src/bar.rs".to_string(),
+                    start: 73,
+                    end: Some(80),
+                }],
+                is_regression_of_commit: None,
+                suggested_test_scenario: None,
+                description: "Regression drops the retry path.".to_string(),
+            }],
+        }
+    );
+}
+
+#[test]
 fn extract_findings_toml_from_text_returns_none_without_block() {
     let review_text = r#"<!-- CSA:SECTION:summary -->
 PASS
@@ -157,6 +193,71 @@ No blocking issues found.
 "#;
 
     assert!(extract_findings_toml_from_text(review_text).is_none());
+}
+
+#[test]
+fn extract_findings_toml_from_text_rejects_unrelated_toml_fence() {
+    let review_text = r#"```toml
+[some_other_section]
+key = "value"
+```"#;
+
+    assert!(extract_findings_toml_from_text(review_text).is_none());
+}
+
+#[test]
+fn extract_findings_toml_from_text_rejects_findings_fence_without_toml_extension() {
+    let review_text = r#"```findings
+[[findings]]
+id = "f1"
+severity = "high"
+description = "Regression drops the retry path."
+
+[[findings.file_ranges]]
+path = "crates/foo/src/bar.rs"
+start = 73
+```"#;
+
+    assert!(extract_findings_toml_from_text(review_text).is_none());
+}
+
+#[test]
+fn extract_findings_toml_from_text_prefers_findings_toml_over_generic_toml() {
+    let review_text = r#"```toml
+findings = []
+```
+
+```toml findings.toml
+[[findings]]
+id = "f1"
+severity = "medium"
+description = "Use the labeled findings block."
+
+[[findings.file_ranges]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml.rs"
+start = 101
+```"#;
+
+    let parsed =
+        extract_findings_toml_from_text(review_text).expect("findings.toml block should parse");
+
+    assert_eq!(
+        parsed,
+        FindingsFile {
+            findings: vec![ReviewFinding {
+                id: "f1".to_string(),
+                severity: FindingSeverity::Medium,
+                file_ranges: vec![ReviewFindingFileRange {
+                    path: "crates/cli-sub-agent/src/review_cmd_findings_toml.rs".to_string(),
+                    start: 101,
+                    end: None,
+                }],
+                is_regression_of_commit: None,
+                suggested_test_scenario: None,
+                description: "Use the labeled findings block.".to_string(),
+            }],
+        }
+    );
 }
 
 #[test]
@@ -218,6 +319,53 @@ start = 425
             }],
         }
     );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_writes_synthetic_empty_for_findings_fence_without_toml_extension() {
+    let project_root = temp_project_root("persist-review-findings-no-extension");
+    let session_id = "01TESTFINDINGSTOMLNOEXT00";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"```findings
+[[findings]]
+id = "f1"
+severity = "high"
+description = "This fence should be ignored."
+
+[[findings.file_ranges]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml.rs"
+start = 130
+```"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "Ignored findings fence.\n",
+    )
+    .expect("write details.md");
+
+    let meta = make_review_meta(session_id);
+    let buffer = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(buffer.clone())
+        .without_time()
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    persist_review_findings_toml(&project_root, &meta);
+
+    let findings_path = session_dir.join("output").join("findings.toml");
+    let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse synthetic findings.toml");
+    assert_eq!(parsed, FindingsFile::default());
+    assert_eq!(actual.trim(), "findings = []");
+    assert!(buffer.contents().contains(
+        "Reviewer findings.toml block missing or invalid; wrote synthetic empty artifact"
+    ));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
