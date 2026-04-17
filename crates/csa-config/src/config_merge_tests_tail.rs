@@ -176,9 +176,10 @@ fn test_execution_config_is_not_default_with_custom_value() {
 
 #[test]
 fn test_execution_config_resolved_acp_crash_max_attempts_clamps() {
-    let mut exec = crate::config::ExecutionConfig::default();
-
-    exec.acp_crash_max_attempts = 0;
+    let mut exec = crate::config::ExecutionConfig {
+        acp_crash_max_attempts: 0,
+        ..Default::default()
+    };
     assert_eq!(exec.resolved_acp_crash_max_attempts(), 1);
 
     exec.acp_crash_max_attempts = 2;

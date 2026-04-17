@@ -90,3 +90,4 @@ strix_runs
 # Review artifacts
 result.toml
 .letta/
+proptest-regressions/

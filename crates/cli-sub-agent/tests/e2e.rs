@@ -361,7 +361,7 @@ fn config_get_prefers_effective_tool_state_over_raw_project_value() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_config_path = global_config_path(tmp.path());
     let global_dir = global_config_path.parent().expect("global config dir");
-    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::create_dir_all(global_dir).expect("create global config dir");
     std::fs::write(
         &global_config_path,
         r#"
@@ -398,7 +398,7 @@ fn config_get_redacts_global_memory_api_keys_in_project_scoped_lookups() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_config_path = global_config_path(tmp.path());
     let global_dir = global_config_path.parent().expect("global config dir");
-    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::create_dir_all(global_dir).expect("create global config dir");
     std::fs::write(
         &global_config_path,
         r#"
@@ -444,7 +444,7 @@ fn config_get_falls_back_to_raw_project_value_when_global_config_is_invalid() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_config_path = global_config_path(tmp.path());
     let global_dir = global_config_path.parent().expect("global config dir");
-    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::create_dir_all(global_dir).expect("create global config dir");
     std::fs::write(&global_config_path, "{{invalid toml").expect("write invalid global config");
 
     let config_path = csa_config::ProjectConfig::config_path(tmp.path());
