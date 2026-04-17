@@ -14,6 +14,7 @@ pub(crate) struct AutoReviewerSelection {
 
 pub(crate) struct AutoReviewerRequest<'a> {
     pub(crate) requested_reviewers: usize,
+    pub(crate) explicit_reviewer_count: bool,
     pub(crate) single: bool,
     pub(crate) scope_is_range: bool,
     pub(crate) explicit_tool: Option<ToolName>,
@@ -84,6 +85,7 @@ pub(crate) fn resolve_auto_reviewer_selection(
     request: &AutoReviewerRequest<'_>,
 ) -> Option<AutoReviewerSelection> {
     if request.requested_reviewers != 1
+        || request.explicit_reviewer_count
         || request.single
         || !request.scope_is_range
         || request.explicit_tool.is_some()
@@ -289,6 +291,7 @@ mod tests {
 
         let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
             requested_reviewers: 1,
+            explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
             explicit_tool: None,
@@ -315,6 +318,7 @@ mod tests {
 
         let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
             requested_reviewers: 1,
+            explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
             explicit_tool: None,
@@ -344,6 +348,7 @@ mod tests {
 
         let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
             requested_reviewers: 1,
+            explicit_reviewer_count: false,
             single: true,
             scope_is_range: true,
             explicit_tool: None,
@@ -367,11 +372,37 @@ mod tests {
         let global = GlobalConfig::default();
 
         let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
-            requested_reviewers: 5,
+            requested_reviewers: 1,
+            explicit_reviewer_count: true,
             single: false,
             scope_is_range: true,
             explicit_tool: None,
             explicit_model_spec: None,
+            primary_tool: ToolName::Codex,
+            resolved_tier_name: Some("quality"),
+            config: Some(&config),
+            global_config: &global,
+        });
+
+        assert!(selection.is_none());
+    }
+
+    #[test]
+    fn auto_reviewer_selection_respects_explicit_model_spec_override() {
+        let (_env_lock, _available_guard) = assume_review_tools_available();
+        let config = project_config_with_tier(&[
+            "codex/openai/gpt-5.4/high",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        ]);
+        let global = GlobalConfig::default();
+
+        let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
+            requested_reviewers: 1,
+            explicit_reviewer_count: false,
+            single: false,
+            scope_is_range: true,
+            explicit_tool: None,
+            explicit_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
             primary_tool: ToolName::Codex,
             resolved_tier_name: Some("quality"),
             config: Some(&config),
@@ -392,6 +423,7 @@ mod tests {
 
         let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
             requested_reviewers: 1,
+            explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
             explicit_tool: Some(ToolName::Codex),
@@ -416,6 +448,7 @@ mod tests {
 
         let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
             requested_reviewers: 1,
+            explicit_reviewer_count: false,
             single: false,
             scope_is_range: false,
             explicit_tool: None,

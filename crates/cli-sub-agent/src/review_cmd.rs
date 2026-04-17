@@ -344,6 +344,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let requested_reviewers = args.requested_reviewers() as usize;
     let reviewers = resolve_effective_reviewer_count(&AutoReviewerRequest {
         requested_reviewers,
+        explicit_reviewer_count: args.reviewers.is_some(),
         single: args.single,
         scope_is_range: args.range.is_some(),
         explicit_tool: explicit_review_tool(&args),
