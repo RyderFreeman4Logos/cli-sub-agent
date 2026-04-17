@@ -114,12 +114,7 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
             return (seconds > 0).then_some(seconds);
         }
 
-        return config
-            .and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
-            .map_or(
-                Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS),
-                |seconds| (seconds > 0).then_some(seconds),
-            );
+        return Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS);
     }
 
     resolve_initial_response_timeout_seconds(config, None)
