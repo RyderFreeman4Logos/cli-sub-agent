@@ -315,7 +315,7 @@ pub fn list_all_sessions_all_projects() -> Result<Vec<MetaSessionState>> {
             }
         }
     }
-    all_sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    all_sessions.sort_by_key(|session| std::cmp::Reverse(session.last_accessed));
     Ok(all_sessions)
 }
 
@@ -597,7 +597,7 @@ pub(crate) fn find_sessions_in(
         sessions.retain(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)));
     }
 
-    sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_accessed));
     sessions.truncate(10);
     Ok(sessions)
 }

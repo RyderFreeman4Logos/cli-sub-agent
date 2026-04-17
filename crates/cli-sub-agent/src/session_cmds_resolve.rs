@@ -56,7 +56,7 @@ pub(super) fn list_checkpoints_from_dirs(
         }
     }
 
-    checkpoints.sort_by(|a, b| b.1.completed_at.cmp(&a.1.completed_at));
+    checkpoints.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.1.completed_at.clone()));
     Ok(checkpoints)
 }
 

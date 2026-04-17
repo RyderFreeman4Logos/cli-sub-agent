@@ -3,6 +3,9 @@ mod cli_defs;
 
 #[path = "../src/review_consensus.rs"]
 mod review_consensus;
+#[allow(dead_code)]
+#[path = "../src/review_prior_rounds.rs"]
+mod review_prior_rounds;
 
 use chrono::{TimeZone, Utc};
 use clap::Parser;
@@ -109,7 +112,7 @@ fn review_cli_validation_and_consensus_helpers_remain_compatible() {
         .expect("red-team review args should validate");
 
     let instruction =
-        review_consensus::build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex);
+        review_consensus::build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex, None);
     assert!(instruction.contains("reviewer 2"));
     assert!(instruction.contains("CLEAN"));
     assert!(instruction.contains("HAS_ISSUES"));

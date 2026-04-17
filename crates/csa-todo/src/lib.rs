@@ -339,7 +339,7 @@ impl TodoManager {
         }
 
         // Newest first (timestamps sort lexicographically)
-        plans.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        plans.sort_by_key(|plan| std::cmp::Reverse(plan.timestamp.clone()));
 
         Ok(plans)
     }

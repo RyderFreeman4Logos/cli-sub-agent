@@ -9,6 +9,7 @@ use crate::review_context::{
     ResolvedReviewContext, ResolvedReviewContextKind, discover_prior_round_assumptions,
     discover_review_checklist, render_spec_review_context,
 };
+use crate::review_prior_rounds::REVIEW_FINDINGS_TOML_INSTRUCTION;
 use crate::review_routing::{ReviewRoutingMetadata, detect_review_routing_metadata};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
@@ -527,7 +528,7 @@ pub(crate) fn build_review_instruction(
     context: Option<&ResolvedReviewContext>,
 ) -> String {
     let mut instruction = format!(
-        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN. After the CSA summary/details sections, append exactly one fenced TOML block labeled `findings.toml` for machine parsing. Keep that fenced block OUTSIDE the CSA sections so `details.md` remains unchanged. Use `findings = []` when there are no findings."
+        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN."
     );
     if let Some(ctx) = context {
         instruction.push_str(&format!(" context={}", ctx.path));
@@ -549,9 +550,9 @@ pub(crate) fn build_review_instruction_for_project(
     review_mode: ReviewMode,
     context: Option<&ResolvedReviewContext>,
     project_root: &Path,
-    project_config: Option<&ProjectConfig>,
+    options: ReviewProjectPromptOptions<'_>,
 ) -> (String, ReviewRoutingMetadata) {
-    let review_routing = detect_review_routing_metadata(project_root, project_config);
+    let review_routing = detect_review_routing_metadata(project_root, options.project_config);
     let mut instruction =
         build_review_instruction(scope, mode, security_mode, review_mode, context);
     instruction.push_str(&format!(
@@ -582,6 +583,12 @@ pub(crate) fn build_review_instruction_for_project(
     if let Some(prior) = discover_prior_round_assumptions(project_root, branch.as_deref(), None) {
         instruction.push_str(&prior);
     }
+    if let Some(prior_rounds_section) = options.prior_rounds_section {
+        instruction.push_str("\n\n");
+        instruction.push_str(prior_rounds_section);
+    }
+    instruction.push_str("\n\n");
+    instruction.push_str(REVIEW_FINDINGS_TOML_INSTRUCTION);
 
     (instruction, review_routing)
 }
@@ -597,6 +604,11 @@ fn append_design_anchor(prompt: &mut String) {
     }
     prompt.push_str("\n\n");
     prompt.push_str(crate::review_consensus::review_design_anchor::REVIEW_DESIGN_PREFERENCE_ANCHOR);
+}
+
+pub(crate) struct ReviewProjectPromptOptions<'a> {
+    pub(crate) project_config: Option<&'a ProjectConfig>,
+    pub(crate) prior_rounds_section: Option<&'a str>,
 }
 
 #[cfg(test)]

@@ -30,7 +30,7 @@ pub(crate) fn resolve_last_session_selection(
     }
 
     let mut sorted_sessions = sessions;
-    sorted_sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    sorted_sessions.sort_by_key(|session| std::cmp::Reverse(session.last_accessed));
     let selected_id = sorted_sessions[0].meta_session_id.clone();
 
     let active_sessions: Vec<&MetaSessionState> = sorted_sessions

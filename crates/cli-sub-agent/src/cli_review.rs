@@ -182,6 +182,10 @@ pub struct ReviewArgs {
     #[arg(long, value_name = "PATH")]
     pub prompt_file: Option<PathBuf>,
 
+    /// TOML file containing prior-round fix summaries and invariants to re-verify
+    #[arg(long, value_name = "PATH")]
+    pub prior_rounds_summary: Option<PathBuf>,
+
     /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
     #[arg(long, hide = true)]
     pub daemon: bool,

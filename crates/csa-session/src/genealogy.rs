@@ -110,7 +110,7 @@ fn list_sessions_tree_in_roots(
     }
 
     // Sort by created_at for consistent ordering
-    all_sessions.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    all_sessions.sort_by_key(|a| a.created_at);
 
     // Build set of session IDs present in the list for quick lookup.
     let present_ids: HashSet<&str> = all_sessions

@@ -270,7 +270,7 @@ fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_ex
     let _parent_guard = ScopedEnvVar::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
     let _session_guard = ScopedEnvVar::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/child-session");
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex);
+    let prompt = build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex, None);
 
     assert!(prompt.contains("/tmp/child-session/reviewer-2/review-findings.json"));
     assert!(
@@ -287,7 +287,7 @@ fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
     let _parent_guard = ScopedEnvVar::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
     let _session_guard = ScopedEnvVar::unset(CSA_SESSION_DIR_ENV_KEY);
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 3, ToolName::Codex);
+    let prompt = build_multi_reviewer_instruction("Base prompt", 3, ToolName::Codex, None);
 
     assert!(prompt.contains("/tmp/parent-session/reviewer-3/review-findings.json"));
 }
@@ -300,13 +300,22 @@ fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_m
     let _parent_guard = ScopedEnvVar::unset(CSA_PARENT_SESSION_DIR_ENV_KEY);
     let _session_guard = ScopedEnvVar::unset(CSA_SESSION_DIR_ENV_KEY);
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 4, ToolName::Codex);
+    let prompt = build_multi_reviewer_instruction("Base prompt", 4, ToolName::Codex, None);
 
     assert!(
         prompt.contains(
             "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-4/review-findings.json"
         )
     );
+}
+
+#[test]
+fn build_multi_reviewer_instruction_does_not_duplicate_findings_contract_from_base_prompt() {
+    let base_prompt = format!("Base prompt\n\n{REVIEW_FINDINGS_TOML_INSTRUCTION}");
+
+    let prompt = build_multi_reviewer_instruction(&base_prompt, 4, ToolName::Codex, None);
+
+    assert_eq!(prompt.matches(REVIEW_FINDINGS_TOML_INSTRUCTION).count(), 1);
 }
 
 #[test]

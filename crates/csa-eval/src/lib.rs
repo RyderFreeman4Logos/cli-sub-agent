@@ -124,7 +124,7 @@ pub fn identify_failure_patterns(sessions: &[SessionSummary]) -> Vec<FailurePatt
     }
 
     // Sort by count descending for readability
-    patterns.sort_by(|a, b| b.count.cmp(&a.count));
+    patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.count));
     patterns
 }
 

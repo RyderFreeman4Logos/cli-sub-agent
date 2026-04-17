@@ -108,7 +108,7 @@ pub(super) fn select_sessions_for_list(
         sessions.retain(|session| session.branch.as_deref() == Some(branch_filter));
     }
 
-    sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_accessed));
     Ok(sessions)
 }
 
@@ -126,7 +126,7 @@ pub(super) fn select_sessions_for_list_all_projects(
         sessions.retain(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)));
     }
 
-    sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_accessed));
     Ok(sessions)
 }
 

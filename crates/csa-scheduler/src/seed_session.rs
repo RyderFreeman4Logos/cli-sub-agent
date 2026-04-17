@@ -116,7 +116,7 @@ fn find_seed_session_inner(
         .collect();
 
     // Sort by last_accessed descending (most recent first)
-    candidates.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.last_accessed));
 
     if let Some(best) = candidates.first() {
         debug!(
@@ -156,7 +156,7 @@ pub fn evict_excess_seeds(
         .collect();
 
     // Sort by last_accessed descending (keep most recent)
-    seeds.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    seeds.sort_by_key(|seed| std::cmp::Reverse(seed.last_accessed));
 
     let mut retired_ids = Vec::new();
 
