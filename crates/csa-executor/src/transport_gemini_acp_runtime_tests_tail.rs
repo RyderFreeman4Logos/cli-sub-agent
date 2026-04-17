@@ -413,12 +413,12 @@ fn prepare_gemini_acp_runtime_pins_non_shim_runtime_bins_on_path() {
     let prepared_path = env.get("PATH").expect("prepared path");
     assert_eq!(
         resolve_first_path_entry("node", prepared_path),
-        Some(node_dir.join("node")),
+        Some(canonicalize_if_exists(&node_dir.join("node"))),
         "nested yarn/node launches must hit the real node binary before any shim"
     );
     assert_eq!(
         resolve_first_path_entry("yarn", prepared_path),
-        Some(yarn_dir.join("yarn")),
+        Some(canonicalize_if_exists(&yarn_dir.join("yarn"))),
         "runtime PATH should preserve direct yarn binaries ahead of shim-only entries"
     );
     assert_eq!(env.get("MISE_SHIM"), Some(&String::new()));
@@ -495,12 +495,12 @@ fn prepare_gemini_acp_runtime_resolves_mise_shims_via_mise_which() {
     let prepared_path = env.get("PATH").expect("prepared path");
     assert_eq!(
         resolve_first_path_entry("node", prepared_path),
-        Some(node_dir.join("node")),
+        Some(canonicalize_if_exists(&node_dir.join("node"))),
         "mise-which fallback should pin the real node binary ahead of shim-only PATH entries"
     );
     assert_eq!(
         resolve_first_path_entry("yarn", prepared_path),
-        Some(yarn_dir.join("yarn")),
+        Some(canonicalize_if_exists(&yarn_dir.join("yarn"))),
         "mise-which fallback should pin the real yarn binary ahead of shim-only PATH entries"
     );
 }
