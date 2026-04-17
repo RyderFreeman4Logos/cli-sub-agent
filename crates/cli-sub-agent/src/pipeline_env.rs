@@ -91,6 +91,44 @@ pub(crate) fn apply_review_target_dir(
     }
 }
 
+pub(crate) fn apply_task_target_dir_guards(
+    task_type: Option<&str>,
+    tool_name: &str,
+    project_root: &Path,
+    session_dir: &Path,
+    merged_env: &mut HashMap<String, String>,
+) {
+    apply_review_target_dir(task_type, session_dir, merged_env);
+    apply_run_target_dir_guard(task_type, tool_name, project_root, merged_env);
+}
+
+pub(crate) fn apply_run_target_dir_guard(
+    task_type: Option<&str>,
+    tool_name: &str,
+    project_root: &Path,
+    _merged_env: &mut HashMap<String, String>,
+) {
+    if !matches!(task_type, Some("run")) || tool_name != "codex" {
+        return;
+    }
+
+    let repo_target_dir = project_root.join("target");
+    let user_configured_target = std::fs::symlink_metadata(&repo_target_dir).is_ok();
+
+    if user_configured_target {
+        info!(
+            project_target = %repo_target_dir.display(),
+            "Run session: ./target already configured by user (detected symlink/dir), leaving CARGO_TARGET_DIR untouched"
+        );
+        return;
+    }
+
+    info!(
+        project_target = %repo_target_dir.display(),
+        "Run session: no user-configured ./target, leaving codex default CARGO_TARGET_DIR behavior (no CSA override)"
+    );
+}
+
 fn resolve_review_project_root(session_dir: &Path) -> Option<PathBuf> {
     let state_path = session_dir.join("state.toml");
     let state_contents = std::fs::read_to_string(state_path).ok()?;
