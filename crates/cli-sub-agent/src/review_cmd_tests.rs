@@ -430,7 +430,8 @@ fn default_review_args() -> ReviewArgs {
         red_team: false,
         security_mode: "auto".to_string(),
         context: None,
-        reviewers: 1,
+        reviewers: None,
+        single: false,
         consensus: "majority".to_string(),
         cd: None,
         timeout: None,
@@ -607,7 +608,7 @@ fn review_cli_parses_range_scope_with_multiple_reviewers() {
         "3",
     ]);
 
-    assert_eq!(args.reviewers, 3);
+    assert_eq!(args.reviewers, Some(3));
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
 
@@ -641,7 +642,7 @@ fn review_cli_builds_multi_reviewer_config_from_args() {
     ]);
 
     let strategy = parse_consensus_strategy(&args.consensus).unwrap();
-    let reviewers = args.reviewers as usize;
+    let reviewers = args.requested_reviewers() as usize;
     let reviewer_tools =
         build_reviewer_tools(args.tool, ToolName::Codex, None, None, None, reviewers);
 

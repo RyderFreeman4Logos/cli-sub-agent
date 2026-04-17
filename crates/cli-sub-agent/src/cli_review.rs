@@ -114,9 +114,15 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub context: Option<String>,
 
-    /// Number of reviewers to run in parallel (default: 1)
-    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
-    pub reviewers: u32,
+    /// Number of reviewers to run in parallel (default: 1).
+    /// `--range` auto-selects up to 3 heterogeneous reviewers from a multi-tool tier
+    /// unless `--reviewers`, `--single`, `--tool`, or `--model-spec` overrides it.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub reviewers: Option<u32>,
+
+    /// Force single-reviewer mode even when `--range` would auto-select heterogeneous reviewers.
+    #[arg(long)]
+    pub single: bool,
 
     /// Consensus strategy for multi-reviewer mode
     #[arg(
@@ -204,6 +210,10 @@ pub struct ReviewArgs {
 }
 
 impl ReviewArgs {
+    pub fn requested_reviewers(&self) -> u32 {
+        self.reviewers.unwrap_or(1)
+    }
+
     pub fn effective_review_mode(&self) -> ReviewMode {
         if self.red_team {
             ReviewMode::RedTeam
@@ -241,6 +251,13 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
         return Err(clap::Error::raw(
             clap::error::ErrorKind::ArgumentConflict,
             format!("{mode_flag} conflicts with --security-mode off"),
+        ));
+    }
+
+    if args.single && args.requested_reviewers() > 1 {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--single conflicts with --reviewers > 1",
         ));
     }
 
