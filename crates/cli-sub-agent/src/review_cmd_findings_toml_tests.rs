@@ -58,6 +58,27 @@ fn write_review_full_output(session_dir: &Path, review_text: &str) {
         .expect("write full output transcript");
 }
 
+fn sample_finding(
+    id: &str,
+    severity: FindingSeverity,
+    path: &str,
+    start: u32,
+    description: &str,
+) -> ReviewFinding {
+    ReviewFinding {
+        id: id.to_string(),
+        severity,
+        file_ranges: vec![ReviewFindingFileRange {
+            path: path.to_string(),
+            start,
+            end: None,
+        }],
+        is_regression_of_commit: None,
+        suggested_test_scenario: None,
+        description: description.to_string(),
+    }
+}
+
 #[derive(Clone, Default)]
 struct SharedLogBuffer {
     bytes: Arc<Mutex<Vec<u8>>>,
@@ -411,6 +432,174 @@ No blocking issues found.
     assert!(buffer.contents().contains(
         "Reviewer findings.toml block missing or invalid; wrote synthetic empty artifact"
     ));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_preserves_existing_non_empty_artifact() {
+    let project_root = temp_project_root("persist-review-findings-preserve-existing");
+    let session_id = "01TESTFINDINGSPRESERVE0000";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+No blocking issues found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "No blocking issues found.\n",
+    )
+    .expect("write details.md");
+
+    let existing = FindingsFile {
+        findings: vec![sample_finding(
+            "existing-f1",
+            FindingSeverity::High,
+            "crates/cli-sub-agent/src/review_cmd_output.rs",
+            173,
+            "Preserve the pre-existing AI artifact.",
+        )],
+    };
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        toml::to_string(&existing).expect("serialize existing findings"),
+    )
+    .expect("write existing findings.toml");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
+        .expect("read preserved findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse preserved findings.toml");
+    assert_eq!(parsed, existing);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_overwrites_existing_empty_artifact() {
+    let project_root = temp_project_root("persist-review-findings-overwrite-empty");
+    let session_id = "01TESTFINDINGSEMPTYOVERWR0";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+FAIL
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+One issue found.
+<!-- CSA:SECTION:details:END -->
+
+```toml findings.toml
+[[findings]]
+id = "new-f1"
+severity = "medium"
+description = "Replace the empty placeholder artifact."
+
+[[findings.file_ranges]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml.rs"
+start = 31
+```
+"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "One issue found.\n",
+    )
+    .expect("write details.md");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write empty findings.toml");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
+        .expect("read overwritten findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse overwritten findings.toml");
+    assert_eq!(
+        parsed,
+        FindingsFile {
+            findings: vec![sample_finding(
+                "new-f1",
+                FindingSeverity::Medium,
+                "crates/cli-sub-agent/src/review_cmd_findings_toml.rs",
+                31,
+                "Replace the empty placeholder artifact.",
+            )],
+        }
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_overwrites_unparseable_existing_artifact() {
+    let project_root = temp_project_root("persist-review-findings-overwrite-garbage");
+    let session_id = "01TESTFINDINGSGARBAGEOVR0";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+FAIL
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+One issue found.
+<!-- CSA:SECTION:details:END -->
+
+```toml findings.toml
+[[findings]]
+id = "new-f1"
+severity = "low"
+description = "Replace the corrupt artifact."
+
+[[findings.file_ranges]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml_tests.rs"
+start = 300
+```
+"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "One issue found.\n",
+    )
+    .expect("write details.md");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "this is not toml\n[[\n",
+    )
+    .expect("write invalid findings.toml");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
+        .expect("read overwritten findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse overwritten findings.toml");
+    assert_eq!(
+        parsed,
+        FindingsFile {
+            findings: vec![sample_finding(
+                "new-f1",
+                FindingSeverity::Low,
+                "crates/cli-sub-agent/src/review_cmd_findings_toml_tests.rs",
+                300,
+                "Replace the corrupt artifact.",
+            )],
+        }
+    );
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
