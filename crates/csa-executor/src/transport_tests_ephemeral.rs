@@ -47,6 +47,47 @@ fn test_execute_in_timeout_resolver_defaults_codex_to_300_seconds() {
     );
 }
 
+#[test]
+fn test_legacy_execute_in_consumes_resolved_timeout_without_reapplying_defaults() {
+    let codex_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+
+    let disabled = super::consume_resolved_execute_in_initial_response_timeout_seconds(
+        super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(0)),
+    );
+    assert_eq!(
+        disabled, None,
+        "Executor::execute_in(Some(0)) must stay disabled through the legacy codex path"
+    );
+
+    let defaulted = super::consume_resolved_execute_in_initial_response_timeout_seconds(
+        super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, None),
+    );
+    assert_eq!(
+        defaulted,
+        Some(300),
+        "Executor::execute_in(None) must arm the codex legacy watchdog at the 300s default"
+    );
+
+    let explicit = super::consume_resolved_execute_in_initial_response_timeout_seconds(
+        super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(450)),
+    );
+    assert_eq!(
+        explicit,
+        Some(450),
+        "Executor::execute_in(Some(450)) must preserve the explicit codex legacy watchdog"
+    );
+
+    assert_eq!(
+        super::consume_resolved_execute_in_initial_response_timeout_seconds(Some(0)),
+        None,
+        "legacy consumers should defensively collapse stray Some(0) to disabled"
+    );
+}
+
 #[tokio::test]
 async fn test_executor_execute_in_retries_codex_stall_with_direct_entry() {
     use std::collections::HashMap;

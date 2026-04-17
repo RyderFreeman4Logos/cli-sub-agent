@@ -66,6 +66,7 @@ pub use transport_codex_exec_stall::resolve_initial_response_timeout;
 use transport_codex_exec_stall::{
     CODEX_EXEC_INITIAL_STALL_REASON, apply_codex_exec_initial_stall_summary,
     classify_codex_exec_initial_stall, codex_initial_response_timeout_seconds,
+    consume_resolved_execute_in_initial_response_timeout_seconds,
 };
 
 #[path = "transport_types.rs"]
@@ -119,7 +120,13 @@ struct ExecuteInAttempt<'a> {
     extra_env: Option<&'a HashMap<String, String>>,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
+    /// Already resolved by `Executor::execute_in_with_transport()`.
+    ///
+    /// Contract:
+    /// - `None` disables the watchdog
+    /// - `Some(seconds > 0)` arms the watchdog for that duration
+    /// - `Some(0)` should not reach this layer, but is treated as disabled
+    resolved_initial_response_timeout_seconds: Option<u64>,
 }
 
 impl LegacyTransport {
@@ -178,10 +185,10 @@ impl LegacyTransport {
             spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         };
-        let initial_response_timeout_seconds = codex_initial_response_timeout_seconds(
-            request.executor,
-            request.initial_response_timeout_seconds,
-        );
+        let initial_response_timeout_seconds =
+            consume_resolved_execute_in_initial_response_timeout_seconds(
+                request.resolved_initial_response_timeout_seconds,
+            );
         let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
         let child_pid = child.id();
         let execution = wait_and_capture_with_idle_timeout(
@@ -337,6 +344,11 @@ impl LegacyTransport {
         })
     }
 
+    /// Execute the legacy direct-entry path.
+    ///
+    /// `initial_response_timeout_seconds` is already resolved by
+    /// `Executor::execute_in_with_transport()`: `None` means disabled, and positive values are
+    /// concrete watchdog durations. This layer must not re-apply executor defaults.
     pub async fn execute_in(
         &self,
         prompt: &str,
@@ -389,7 +401,7 @@ impl LegacyTransport {
                     extra_env: attempt_env,
                     stream_mode,
                     idle_timeout_seconds,
-                    initial_response_timeout_seconds,
+                    resolved_initial_response_timeout_seconds: initial_response_timeout_seconds,
                 })
                 .await?;
             if let Some(backoff) =
@@ -412,7 +424,9 @@ impl LegacyTransport {
             if let Some(classification) = classify_codex_exec_initial_stall(
                 &executor,
                 &result.execution,
-                codex_initial_response_timeout_seconds(&executor, initial_response_timeout_seconds),
+                consume_resolved_execute_in_initial_response_timeout_seconds(
+                    initial_response_timeout_seconds,
+                ),
             ) {
                 if let Some(retry_budget) = classification.retry_effort.clone() {
                     let mut downgraded_executor = executor.clone();
@@ -430,14 +444,14 @@ impl LegacyTransport {
                             extra_env: attempt_env,
                             stream_mode,
                             idle_timeout_seconds,
-                            initial_response_timeout_seconds,
+                            resolved_initial_response_timeout_seconds:
+                                initial_response_timeout_seconds,
                         })
                         .await?;
                     if let Some(retry_classification) = classify_codex_exec_initial_stall(
                         &downgraded_executor,
                         &retry_result.execution,
-                        codex_initial_response_timeout_seconds(
-                            &downgraded_executor,
+                        consume_resolved_execute_in_initial_response_timeout_seconds(
                             initial_response_timeout_seconds,
                         ),
                     ) {
