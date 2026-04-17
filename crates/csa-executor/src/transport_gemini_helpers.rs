@@ -178,6 +178,123 @@ pub(super) fn classify_join_error(e: tokio::task::JoinError) -> anyhow::Error {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct GeminiAcpInitFailureClassification {
+    pub(super) code: &'static str,
+    pub(super) missing_env_vars: Vec<&'static str>,
+}
+
+pub(super) fn is_gemini_acp_init_failure(error: &str) -> bool {
+    let error_lower = error.to_ascii_lowercase();
+    error_lower.contains("acp initialization failed")
+        || error_lower.contains("sandboxed acp: acp initialization failed")
+}
+
+pub(super) fn classify_gemini_acp_init_failure(
+    error: &str,
+    execution_env: &HashMap<String, String>,
+) -> GeminiAcpInitFailureClassification {
+    let error_lower = error.to_ascii_lowercase();
+    let missing_env_vars = missing_gemini_auth_env_vars(execution_env);
+
+    let code = if is_gemini_init_oom(&error_lower) {
+        "gemini_acp_init_oom"
+    } else if is_gemini_init_mcp_extension(&error_lower) {
+        "gemini_acp_init_mcp_extension"
+    } else if !missing_env_vars.is_empty() && is_gemini_init_auth_env(&error_lower) {
+        "gemini_acp_init_auth_env"
+    } else {
+        "gemini_acp_init_handshake_timeout"
+    };
+
+    GeminiAcpInitFailureClassification {
+        code,
+        missing_env_vars,
+    }
+}
+
+pub(super) fn format_gemini_acp_init_failure(
+    classification: &GeminiAcpInitFailureClassification,
+    error: anyhow::Error,
+    memory_max_mb: Option<u64>,
+) -> anyhow::Error {
+    let current_limit = match memory_max_mb {
+        Some(limit_mb) => format!("{limit_mb}MB"),
+        None => "(no explicit limit set — using system default)".to_string(),
+    };
+
+    let detail = match classification.code {
+        "gemini_acp_init_oom" => format!(
+            "Gemini ACP child died before handshake and looks memory-constrained. Current limit: {current_limit} ([tools.gemini-cli].memory_max_mb)."
+        ),
+        "gemini_acp_init_auth_env" => format!(
+            "Gemini ACP child died before handshake and auth/routing env may have been stripped: {}.",
+            classification.missing_env_vars.join(", ")
+        ),
+        "gemini_acp_init_mcp_extension" => {
+            "Gemini ACP child died before handshake while starting a Gemini MCP extension."
+                .to_string()
+        }
+        _ => {
+            "Gemini ACP child died before handshake or initialization never completed.".to_string()
+        }
+    };
+
+    anyhow!(
+        "{code}: {detail}\nOriginal error: {error:#}",
+        code = classification.code
+    )
+}
+
+fn missing_gemini_auth_env_vars(execution_env: &HashMap<String, String>) -> Vec<&'static str> {
+    [
+        csa_core::gemini::API_KEY_ENV,
+        csa_core::gemini::BASE_URL_ENV,
+    ]
+    .into_iter()
+    .filter(|key| {
+        std::env::var_os(key).is_some()
+            && execution_env
+                .get(*key)
+                .is_none_or(|value| value.trim().is_empty())
+    })
+    .collect()
+}
+
+fn is_gemini_init_oom(error_lower: &str) -> bool {
+    error_lower.contains("oom detected")
+        || error_lower.contains("out of memory")
+        || error_lower.contains("killed by signal 9")
+        || error_lower.contains("memory limit")
+}
+
+fn is_gemini_init_auth_env(error_lower: &str) -> bool {
+    [
+        "auth",
+        "oauth",
+        "credential",
+        "api key",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "login",
+        "401",
+        "403",
+    ]
+    .iter()
+    .any(|pattern| error_lower.contains(pattern))
+}
+
+fn is_gemini_init_mcp_extension(error_lower: &str) -> bool {
+    error_lower.contains("mcp-server")
+        || error_lower.contains("gemini-cli-security")
+        || error_lower.contains("/extensions/")
+        || (error_lower.contains("extension")
+            && ["enoent", "eacces", "spawn", "failed to start"]
+                .iter()
+                .any(|pattern| error_lower.contains(pattern)))
+}
+
 pub(super) fn format_gemini_retry_report(phases: &[GeminiRetryPhase]) -> String {
     phases
         .iter()
