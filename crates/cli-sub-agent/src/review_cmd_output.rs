@@ -307,7 +307,7 @@ fn infer_review_verdict_from_full_output(
     )))
 }
 
-fn extract_review_text(raw_output: &str) -> Option<String> {
+pub(super) fn extract_review_text(raw_output: &str) -> Option<String> {
     let mut transcript_messages = Vec::new();
     let mut saw_json_line = false;
 

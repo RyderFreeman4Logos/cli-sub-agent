@@ -30,6 +30,9 @@ use output::{
 #[path = "review_cmd_fix.rs"]
 mod fix;
 
+#[path = "review_cmd_findings_toml.rs"]
+mod findings_toml;
+
 #[path = "review_cmd_post_review.rs"]
 mod post_review;
 
@@ -47,6 +50,7 @@ use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_revie
 #[cfg(test)]
 use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_review_iterations};
 use execute::{compute_diff_fingerprint, execute_review};
+use findings_toml::persist_review_findings_toml;
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 #[cfg(test)]
 use resolve::build_review_instruction;
@@ -434,6 +438,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         };
         persist_review_meta(&project_root, &review_meta);
         persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
+        persist_review_findings_toml(&project_root, &review_meta);
 
         let is_cumulative_review = review_scope_is_cumulative(&scope);
 
@@ -707,6 +712,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         };
         persist_review_meta(&project_root, &review_meta);
         persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
+        persist_review_findings_toml(&project_root, &review_meta);
     }
 
     if let Err(err) = write_multi_reviewer_consolidated_artifact(reviewers) {
