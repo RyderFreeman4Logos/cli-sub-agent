@@ -22,6 +22,18 @@ pub(crate) fn codex_initial_response_timeout_seconds(
     }
 }
 
+pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
+    executor: &Executor,
+    configured_timeout_seconds: Option<u64>,
+) -> Option<u64> {
+    let configured_timeout_seconds = configured_timeout_seconds.filter(|&seconds| seconds > 0);
+    if matches!(executor, Executor::Codex { .. }) {
+        configured_timeout_seconds.or(Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS))
+    } else {
+        configured_timeout_seconds
+    }
+}
+
 pub(crate) fn classify_codex_exec_initial_stall(
     executor: &Executor,
     execution: &ExecutionResult,

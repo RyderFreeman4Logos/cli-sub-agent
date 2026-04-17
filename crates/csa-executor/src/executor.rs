@@ -18,6 +18,7 @@ use crate::install_hints::{
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     SandboxTransportConfig, Transport, TransportFactory, TransportOptions, TransportResult,
+    resolve_execute_in_initial_response_timeout_seconds,
 };
 #[path = "executor_arg_helpers.rs"]
 mod arg_helpers;
@@ -419,6 +420,10 @@ impl Executor {
         initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         let transport = self.transport(None)?;
+        let initial_response_timeout_seconds = resolve_execute_in_initial_response_timeout_seconds(
+            self,
+            initial_response_timeout_seconds,
+        );
         let mut result = transport
             .execute_in(
                 prompt,

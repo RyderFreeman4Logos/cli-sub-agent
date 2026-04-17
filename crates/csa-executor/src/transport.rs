@@ -61,6 +61,7 @@ use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payloa
 mod transport_codex_exec_stall;
 #[cfg(test)]
 use transport_codex_exec_stall::CodexExecInitialStallClassification;
+pub(crate) use transport_codex_exec_stall::resolve_execute_in_initial_response_timeout_seconds;
 use transport_codex_exec_stall::{
     CODEX_EXEC_INITIAL_STALL_REASON, apply_codex_exec_initial_stall_summary,
     classify_codex_exec_initial_stall, codex_initial_response_timeout_seconds,
