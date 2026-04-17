@@ -19,6 +19,11 @@ use csa_core::types::ToolName;
 use csa_executor::{CodexRuntimeMetadata, CodexTransport};
 use csa_session::review_artifact::{Finding, ReviewArtifact, SeveritySummary};
 
+#[path = "review_design_anchor.rs"]
+pub(crate) mod review_design_anchor;
+#[path = "review_iteration.rs"]
+pub(crate) mod review_iteration;
+
 pub(crate) const CLEAN: &str = "CLEAN";
 pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";
 
@@ -27,6 +32,14 @@ pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";
 pub(crate) const RULE_SPEC_DEVIATION: &str = "spec-deviation";
 pub(crate) const RULE_UNVERIFIED_CRITERION: &str = "unverified-criterion";
 pub(crate) const RULE_BOUNDARY_VIOLATION: &str = "boundary-violation";
+
+fn append_design_anchor(prompt: &mut String) {
+    if prompt.contains("## Design preferences vs correctness bugs") {
+        return;
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(review_design_anchor::REVIEW_DESIGN_PREFERENCE_ANCHOR);
+}
 
 #[cfg(test)]
 fn reviewer_tool_binary_available(_tool_name: &str, _config: Option<&ProjectConfig>) -> bool {
@@ -152,7 +165,7 @@ pub(crate) fn build_multi_reviewer_instruction(
     tool: ToolName,
 ) -> String {
     let output_dir = reviewer_output_dir(reviewer_index);
-    format!(
+    let mut prompt = format!(
         "{base_prompt}\n\
 You are reviewer {reviewer_index}. Emit exactly one final verdict token: \
 PASS, FAIL, SKIP, or UNCERTAIN.\n\
@@ -169,7 +182,21 @@ When spec/contract context is provided, use rule_id values: \
 '{RULE_BOUNDARY_VIOLATION}' (change exceeds spec scope).\n\
 Reviewer tool hint: {}.",
         tool.as_str()
-    )
+    );
+    append_design_anchor(&mut prompt);
+    if !prompt.contains("## Review iteration context")
+        && let Ok(project_root) = std::env::current_dir()
+    {
+        let backend = csa_session::vcs_backends::create_vcs_backend(&project_root);
+        if let Ok(Some(branch)) = backend.current_branch(&project_root)
+            && let Some(iteration_context) =
+                review_iteration::render_review_iteration_context(&project_root, &branch)
+        {
+            prompt.push_str("\n\n");
+            prompt.push_str(&iteration_context);
+        }
+    }
+    prompt
 }
 
 fn reviewer_output_dir(reviewer_index: usize) -> String {
