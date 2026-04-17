@@ -527,7 +527,7 @@ pub(crate) fn build_review_instruction(
     context: Option<&ResolvedReviewContext>,
 ) -> String {
     let mut instruction = format!(
-        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN."
+        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN. After the CSA summary/details sections, append exactly one fenced TOML block labeled `findings.toml` for machine parsing. Keep that fenced block OUTSIDE the CSA sections so `details.md` remains unchanged. Use `findings = []` when there are no findings."
     );
     if let Some(ctx) = context {
         instruction.push_str(&format!(" context={}", ctx.path));

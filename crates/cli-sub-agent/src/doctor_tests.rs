@@ -330,8 +330,8 @@ transport = "cli"
     );
 }
 
-#[tokio::test]
-async fn doctor_text_reports_invalid_effective_config() {
+#[test]
+fn doctor_text_reports_invalid_effective_config() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
     let td = tempfile::tempdir().expect("tempdir");
     let config_root = td.path().join("xdg-config");
@@ -385,8 +385,9 @@ transport = "cli"
         "doctor text should not pretend defaults are ready when merged config failed: {tool_lines}"
     );
 
-    run_doctor_text_from(td.path())
-        .await
+    tokio::runtime::Runtime::new()
+        .expect("create tokio runtime")
+        .block_on(run_doctor_text_from(td.path()))
         .expect("doctor text should keep running when effective config is invalid");
 }
 

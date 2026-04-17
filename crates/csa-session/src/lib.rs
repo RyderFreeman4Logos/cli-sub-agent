@@ -68,8 +68,9 @@ pub use output_section::{
 pub use redact::{redact_event, redact_text_content};
 pub use result::{SessionArtifact, SessionResult};
 pub use review_artifact::{
-    Finding, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewVerdictArtifact, Severity,
-    SeveritySummary, write_review_verdict,
+    Finding, FindingSeverity, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact,
+    ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,
+    write_findings_toml, write_review_verdict,
 };
 pub use soft_fork::{SoftForkContext, soft_fork_session};
 pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};

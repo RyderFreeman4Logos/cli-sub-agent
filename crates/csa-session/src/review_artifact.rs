@@ -11,6 +11,45 @@ fn default_schema_version() -> String {
 pub const REVIEW_VERDICT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FindingSeverity {
+    #[serde(rename = "critical")]
+    Critical = 4,
+    #[serde(rename = "high")]
+    High = 3,
+    #[serde(rename = "medium")]
+    Medium = 2,
+    #[serde(rename = "low")]
+    Low = 1,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ReviewFindingFileRange {
+    pub path: String,
+    pub start: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ReviewFinding {
+    pub id: String,
+    pub severity: FindingSeverity,
+    #[serde(default)]
+    pub file_ranges: Vec<ReviewFindingFileRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_regression_of_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_test_scenario: Option<String>,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FindingsFile {
+    #[serde(default)]
+    pub findings: Vec<ReviewFinding>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     #[serde(rename = "critical")]
     Critical = 5,
@@ -137,11 +176,20 @@ pub fn write_review_verdict(
     std::fs::write(path, json)
 }
 
+pub fn write_findings_toml(session_dir: &Path, artifact: &FindingsFile) -> std::io::Result<()> {
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir)?;
+    let path = output_dir.join("findings.toml");
+    let toml = toml::to_string_pretty(artifact)
+        .map_err(|error| std::io::Error::other(format!("serialize findings.toml: {error}")))?;
+    std::fs::write(path, toml)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Finding, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewVerdictArtifact, Severity,
-        SeveritySummary,
+        Finding, FindingSeverity, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact,
+        ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,
     };
     use chrono::Utc;
     use csa_core::types::ReviewDecision;
@@ -318,5 +366,44 @@ mod tests {
         assert_eq!(summary.medium, 0);
         assert_eq!(summary.low, 0);
         assert_eq!(summary.info, 0);
+    }
+
+    #[test]
+    fn findings_file_toml_deserializes() {
+        let toml = r#"
+[[findings]]
+id = "f1"
+severity = "high"
+description = "Regression drops the fixup path."
+is_regression_of_commit = "29b6c34c"
+suggested_test_scenario = "Run the fix loop after a failed review."
+
+[[findings.file_ranges]]
+path = "crates/foo/src/bar.rs"
+start = 73
+end = 80
+"#;
+
+        let parsed: FindingsFile = toml::from_str(toml).expect("findings.toml should deserialize");
+
+        assert_eq!(
+            parsed,
+            FindingsFile {
+                findings: vec![ReviewFinding {
+                    id: "f1".to_string(),
+                    severity: FindingSeverity::High,
+                    file_ranges: vec![ReviewFindingFileRange {
+                        path: "crates/foo/src/bar.rs".to_string(),
+                        start: 73,
+                        end: Some(80),
+                    }],
+                    is_regression_of_commit: Some("29b6c34c".to_string()),
+                    suggested_test_scenario: Some(
+                        "Run the fix loop after a failed review.".to_string()
+                    ),
+                    description: "Regression drops the fixup path.".to_string(),
+                }],
+            }
+        );
     }
 }

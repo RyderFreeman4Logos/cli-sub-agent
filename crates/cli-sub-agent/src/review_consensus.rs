@@ -173,6 +173,7 @@ You are reviewer {reviewer_index}. Emit exactly one final verdict token: \
 PASS, FAIL, SKIP, or UNCERTAIN.\n\
 Legacy aliases accepted: {CLEAN} → PASS, {HAS_ISSUES} → FAIL.\n\
 Write review artifacts to {output_dir}/review-findings.json and {output_dir}/review-report.md.\n\
+After the CSA summary/details sections, append exactly one fenced TOML block labeled `findings.toml` for machine parsing. Keep that fenced block OUTSIDE the CSA sections so `details.md` remains unchanged. Use `findings = []` when there are no findings.\n\
 Verdict rules:\n\
 - PASS: no serious issues (P0/P1).\n\
 - FAIL: serious issues found.\n\
