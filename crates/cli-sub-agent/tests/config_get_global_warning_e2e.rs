@@ -50,7 +50,7 @@ fn config_get_global_warns_when_falling_back_to_raw_invalid_global_config() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_config_path = global_config_path(tmp.path());
     let global_dir = global_config_path.parent().expect("global config dir");
-    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::create_dir_all(global_dir).expect("create global config dir");
     std::fs::write(
         &global_config_path,
         r#"

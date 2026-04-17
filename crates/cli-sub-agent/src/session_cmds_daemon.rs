@@ -779,21 +779,22 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
         let err = std::io::Error::last_os_error();
         eprintln!("Warning: SIGKILL failed for PID {pid}: {err}");
     }
-
     // Wait for reaping.
     std::thread::sleep(std::time::Duration::from_millis(500));
     if is_pid_alive(pid) {
         anyhow::bail!(
             "Failed to kill session {} (PID {})",
             resolved.session_id,
-            pid,
+            pid
         );
     }
-
     eprintln!("Session {} killed", resolved.session_id);
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "session_cmds_daemon_routing_proptest.rs"]
+mod session_cmds_daemon_routing_proptest;
 #[cfg(test)]
 #[path = "session_cmds_daemon_tests.rs"]
 mod tests;

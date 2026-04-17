@@ -18,6 +18,10 @@ ignore = [
     # Transitive from cc-sdk -> reqwest -> rustls. CRL revocation check bug.
     # Safe default (UnknownStatusPolicy::Deny) mitigates impact.
     "RUSTSEC-2026-0049",
+    # Transitive from rustls-webpki 0.101.7 (old chain). URI name constraints bypass.
+    "RUSTSEC-2026-0098",
+    # Transitive from rustls-webpki 0.101.7 (old chain). Wildcard name constraints bypass.
+    "RUSTSEC-2026-0099",
 ]
 
 [licenses]

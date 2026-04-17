@@ -623,7 +623,7 @@ proptest::proptest! {
         session_active in proptest::prelude::any::<bool>(),
     ) {
         let result = attach_route_for(tool, runtime_binary, output_log_exists, session_active);
-        if runtime_binary == Some("codex-acp") {
+        if tool == "codex" && runtime_binary == Some("codex-acp") {
             proptest::prop_assert_eq!(
                 result,
                 AttachPrimaryOutput::OutputLog,

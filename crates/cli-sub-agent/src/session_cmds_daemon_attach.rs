@@ -16,9 +16,22 @@ const ATTACH_ROUTE_POLL_INTERVAL: std::time::Duration = std::time::Duration::fro
 const ATTACH_METADATA_RETRY_MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 const ATTACH_STDOUT_LIVE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
+fn runtime_binary_file_name(runtime_binary: &str) -> Option<&str> {
+    std::path::Path::new(runtime_binary)
+        .file_name()
+        .and_then(|name| name.to_str())
+}
+
+fn runtime_binary_indicates_codex_acp(runtime_binary: &str) -> bool {
+    runtime_binary_file_name(runtime_binary).is_some_and(|name| name.contains("codex-acp"))
+}
+
 fn routes_session_output_to_output_log(metadata: &csa_session::metadata::SessionMetadata) -> bool {
-    if metadata.runtime_binary.as_deref() == Some("codex-acp") {
-        return true;
+    if metadata.tool == "codex" {
+        return metadata
+            .runtime_binary
+            .as_deref()
+            .is_some_and(runtime_binary_indicates_codex_acp);
     }
     matches!(
         TransportFactory::mode_for_tool(&metadata.tool),
@@ -72,10 +85,11 @@ fn attach_primary_output_from_metadata_fragment(
     let runtime_binary = metadata_fragment_value(contents, "runtime_binary");
     let tool = metadata_fragment_value(contents, "tool").or_else(|| {
         let binary = runtime_binary.as_deref()?;
-        if binary == "codex" || binary == "codex-acp" {
+        let file_name = runtime_binary_file_name(binary).unwrap_or(binary);
+        if file_name == "codex" || runtime_binary_indicates_codex_acp(binary) {
             return Some("codex".to_string());
         }
-        binary
+        file_name
             .strip_suffix("-acp")
             .map(std::string::ToString::to_string)
     })?;
