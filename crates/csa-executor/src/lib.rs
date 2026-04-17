@@ -32,6 +32,7 @@ pub use session_id::{extract_session_id, extract_session_id_from_transport};
 pub use transport::{
     AcpTransport, LegacyTransport, PeakMemoryContext, SandboxTransportConfig, Transport,
     TransportFactory, TransportMode, TransportOptions, TransportResult,
+    resolve_initial_response_timeout,
 };
 
 // Re-export session config types from csa-acp for pipeline integration.

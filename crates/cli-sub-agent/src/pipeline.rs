@@ -90,11 +90,10 @@ pub(crate) fn resolve_initial_response_timeout_seconds(
 ) -> Option<u64> {
     let raw = cli_override
         .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
-    match raw {
-        Some(0) => None,
-        Some(seconds) => Some(seconds),
-        None => Some(DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS),
-    }
+    csa_executor::resolve_initial_response_timeout(
+        raw,
+        DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+    )
 }
 
 pub(crate) fn resolve_initial_response_timeout_for_tool(
@@ -108,22 +107,25 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
     }
 
     if let Some(cli_override) = cli_initial_response_timeout {
-        return Some(cli_override);
+        return csa_executor::resolve_initial_response_timeout(
+            Some(cli_override),
+            DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+        );
     }
 
     if tool_name == "codex" {
-        if let Some(seconds) =
+        let configured = if let Some(seconds) =
             config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name))
         {
-            return Some(seconds);
-        }
+            Some(seconds)
+        } else {
+            config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
+        };
 
-        if let Some(seconds) = config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
-        {
-            return Some(seconds);
-        }
-
-        return Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS);
+        return csa_executor::resolve_initial_response_timeout(
+            configured,
+            DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+        );
     }
 
     resolve_initial_response_timeout_seconds(config, None)

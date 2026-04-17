@@ -3,6 +3,7 @@ use csa_process::ExecutionResult;
 
 pub(crate) const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
 const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
+const DEFAULT_GENERIC_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 120;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CodexExecInitialStallClassification {
@@ -11,29 +12,43 @@ pub(crate) struct CodexExecInitialStallClassification {
     pub(crate) retry_effort: Option<ThinkingBudget>,
 }
 
+pub fn resolve_initial_response_timeout(
+    configured_timeout_seconds: Option<u64>,
+    default_if_none: u64,
+) -> Option<u64> {
+    match configured_timeout_seconds {
+        None => Some(default_if_none),
+        Some(0) => None,
+        Some(seconds) => Some(seconds),
+    }
+}
+
+fn executor_default_initial_response_timeout_seconds(executor: &Executor) -> u64 {
+    if matches!(executor, Executor::Codex { .. }) {
+        DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS
+    } else {
+        DEFAULT_GENERIC_INITIAL_RESPONSE_TIMEOUT_SECONDS
+    }
+}
+
 pub(crate) fn codex_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
 ) -> Option<u64> {
-    if matches!(executor, Executor::Codex { .. }) {
-        configured_timeout_seconds.filter(|&seconds| seconds > 0)
-    } else {
-        configured_timeout_seconds.filter(|&seconds| seconds > 0)
-    }
+    resolve_initial_response_timeout(
+        configured_timeout_seconds,
+        executor_default_initial_response_timeout_seconds(executor),
+    )
 }
 
 pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
 ) -> Option<u64> {
-    match configured_timeout_seconds {
-        Some(0) => None,
-        Some(seconds) => Some(seconds),
-        None if matches!(executor, Executor::Codex { .. }) => {
-            Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS)
-        }
-        None => None,
-    }
+    resolve_initial_response_timeout(
+        configured_timeout_seconds,
+        executor_default_initial_response_timeout_seconds(executor),
+    )
 }
 
 pub(crate) fn classify_codex_exec_initial_stall(

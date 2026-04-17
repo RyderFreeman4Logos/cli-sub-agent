@@ -62,6 +62,7 @@ mod transport_codex_exec_stall;
 #[cfg(test)]
 use transport_codex_exec_stall::CodexExecInitialStallClassification;
 pub(crate) use transport_codex_exec_stall::resolve_execute_in_initial_response_timeout_seconds;
+pub use transport_codex_exec_stall::resolve_initial_response_timeout;
 use transport_codex_exec_stall::{
     CODEX_EXEC_INITIAL_STALL_REASON, apply_codex_exec_initial_stall_summary,
     classify_codex_exec_initial_stall, codex_initial_response_timeout_seconds,
