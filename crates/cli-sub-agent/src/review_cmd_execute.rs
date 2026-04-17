@@ -150,7 +150,9 @@ pub(super) async fn execute_review(
 
     let mut status_reason = None;
     if let Some(kind) = detect_tool_review_failure(tool, &execution.execution.output) {
-        let retry_env = build_gemini_api_key_retry_env(extra_env_owned.as_ref());
+        let retry_env = (!no_failover)
+            .then(|| build_gemini_api_key_retry_env(extra_env_owned.as_ref()))
+            .flatten();
         warn!(
             tool = %tool,
             reason = kind.status_reason(),

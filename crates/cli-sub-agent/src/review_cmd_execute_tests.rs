@@ -393,3 +393,79 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
     assert_eq!(persisted.exit_code, 1);
     assert!(persisted.summary.contains("no review verdict produced"));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_review_does_not_retry_gemini_auth_prompt_when_no_failover_is_set() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_gemini = bin_dir.join("gemini");
+    let auth_log = project_dir.path().join("gemini-auth.log");
+    std::fs::write(
+        &fake_gemini,
+        format!(
+            "#!/bin/sh\n\
+printf 'oauth\\n' >> \"{}\"\n\
+printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
+            auth_log.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_gemini).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_gemini, perms).unwrap();
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+    let config = project_config_with_enabled_tools(&["gemini-cli"]);
+    let mut global = GlobalConfig::default();
+    global.tools.insert(
+        "gemini-cli".to_string(),
+        GlobalToolConfig {
+            api_key: Some("fallback-key".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let result = execute_review(
+        ToolName::GeminiCli,
+        "scope=uncommitted mode=review-only security=auto".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        "review: gemini-auth-no-failover".to_string(),
+        project_dir.path(),
+        Some(&config),
+        &global,
+        ReviewRoutingMetadata {
+            project_profile: ProjectProfile::Unknown,
+            detection_method: "auto",
+        },
+        csa_process::StreamMode::BufferOnly,
+        crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        false,
+        false,
+        false,
+        false,
+        true,
+        &[],
+    )
+    .await
+    .expect("classified auth failure should still return a result");
+
+    assert_eq!(result.status_reason.as_deref(), Some("gemini_auth_prompt"));
+    let auth_attempts = std::fs::read_to_string(auth_log).unwrap();
+    assert!(
+        !auth_attempts.contains("api_key\n"),
+        "expected no api-key retry when --no-failover is set, got: {auth_attempts:?}"
+    );
+}
