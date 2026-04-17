@@ -29,11 +29,12 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                 }
             };
 
-            if existing_non_empty_findings_artifact(&findings_path) {
+            if should_preserve_existing_findings_artifact(&artifact, warning_reason, &findings_path)
+            {
                 debug!(
                     session_id = %meta.session_id,
                     path = %findings_path.display(),
-                    "Preserved existing non-empty output/findings.toml artifact"
+                    "preserving prior non-empty findings.toml against synthetic empty"
                 );
                 return;
             }
@@ -64,6 +65,18 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
             );
         }
     }
+}
+
+fn should_preserve_existing_findings_artifact(
+    artifact: &FindingsFile,
+    warning_reason: Option<&'static str>,
+    findings_path: &Path,
+) -> bool {
+    if !artifact.findings.is_empty() || warning_reason.is_none() {
+        return false;
+    }
+
+    existing_non_empty_findings_artifact(findings_path)
 }
 
 fn existing_non_empty_findings_artifact(findings_path: &Path) -> bool {

@@ -372,6 +372,7 @@ start = 130
     let buffer = SharedLogBuffer::default();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
         .with_writer(buffer.clone())
         .without_time()
         .finish();
@@ -417,6 +418,7 @@ No blocking issues found.
     let buffer = SharedLogBuffer::default();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
         .with_writer(buffer.clone())
         .without_time()
         .finish();
@@ -540,6 +542,154 @@ start = 31
             )],
         }
     );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_overwrites_existing_non_empty_artifact_when_derived_is_non_empty() {
+    let project_root = temp_project_root("persist-review-findings-overwrite-non-empty");
+    let session_id = "01TESTFINDINGSNONEMPTYOVR0";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+FAIL
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+One fresh issue found.
+<!-- CSA:SECTION:details:END -->
+
+```toml findings.toml
+[[findings]]
+id = "fresh-f1"
+severity = "medium"
+description = "Fresh reviewer output should replace prior findings."
+
+[[findings.file_ranges]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml.rs"
+start = 27
+```
+"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "One fresh issue found.\n",
+    )
+    .expect("write details.md");
+
+    let existing = FindingsFile {
+        findings: vec![sample_finding(
+            "existing-f1",
+            FindingSeverity::High,
+            "crates/cli-sub-agent/src/review_cmd_output.rs",
+            173,
+            "Old reviewer output should not be preserved.",
+        )],
+    };
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        toml::to_string(&existing).expect("serialize existing findings"),
+    )
+    .expect("write existing findings.toml");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
+        .expect("read overwritten findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse overwritten findings.toml");
+    assert_eq!(
+        parsed,
+        FindingsFile {
+            findings: vec![sample_finding(
+                "fresh-f1",
+                FindingSeverity::Medium,
+                "crates/cli-sub-agent/src/review_cmd_findings_toml.rs",
+                27,
+                "Fresh reviewer output should replace prior findings.",
+            )],
+        }
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_overwrites_existing_empty_artifact_with_derived_empty() {
+    let project_root = temp_project_root("persist-review-findings-empty-over-empty");
+    let session_id = "01TESTFINDINGSEMPTYEMPTY00";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+No blocking issues found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "No blocking issues found.\n",
+    )
+    .expect("write details.md");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write empty findings.toml");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
+        .expect("read empty findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse empty findings.toml");
+    assert_eq!(parsed, FindingsFile::default());
+    assert_eq!(actual.trim(), "findings = []");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_findings_toml_overwrites_unparseable_existing_artifact_with_derived_empty() {
+    let project_root = temp_project_root("persist-review-findings-empty-over-garbage");
+    let session_id = "01TESTFINDINGSEMPTYGARBAG0";
+    let session_dir = create_session_dir(&project_root, session_id);
+    write_review_full_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+No blocking issues found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    );
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "No blocking issues found.\n",
+    )
+    .expect("write details.md");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "this is not toml\n[[\n",
+    )
+    .expect("write invalid findings.toml");
+
+    let meta = make_review_meta(session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
+        .expect("read overwritten findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse overwritten findings.toml");
+    assert_eq!(parsed, FindingsFile::default());
+    assert_eq!(actual.trim(), "findings = []");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
