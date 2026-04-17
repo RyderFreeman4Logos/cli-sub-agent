@@ -1,5 +1,7 @@
 use super::*;
-use crate::review_prior_rounds::{REVIEW_FINDINGS_TOML_INSTRUCTION, load_prior_rounds_section};
+use crate::review_prior_rounds::{
+    PRIOR_ROUNDS_SECTION_HEADING, REVIEW_FINDINGS_TOML_INSTRUCTION, load_prior_rounds_section,
+};
 use csa_core::types::ToolName;
 use tempfile::tempdir;
 
@@ -146,4 +148,19 @@ fn build_review_instruction_for_project_without_prior_rounds_flag_leaves_section
 
     assert!(!instruction.contains("## Prior-Round Invariant Verification"));
     assert!(instruction.contains(REVIEW_FINDINGS_TOML_INSTRUCTION));
+}
+
+#[test]
+fn multi_reviewer_prompt_does_not_duplicate_prior_rounds_section_from_base_prompt() {
+    let prior_rounds = "## Prior-Round Invariant Verification\n\nRound 6 (commit 29b6c34c): summary - Invariant: invariant";
+    let base_prompt = format!("Base prompt\n\n{prior_rounds}");
+
+    let prompt = crate::review_consensus::build_multi_reviewer_instruction(
+        &base_prompt,
+        2,
+        ToolName::Codex,
+        Some(prior_rounds),
+    );
+
+    assert_eq!(prompt.matches(PRIOR_ROUNDS_SECTION_HEADING).count(), 1);
 }

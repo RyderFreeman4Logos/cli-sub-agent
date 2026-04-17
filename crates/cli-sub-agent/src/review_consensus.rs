@@ -1,4 +1,4 @@
-use crate::review_prior_rounds::REVIEW_FINDINGS_TOML_INSTRUCTION;
+use crate::review_prior_rounds::{PRIOR_ROUNDS_SECTION_HEADING, REVIEW_FINDINGS_TOML_INSTRUCTION};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
@@ -200,7 +200,9 @@ Reviewer tool hint: {}.",
             prompt.push_str(&iteration_context);
         }
     }
-    if let Some(prior_rounds_section) = prior_rounds_section {
+    if let Some(prior_rounds_section) = prior_rounds_section
+        && !base_prompt.contains(PRIOR_ROUNDS_SECTION_HEADING)
+    {
         prompt.push_str("\n\n");
         prompt.push_str(prior_rounds_section);
     }

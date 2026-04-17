@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 pub(crate) const REVIEW_FINDINGS_TOML_INSTRUCTION: &str = "After the CSA summary/details sections, append exactly one fenced TOML block labeled `findings.toml` for machine parsing. Keep that fenced block OUTSIDE the CSA sections so `details.md` remains unchanged. Use `findings = []` when there are no findings.";
+pub(crate) const PRIOR_ROUNDS_SECTION_HEADING: &str = "## Prior-Round Invariant Verification";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct PriorRoundsSummary {
@@ -41,7 +42,8 @@ pub(crate) fn load_prior_rounds_section(path: &Path) -> Result<String> {
 }
 
 pub(crate) fn render_prior_rounds_section(summary: &PriorRoundsSummary) -> String {
-    let mut rendered = String::from("## Prior-Round Invariant Verification\n\n");
+    let mut rendered = String::from(PRIOR_ROUNDS_SECTION_HEADING);
+    rendered.push_str("\n\n");
     rendered.push_str("Prior rounds of review have fired on this branch and their fixes are now\n");
     rendered.push_str("part of the diff you are reviewing. Verify each prior-round fix did NOT\n");
     rendered.push_str("introduce a regression:\n\n");
