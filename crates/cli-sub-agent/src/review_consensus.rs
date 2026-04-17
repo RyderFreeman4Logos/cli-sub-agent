@@ -29,6 +29,8 @@ pub(crate) mod review_iteration_resolver;
 
 pub(crate) const CLEAN: &str = "CLEAN";
 pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";
+pub(crate) const SKIP: &str = "SKIP";
+pub(crate) const UNCERTAIN: &str = "UNCERTAIN";
 
 /// Contract alignment rule_id constants for spec-aware review findings.
 /// These are emitted by the review agent when a spec/TODO context is provided.
@@ -255,6 +257,7 @@ pub(crate) fn resolve_consensus(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_review_verdict(output: &str, exit_code: i32) -> &'static str {
     let has_issues = contains_verdict_token(output, HAS_ISSUES);
     let clean = contains_verdict_token(output, CLEAN);
@@ -280,9 +283,9 @@ pub(crate) fn parse_review_decision(
 
     let has_fail =
         contains_verdict_token(output, HAS_ISSUES) || contains_verdict_token(output, "FAIL");
-    let has_uncertain = contains_verdict_token(output, "UNCERTAIN");
+    let has_uncertain = contains_verdict_token(output, UNCERTAIN);
     let has_pass = contains_verdict_token(output, CLEAN) || contains_verdict_token(output, "PASS");
-    let has_skip = contains_verdict_token(output, "SKIP");
+    let has_skip = contains_verdict_token(output, SKIP);
 
     if has_fail {
         ReviewDecision::Fail
@@ -370,6 +373,12 @@ pub(crate) fn consensus_verdict(consensus_result: &ConsensusResult) -> &'static 
         }
         if decision.eq_ignore_ascii_case(HAS_ISSUES) {
             return HAS_ISSUES;
+        }
+        if decision.eq_ignore_ascii_case(SKIP) {
+            return SKIP;
+        }
+        if decision.eq_ignore_ascii_case(UNCERTAIN) {
+            return UNCERTAIN;
         }
     }
     HAS_ISSUES

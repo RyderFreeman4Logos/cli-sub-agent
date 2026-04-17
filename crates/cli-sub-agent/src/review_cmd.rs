@@ -1,8 +1,7 @@
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
-    CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
-    consensus_verdict, parse_consensus_strategy, parse_review_decision, parse_review_verdict,
-    resolve_consensus,
+    CLEAN, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
+    consensus_verdict, parse_consensus_strategy, resolve_consensus,
 };
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
@@ -25,8 +24,8 @@ use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{
-    ReviewerOutcome, detect_tool_diagnostic, is_review_output_empty, is_worktree_submodule,
-    persist_review_meta, persist_review_verdict, print_reviewer_outcomes, sanitize_review_output,
+    GEMINI_AUTH_PROMPT_STATUS_REASON, is_worktree_submodule, persist_review_meta,
+    persist_review_verdict, print_reviewer_outcomes,
 };
 
 #[path = "review_cmd_fix.rs"]
@@ -43,6 +42,9 @@ mod reviewers;
 
 #[path = "review_cmd_execute.rs"]
 mod execute;
+
+#[path = "review_cmd_result.rs"]
+mod result_handling;
 
 #[path = "review_cmd_prior_rounds.rs"]
 mod prior_rounds;
@@ -68,15 +70,17 @@ use resolve::{
     resolve_review_tier_name, resolve_review_tool, review_scope_allows_auto_discovery,
     verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
+use result_handling::{build_reviewer_outcome, resolve_single_review_result};
 use reviewers::{
     AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool,
 };
 
 fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
-    if verdict == CLEAN {
-        ReviewDecision::Pass
-    } else {
-        ReviewDecision::Fail
+    match verdict {
+        CLEAN => ReviewDecision::Pass,
+        "SKIP" => ReviewDecision::Skip,
+        "UNCERTAIN" => ReviewDecision::Uncertain,
+        _ => ReviewDecision::Fail,
     }
 }
 
@@ -401,52 +405,27 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        let sanitized = sanitize_review_output(&result.execution.output);
-        let empty_output = is_review_output_empty(&result.execution.output);
-        let tool_diagnostic =
-            detect_tool_diagnostic(&result.execution.output, &result.execution.stderr_output);
-        if empty_output {
-            if let Some(ref diagnostic) = tool_diagnostic {
-                eprintln!("[csa-review] Tool failure detected: {diagnostic}");
-            }
-            warn!(scope = %scope, tool = %tool, session_id = %result.meta_session_id,
-                diagnostic = tool_diagnostic.as_deref().unwrap_or("unknown"),
-                "Review produced no substantive output — tool may have failed silently. \
-                 Check: csa session logs {}", result.meta_session_id);
-        } else if let Some(ref diagnostic) = tool_diagnostic {
-            eprintln!("[csa-review] Warning: {diagnostic}");
-            warn!(scope = %scope, tool = %tool,
-                "Tool diagnostic detected in review output (review may be degraded)");
-        }
+        let resolved = resolve_single_review_result(&result, tool, &scope);
+        let sanitized = resolved.sanitized;
+        let empty_output = resolved.empty_output;
+        let verdict = resolved.verdict;
+        let decision = resolved.decision;
+        let auth_prompt_failure = resolved.auth_prompt_failure;
         print!("{}", sanitized);
-
-        // Empty output forces non-clean verdict to prevent silent pass-through.
-        let verdict = if empty_output {
-            HAS_ISSUES
-        } else {
-            parse_review_verdict(&result.execution.output, result.execution.exit_code)
-        };
-        let decision = if empty_output {
-            csa_core::types::ReviewDecision::Uncertain
-        } else {
-            parse_review_decision(&result.execution.output, result.execution.exit_code)
-        };
         debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
-        let review_iterations = resolve_review_iterations(&project_root, &result.meta_session_id);
-        let review_session_ids = vec![result.meta_session_id.clone()];
+        let review_iterations =
+            resolve_review_iterations(&project_root, &result.execution.meta_session_id);
+        let review_session_ids = vec![result.execution.meta_session_id.clone()];
 
         // Write structured review metadata to session directory.
-        let effective_exit_code = if empty_output {
-            1
-        } else {
-            result.execution.exit_code
-        };
+        let effective_exit_code = resolved.effective_exit_code;
         let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
         let review_meta = ReviewSessionMeta {
-            session_id: result.meta_session_id.clone(),
+            session_id: result.execution.meta_session_id.clone(),
             head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
             decision: decision.as_str().to_string(),
             verdict: verdict.to_string(),
+            status_reason: result.status_reason.clone(),
             tool: tool.to_string(),
             scope: scope.clone(),
             exit_code: effective_exit_code,
@@ -465,7 +444,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         if !args.fix || verdict == CLEAN {
             // Accumulate only on FINAL result — prevents double-counting when
             // --fix resolves the same issues.
-            if verdict != CLEAN && !empty_output && !is_cumulative_review {
+            if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {
                 crate::review_findings::accumulate_findings(&project_root, &sanitized);
             }
             // PostReview hook: only for final results (no fix loop pending).
@@ -473,7 +452,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &crate::pipeline::capture_observational_hook_output(
                     csa_hooks::HookEvent::PostReview,
                     &[
-                        ("session_id", result.meta_session_id.as_str()),
+                        ("session_id", result.execution.meta_session_id.as_str()),
                         ("decision", decision.as_str()),
                         ("verdict", verdict),
                         ("scope", &scope),
@@ -529,7 +508,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             decision: decision.as_str().to_string(),
             verdict: verdict.to_string(),
             max_rounds: args.max_rounds,
-            initial_session_id: result.meta_session_id.clone(),
+            initial_session_id: result.execution.meta_session_id.clone(),
             review_iterations,
         })
         .await;
@@ -542,7 +521,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &crate::pipeline::capture_observational_hook_output(
                 csa_hooks::HookEvent::PostReview,
                 &[
-                    ("session_id", result.meta_session_id.as_str()),
+                    ("session_id", result.execution.meta_session_id.as_str()),
                     ("decision", if fix_passed { "pass" } else { "fail" }),
                     ("verdict", if fix_passed { CLEAN } else { verdict }),
                     ("scope", &scope_for_hook),
@@ -651,30 +630,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &reviewer_extra_writable,
             )
             .await?;
-            let result = &session_result.execution;
-            let empty = is_review_output_empty(&result.output);
-            let diagnostic = detect_tool_diagnostic(&result.output, &result.stderr_output);
-            if empty {
-                tracing::warn!(
-                    reviewer = reviewer_index + 1,
-                    tool = %reviewer_tool,
-                    diagnostic = diagnostic.as_deref().unwrap_or("unknown"),
-                    "Reviewer produced no substantive output — tool may have failed"
-                );
-            }
-            Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
-                reviewer_index,
-                tool: reviewer_tool,
-                session_id: session_result.meta_session_id,
-                verdict: if empty {
-                    HAS_ISSUES
-                } else {
-                    parse_review_verdict(&result.output, result.exit_code)
-                },
-                output: sanitize_review_output(&result.output),
-                exit_code: if empty { 1 } else { result.exit_code },
-                diagnostic,
-            })
+            build_reviewer_outcome(reviewer_index, reviewer_tool, &session_result)
         });
     }
 
@@ -724,6 +680,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 .as_str()
                 .to_string(),
             verdict: outcome.verdict.to_string(),
+            status_reason: (outcome.verdict == "UNCERTAIN"
+                && outcome
+                    .diagnostic
+                    .as_deref()
+                    .is_some_and(|d| d.contains("OAuth browser prompt")))
+            .then(|| GEMINI_AUTH_PROMPT_STATUS_REASON.to_string()),
             tool: outcome.tool.as_str().to_string(),
             scope: scope.clone(),
             exit_code: outcome.exit_code,

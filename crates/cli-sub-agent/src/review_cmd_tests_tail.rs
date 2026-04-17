@@ -1,3 +1,4 @@
+use super::output::{detect_tool_diagnostic, is_review_output_empty};
 use super::*;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{ProjectProfile, ToolRestrictions};
@@ -618,7 +619,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
     .await;
 
     let execution = result.expect("review should ignore inherited stale CSA_SESSION_ID");
-    assert_eq!(execution.execution.exit_code, 0);
+    assert_eq!(execution.execution.execution.exit_code, 0);
 }
 
 fn write_review_project_config(project_root: &Path, config: &ProjectConfig) {

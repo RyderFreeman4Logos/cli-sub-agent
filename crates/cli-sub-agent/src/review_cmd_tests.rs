@@ -1,4 +1,6 @@
-use super::output::{derive_review_result_summary, has_structured_review_content};
+use super::output::{
+    derive_review_result_summary, has_structured_review_content, sanitize_review_output,
+};
 use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use crate::review_consensus::build_reviewer_tools;

@@ -14,6 +14,28 @@ use tracing::{debug, warn};
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
+pub(super) const GEMINI_AUTH_PROMPT_STATUS_REASON: &str = "gemini_auth_prompt";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ToolReviewFailureKind {
+    GeminiAuthPromptDetected,
+}
+
+impl ToolReviewFailureKind {
+    pub(super) fn status_reason(self) -> &'static str {
+        match self {
+            Self::GeminiAuthPromptDetected => GEMINI_AUTH_PROMPT_STATUS_REASON,
+        }
+    }
+
+    pub(super) fn summary_note(self) -> &'static str {
+        match self {
+            Self::GeminiAuthPromptDetected => {
+                "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced"
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct ReviewerOutcome {
@@ -187,25 +209,35 @@ pub(super) fn persist_review_verdict(
                 );
                 return;
             }
-            let artifact = match derive_review_verdict_artifact(&session_dir, meta, findings) {
-                Ok(mut artifact) => {
-                    artifact.prior_round_refs = prior_round_refs.clone();
-                    artifact
-                }
-                Err(error) => {
-                    debug!(
-                        session_id = %meta.session_id,
-                        error = %error,
-                        "Failed to derive review-verdict artifact; falling back to review_meta defaults"
-                    );
-                    ReviewVerdictArtifact::from_parts(
-                        meta.session_id.clone(),
-                        ReviewDecision::from_str(&meta.decision)
-                            .unwrap_or(ReviewDecision::Uncertain),
-                        meta.verdict.clone(),
-                        findings,
-                        prior_round_refs.clone(),
-                    )
+            let artifact = if meta.status_reason.is_some() {
+                ReviewVerdictArtifact::from_parts(
+                    meta.session_id.clone(),
+                    ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain),
+                    meta.verdict.clone(),
+                    findings,
+                    prior_round_refs.clone(),
+                )
+            } else {
+                match derive_review_verdict_artifact(&session_dir, meta, findings) {
+                    Ok(mut artifact) => {
+                        artifact.prior_round_refs = prior_round_refs.clone();
+                        artifact
+                    }
+                    Err(error) => {
+                        debug!(
+                            session_id = %meta.session_id,
+                            error = %error,
+                            "Failed to derive review-verdict artifact; falling back to review_meta defaults"
+                        );
+                        ReviewVerdictArtifact::from_parts(
+                            meta.session_id.clone(),
+                            ReviewDecision::from_str(&meta.decision)
+                                .unwrap_or(ReviewDecision::Uncertain),
+                            meta.verdict.clone(),
+                            findings,
+                            prior_round_refs.clone(),
+                        )
+                    }
                 }
             };
             if let Err(e) = write_review_verdict(&session_dir, &artifact) {
@@ -533,6 +565,43 @@ pub(super) fn detect_tool_diagnostic(stdout: &str, stderr: &str) -> Option<Strin
     }
 
     None
+}
+
+pub(super) fn detect_tool_review_failure(
+    tool: ToolName,
+    stdout: &str,
+) -> Option<ToolReviewFailureKind> {
+    if tool != ToolName::GeminiCli {
+        return None;
+    }
+
+    let has_oauth_prompt = stdout.contains("Opening authentication page")
+        || stdout.contains("Do you want to continue? [Y/n]");
+    if !has_oauth_prompt {
+        return None;
+    }
+
+    let saw_turn_completed = stdout.lines().any(|line| {
+        line.contains("\"type\":\"turn.completed\"")
+            || line.contains("\"type\": \"turn.completed\"")
+            || line.trim() == "turn.completed"
+    });
+    if saw_turn_completed {
+        return None;
+    }
+
+    let output_tokens = crate::run_helpers::parse_token_usage(stdout)
+        .and_then(|usage| usage.output_tokens)
+        .unwrap_or(0);
+    if output_tokens != 0 {
+        return None;
+    }
+
+    if stdout.len() >= 200 {
+        return None;
+    }
+
+    Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
 }
 
 /// Print per-reviewer output and diagnostics for multi-reviewer mode.

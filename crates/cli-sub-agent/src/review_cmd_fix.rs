@@ -108,15 +108,18 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             fix_future.await?
         };
 
-        print!("{}", sanitize_review_output(&fix_result.execution.output));
-        let fix_empty = is_review_output_empty(&fix_result.execution.output);
+        print!(
+            "{}",
+            sanitize_review_output(&fix_result.execution.execution.output)
+        );
+        let fix_empty = is_review_output_empty(&fix_result.execution.execution.output);
         if fix_empty {
             warn!(
                 round,
                 "Fix round produced no substantive output — treating as failed"
             );
         }
-        session_id = fix_result.meta_session_id.clone();
+        session_id = fix_result.execution.meta_session_id.clone();
 
         // Run the quality gate after fix.
         let fix_gate_steps = ctx.global_config.review.effective_gate_steps();
@@ -177,6 +180,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
                 decision: "pass".to_string(),
                 verdict: CLEAN.to_string(),
+                status_reason: None,
                 tool: ctx.tool.to_string(),
                 scope: ctx.scope.clone(),
                 exit_code: 0,
@@ -197,6 +201,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
         decision: ctx.decision,
         verdict: ctx.verdict,
+        status_reason: None,
         tool: ctx.tool.to_string(),
         scope: ctx.scope,
         exit_code: 1,

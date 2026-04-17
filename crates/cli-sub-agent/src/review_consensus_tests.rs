@@ -419,6 +419,23 @@ fn multi_reviewer_unanimous_disagreement_maps_to_exit_code_one() {
 }
 
 #[test]
+fn multi_reviewer_majority_uncertain_preserves_uncertain_verdict() {
+    let responses = vec![
+        response("reviewer-1:codex", UNCERTAIN, false),
+        response("reviewer-2:opencode", UNCERTAIN, false),
+        response("reviewer-3:claude-code", CLEAN, false),
+    ];
+
+    let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
+    let final_verdict = consensus_verdict(&consensus);
+
+    assert!(consensus.consensus_reached);
+    assert_eq!(consensus.decision.as_deref(), Some(UNCERTAIN));
+    assert_eq!(final_verdict, UNCERTAIN);
+    assert_eq!(verdict_to_exit_code(final_verdict), 1);
+}
+
+#[test]
 fn agreement_level_ignores_timed_out_responses_with_consensus_decision() {
     let responses = vec![
         response("reviewer-1:codex", CLEAN, false),

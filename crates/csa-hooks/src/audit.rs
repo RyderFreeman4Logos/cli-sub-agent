@@ -102,6 +102,7 @@ mod tests {
     /// the original value on drop.
     struct ScopedXdgOverride {
         orig: Option<String>,
+        orig_home: Option<String>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
@@ -109,11 +110,19 @@ mod tests {
         fn new(tmp: &tempfile::TempDir) -> Self {
             let lock = ENV_LOCK.lock().expect("env lock poisoned");
             let orig = std::env::var("XDG_STATE_HOME").ok();
+            let orig_home = std::env::var("HOME").ok();
+            let home = tmp.path().join("home");
+            fs::create_dir_all(&home).expect("create isolated HOME for audit tests");
             // SAFETY: test-scoped env mutation protected by AUDIT_ENV_LOCK.
             unsafe {
                 std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap());
+                std::env::set_var("HOME", home.to_str().unwrap());
             }
-            Self { orig, _lock: lock }
+            Self {
+                orig,
+                orig_home,
+                _lock: lock,
+            }
         }
     }
 
@@ -124,6 +133,10 @@ mod tests {
                 match &self.orig {
                     Some(v) => std::env::set_var("XDG_STATE_HOME", v),
                     None => std::env::remove_var("XDG_STATE_HOME"),
+                }
+                match &self.orig_home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
                 }
             }
         }

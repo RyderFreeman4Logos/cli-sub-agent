@@ -58,6 +58,7 @@ fn make_review_meta(session_id: &str, decision: &str, review_iterations: u32) ->
         head_sha: "deadbeef".to_string(),
         decision: decision.to_string(),
         verdict: decision.to_ascii_uppercase(),
+        status_reason: None,
         tool: "codex".to_string(),
         scope: "uncommitted".to_string(),
         exit_code: 0,
@@ -150,6 +151,7 @@ fn build_multi_reviewer_instruction_contains_design_preference_anchor() {
 
 #[test]
 fn count_prior_reviews_zero_omits_iteration_block() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-zero");
 
@@ -176,6 +178,7 @@ fn count_prior_reviews_zero_omits_iteration_block() {
 
 #[test]
 fn count_prior_reviews_one_injects_iteration_two() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-one");
     create_mock_review_session(
@@ -294,6 +297,7 @@ fn multi_round_escalation_keeps_persistent_correctness_bugs_blocking() {
 
 #[test]
 fn count_prior_reviews_does_not_pull_reviews_from_other_branches() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-current");
     create_mock_review_session(
@@ -319,6 +323,7 @@ fn count_prior_reviews_does_not_pull_reviews_from_other_branches() {
 
 #[test]
 fn count_prior_reviews_branch_unknown_returns_safe_zero() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-unknown");
     create_mock_review_session(
@@ -343,6 +348,7 @@ fn count_prior_reviews_branch_unknown_returns_safe_zero() {
 
 #[test]
 fn count_prior_reviews_uses_canonical_max_after_more_than_ten_prior_reviews() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
     let project_dir = tempdir().unwrap();
     init_git_repo_with_branch(project_dir.path(), "feat/iter-many");
 
