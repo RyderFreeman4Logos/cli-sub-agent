@@ -548,3 +548,18 @@ fn resolve_attempt_initial_response_timeout_uses_fallback_tool_defaults() {
         "runtime fallback to codex must use codex's default initial-response timeout"
     );
 }
+
+#[test]
+fn resolve_attempt_initial_response_timeout_preserves_codex_disabled_sentinel_for_ephemeral_runs() {
+    let mut config = make_failover_config(&["codex/openai/o4-mini/high"]);
+    config.resources.initial_response_timeout_seconds = Some(0);
+
+    let codex_timeout =
+        resolve_attempt_initial_response_timeout_seconds(Some(&config), None, None, false, "codex");
+
+    assert_eq!(
+        codex_timeout,
+        Some(0),
+        "ephemeral codex runs must keep the disabled sentinel so execute_in skips the watchdog"
+    );
+}

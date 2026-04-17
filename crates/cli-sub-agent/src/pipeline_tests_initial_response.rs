@@ -264,6 +264,36 @@ fn test_resolve_initial_response_timeout_for_codex_defaults_to_300_without_overr
 }
 
 #[test]
+fn test_resolve_initial_response_timeout_for_codex_cli_zero_preserves_disabled_sentinel() {
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    assert_eq!(
+        resolve_initial_response_timeout_for_tool(Some(&cfg), Some(0), None, "codex"),
+        Some(0),
+        "codex callers must preserve explicit disable so downstream executors can skip the watchdog"
+    );
+}
+
+#[test]
 fn test_resolve_initial_response_timeout_for_codex_uses_explicit_resource_timeout() {
     let cfg = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -405,7 +435,8 @@ fn test_resolve_initial_response_timeout_for_codex_tool_zero_disables() {
 
     assert_eq!(
         resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex"),
-        None
+        Some(0),
+        "codex tool-level zero must survive so the executor sees the disabled sentinel"
     );
 }
 
@@ -437,7 +468,8 @@ fn test_resolve_initial_response_timeout_for_codex_global_zero_disables() {
 
     assert_eq!(
         resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex"),
-        None
+        Some(0),
+        "codex global zero must survive so the executor sees the disabled sentinel"
     );
 }
 

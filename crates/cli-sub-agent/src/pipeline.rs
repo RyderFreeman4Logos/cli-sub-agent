@@ -108,19 +108,19 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
     }
 
     if let Some(cli_override) = cli_initial_response_timeout {
-        return (cli_override > 0).then_some(cli_override);
+        return Some(cli_override);
     }
 
     if tool_name == "codex" {
         if let Some(seconds) =
             config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name))
         {
-            return (seconds > 0).then_some(seconds);
+            return Some(seconds);
         }
 
         if let Some(seconds) = config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
         {
-            return (seconds > 0).then_some(seconds);
+            return Some(seconds);
         }
 
         return Some(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS);
