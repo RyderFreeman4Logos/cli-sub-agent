@@ -86,9 +86,15 @@ fn prepare_gemini_acp_runtime_sets_runtime_home_and_resolves_direct_launch() {
     )
     .expect("prepare runtime");
 
-    assert_eq!(launch.command, node_path.to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.command)),
+        canonicalize_if_exists(&node_path)
+    );
     assert_eq!(launch.args[0], "--no-warnings=DEP0040");
-    assert_eq!(launch.args[1], real_script.to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.args[1])),
+        canonicalize_if_exists(&real_script)
+    );
     assert_eq!(launch.args[2], "--acp");
 
     let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
@@ -491,7 +497,10 @@ fn prepare_gemini_acp_runtime_resolves_mise_shims_via_mise_which() {
         canonicalize_if_exists(Path::new(&launch.command)),
         canonicalize_if_exists(&node_dir.join("node"))
     );
-    assert_eq!(launch.args[1], real_script.to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.args[1])),
+        canonicalize_if_exists(&real_script)
+    );
     let prepared_path = env.get("PATH").expect("prepared path");
     assert_eq!(
         resolve_first_path_entry("node", prepared_path),
