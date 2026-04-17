@@ -257,6 +257,7 @@ pub(crate) fn resolve_consensus(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_review_verdict(output: &str, exit_code: i32) -> &'static str {
     let has_issues = contains_verdict_token(output, HAS_ISSUES);
     let clean = contains_verdict_token(output, CLEAN);

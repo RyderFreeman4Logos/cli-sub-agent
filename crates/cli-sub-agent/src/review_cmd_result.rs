@@ -2,7 +2,7 @@ use anyhow::Result;
 use csa_core::types::{ReviewDecision, ToolName};
 use tracing::warn;
 
-use crate::review_consensus::{HAS_ISSUES, parse_review_decision, parse_review_verdict};
+use crate::review_consensus::{CLEAN, HAS_ISSUES, SKIP, UNCERTAIN, parse_review_decision};
 
 use super::execute::ReviewExecutionOutcome;
 use super::output::{
@@ -13,6 +13,22 @@ use super::output::{
 const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAuth prompt detected; authentication required (no review verdict produced).\n";
 const AUTH_PROMPT_DIAGNOSTIC: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced";
+
+fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
+    match decision {
+        ReviewDecision::Pass => CLEAN,
+        ReviewDecision::Fail => HAS_ISSUES,
+        ReviewDecision::Skip => SKIP,
+        ReviewDecision::Uncertain => UNCERTAIN,
+    }
+}
+
+fn exit_code_from_decision(decision: ReviewDecision) -> i32 {
+    match decision {
+        ReviewDecision::Pass => 0,
+        ReviewDecision::Fail | ReviewDecision::Skip | ReviewDecision::Uncertain => 1,
+    }
+}
 
 pub(super) struct SingleReviewResolution {
     pub sanitized: String,
@@ -55,16 +71,6 @@ pub(super) fn resolve_single_review_result(
             "Tool diagnostic detected in review output (review may be degraded)");
     }
 
-    let verdict = if auth_prompt_failure {
-        "UNCERTAIN"
-    } else if empty_output {
-        HAS_ISSUES
-    } else {
-        parse_review_verdict(
-            &result.execution.execution.output,
-            result.execution.execution.exit_code,
-        )
-    };
     let decision = if auth_prompt_failure || empty_output {
         ReviewDecision::Uncertain
     } else {
@@ -73,11 +79,8 @@ pub(super) fn resolve_single_review_result(
             result.execution.execution.exit_code,
         )
     };
-    let effective_exit_code = if empty_output {
-        1
-    } else {
-        result.execution.execution.exit_code
-    };
+    let verdict = verdict_from_decision(decision);
+    let effective_exit_code = exit_code_from_decision(decision);
 
     SingleReviewResolution {
         sanitized,
@@ -113,24 +116,78 @@ pub(super) fn build_reviewer_outcome(
         reviewer_index,
         tool: reviewer_tool,
         session_id: session_result.execution.meta_session_id.clone(),
-        verdict: if auth_prompt_failure {
-            "UNCERTAIN"
-        } else if empty {
-            HAS_ISSUES
+        verdict: verdict_from_decision(if auth_prompt_failure || empty {
+            ReviewDecision::Uncertain
         } else {
-            parse_review_verdict(&result.execution.output, result.execution.exit_code)
-        },
+            parse_review_decision(&result.execution.output, result.execution.exit_code)
+        }),
         output: if auth_prompt_failure {
             AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
         } else {
             sanitize_review_output(&result.execution.output)
         },
-        exit_code: if empty || auth_prompt_failure {
-            1
+        exit_code: exit_code_from_decision(if auth_prompt_failure || empty {
+            ReviewDecision::Uncertain
         } else {
-            result.execution.exit_code
-        },
+            parse_review_decision(&result.execution.output, result.execution.exit_code)
+        }),
         diagnostic: diagnostic
             .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string())),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::SessionExecutionResult;
+    use csa_process::ExecutionResult;
+
+    fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
+        ReviewExecutionOutcome {
+            execution: SessionExecutionResult {
+                execution: ExecutionResult {
+                    output: output.to_string(),
+                    stderr_output: String::new(),
+                    summary: String::new(),
+                    exit_code,
+                    peak_memory_mb: None,
+                },
+                meta_session_id: "01TESTRESULT".to_string(),
+                provider_session_id: None,
+            },
+            status_reason: None,
+        }
+    }
+
+    #[test]
+    fn resolve_single_review_result_preserves_uncertain_contract() {
+        let resolved = resolve_single_review_result(
+            &outcome(
+                "<!-- CSA:SECTION:summary -->\nUNCERTAIN\n<!-- CSA:SECTION:summary:END -->",
+                0,
+            ),
+            ToolName::Codex,
+            "uncommitted",
+        );
+
+        assert_eq!(resolved.decision, ReviewDecision::Uncertain);
+        assert_eq!(resolved.verdict, UNCERTAIN);
+        assert_eq!(resolved.effective_exit_code, 1);
+    }
+
+    #[test]
+    fn build_reviewer_outcome_preserves_skip_contract() {
+        let reviewer = build_reviewer_outcome(
+            0,
+            ToolName::Codex,
+            &outcome(
+                "<!-- CSA:SECTION:summary -->\nSKIP\n<!-- CSA:SECTION:summary:END -->",
+                0,
+            ),
+        )
+        .expect("reviewer outcome");
+
+        assert_eq!(reviewer.verdict, SKIP);
+        assert_eq!(reviewer.exit_code, 1);
+    }
 }
