@@ -68,7 +68,9 @@ use resolve::{
     resolve_review_tier_name, resolve_review_tool, review_scope_allows_auto_discovery,
     verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
-use reviewers::resolve_multi_reviewer_pool;
+use reviewers::{
+    AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool,
+};
 
 fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
     if verdict == CLEAN {
@@ -339,7 +341,21 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // Resolve readonly_project_root from config (default: false).
     let readonly_project_root = global_config.review.readonly_sandbox.unwrap_or(false);
 
-    if args.reviewers == 1 {
+    let requested_reviewers = args.requested_reviewers() as usize;
+    let reviewers = resolve_effective_reviewer_count(&AutoReviewerRequest {
+        requested_reviewers,
+        explicit_reviewer_count: args.reviewers.is_some(),
+        single: args.single,
+        scope_is_range: args.range.is_some(),
+        explicit_tool: explicit_review_tool(&args),
+        explicit_model_spec: args.model_spec.as_deref(),
+        primary_tool: tool,
+        resolved_tier_name: resolved_tier_name.as_deref(),
+        config: config.as_ref(),
+        global_config: &global_config,
+    });
+
+    if reviewers == 1 {
         // Single-reviewer path (with optional --fix loop).
         let review_future = execute_review(
             tool,
@@ -560,7 +576,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         anyhow::bail!("--session is only supported when --reviewers=1");
     }
 
-    let reviewers = args.reviewers as usize;
     let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
     let reviewer_pool = resolve_multi_reviewer_pool(
         reviewers,

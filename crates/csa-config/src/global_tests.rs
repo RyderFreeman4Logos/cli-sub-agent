@@ -161,7 +161,9 @@ frequent_poll_seconds = 45
 fn test_resolve_session_wait_long_poll_seconds_uses_legacy_config_dir_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
-    let legacy_dir = config_root.join("csa");
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+    let legacy_dir = crate::paths::legacy_config_dir().expect("legacy config dir");
     std::fs::create_dir_all(&legacy_dir).unwrap();
     std::fs::write(
         legacy_dir.join("config.toml"),
@@ -171,9 +173,6 @@ long_poll_seconds = 3000
 "#,
     )
     .unwrap();
-
-    let _home_guard = EnvVarGuard::set("HOME", dir.path());
-    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
     let config_dir = crate::paths::config_dir();
     assert_eq!(

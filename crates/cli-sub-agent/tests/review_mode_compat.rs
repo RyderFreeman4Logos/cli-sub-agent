@@ -8,7 +8,7 @@ mod review_consensus;
 mod review_prior_rounds;
 
 use chrono::{TimeZone, Utc};
-use clap::Parser;
+use clap::{Parser, error::ErrorKind};
 use cli_defs::{Cli, Commands, ReviewMode};
 use csa_core::{consensus::ConsensusStrategy, types::ToolName};
 use csa_session::review_artifact::{ReviewArtifact, SeveritySummary};
@@ -122,4 +122,18 @@ fn review_cli_validation_and_consensus_helpers_remain_compatible() {
         review_consensus::consensus_strategy_label(ConsensusStrategy::Majority),
         "majority"
     );
+}
+
+#[test]
+fn review_cli_validation_rejects_single_with_multiple_reviewers() {
+    let cli = Cli::try_parse_from(["csa", "review", "--diff", "--single", "--reviewers", "2"])
+        .expect("single flag should parse before validation");
+    let err = match cli.command {
+        Commands::Review(args) => {
+            cli_defs::validate_review_args(&args).expect_err("validation should reject conflict")
+        }
+        _ => panic!("expected review command"),
+    };
+
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
 }

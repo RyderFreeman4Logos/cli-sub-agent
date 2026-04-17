@@ -96,10 +96,7 @@ pub fn audit_log_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{LazyLock, Mutex};
-
-    /// Process-wide lock for tests that mutate `XDG_STATE_HOME`.
-    static AUDIT_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    use crate::test_support::ENV_LOCK;
 
     /// RAII guard that sets `XDG_STATE_HOME` to a temp path and restores
     /// the original value on drop.
@@ -110,7 +107,7 @@ mod tests {
 
     impl ScopedXdgOverride {
         fn new(tmp: &tempfile::TempDir) -> Self {
-            let lock = AUDIT_ENV_LOCK.lock().expect("env lock poisoned");
+            let lock = ENV_LOCK.lock().expect("env lock poisoned");
             let orig = std::env::var("XDG_STATE_HOME").ok();
             // SAFETY: test-scoped env mutation protected by AUDIT_ENV_LOCK.
             unsafe {
@@ -143,9 +140,9 @@ mod tests {
             Path::new("/tmp/markers/owner_repo/42-abc123def.done"),
         );
 
-        let log_path = tmp
-            .path()
-            .join("state/cli-sub-agent/events/merge-guard.jsonl");
+        let log_path = csa_config::paths::state_dir()
+            .expect("state dir")
+            .join("events/merge-guard.jsonl");
         assert!(log_path.exists(), "audit log should be created");
 
         let content = fs::read_to_string(&log_path).unwrap();
@@ -167,9 +164,9 @@ mod tests {
         emit_merge_completed_event(1, "sha1", Path::new("/tmp/m1.done"));
         emit_merge_completed_event(2, "sha2", Path::new("/tmp/m2.done"));
 
-        let log_path = tmp
-            .path()
-            .join("state/cli-sub-agent/events/merge-guard.jsonl");
+        let log_path = csa_config::paths::state_dir()
+            .expect("state dir")
+            .join("events/merge-guard.jsonl");
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2, "should have two event lines");

@@ -86,9 +86,15 @@ fn prepare_gemini_acp_runtime_sets_runtime_home_and_resolves_direct_launch() {
     )
     .expect("prepare runtime");
 
-    assert_eq!(launch.command, node_path.to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.command)),
+        canonicalize_if_exists(&node_path)
+    );
     assert_eq!(launch.args[0], "--no-warnings=DEP0040");
-    assert_eq!(launch.args[1], real_script.to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.args[1])),
+        canonicalize_if_exists(&real_script)
+    );
     assert_eq!(launch.args[2], "--acp");
 
     let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
@@ -413,12 +419,12 @@ fn prepare_gemini_acp_runtime_pins_non_shim_runtime_bins_on_path() {
     let prepared_path = env.get("PATH").expect("prepared path");
     assert_eq!(
         resolve_first_path_entry("node", prepared_path),
-        Some(node_dir.join("node")),
+        Some(canonicalize_if_exists(&node_dir.join("node"))),
         "nested yarn/node launches must hit the real node binary before any shim"
     );
     assert_eq!(
         resolve_first_path_entry("yarn", prepared_path),
-        Some(yarn_dir.join("yarn")),
+        Some(canonicalize_if_exists(&yarn_dir.join("yarn"))),
         "runtime PATH should preserve direct yarn binaries ahead of shim-only entries"
     );
     assert_eq!(env.get("MISE_SHIM"), Some(&String::new()));
@@ -487,17 +493,23 @@ fn prepare_gemini_acp_runtime_resolves_mise_shims_via_mise_which() {
     )
     .expect("prepare runtime");
 
-    assert_eq!(launch.command, node_dir.join("node").to_string_lossy());
-    assert_eq!(launch.args[1], real_script.to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.command)),
+        canonicalize_if_exists(&node_dir.join("node"))
+    );
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.args[1])),
+        canonicalize_if_exists(&real_script)
+    );
     let prepared_path = env.get("PATH").expect("prepared path");
     assert_eq!(
         resolve_first_path_entry("node", prepared_path),
-        Some(node_dir.join("node")),
+        Some(canonicalize_if_exists(&node_dir.join("node"))),
         "mise-which fallback should pin the real node binary ahead of shim-only PATH entries"
     );
     assert_eq!(
         resolve_first_path_entry("yarn", prepared_path),
-        Some(yarn_dir.join("yarn")),
+        Some(canonicalize_if_exists(&yarn_dir.join("yarn"))),
         "mise-which fallback should pin the real yarn binary ahead of shim-only PATH entries"
     );
 }
@@ -574,7 +586,10 @@ fn prepare_gemini_acp_runtime_passes_project_dir_to_mise_which() {
     )
     .expect("prepare runtime");
 
-    assert_eq!(launch.command, node_dir.join("node").to_string_lossy());
+    assert_eq!(
+        canonicalize_if_exists(Path::new(&launch.command)),
+        canonicalize_if_exists(&node_dir.join("node"))
+    );
     assert_eq!(env.get("TMPDIR"), Some(&runtime_tmp.to_string_lossy().into_owned()));
 }
 
@@ -681,4 +696,9 @@ fn resolve_first_path_entry(name: &str, path_env: &str) -> Option<PathBuf> {
     std::env::split_paths(OsStr::new(path_env))
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+        .map(|candidate| canonicalize_if_exists(&candidate))
+}
+
+fn canonicalize_if_exists(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
