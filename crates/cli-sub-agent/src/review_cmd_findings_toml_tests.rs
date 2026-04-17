@@ -439,54 +439,6 @@ No blocking issues found.
 }
 
 #[test]
-fn persist_review_findings_toml_preserves_existing_non_empty_artifact() {
-    let project_root = temp_project_root("persist-review-findings-preserve-existing");
-    let session_id = "01TESTFINDINGSPRESERVE0000";
-    let session_dir = create_session_dir(&project_root, session_id);
-    write_review_full_output(
-        &session_dir,
-        r#"<!-- CSA:SECTION:summary -->
-PASS
-<!-- CSA:SECTION:summary:END -->
-
-<!-- CSA:SECTION:details -->
-No blocking issues found.
-<!-- CSA:SECTION:details:END -->
-"#,
-    );
-    fs::write(
-        session_dir.join("output").join("details.md"),
-        "No blocking issues found.\n",
-    )
-    .expect("write details.md");
-
-    let existing = FindingsFile {
-        findings: vec![sample_finding(
-            "existing-f1",
-            FindingSeverity::High,
-            "crates/cli-sub-agent/src/review_cmd_output.rs",
-            173,
-            "Preserve the pre-existing AI artifact.",
-        )],
-    };
-    fs::write(
-        session_dir.join("output").join("findings.toml"),
-        toml::to_string(&existing).expect("serialize existing findings"),
-    )
-    .expect("write existing findings.toml");
-
-    let meta = make_review_meta(session_id);
-    persist_review_findings_toml(&project_root, &meta);
-
-    let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
-        .expect("read preserved findings.toml");
-    let parsed: FindingsFile = toml::from_str(&actual).expect("parse preserved findings.toml");
-    assert_eq!(parsed, existing);
-
-    fs::remove_dir_all(project_root).expect("remove temp project root");
-}
-
-#[test]
 fn persist_review_findings_toml_overwrites_existing_empty_artifact() {
     let project_root = temp_project_root("persist-review-findings-overwrite-empty");
     let session_id = "01TESTFINDINGSEMPTYOVERWR0";
@@ -547,8 +499,8 @@ start = 31
 }
 
 #[test]
-fn persist_review_findings_toml_overwrites_existing_non_empty_artifact_when_derived_is_non_empty() {
-    let project_root = temp_project_root("persist-review-findings-overwrite-non-empty");
+fn persist_review_findings_toml_overwrites_existing_findings_toml_with_new_content() {
+    let project_root = temp_project_root("persist-review-findings-overwrite-existing");
     let session_id = "01TESTFINDINGSNONEMPTYOVR0";
     let session_dir = create_session_dir(&project_root, session_id);
     write_review_full_output(

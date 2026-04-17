@@ -16,7 +16,6 @@ const FINDINGS_TOML_FENCE_LABEL: &str = "findings.toml";
 pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSessionMeta) {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
-            let findings_path = session_dir.join("output").join("findings.toml");
             let (artifact, warning_reason) = match derive_findings_toml_artifact(&session_dir) {
                 Ok(artifact) => artifact,
                 Err(error) => {
@@ -28,16 +27,6 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                     (FindingsFile::default(), Some("derivation failure"))
                 }
             };
-
-            if should_preserve_existing_findings_artifact(&artifact, warning_reason, &findings_path)
-            {
-                debug!(
-                    session_id = %meta.session_id,
-                    path = %findings_path.display(),
-                    "preserving prior non-empty findings.toml against synthetic empty"
-                );
-                return;
-            }
 
             if let Some(reason) = warning_reason {
                 warn!(
@@ -64,31 +53,6 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                 "Cannot resolve session dir for review findings.toml"
             );
         }
-    }
-}
-
-fn should_preserve_existing_findings_artifact(
-    artifact: &FindingsFile,
-    warning_reason: Option<&'static str>,
-    findings_path: &Path,
-) -> bool {
-    if !artifact.findings.is_empty() || warning_reason.is_none() {
-        return false;
-    }
-
-    existing_non_empty_findings_artifact(findings_path)
-}
-
-fn existing_non_empty_findings_artifact(findings_path: &Path) -> bool {
-    if !findings_path.exists() {
-        return false;
-    }
-
-    match fs::read_to_string(findings_path) {
-        Ok(existing) => toml::from_str::<FindingsFile>(&existing)
-            .map(|artifact| !artifact.findings.is_empty())
-            .unwrap_or(false),
-        Err(_) => false,
     }
 }
 
