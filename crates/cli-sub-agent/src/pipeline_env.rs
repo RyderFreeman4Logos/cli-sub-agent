@@ -106,7 +106,7 @@ pub(crate) fn apply_run_target_dir_guard(
     task_type: Option<&str>,
     tool_name: &str,
     project_root: &Path,
-    merged_env: &mut HashMap<String, String>,
+    _merged_env: &mut HashMap<String, String>,
 ) {
     if !matches!(task_type, Some("run")) || tool_name != "codex" {
         return;
@@ -127,7 +127,6 @@ pub(crate) fn apply_run_target_dir_guard(
         project_target = %repo_target_dir.display(),
         "Run session: no user-configured ./target, leaving codex default CARGO_TARGET_DIR behavior (no CSA override)"
     );
-    merged_env.remove("CARGO_TARGET_DIR");
 }
 
 fn resolve_review_project_root(session_dir: &Path) -> Option<PathBuf> {

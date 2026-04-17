@@ -87,7 +87,7 @@ fn apply_run_target_dir_guard_does_not_inject_override_when_repo_target_missing(
 }
 
 #[test]
-fn apply_run_target_dir_guard_removes_preexisting_override_when_repo_target_missing() {
+fn apply_run_target_dir_guard_preserves_existing_env_when_repo_target_missing() {
     let _lock = current_dir_lock().lock().expect("current dir lock");
     let project = tempdir().expect("tempdir");
     let _cwd = CurrentDirGuard::enter(project.path());
@@ -99,8 +99,8 @@ fn apply_run_target_dir_guard_removes_preexisting_override_when_repo_target_miss
 
     crate::pipeline_env::apply_run_target_dir_guard(Some("run"), "codex", project.path(), &mut env);
 
-    assert!(
-        !env.contains_key("CARGO_TARGET_DIR"),
-        "run guard must preserve codex default behavior when ./target is absent"
+    assert_eq!(
+        env.get("CARGO_TARGET_DIR").map(String::as_str),
+        Some("/tmp/codex-session-target")
     );
 }
