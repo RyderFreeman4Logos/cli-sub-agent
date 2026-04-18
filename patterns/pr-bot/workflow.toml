@@ -1439,7 +1439,6 @@ The gate:
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
-Condition: !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
 Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
 then up to `cloud_bot_poll_max_seconds` of polling.
 
@@ -1679,7 +1678,7 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
+condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})"
 
 [[workflow.steps]]
 id = 17
@@ -1687,10 +1686,10 @@ title = "Step 10a: Bot Review Clean"
 tool = "note"
 prompt = """
 No issues found by bot. Proceed to merge.
-This step only runs when the cloud bot is reachable; it must not run in the
-`BOT_UNAVAILABLE=true` timeout branch."""
+This step only runs when the cloud bot is enabled, reachable, has reported no
+issues, and the review loop has not hit the round limit."""
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((!(${BOT_HAS_ISSUES})) && (!(${BOT_UNAVAILABLE}))))"
+condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})"
 
 [[workflow.steps]]
 id = 18
@@ -1719,9 +1718,9 @@ wait/fix/review loop to a single CSA-managed step.
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
 
-This step only runs when the cloud bot is reachable; skip the entire rebase
-path when `BOT_UNAVAILABLE=true`, because the post-rebase review gate requires
-an actual bot response and would otherwise stall/fail in the timeout branch.
+This step is disabled unconditionally. Keep the implementation text only as
+historical context; the workflow condition is `false` so the rebase path never
+executes.
 
 ```bash
 set -euo pipefail
@@ -1858,7 +1857,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((!(${BOT_HAS_ISSUES})) && (!(${BOT_UNAVAILABLE}))))"
+condition = "false"
 
 [[workflow.steps]]
 id = 19

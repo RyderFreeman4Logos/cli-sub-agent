@@ -1104,10 +1104,18 @@ echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 
 Loop back to Step 5 (delegated wait gate).
 
+## ENDIF
+
+## ENDIF
+
+## ENDIF
+<!-- End of CLOUD_BOT block -->
+
 ## Step 10b: Post-Fix Re-Review Gate (HARD GATE)
 
 Tool: bash
 OnFail: abort
+Condition: (${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
 
 After fixing bot findings, verify the bot has actually re-reviewed the current
 HEAD and found zero actionable findings before any merge path can execute.
@@ -1131,7 +1139,6 @@ The gate:
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
-Condition: !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
 Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
 then up to `cloud_bot_poll_max_seconds` of polling.
 
@@ -1371,16 +1378,14 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```
 
-## ELSE
-
 ## Step 10a: Bot Review Clean
 
 Tool: note
-Condition: !(${BOT_UNAVAILABLE})
+Condition: (${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
 
 No issues found by bot. Proceed to merge.
-This step only runs when the cloud bot is reachable; it must not run in the
-`BOT_UNAVAILABLE=true` timeout branch.
+This step only runs when the cloud bot is enabled, reachable, has reported no
+issues, and the review loop has not hit the round limit.
 
 ## Step 10.5: Rebase for Clean History (DISABLED)
 
@@ -1390,7 +1395,7 @@ This step only runs when the cloud bot is reachable; it must not run in the
 > Squash merges are forbidden for audit reasons.
 
 Tool: bash
-Condition: !(${BOT_UNAVAILABLE})
+Condition: false
 
 Reorganize accumulated fix commits into logical groups (source, patterns, other)
 before merging. Skip if <= 3 commits.
@@ -1408,9 +1413,9 @@ wait/fix/review loop to a single CSA-managed step.
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
 
-This step only runs when the cloud bot is reachable; skip the entire rebase
-path when `BOT_UNAVAILABLE=true`, because the post-rebase review gate requires
-an actual bot response and would otherwise stall/fail in the timeout branch.
+This step is disabled unconditionally. Keep the implementation text only as
+historical context; the workflow condition is `false` so the rebase path never
+executes.
 
 ```bash
 set -euo pipefail
@@ -1546,13 +1551,6 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   git push origin "${WORKFLOW_BRANCH}"
 fi
 ```
-
-## ENDIF
-
-## ENDIF
-
-## ENDIF
-<!-- End of CLOUD_BOT block -->
 
 ## IF !(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES}))
 
