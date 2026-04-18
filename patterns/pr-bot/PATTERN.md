@@ -1373,8 +1373,11 @@ echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ## Step 10a: Bot Review Clean
 
 Tool: note
+Condition: !(${BOT_UNAVAILABLE})
 
 No issues found by bot. Proceed to merge.
+This step only runs when the cloud bot is reachable; it must not run in the
+`BOT_UNAVAILABLE=true` timeout branch.
 
 ## Step 10.5: Rebase for Clean History (DISABLED)
 
@@ -1384,6 +1387,7 @@ No issues found by bot. Proceed to merge.
 > Squash merges are forbidden for audit reasons.
 
 Tool: bash
+Condition: !(${BOT_UNAVAILABLE})
 
 Reorganize accumulated fix commits into logical groups (source, patterns, other)
 before merging. Skip if <= 3 commits.
@@ -1400,6 +1404,10 @@ wait/fix/review loop to a single CSA-managed step.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
+
+This step only runs when the cloud bot is reachable; skip the entire rebase
+path when `BOT_UNAVAILABLE=true`, because the post-rebase review gate requires
+an actual bot response and would otherwise stall/fail in the timeout branch.
 
 ```bash
 set -euo pipefail
@@ -1558,8 +1566,10 @@ This step executes in either of these cases:
 - `cloud_bot=false` (no cloud bot path)
 - `cloud_bot=true`, `BOT_UNAVAILABLE=true`, and fallback local review is clean
 
-**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale
-(bot disabled + local review CLEAN). This provides audit trail for reviewers.
+**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale.
+This step has two distinct audit-trail cases:
+- `cloud_bot=false`: "cloud_bot=false (disabled in config); merging on local review clean"
+- `cloud_bot=true` and `BOT_UNAVAILABLE=true`: "cloud_bot=true but bot timed out; merging on fallback review clean"
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -1579,8 +1589,16 @@ fi
 git push origin "${WORKFLOW_BRANCH}"
 
 # Audit trail: explain why merging without bot review.
+if [ "${CLOUD_BOT}" = "false" ]; then
+  MERGE_REASON="cloud_bot=false (disabled in config); merging on local review clean"
+elif [ "${BOT_UNAVAILABLE:-false}" = "true" ]; then
+  MERGE_REASON="cloud_bot=true but bot timed out; merging on fallback review clean"
+else
+  echo "ERROR: Step 6a reached without a valid merge-without-bot rationale."
+  exit 1
+fi
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: Cloud bot (${CLOUD_BOT_NAME}) is disabled (pr_review.cloud_bot=false). Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+  "**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
