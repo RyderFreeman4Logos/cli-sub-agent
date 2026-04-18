@@ -31,16 +31,6 @@ fn executor_default_initial_response_timeout_seconds(executor: &Executor) -> u64
     }
 }
 
-pub(crate) fn codex_initial_response_timeout_seconds(
-    executor: &Executor,
-    configured_timeout_seconds: Option<u64>,
-) -> Option<u64> {
-    resolve_initial_response_timeout(
-        configured_timeout_seconds,
-        executor_default_initial_response_timeout_seconds(executor),
-    )
-}
-
 pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
@@ -51,16 +41,23 @@ pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
     )
 }
 
-/// Consume an already-resolved `execute_in` watchdog setting without re-applying defaults.
+/// Consume an already-resolved watchdog setting without re-applying defaults.
 ///
-/// The outer `Executor::execute_in_with_transport()` resolver is the single source of truth for
-/// defaulting/sentinel handling. Legacy `execute_in` consumers must treat `None` as disabled and
-/// pass through positive values unchanged. `Some(0)` is accepted defensively and treated as
-/// disabled so a stray sentinel cannot resurrect the codex default.
-pub(crate) fn consume_resolved_execute_in_initial_response_timeout_seconds(
+/// The outer resolver is the single source of truth for defaulting/sentinel handling. Transport
+/// internals must treat `None` as disabled and pass through positive values unchanged. `Some(0)`
+/// is accepted defensively and treated as disabled so a stray sentinel cannot resurrect the codex
+/// default.
+pub(crate) fn consume_resolved_initial_response_timeout_seconds(
     resolved_timeout_seconds: Option<u64>,
 ) -> Option<u64> {
     resolved_timeout_seconds.filter(|seconds| *seconds > 0)
+}
+
+/// Compatibility wrapper for direct `execute_in` callers/tests.
+pub(crate) fn consume_resolved_execute_in_initial_response_timeout_seconds(
+    resolved_timeout_seconds: Option<u64>,
+) -> Option<u64> {
+    consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
 }
 
 pub(crate) fn classify_codex_exec_initial_stall(

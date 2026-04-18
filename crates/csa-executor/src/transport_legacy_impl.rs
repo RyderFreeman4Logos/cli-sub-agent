@@ -55,7 +55,9 @@ impl Transport for LegacyTransport {
             if let Some(classification) = classify_codex_exec_initial_stall(
                 &executor,
                 &result.execution,
-                codex_initial_response_timeout_seconds(&executor, options.initial_response_timeout_seconds),
+                Self::consume_resolved_transport_initial_response_timeout_seconds(
+                    options.initial_response_timeout_seconds,
+                ),
             ) {
                 if let Some(retry_budget) = classification.retry_effort.clone() {
                     let mut downgraded_executor = executor.clone();
@@ -78,8 +80,7 @@ impl Transport for LegacyTransport {
                     if let Some(retry_classification) = classify_codex_exec_initial_stall(
                         &downgraded_executor,
                         &retry_result.execution,
-                        codex_initial_response_timeout_seconds(
-                            &downgraded_executor,
+                        Self::consume_resolved_transport_initial_response_timeout_seconds(
                             options.initial_response_timeout_seconds,
                         ),
                     )

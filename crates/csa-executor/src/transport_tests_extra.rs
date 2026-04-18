@@ -187,6 +187,100 @@ fn test_classify_codex_exec_initial_stall_ignores_first_byte_before_deadline() {
 }
 
 #[test]
+fn test_legacy_transport_consumes_resolved_timeout_without_reapplying_defaults() {
+    assert_eq!(
+        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(None),
+        None,
+        "resolved None must stay disabled on the persistent legacy path"
+    );
+    assert_eq!(
+        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(Some(
+            0
+        )),
+        None,
+        "stray Some(0) must not resurrect the codex default on the persistent legacy path"
+    );
+    assert_eq!(
+        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(Some(
+            450
+        )),
+        Some(450),
+        "positive resolved values must pass through unchanged on the persistent legacy path"
+    );
+}
+
+#[tokio::test]
+async fn test_legacy_transport_execute_preserves_disabled_resolved_timeout_on_persistent_codex_path()
+{
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script_path = temp.path().join("codex");
+    std::fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+sleep 2
+echo "ok persistent"
+"#,
+    )
+    .expect("write fake codex");
+    let mut perms = std::fs::metadata(&script_path)
+        .expect("metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script_path, perms).expect("chmod +x");
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let env = HashMap::from([(
+        "PATH".to_string(),
+        format!("{}:{old_path}", temp.path().display()),
+    )]);
+    let transport = super::LegacyTransport::new(Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    });
+    let session = super::build_ephemeral_meta_session(temp.path());
+
+    for initial_response_timeout_seconds in [None, Some(0)] {
+        let result = transport
+            .execute(
+                "persistent legacy timeout disable regression",
+                None,
+                &session,
+                Some(&env),
+                super::TransportOptions {
+                    stream_mode: StreamMode::BufferOnly,
+                    idle_timeout_seconds: 10,
+                    acp_crash_max_attempts: 1,
+                    initial_response_timeout_seconds,
+                    liveness_dead_seconds: 15,
+                    stdin_write_timeout_seconds: 5,
+                    acp_init_timeout_seconds: 5,
+                    termination_grace_period_seconds: 1,
+                    output_spool: None,
+                    output_spool_max_bytes: 64 * 1024,
+                    output_spool_keep_rotated: false,
+                    setting_sources: None,
+                    sandbox: None,
+                },
+            )
+            .await
+            .expect("persistent legacy execute should succeed without synthesizing a watchdog");
+
+        assert_eq!(result.execution.exit_code, 0);
+        assert!(
+            result.execution.output.contains("ok persistent"),
+            "persistent legacy path should not arm an initial-response watchdog for {initial_response_timeout_seconds:?}: {:?}",
+            result.execution
+        );
+    }
+}
+
+#[test]
 fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() {
     let classification = super::CodexExecInitialStallClassification {
         effort: "high",

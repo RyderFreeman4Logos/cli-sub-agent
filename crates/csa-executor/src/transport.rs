@@ -65,8 +65,9 @@ pub(crate) use transport_codex_exec_stall::resolve_execute_in_initial_response_t
 pub use transport_codex_exec_stall::resolve_initial_response_timeout;
 use transport_codex_exec_stall::{
     CODEX_EXEC_INITIAL_STALL_REASON, apply_codex_exec_initial_stall_summary,
-    classify_codex_exec_initial_stall, codex_initial_response_timeout_seconds,
+    classify_codex_exec_initial_stall,
     consume_resolved_execute_in_initial_response_timeout_seconds,
+    consume_resolved_initial_response_timeout_seconds,
 };
 
 #[path = "transport_types.rs"]
@@ -223,6 +224,12 @@ impl LegacyTransport {
         })
     }
 
+    fn consume_resolved_transport_initial_response_timeout_seconds(
+        resolved_timeout_seconds: Option<u64>,
+    ) -> Option<u64> {
+        consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
+    }
+
     async fn execute_single_attempt(
         &self,
         executor: &Executor,
@@ -249,10 +256,10 @@ impl LegacyTransport {
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
         };
-        let initial_response_timeout_seconds = codex_initial_response_timeout_seconds(
-            executor,
-            options.initial_response_timeout_seconds,
-        );
+        let initial_response_timeout_seconds =
+            Self::consume_resolved_transport_initial_response_timeout_seconds(
+                options.initial_response_timeout_seconds,
+            );
         let (child, sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
             stdin_data.clone(),
