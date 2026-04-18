@@ -48,15 +48,18 @@ Each step below is annotated with its execution layer.
 
 Tool: bash
 
-Ensure all changes committed. Set WORKFLOW_BRANCH once (persists through
-clean branch switches in Step 11).
+Ensure all changes committed. Set `WORKFLOW_BRANCH` and `DEFAULT_BRANCH` once
+(both persist through clean branch switches in Step 11).
 
 ```bash
 # Force weave to pick up workflow variables used across steps.
-: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}"
+: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${DEFAULT_BRANCH}"
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH="main"; fi
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
+echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 ```
 
 ## Step 2: Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)
@@ -67,13 +70,13 @@ echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
 Tool: bash
 OnFail: abort
 
-Run cumulative local review covering all commits since main.
+Run cumulative local review covering all commits since the default branch.
 This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 
 > Fast-path (SHA-verified): compare `git rev-parse HEAD` with the HEAD SHA
 > stored in the latest `csa review` session metadata. If they match, skip
 > Step 2 review. If they do not match (or metadata is missing), run full
-> `csa review --branch main`. Any HEAD drift (including amend) auto-invalidates
+> `csa review --branch "${DEFAULT_BRANCH}"`. Any HEAD drift (including amend) auto-invalidates
 > the fast-path.
 
 ```bash
@@ -88,7 +91,7 @@ REVIEW_HEAD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh")"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
 else
-  SID=$(csa review --branch main)
+  SID=$(csa review --branch "${DEFAULT_BRANCH}")
   bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
 fi
 REVIEW_COMPLETED=true
@@ -120,7 +123,7 @@ OnFail: abort
 
 **PRECONDITION (MANDATORY)**: Step 2 local review MUST have completed successfully.
 - If `REVIEW_COMPLETED` is not `true`, STOP and report:
-  `ERROR: Local review (Step 2) was not completed. Run csa review --branch main before creating PR.`
+  `ERROR: Local review (Step 2) was not completed. Run csa review --branch "${DEFAULT_BRANCH}" before creating PR.`
 - If Step 2 found unresolved issues that were not fixed in Step 3, STOP and report:
   `ERROR: Local review found unresolved issues. Fix them before PR creation.`
 - FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
@@ -129,7 +132,7 @@ OnFail: abort
 # --- Precondition gate: review must be complete ---
 if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
   echo "ERROR: Local review (Step 2) was not completed."
-  echo "Run csa review --branch main before creating PR."
+  echo "Run csa review --branch ${DEFAULT_BRANCH} before creating PR."
   echo "FORBIDDEN: Creating PR without Step 2 completion."
   exit 1
 fi
@@ -156,7 +159,7 @@ fi
 find_branch_pr() {
   local owner_matches owner_count branch_matches branch_count
   owner_matches="$(
-    gh pr list --base main --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
+    gh pr list --base "${DEFAULT_BRANCH}" --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
       --jq '.[].number' 2>/dev/null || true
   )"
   owner_count="$(printf '%s\n' "${owner_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -170,7 +173,7 @@ find_branch_pr() {
   fi
 
   branch_matches="$(
-    gh pr list --base main --state open --head "${WORKFLOW_BRANCH}" --json number \
+    gh pr list --base "${DEFAULT_BRANCH}" --state open --head "${WORKFLOW_BRANCH}" --json number \
       --jq '.[].number' 2>/dev/null || true
   )"
   branch_count="$(printf '%s\n' "${branch_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -195,7 +198,7 @@ elif [ "${FIND_RC}" = "1" ]; then
   exit 1
 else
   set +e
-  CREATE_OUTPUT="$(gh pr create --base main --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1)"
+  CREATE_OUTPUT="$(gh pr create --base "${DEFAULT_BRANCH}" --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1)"
   CREATE_RC=$?
   set -e
   if [ "${CREATE_RC}" != "0" ]; then
@@ -221,12 +224,12 @@ else
     sleep 2
   done
   if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
-    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting main." >&2
+    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting ${DEFAULT_BRANCH}." >&2
     exit 1
   fi
 fi
 if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
-  echo "ERROR: Failed to resolve PR number for branch ${WORKFLOW_BRANCH} targeting main." >&2
+  echo "ERROR: Failed to resolve PR number for branch ${WORKFLOW_BRANCH} targeting ${DEFAULT_BRANCH}." >&2
   exit 1
 fi
 REPO="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
@@ -284,7 +287,7 @@ if [ "${CLOUD_BOT}" = "false" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
-    SID=$(csa review --branch main)
+    SID=$(csa review --branch "${DEFAULT_BRANCH}")
     bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
   fi
 fi
@@ -327,7 +330,7 @@ If `CLOUD_BOT` is `false`:
 - Skip Steps 5 through 10 (cloud bot trigger, delegated wait gate, classify, arbitrate, fix).
 - Reuse the same SHA-verified fast-path before supplementary review:
   - If current `HEAD` matches latest reviewed session HEAD SHA → skip review.
-  - Otherwise run full `csa review --branch main`.
+  - Otherwise run full `csa review --branch "${DEFAULT_BRANCH}"`.
 - Route to Step 6a (Merge Without Bot) after supplementary local review gate passes.
 
 ## IF ${CLOUD_BOT}
@@ -704,7 +707,7 @@ else
   CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
 fi
 set +e
-FIX_SID="$(csa run --sa-mode true --tier tier-4-critical --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
+FIX_SID="$(csa run --sa-mode true --tier tier-4-critical --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range ${DEFAULT_BRANCH}...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
 DAEMON_RC=$?
 set -e
 if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
@@ -819,7 +822,7 @@ set -euo pipefail
 COMMENT_IS_STALE=false
 
 if [ -n "${COMMENT_PATH:-}" ] && [ -n "${COMMENT_TIMESTAMP:-}" ]; then
-  if ! git diff --quiet main...HEAD -- "${COMMENT_PATH}"; then
+  if ! git diff --quiet "${DEFAULT_BRANCH}...HEAD" -- "${COMMENT_PATH}"; then
     if git log --since="${COMMENT_TIMESTAMP}" --format=%H -- "${COMMENT_PATH}" | grep -q .; then
       COMMENT_IS_STALE=true
     fi
@@ -1137,7 +1140,7 @@ The gate:
 2. Checks for an already-posted exact current-HEAD review before retriggering; otherwise polls for a new review event from `${CLOUD_BOT_LOGIN}` on the current HEAD
 3. If review event found AND has P0/P1/P2 inline comments → **abort** (user must re-run pr-bot)
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
-5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
+5. If no review event within timeout → falls back to local `csa review --range ${DEFAULT_BRANCH}...HEAD`
 
 Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
 then up to `cloud_bot_poll_max_seconds` of polling.
@@ -1348,7 +1351,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
       echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} since ${POST_FIX_REVIEW_WINDOW_START}." >&2
       _check_setup_message
       echo "Falling back to local review." >&2
-      SID=$(csa review --sa-mode true --range main...HEAD)
+      SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
       if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
         echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
         exit 1
@@ -1358,7 +1361,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   BOT_CLEAN=true
 else
   echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
-  SID=$(csa review --sa-mode true --range main...HEAD)
+  SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
   if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
     echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
     exit 1
@@ -1407,7 +1410,7 @@ wait/fix/review loop to a single CSA-managed step.
 **Post-rebase review gate** (BLOCKING):
 - CSA delegated step handles both paths:
   - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same configurable wait policy for each trigger (`cloud_bot_wait_seconds` quiet wait + `cloud_bot_poll_max_seconds` polling).
-  - Bot times out → CSA runs fallback `csa review --range main...HEAD` and bounded fix/review retries (max 3 rounds).
+  - Bot times out → CSA runs fallback `csa review --range "${DEFAULT_BRANCH}...HEAD"` and bounded fix/review retries (max 3 rounds).
 - CSA daemon + session wait (configured by `cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, defaults: `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`) enforces the hard timeout.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
@@ -1425,11 +1428,11 @@ else
   CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
 fi
 
-COMMIT_COUNT=$(git rev-list --count main..HEAD)
+COMMIT_COUNT=$(git rev-list --count "${DEFAULT_BRANCH}..HEAD")
 if [ "${COMMIT_COUNT}" -gt 3 ]; then
   git branch -f "backup-${PR_NUM}-pre-rebase" HEAD
 
-  MERGE_BASE=$(git merge-base main HEAD)
+  MERGE_BASE=$(git merge-base "${DEFAULT_BRANCH}" HEAD)
   git reset --soft $MERGE_BASE
 
   git reset HEAD .
@@ -1599,7 +1602,7 @@ else
   exit 1
 fi
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+  "**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch ${DEFAULT_BRANCH}\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
@@ -1615,10 +1618,10 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local main with remote
+# Post-merge: sync local default branch with remote
 git fetch origin
-git checkout main
-git merge origin/main --ff-only
+git checkout "${DEFAULT_BRANCH}"
+git merge "origin/${DEFAULT_BRANCH}" --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```
@@ -1641,7 +1644,7 @@ If fixes accumulated, create clean branch for final review.
 CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
 git push -u origin "${CLEAN_BRANCH}"
-gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
+gh pr create --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```
 
 ## Step 12: Final Merge
@@ -1651,7 +1654,7 @@ gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "
 Tool: bash
 OnFail: abort
 
-Merge and update local main.
+Merge and update the local default branch.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -1681,10 +1684,10 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local main with remote
+# Post-merge: sync local default branch with remote
 git fetch origin
-git checkout main
-git merge origin/main --ff-only
+git checkout "${DEFAULT_BRANCH}"
+git merge "origin/${DEFAULT_BRANCH}" --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
@@ -1728,10 +1731,10 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local main with remote
+# Post-merge: sync local default branch with remote
 git fetch origin
-git checkout main
-git merge origin/main --ff-only
+git checkout "${DEFAULT_BRANCH}"
+git merge "origin/${DEFAULT_BRANCH}" --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
