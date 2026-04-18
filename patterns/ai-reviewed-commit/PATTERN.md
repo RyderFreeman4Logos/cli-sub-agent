@@ -9,8 +9,9 @@ version = "0.1.0"
 # AI-Reviewed Commit
 
 Ensures all code is reviewed by csa review before committing.
-Automated fix-and-retry loop: review → fix → re-review → repeat until clean.
-Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement.
+The weave workflow is a **single-pass mechanical gate**: it can run the initial review, dispatch one fix/re-stage/re-review pass, and stop cleanly when the hard-cap gate requires user direction.
+Multi-round fix-and-re-review for rounds 2 and 3 is **not implemented by native weave looping**. It is driven by the LLM orchestrator following the companion `SKILL.md` contract.
+Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement. Those hard-cap and exception rules are binding on the orchestrator; the weave workflow provides the round-1 halt gate as a deterministic backup.
 Because this pattern invokes the downstream `commit` skill, the AI reviewer should verify the
 `Reviewer Guidance` schema required there, including `Timing/Race Scenarios`, `Boundary Cases`,
 and `Regression Tests Added`.
@@ -100,7 +101,7 @@ git add ${FIXED_FILES}
 
 Tool: bash
 
-Enforce the 3-round hard cap before triggering the next review.
+Enforce the 3-round hard cap before triggering the next review attempt inside this single-pass workflow.
 If round 3 still has non-false-positive P0/P1 findings, stop and require user direction.
 Continue without asking only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
 `${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`.
@@ -128,7 +129,8 @@ echo "CSA_VAR:REVIEW_ROUND=$((REVIEW_ROUND + 1))"
 
 Tool: bash
 
-Loop back to review only if the hard-cap check allowed another round.
+Run the next review only if the hard-cap check allowed it.
+This is still a single-pass workflow step, not a native weave loop.
 
 ```bash
 SID=$(csa review --diff --allow-fallback)
@@ -148,6 +150,7 @@ The review MUST include AGENTS.md compliance checklist:
 - If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`
 - If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`
 - Zero unchecked items before proceeding to commit
+- Skip this and all later post-review steps when `${USER_DECISION_REQUIRED}` is `"true"` so the workflow halts cleanly instead of committing past the cap
 
 ## Step 10: Generate Commit Message
 
@@ -155,6 +158,7 @@ Tool: csa
 Tier: tier-1-quick
 
 Delegate commit message generation to cheaper tool.
+Skip when `${USER_DECISION_REQUIRED}` is `"true"`.
 
 ```bash
 SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits message")
@@ -165,6 +169,8 @@ bash scripts/csa/session-wait-until-done.sh "$SID"
 
 Tool: bash
 OnFail: abort
+
+Skip when `${USER_DECISION_REQUIRED}` is `"true"` so the workflow never commits after the hard-cap gate asked for user direction.
 
 ```bash
 git commit -m "${COMMIT_MSG}"

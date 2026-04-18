@@ -190,6 +190,7 @@ The review MUST include AGENTS.md compliance checklist:
 - If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`
 - Zero unchecked items before proceeding to commit"""
 on_fail = "abort"
+condition = "!(${USER_DECISION_REQUIRED})"
 
 [[workflow.steps]]
 id = 11
@@ -200,6 +201,7 @@ Run 'git diff --staged' and generate a Conventional Commits message.
 Output ONLY the commit message, nothing else."""
 tier = "tier-1-quick"
 on_fail = "abort"
+condition = "!(${USER_DECISION_REQUIRED})"
 
 [[workflow.steps]]
 id = 12
@@ -210,3 +212,4 @@ prompt = """
 git commit -m "${COMMIT_MSG}"
 ```"""
 on_fail = "abort"
+condition = "!(${USER_DECISION_REQUIRED})"

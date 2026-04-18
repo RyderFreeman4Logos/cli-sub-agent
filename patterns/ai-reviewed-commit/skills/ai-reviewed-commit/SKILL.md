@@ -27,7 +27,7 @@ triggers:
 
 ## Purpose
 
-Ensure every commit is reviewed by an independent model before creation. Uses authorship-aware strategy: self-authored code gets adversarial debate review (`csa debate`), while other-authored code gets standard `csa review --diff --allow-fallback`. Includes an automated fix-and-retry loop with a **3-round hard cap**, mandatory AGENTS.md compliance checking, and Conventional Commits message generation.
+Ensure every commit is reviewed by an independent model before creation. Uses authorship-aware strategy: self-authored code gets adversarial debate review (`csa debate`), while other-authored code gets standard `csa review --diff --allow-fallback`. The compiled weave workflow is a **single-pass mechanical gate**, while the orchestrator is responsible for driving additional rounds under the contract below. Includes an automated fix-and-retry loop with a **3-round hard cap**, mandatory AGENTS.md compliance checking, and Conventional Commits message generation.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -58,6 +58,9 @@ breaks prompt-guard propagation.
    - Self-authored: `csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself."`
    - Other-authored: `csa review --diff --allow-fallback`
 5. **Fix loop** (if issues found): Dispatch sub-agent to fix issues, re-stage, re-review. Preserve original code intent -- do NOT delete code to silence warnings. Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement.
+   - The weave workflow itself remains single-pass and only provides the deterministic halt gate plus one review/fix/re-review pass.
+   - Rounds 2 and 3 are driven by the orchestrator re-invoking the contract, not by native weave `WHILE`/`GOTO`.
+   - The hard cap and exception rules above are binding on the orchestrator even when weave cannot mechanically express the full loop.
 6. **AGENTS.md compliance**: Discover AGENTS.md chain for each staged file. Check every applicable rule. If the staged diff or generated commit body lists concrete `Timing/Race Scenarios`, verify that matching regression tests exist and are named under `Regression Tests Added`; missing or mismatched tests are a blocking failure. Zero unchecked items before proceeding.
 7. **Generate commit message**: `csa run "Run 'git diff --staged' and generate a Conventional Commits message"` (tier-1).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
