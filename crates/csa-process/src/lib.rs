@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
+use tokio::time::MissedTickBehavior;
 use tracing::warn;
 mod idle_watchdog;
 use idle_watchdog::should_terminate_for_idle;
@@ -321,6 +322,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut stderr_output = String::new();
     let execution_start = Instant::now();
     let mut last_activity = Instant::now();
+    let last_stdout_activity = last_activity;
     let mut last_heartbeat = execution_start;
     let heartbeat_interval = resolve_heartbeat_interval();
     let mut liveness_dead_since: Option<Instant> = None;
@@ -345,6 +347,8 @@ pub async fn wait_and_capture_with_idle_timeout(
         let mut stderr_done = false;
         let mut stdout_buf = [0u8; READ_BUF_SIZE];
         let mut stderr_buf = [0u8; READ_BUF_SIZE];
+        let mut watchdog_tick = tokio::time::interval(IDLE_POLL_INTERVAL);
+        watchdog_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         while !stdout_done || !stderr_done {
             tokio::select! {
@@ -441,7 +445,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                     }
                 }
-                _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
+                _ = watchdog_tick.tick() => {
                     let effective_idle = if !received_first_output {
                         initial_response_timeout.unwrap_or(idle_timeout)
                     } else {
@@ -457,7 +461,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     // Skip liveness polling for initial-response timeout:
                     // kill immediately once elapsed time exceeds the threshold.
                     let should_kill = if !received_first_output && initial_response_timeout.is_some() {
-                        last_activity.elapsed() >= effective_idle
+                        last_stdout_activity.elapsed() >= effective_idle
                     } else {
                         should_terminate_for_idle(
                             &mut last_activity,
@@ -501,6 +505,8 @@ pub async fn wait_and_capture_with_idle_timeout(
     } else {
         // No stderr handle (shouldn't happen with spawn_tool, but handle gracefully)
         let mut stdout_buf = [0u8; READ_BUF_SIZE];
+        let mut watchdog_tick = tokio::time::interval(IDLE_POLL_INTERVAL);
+        watchdog_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 result = stdout_reader.read(&mut stdout_buf) => {
@@ -544,7 +550,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                     }
                 }
-                _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
+                _ = watchdog_tick.tick() => {
                     let effective_idle = if !received_first_output {
                         initial_response_timeout.unwrap_or(idle_timeout)
                     } else {
@@ -560,7 +566,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     // Skip liveness polling for initial-response timeout:
                     // kill immediately once elapsed time exceeds the threshold.
                     let should_kill = if !received_first_output && initial_response_timeout.is_some() {
-                        last_activity.elapsed() >= effective_idle
+                        last_stdout_activity.elapsed() >= effective_idle
                     } else {
                         should_terminate_for_idle(
                             &mut last_activity,
