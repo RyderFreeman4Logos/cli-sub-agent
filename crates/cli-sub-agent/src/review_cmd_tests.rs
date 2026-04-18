@@ -11,31 +11,7 @@ use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, Todo
 use std::{collections::HashMap, process::Command};
 use tempfile::TempDir;
 
-pub(super) struct ScopedEnvVarRestore {
-    key: &'static str,
-    original: Option<String>,
-}
-
-impl ScopedEnvVarRestore {
-    pub(super) fn set(key: &'static str, value: &str) -> Self {
-        let original = std::env::var(key).ok();
-        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
-        unsafe { std::env::set_var(key, value) };
-        Self { key, original }
-    }
-}
-
-impl Drop for ScopedEnvVarRestore {
-    fn drop(&mut self) {
-        // SAFETY: restoration of test-scoped env mutation.
-        unsafe {
-            match self.original.take() {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-}
+pub(crate) use crate::test_env_lock::ScopedEnvVarRestore;
 
 fn assume_review_tools_available() -> (std::sync::MutexGuard<'static, ()>, ScopedEnvVarRestore) {
     (
