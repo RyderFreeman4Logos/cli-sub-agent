@@ -295,7 +295,7 @@ pub(crate) fn pre_create_native_fork_session(
                 .unwrap_or(&fork_res.source_session_id)
         )
     });
-    let mut pre_session = csa_session::create_session(
+    let mut pre_session = csa_session::create_session_fresh(
         project_root,
         Some(&fork_desc),
         Some(&fork_res.source_session_id),
@@ -400,5 +400,73 @@ pub(crate) fn cleanup_pre_created_fork_session(
                 warn!(session = %sid, error = %e, "Failed to clean up pre-created fork session");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ForkResolution, cleanup_pre_created_fork_session, pre_create_native_fork_session};
+    use crate::test_session_sandbox::ScopedSessionSandbox;
+    use csa_core::types::ToolName;
+
+    #[test]
+    fn pre_created_native_fork_session_ignores_daemon_parent_session_id() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let _sandbox = ScopedSessionSandbox::new(&td);
+        let project_root = td.path();
+
+        let parent = csa_session::create_session(project_root, Some("parent"), None, Some("codex"))
+            .expect("create parent session");
+        let parent_dir = csa_session::get_session_dir(project_root, &parent.meta_session_id)
+            .expect("parent session dir");
+
+        // SAFETY: test-scoped env mutation while ScopedSessionSandbox holds TEST_ENV_LOCK.
+        unsafe {
+            std::env::set_var("CSA_DAEMON_SESSION_ID", &parent.meta_session_id);
+            std::env::set_var("CSA_DAEMON_PROJECT_ROOT", project_root);
+            std::env::set_var("CSA_DAEMON_SESSION_DIR", &parent_dir);
+        }
+
+        let fork_res = ForkResolution {
+            provider_session_id: Some("provider-child".to_string()),
+            context_prefix: None,
+            source_session_id: parent.meta_session_id.clone(),
+            source_provider_session_id: Some("provider-parent".to_string()),
+        };
+
+        let (mut pre_created_id, effective_session_arg) = pre_create_native_fork_session(
+            project_root,
+            &fork_res,
+            &ToolName::Codex,
+            Some("fork child"),
+            None,
+        )
+        .expect("pre-create native fork session");
+
+        let child_id = pre_created_id
+            .clone()
+            .expect("child session id should be created");
+        assert_ne!(
+            child_id, parent.meta_session_id,
+            "native fork pre-create must allocate a fresh CSA session id even under daemon env"
+        );
+        assert_eq!(effective_session_arg.as_deref(), Some(child_id.as_str()));
+
+        cleanup_pre_created_fork_session(&mut pre_created_id, project_root);
+
+        assert!(
+            csa_session::get_session_dir(project_root, &parent.meta_session_id)
+                .expect("parent session dir after cleanup")
+                .exists(),
+            "cleanup of pre-created fork session must not delete the parent daemon session"
+        );
+        assert!(
+            csa_session::load_session(project_root, &parent.meta_session_id).is_ok(),
+            "parent daemon session state must remain loadable after child cleanup"
+        );
+        assert!(
+            csa_session::load_session(project_root, &child_id).is_err(),
+            "cleanup should remove only the pre-created child session"
+        );
     }
 }
