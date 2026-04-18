@@ -246,3 +246,79 @@ fi\n",
         "oauth\napi_key\n"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_review_fails_when_repo_root_findings_artifact_is_created() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_opencode = bin_dir.join("opencode");
+    std::fs::write(
+        &fake_opencode,
+        "#!/bin/sh\n\
+printf '{\"findings\":[]}\n' > review-findings.json\n\
+printf '%s\\n' \
+'<!-- CSA:SECTION:summary -->' \
+'Review completed successfully.' \
+'<!-- CSA:SECTION:summary:END -->' \
+'' \
+'<!-- CSA:SECTION:details -->' \
+'Structured details from reviewer.' \
+'<!-- CSA:SECTION:details:END -->' \
+'' \
+'PASS'\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_opencode, perms).unwrap();
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+    let config = project_config_with_enabled_tools(&["opencode"]);
+    let global = GlobalConfig::default();
+    let err = match execute_review(
+        ToolName::Opencode,
+        "scope=uncommitted mode=review-only security=auto".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        "review: repo-root-findings-contract-violation".to_string(),
+        project_dir.path(),
+        Some(&config),
+        &global,
+        ReviewRoutingMetadata {
+            project_profile: ProjectProfile::Unknown,
+            detection_method: "auto",
+        },
+        csa_process::StreamMode::BufferOnly,
+        crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &[],
+    )
+    .await
+    {
+        Ok(_) => panic!("expected review artifact contract violation"),
+        Err(err) => err,
+    };
+
+    let message = format!("{err:#}");
+    assert!(message.contains("contract violation"));
+    assert!(
+        message.contains("review-findings.json"),
+        "expected leaked artifact path in error, got: {message}"
+    );
+}

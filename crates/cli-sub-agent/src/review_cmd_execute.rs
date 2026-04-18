@@ -1,9 +1,11 @@
 //! Review execution helpers extracted from `review_cmd.rs`.
 
+#[path = "review_cmd_execute_artifact_guard.rs"]
+mod artifact_guard;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -28,13 +30,12 @@ use super::output::{
     ensure_review_summary_artifact, has_structured_review_content, is_edit_restriction_summary,
     is_review_output_empty,
 };
+use artifact_guard::detect_repo_root_review_artifact_violations;
 
 pub(super) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
     pub status_reason: Option<String>,
 }
-
-const REVIEW_RELATIVE_ARTIFACT_GUARD_ENV: &str = "CSA_REVIEW_ALLOW_RELATIVE_ARTIFACTS";
 fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
     let options = ExecutionEnvOptions::with_no_flash_fallback();
     if no_failover {
@@ -590,94 +591,6 @@ fn enforce_review_artifact_contract(
 
     Err(anyhow::anyhow!(message))
 }
-
-fn detect_repo_root_review_artifact_violations(
-    project_root: &Path,
-    execution_started_at: DateTime<Utc>,
-) -> Result<Option<Vec<String>>> {
-    if std::env::var_os(REVIEW_RELATIVE_ARTIFACT_GUARD_ENV).as_deref() == Some("1".as_ref()) {
-        warn!(
-            "{}=1 bypasses deprecated review artifact contract guard",
-            REVIEW_RELATIVE_ARTIFACT_GUARD_ENV
-        );
-        return Ok(None);
-    }
-
-    let started_at = system_time_from_utc(execution_started_at)
-        .checked_sub(Duration::from_secs(1))
-        .unwrap_or(UNIX_EPOCH);
-    let mut leaked_paths = Vec::new();
-    collect_guarded_review_artifacts(
-        &project_root.join("output"),
-        "output",
-        started_at,
-        &mut leaked_paths,
-        is_guarded_repo_root_review_artifact,
-    )?;
-
-    if leaked_paths.is_empty() {
-        Ok(None)
-    } else {
-        leaked_paths.sort();
-        Ok(Some(leaked_paths))
-    }
-}
-
-fn is_guarded_repo_root_review_artifact(file_name: &str) -> bool {
-    matches!(file_name, "result.toml" | "summary.md" | "details.md")
-        || file_name.starts_with("review-")
-}
-
-fn collect_guarded_review_artifacts(
-    dir: &Path,
-    prefix: &str,
-    started_at: SystemTime,
-    leaked_paths: &mut Vec<String>,
-    is_guarded: fn(&str) -> bool,
-) -> Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        if !is_guarded(file_name) {
-            continue;
-        }
-
-        let modified_at = entry.metadata()?.modified().with_context(|| {
-            format!(
-                "failed to read modified time for {}",
-                entry.path().display()
-            )
-        })?;
-        if modified_at >= started_at {
-            let relative_path = if prefix.is_empty() {
-                file_name.to_string()
-            } else {
-                format!("{prefix}/{file_name}")
-            };
-            leaked_paths.push(relative_path);
-        }
-    }
-
-    Ok(())
-}
-
-fn system_time_from_utc(timestamp: DateTime<Utc>) -> SystemTime {
-    UNIX_EPOCH
-        + Duration::from_secs(timestamp.timestamp().max(0) as u64)
-        + Duration::from_nanos(u64::from(timestamp.timestamp_subsec_nanos()))
-}
-
 fn repair_completed_review_restriction_result(
     project_root: &Path,
     tool: ToolName,
