@@ -219,7 +219,7 @@ If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015
 Explicitly check: error handling (009), security (014), testing (016).
 If `Reviewer Guidance` lists concrete `Timing/Race Scenarios`, the review MUST verify matching
 tests exist and are named in `Regression Tests Added`; otherwise the review MUST fail.
-Fix-and-retry loop (max 3 rounds).
+Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement.
 
 ### Fork-Based Self-Review (Optional)
 

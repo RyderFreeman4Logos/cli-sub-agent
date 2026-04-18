@@ -73,7 +73,7 @@ breaks prompt-guard propagation.
 3. **Stage changes**: `git add` relevant files. Verify no untracked files remain.
 4. **Security scan**: Grep staged files for hardcoded secrets (API_KEY, SECRET, PASSWORD, PRIVATE_KEY).
 5. **Security audit**: Invoke the `security-audit` pattern via CSA -- three-phase audit (test completeness, vulnerability scan, code quality).
-6. **Pre-commit review**: Invoke the `ai-reviewed-commit` pattern via CSA -- authorship-aware review (debate for self-authored, `csa review --diff --allow-fallback` for others). Fix-and-retry up to 3 rounds.
+6. **Pre-commit review**: Invoke the `ai-reviewed-commit` pattern via CSA -- authorship-aware review (debate for self-authored, `csa review --diff --allow-fallback` for others). Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement.
 7. **Generate commit message**: Delegate to CSA at `tier-1-quick` (tool and thinking budget come from config). The commit body MUST include the AI Reviewer Metadata block from `Commit Message Format (AI Era)`. If a review session already ran in this workflow, prefer resuming it with `--session <review-session-id>` (reuses cached context, near-zero new tokens). When resuming, keep the same tool (sessions are tool-locked).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 9. **Auto PR** (standalone by default): Push branch, create PR targeting main, invoke `/pr-bot`.
