@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use csa_session::output_parser::parse_sections;
 use csa_session::{OutputIndex, OutputSection};
 
 use super::{derive_review_result_summary, has_structured_review_content, sanitize_review_output};
@@ -16,6 +17,32 @@ pub(crate) fn truncate_review_result_summary(line: &str) -> String {
         .collect()
 }
 
+fn current_run_has_summary_section(output: &str) -> bool {
+    let sanitized = sanitize_review_output(output);
+    let sections = parse_sections(&sanitized);
+    sections.iter().rev().any(|section| {
+        section.id == "summary"
+            && !extract_section_content(&sanitized, section)
+                .trim()
+                .is_empty()
+    })
+}
+
+fn extract_section_content(output: &str, section: &OutputSection) -> String {
+    if section.line_start == 0 || section.line_end < section.line_start {
+        return String::new();
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.is_empty() || section.line_start > lines.len() {
+        return String::new();
+    }
+
+    let start = section.line_start - 1;
+    let end_exclusive = section.line_end.min(lines.len());
+    lines[start..end_exclusive].join("\n")
+}
+
 pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -> Result<()> {
     if !has_structured_review_content(output) {
         return Ok(());
@@ -25,10 +52,13 @@ pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -
     fs::create_dir_all(&output_dir)
         .map_err(|error| anyhow::anyhow!("create {}: {error}", output_dir.display()))?;
     let summary_path = output_dir.join("summary.md");
-    let existing_summary = fs::read_to_string(&summary_path)
-        .ok()
-        .filter(|summary| !summary.trim().is_empty());
-    let summary = if let Some(summary) = existing_summary {
+    let summary = if current_run_has_summary_section(output) {
+        let Some(summary) = fs::read_to_string(&summary_path)
+            .ok()
+            .filter(|summary| !summary.trim().is_empty())
+        else {
+            return Ok(());
+        };
         summary
     } else {
         let Some(summary) = derive_review_result_summary(output) else {

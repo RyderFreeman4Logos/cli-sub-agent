@@ -376,6 +376,28 @@ fn ensure_review_summary_artifact_preserves_existing_multiline_summary_section()
 }
 
 #[test]
+fn ensure_review_summary_artifact_replaces_stale_summary_for_same_session_fix_rounds() {
+    let project_root = temp_project_root("review-summary-same-session-fix");
+    let session_id = "01TESTSUMMARYSAMEROUND000000";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let round_1 = "<!-- CSA:SECTION:summary -->\nFAIL: stale finding\n<!-- CSA:SECTION:summary:END -->\n\
+<!-- CSA:SECTION:details -->\nFAIL: stale finding\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
+    csa_session::persist_structured_output(&session_dir, round_1).expect("persist round 1");
+    ensure_review_summary_artifact(&session_dir, round_1).expect("persist round 1 summary");
+
+    let round_2 = "<!-- CSA:SECTION:details -->\nCLEAN\nDetailed body after fix\n<!-- CSA:SECTION:details:END -->\n";
+    csa_session::persist_structured_output(&session_dir, round_2).expect("persist round 2");
+    ensure_review_summary_artifact(&session_dir, round_2).expect("refresh stale summary");
+
+    let summary = csa_session::read_section(&session_dir, "summary")
+        .expect("read summary section")
+        .expect("summary should exist");
+    assert_eq!(summary, "CLEAN");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn persist_review_verdict_marks_clean_transcript_as_pass() {
     let project_root = temp_project_root("persist-review-verdict-pass");
     let session_id = "01TESTPASS0000000000000000";
