@@ -176,14 +176,10 @@ The review MUST include AGENTS.md compliance checklist:
 Tool: csa
 Tier: tier-1-quick
 Condition: !(${USER_DECISION_REQUIRED})
+OnFail: abort
 
-Delegate commit message generation to cheaper tool.
-Skip when `${USER_DECISION_REQUIRED}` is `"true"`.
-
-```bash
-SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits message")
-bash scripts/csa/session-wait-until-done.sh "$SID"
-```
+Run 'git diff --staged' and generate a Conventional Commits message.
+Output ONLY the commit message, nothing else.
 
 ## Step 11: Commit
 

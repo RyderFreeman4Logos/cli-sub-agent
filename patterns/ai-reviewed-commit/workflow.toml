@@ -196,13 +196,8 @@ id = 11
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
-Delegate commit message generation to cheaper tool.
-Skip when `${USER_DECISION_REQUIRED}` is `"true"`.
-
-```bash
-SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits message")
-bash scripts/csa/session-wait-until-done.sh "$SID"
-```"""
+Run 'git diff --staged' and generate a Conventional Commits message.
+Output ONLY the commit message, nothing else."""
 tier = "tier-1-quick"
 on_fail = "abort"
 condition = "!(${USER_DECISION_REQUIRED})"
