@@ -171,6 +171,13 @@ pub(crate) enum CodexAcpCrashKind {
     Runtime,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CrashExitCode {
+    ExitCode(i32),
+    Signal(i32),
+    OomEvent,
+}
+
 impl CodexAcpCrashKind {
     pub(crate) fn code(self) -> &'static str {
         match self {
@@ -186,9 +193,45 @@ pub(crate) struct CodexAcpCrashClassification {
     pub(crate) rendered_hint: String,
 }
 
+pub(crate) fn extract_crash_exit_code(error_str: &str) -> Option<CrashExitCode> {
+    let lowered = error_str.to_ascii_lowercase();
+
+    if lowered.contains("exit code 137") || lowered.contains("exit 137") {
+        return Some(CrashExitCode::ExitCode(137));
+    }
+
+    if lowered.contains("signal: 9") || lowered.contains("sigkill") {
+        return Some(CrashExitCode::Signal(9));
+    }
+
+    if lowered.contains("memory.max")
+        || lowered.contains("oom-kill")
+        || lowered.contains("memory.events")
+        || lowered.contains("memory.events.local")
+        || lowered.contains("oom ")
+        || lowered.contains(" oom")
+        || lowered.ends_with("oom")
+    {
+        return Some(CrashExitCode::OomEvent);
+    }
+
+    let exit_code_marker = "exit code ";
+    if let Some(start) = lowered.find(exit_code_marker) {
+        let digits: String = lowered[start + exit_code_marker.len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !digits.is_empty() {
+            return digits.parse::<i32>().ok().map(CrashExitCode::ExitCode);
+        }
+    }
+
+    None
+}
+
 pub(crate) fn classify_codex_acp_crash(
     stderr_or_context: &str,
-    exit_code: Option<i32>,
+    exit_code: Option<CrashExitCode>,
     cgroup_state: Option<&str>,
     memory_max_mb: Option<u64>,
 ) -> CodexAcpCrashClassification {
@@ -197,7 +240,12 @@ pub(crate) fn classify_codex_acp_crash(
     let config_key = memory_limit_config_key("codex");
     let current_limit = format_memory_limit(memory_max_mb);
 
-    let signal_kill = matches!(exit_code, Some(137) | Some(9) | Some(-9));
+    let exit_code_oom = matches!(
+        exit_code,
+        Some(CrashExitCode::ExitCode(137))
+            | Some(CrashExitCode::Signal(9))
+            | Some(CrashExitCode::OomEvent)
+    );
     let stderr_exact_killed = stderr_lower
         .rsplit_once("stderr:")
         .is_some_and(|(_, tail)| tail.trim() == "killed");
@@ -214,7 +262,7 @@ pub(crate) fn classify_codex_acp_crash(
         || stderr_exact_killed
         || plain_killed_line
         || cgroup_oom
-        || signal_kill;
+        || exit_code_oom;
 
     let (kind, rendered_hint) = if oom_signature {
         (
@@ -355,8 +403,12 @@ pub(super) async fn execute_with_crash_retry(
                 }
                 if transport.tool_name == "codex" && is_crash_lowered(&error_display.to_lowercase())
                 {
-                    let classification =
-                        classify_codex_acp_crash(&error_display, None, None, memory_max_mb);
+                    let classification = classify_codex_acp_crash(
+                        &error_display,
+                        extract_crash_exit_code(&error_display),
+                        None,
+                        memory_max_mb,
+                    );
                     tracing::warn!(
                         classified_reason = classification.kind.code(),
                         memory_max_mb,
@@ -597,7 +649,6 @@ mod tests {
                 .contains("claude-code native Agent tool")
         );
     }
-
     #[test]
     fn test_classify_codex_acp_crash_oom_from_stderr_tail_killed() {
         let classification = classify_codex_acp_crash(
@@ -608,7 +659,6 @@ mod tests {
         );
         assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
     }
-
     #[test]
     fn test_classify_codex_acp_crash_oom_from_cgroup_state() {
         let classification = classify_codex_acp_crash(
@@ -620,7 +670,6 @@ mod tests {
         assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
         assert!(classification.rendered_hint.contains("4096MB"));
     }
-
     #[test]
     fn test_classify_codex_acp_crash_runtime_without_oom_signature() {
         let classification = classify_codex_acp_crash(
@@ -642,7 +691,6 @@ mod tests {
                 .contains("[tools.codex].memory_max_mb")
         );
     }
-
     #[test]
     fn test_classify_codex_acp_crash_signal_11_stays_runtime() {
         let classification = classify_codex_acp_crash(
@@ -653,7 +701,6 @@ mod tests {
         );
         assert_eq!(classification.kind, CodexAcpCrashKind::Runtime);
     }
-
     #[test]
     fn test_classify_codex_acp_crash_signal_90_stays_runtime() {
         let classification = classify_codex_acp_crash(
@@ -664,10 +711,68 @@ mod tests {
         );
         assert_eq!(classification.kind, CodexAcpCrashKind::Runtime);
     }
-
+    #[test]
+    fn classify_extracts_exit_137_with_empty_stderr() {
+        let classification = classify_codex_acp_crash(
+            "ACP process exited unexpectedly: exit code 137",
+            extract_crash_exit_code("ACP process exited unexpectedly: exit code 137"),
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+    }
+    #[test]
+    fn classify_runtime_on_exit_1_with_oom_stderr() {
+        let classification = classify_codex_acp_crash(
+            "ACP process exited unexpectedly: exit code 1\nstderr: out of memory",
+            extract_crash_exit_code("ACP process exited unexpectedly: exit code 1"),
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+    }
+    #[test]
+    fn classify_runtime_on_exit_1_and_clean_stderr() {
+        let classification = classify_codex_acp_crash(
+            "ACP process exited unexpectedly: exit code 1",
+            extract_crash_exit_code("ACP process exited unexpectedly: exit code 1"),
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Runtime);
+    }
+    #[test]
+    fn classify_signal_9_as_oom() {
+        let classification = classify_codex_acp_crash(
+            "ACP process exited unexpectedly",
+            extract_crash_exit_code("signal: 9"),
+            None,
+            Some(3072),
+        );
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+    }
+    #[test]
+    fn extract_matches_oom_kill_literal() {
+        assert_eq!(
+            extract_crash_exit_code("cgroup memory.events reported oom-kill 1"),
+            Some(CrashExitCode::OomEvent)
+        );
+    }
+    #[test]
+    fn extract_prefers_exit_137_over_generic_pattern() {
+        assert_eq!(
+            extract_crash_exit_code("process exited with exit code 137 after transport failure"),
+            Some(CrashExitCode::ExitCode(137))
+        );
+    }
     #[test]
     fn test_format_codex_acp_crash_includes_hint_and_original_error() {
-        let classification = classify_codex_acp_crash("Killed", Some(137), None, Some(2048));
+        let classification = classify_codex_acp_crash(
+            "Killed",
+            Some(CrashExitCode::ExitCode(137)),
+            None,
+            Some(2048),
+        );
         let err = anyhow::anyhow!("server shut down unexpectedly");
         let formatted = format_codex_acp_crash(&classification, err, 1);
         let msg = formatted.to_string();
@@ -675,7 +780,6 @@ mod tests {
         assert!(msg.contains("2048MB"));
         assert!(msg.contains("Original error"));
     }
-
     #[test]
     fn test_format_codex_acp_crash_retry_exhausted_preserves_failover_anchor() {
         let classification =
