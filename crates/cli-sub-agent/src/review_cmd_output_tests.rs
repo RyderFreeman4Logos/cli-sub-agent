@@ -1,6 +1,6 @@
 use super::{
     PersistedReviewArtifact, ToolReviewFailureKind, derive_decision_from_text,
-    detect_tool_review_failure, persist_review_verdict,
+    detect_tool_review_failure, ensure_review_summary_artifact, persist_review_verdict,
 };
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
@@ -284,6 +284,62 @@ fn persist_review_verdict_falls_back_to_priority_markers_in_full_output() {
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&2));
     assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn ensure_review_summary_artifact_synthesizes_summary_from_details_only_output() {
+    let project_root = temp_project_root("review-summary-synthesis");
+    let session_id = "01TESTSUMMARYSYNTH000000000";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let details_only =
+        "<!-- CSA:SECTION:details -->\nFAIL\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
+    csa_session::persist_structured_output(&session_dir, details_only).expect("persist details");
+
+    ensure_review_summary_artifact(&session_dir, details_only).expect("synthesize summary");
+
+    let summary = csa_session::read_section(&session_dir, "summary")
+        .expect("read summary section")
+        .expect("summary should exist");
+    assert_eq!(summary, "FAIL");
+
+    let index = csa_session::load_output_index(&session_dir)
+        .expect("load output index")
+        .expect("index should exist");
+    assert_eq!(
+        index.sections.first().map(|section| section.id.as_str()),
+        Some("summary")
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn ensure_review_summary_artifact_preserves_existing_summary_section() {
+    let project_root = temp_project_root("review-summary-preserve");
+    let session_id = "01TESTSUMMARYKEEP0000000000";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let output = "<!-- CSA:SECTION:summary -->\nReview completed successfully.\n<!-- CSA:SECTION:summary:END -->\n\
+<!-- CSA:SECTION:details -->\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
+    csa_session::persist_structured_output(&session_dir, output).expect("persist structured");
+
+    ensure_review_summary_artifact(&session_dir, output).expect("keep summary");
+
+    let summary = csa_session::read_section(&session_dir, "summary")
+        .expect("read summary section")
+        .expect("summary should exist");
+    assert_eq!(summary, "Review completed successfully.");
+
+    let index = csa_session::load_output_index(&session_dir)
+        .expect("load output index")
+        .expect("index should exist");
+    let summary_entries = index
+        .sections
+        .iter()
+        .filter(|section| section.id == "summary")
+        .count();
+    assert_eq!(summary_entries, 1);
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

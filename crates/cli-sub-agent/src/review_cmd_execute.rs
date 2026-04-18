@@ -25,7 +25,8 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 
 use super::output::{
     ToolReviewFailureKind, derive_review_result_summary, detect_tool_review_failure,
-    has_structured_review_content, is_edit_restriction_summary, is_review_output_empty,
+    ensure_review_summary_artifact, has_structured_review_content, is_edit_restriction_summary,
+    is_review_output_empty,
 };
 
 pub(super) struct ReviewExecutionOutcome {
@@ -148,6 +149,18 @@ pub(super) async fn execute_review(
         }
     };
 
+    if let Some(leaked_paths) =
+        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
+    {
+        let message = format!(
+            "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
+            leaked_paths.join(", ")
+        );
+        fail_review_execution(project_root, tool, &mut execution, &message)?;
+        return Err(anyhow::anyhow!(message)
+            .context(format!("meta_session_id={}", execution.meta_session_id)));
+    }
+
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
     if let Some(leaked_paths) =
         detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
@@ -234,6 +247,9 @@ pub(super) async fn execute_review(
             status_reason = Some(kind.status_reason().to_string());
         }
     }
+
+    let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
+    ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
 
     Ok(ReviewExecutionOutcome {
         execution,
