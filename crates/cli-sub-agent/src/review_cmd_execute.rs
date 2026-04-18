@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -31,6 +32,8 @@ pub(super) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
     pub status_reason: Option<String>,
 }
+
+const REVIEW_RELATIVE_ARTIFACT_GUARD_ENV: &str = "CSA_REVIEW_ALLOW_RELATIVE_ARTIFACTS";
 
 fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
     let options = ExecutionEnvOptions::with_no_flash_fallback();
@@ -146,6 +149,18 @@ pub(super) async fn execute_review(
     };
 
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
+    if let Some(leaked_paths) =
+        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
+    {
+        let message = format!(
+            "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
+            leaked_paths.join(", ")
+        );
+        fail_review_execution(project_root, tool, &mut execution, &message)?;
+        return Err(anyhow::anyhow!(message)
+            .context(format!("meta_session_id={}", execution.meta_session_id)));
+    }
+
     repair_completed_review_restriction_result(project_root, tool, &mut execution)?;
 
     let mut status_reason = None;
@@ -297,60 +312,7 @@ fn classify_review_failure_result(
     failure: ToolReviewFailureKind,
 ) -> Result<()> {
     let summary = failure.summary_note().to_string();
-    if execution.execution.stderr_output.is_empty() {
-        execution.execution.stderr_output = summary.clone();
-    } else if !execution.execution.stderr_output.contains(&summary) {
-        if !execution.execution.stderr_output.ends_with('\n') {
-            execution.execution.stderr_output.push('\n');
-        }
-        execution.execution.stderr_output.push_str(&summary);
-        execution.execution.stderr_output.push('\n');
-    }
-    execution.execution.exit_code = 1;
-    execution.execution.summary = summary.clone();
-
-    let Some(mut persisted_result) = load_result(project_root, &execution.meta_session_id)
-        .with_context(|| {
-            format!(
-                "failed to load result.toml for classified review session {}",
-                execution.meta_session_id
-            )
-        })?
-    else {
-        return Ok(());
-    };
-    persisted_result.status = SessionResult::status_from_exit_code(1);
-    persisted_result.exit_code = 1;
-    persisted_result.summary = summary.clone();
-    save_result(project_root, &execution.meta_session_id, &persisted_result).with_context(
-        || {
-            format!(
-                "failed to rewrite classified result.toml for review session {}",
-                execution.meta_session_id
-            )
-        },
-    )?;
-
-    let mut session =
-        load_session(project_root, &execution.meta_session_id).with_context(|| {
-            format!(
-                "failed to load session state for classified review session {}",
-                execution.meta_session_id
-            )
-        })?;
-    if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
-        tool_state.last_action_summary = summary;
-        tool_state.last_exit_code = 1;
-        tool_state.updated_at = chrono::Utc::now();
-        save_session(&session).with_context(|| {
-            format!(
-                "failed to rewrite session state for classified review session {}",
-                execution.meta_session_id
-            )
-        })?;
-    }
-
-    Ok(())
+    fail_review_execution(project_root, tool, execution, &summary)
 }
 
 fn maybe_synthesize_missing_review_result(
@@ -487,6 +449,136 @@ fn classify_review_failure(
 fn truncate_for_summary(text: &str, max_chars: usize) -> String {
     let truncated: String = text.chars().take(max_chars).collect();
     truncated.trim().replace('\n', " ")
+}
+
+fn fail_review_execution(
+    project_root: &Path,
+    tool: ToolName,
+    execution: &mut crate::pipeline::SessionExecutionResult,
+    summary: &str,
+) -> Result<()> {
+    if execution.execution.stderr_output.is_empty() {
+        execution.execution.stderr_output = summary.to_string();
+    } else if !execution.execution.stderr_output.contains(summary) {
+        if !execution.execution.stderr_output.ends_with('\n') {
+            execution.execution.stderr_output.push('\n');
+        }
+        execution.execution.stderr_output.push_str(summary);
+        execution.execution.stderr_output.push('\n');
+    }
+    execution.execution.exit_code = 1;
+    execution.execution.summary = summary.to_string();
+
+    let Some(mut persisted_result) = load_result(project_root, &execution.meta_session_id)
+        .with_context(|| {
+            format!(
+                "failed to load result.toml for review session {}",
+                execution.meta_session_id
+            )
+        })?
+    else {
+        return Ok(());
+    };
+    persisted_result.status = SessionResult::status_from_exit_code(1);
+    persisted_result.exit_code = 1;
+    persisted_result.summary = summary.to_string();
+    save_result(project_root, &execution.meta_session_id, &persisted_result).with_context(
+        || {
+            format!(
+                "failed to rewrite result.toml for review session {}",
+                execution.meta_session_id
+            )
+        },
+    )?;
+
+    let mut session =
+        load_session(project_root, &execution.meta_session_id).with_context(|| {
+            format!(
+                "failed to load session state for review session {}",
+                execution.meta_session_id
+            )
+        })?;
+    if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
+        tool_state.last_action_summary = summary.to_string();
+        tool_state.last_exit_code = 1;
+        tool_state.updated_at = chrono::Utc::now();
+        save_session(&session).with_context(|| {
+            format!(
+                "failed to rewrite session state for review session {}",
+                execution.meta_session_id
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn detect_repo_root_review_artifact_violations(
+    project_root: &Path,
+    execution_started_at: DateTime<Utc>,
+) -> Result<Option<Vec<String>>> {
+    if std::env::var_os(REVIEW_RELATIVE_ARTIFACT_GUARD_ENV).as_deref() == Some("1".as_ref()) {
+        warn!(
+            "{}=1 bypasses deprecated review artifact contract guard",
+            REVIEW_RELATIVE_ARTIFACT_GUARD_ENV
+        );
+        return Ok(None);
+    }
+
+    let output_dir = project_root.join("output");
+    if !output_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let started_at = system_time_from_utc(execution_started_at)
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or(UNIX_EPOCH);
+    let mut leaked_paths = Vec::new();
+
+    for entry in fs::read_dir(&output_dir)
+        .with_context(|| format!("failed to read {}", output_dir.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if !is_guarded_repo_root_review_artifact(file_name) {
+            continue;
+        }
+
+        let modified_at = entry.metadata()?.modified().with_context(|| {
+            format!(
+                "failed to read modified time for {}",
+                entry.path().display()
+            )
+        })?;
+        if modified_at >= started_at {
+            leaked_paths.push(format!("output/{file_name}"));
+        }
+    }
+
+    if leaked_paths.is_empty() {
+        Ok(None)
+    } else {
+        leaked_paths.sort();
+        Ok(Some(leaked_paths))
+    }
+}
+
+fn is_guarded_repo_root_review_artifact(file_name: &str) -> bool {
+    matches!(file_name, "result.toml" | "summary.md" | "details.md")
+        || file_name.starts_with("review-")
+}
+
+fn system_time_from_utc(timestamp: DateTime<Utc>) -> SystemTime {
+    UNIX_EPOCH
+        + Duration::from_secs(timestamp.timestamp().max(0) as u64)
+        + Duration::from_nanos(u64::from(timestamp.timestamp_subsec_nanos()))
 }
 
 fn repair_completed_review_restriction_result(

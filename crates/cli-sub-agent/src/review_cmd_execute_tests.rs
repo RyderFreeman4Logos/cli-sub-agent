@@ -6,6 +6,7 @@ use crate::session_cmds_result::{StructuredOutputOpts, handle_session_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{GlobalConfig, ProjectProfile, ToolRestrictions, global::GlobalToolConfig};
 use csa_core::types::ToolName;
+use std::path::Path;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -555,5 +556,129 @@ printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
     assert!(
         !auth_attempts.contains("api_key\n"),
         "expected no api-key retry when --no-failover is set, got: {auth_attempts:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_review_fails_when_repo_root_output_artifact_is_created() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_opencode = bin_dir.join("opencode");
+    std::fs::write(
+        &fake_opencode,
+        "#!/bin/sh\n\
+mkdir -p output\n\
+printf 'repo-root leak\\n' > output/details.md\n\
+printf '%s\\n' \
+'<!-- CSA:SECTION:summary -->' \
+'Review completed successfully.' \
+'<!-- CSA:SECTION:summary:END -->' \
+'' \
+'<!-- CSA:SECTION:details -->' \
+'Structured details from reviewer.' \
+'<!-- CSA:SECTION:details:END -->' \
+'' \
+'PASS'\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_opencode, perms).unwrap();
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+    let config = project_config_with_enabled_tools(&["opencode"]);
+    let global = GlobalConfig::default();
+    let err = match execute_review(
+        ToolName::Opencode,
+        "scope=uncommitted mode=review-only security=auto".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        "review: repo-root-output-contract-violation".to_string(),
+        project_dir.path(),
+        Some(&config),
+        &global,
+        ReviewRoutingMetadata {
+            project_profile: ProjectProfile::Unknown,
+            detection_method: "auto",
+        },
+        csa_process::StreamMode::BufferOnly,
+        crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &[],
+    )
+    .await
+    {
+        Ok(_) => panic!("expected review artifact contract violation"),
+        Err(err) => err,
+    };
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("contract violation"),
+        "expected contract violation, got: {message}"
+    );
+    assert!(
+        message.contains("output/details.md"),
+        "expected leaked artifact path in error, got: {message}"
+    );
+}
+
+#[test]
+fn csa_review_patterns_do_not_use_relative_output_paths() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root");
+    let review_pattern_root = repo_root.join("patterns/csa-review");
+    let mut offenders = Vec::new();
+
+    fn visit(dir: &Path, offenders: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, offenders);
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            if !matches!(ext, "md" | "toml") {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&path).expect("read pattern file");
+            for (line_no, line) in content.lines().enumerate() {
+                if line.contains("output/")
+                    && !line.contains("$CSA_SESSION_DIR/output/")
+                    && !line.contains("${CSA_SESSION_DIR}/output/")
+                {
+                    offenders.push(format!("{}:{}", path.display(), line_no + 1));
+                }
+            }
+        }
+    }
+
+    visit(&review_pattern_root, &mut offenders);
+    assert!(
+        offenders.is_empty(),
+        "found relative output/ paths in review pattern files:\n{}",
+        offenders.join("\n")
     );
 }

@@ -88,7 +88,7 @@ mandatory and must remain ReviewArtifact-compatible:
 
 Additional rich fields are allowed and will be ignored by the consolidator when not needed.
 
-## output/review-verdict.json
+## $CSA_SESSION_DIR/output/review-verdict.json
 
 ```json
 {
@@ -192,4 +192,5 @@ Mandatory AGENTS.md compliance evidence:
 - [ ] <checklist items>
 ```
 
-Write both files to `$CSA_SESSION_DIR` (or a designated output location).
+Write `review-findings.json` to `$CSA_SESSION_DIR/review-findings.json` and
+`review-verdict.json` to `$CSA_SESSION_DIR/output/review-verdict.json`.
