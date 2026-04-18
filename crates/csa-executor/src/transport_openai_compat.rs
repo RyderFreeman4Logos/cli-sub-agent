@@ -223,6 +223,7 @@ impl Transport for OpenaiCompatTransport {
         extra_env: Option<&HashMap<String, String>>,
         _stream_mode: csa_process::StreamMode,
         _idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         let session = build_ephemeral_meta_session(work_dir);
         self.execute(
@@ -234,7 +235,7 @@ impl Transport for OpenaiCompatTransport {
                 stream_mode: csa_process::StreamMode::BufferOnly,
                 idle_timeout_seconds: csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
                 acp_crash_max_attempts: 2,
-                initial_response_timeout_seconds: None,
+                initial_response_timeout_seconds,
                 liveness_dead_seconds: csa_process::DEFAULT_LIVENESS_DEAD_SECS,
                 stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
                 acp_init_timeout_seconds: 120,

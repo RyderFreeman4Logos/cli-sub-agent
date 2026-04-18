@@ -6,6 +6,8 @@
 mod attempt;
 #[path = "run_cmd_attempt_exec.rs"]
 mod attempt_exec;
+#[path = "run_cmd_attempt_support.rs"]
+mod attempt_support;
 #[path = "run_cmd_execute.rs"]
 mod execute;
 #[path = "run_cmd_git.rs"]

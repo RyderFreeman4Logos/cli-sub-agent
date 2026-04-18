@@ -80,7 +80,12 @@ pub(crate) async fn handle_claude_sub_agent(
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
     let initial_response_timeout_seconds =
-        crate::pipeline::resolve_initial_response_timeout_seconds(config.as_ref(), None);
+        crate::pipeline::resolve_initial_response_timeout_for_tool(
+            config.as_ref(),
+            None,
+            None,
+            executor.tool_name(),
+        );
 
     // 11. Session description (no longer derived from --skill)
     let description: Option<String> = None;

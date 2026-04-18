@@ -18,6 +18,7 @@ use crate::install_hints::{
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     SandboxTransportConfig, Transport, TransportFactory, TransportOptions, TransportResult,
+    resolve_execute_in_initial_response_timeout_seconds,
 };
 #[path = "executor_arg_helpers.rs"]
 mod arg_helpers;
@@ -393,6 +394,7 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<ExecutionResult> {
         Ok(self
             .execute_in_with_transport(
@@ -401,6 +403,7 @@ impl Executor {
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
             )
             .await?
             .execution)
@@ -414,8 +417,13 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         let transport = self.transport(None)?;
+        let initial_response_timeout_seconds = resolve_execute_in_initial_response_timeout_seconds(
+            self,
+            initial_response_timeout_seconds,
+        );
         let mut result = transport
             .execute_in(
                 prompt,
@@ -423,6 +431,7 @@ impl Executor {
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
             )
             .await?;
         result.execution.consolidate_stderr_retries();

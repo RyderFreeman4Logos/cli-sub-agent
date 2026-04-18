@@ -17,6 +17,12 @@ pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
     pub acp_crash_max_attempts: u8,
+    /// Already resolved at the outer pipeline / executor boundary.
+    ///
+    /// Contract:
+    /// - `None` disables the watchdog
+    /// - `Some(seconds > 0)` arms the watchdog for that duration
+    /// - `Some(0)` is tolerated defensively and treated as disabled by transport consumers
     pub initial_response_timeout_seconds: Option<u64>,
     pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,

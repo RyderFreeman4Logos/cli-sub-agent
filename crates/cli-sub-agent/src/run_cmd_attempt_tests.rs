@@ -1,8 +1,8 @@
 //! Tests for `run_cmd_attempt` helpers (extracted for monolith limit).
 
-use super::{
+use crate::run_cmd::attempt_support::{
     allow_cross_tool_failover, build_failover_context_addendum,
-    persist_fork_timeout_result_if_missing,
+    persist_fork_timeout_result_if_missing, resolve_attempt_initial_response_timeout_seconds,
 };
 use crate::run_cmd_post::{RateLimitAction, evaluate_error_rate_limit_failover};
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -521,4 +521,44 @@ fn explicit_tool_in_tier_keeps_cross_tool_failover_available() {
         false,
         false,
     ));
+}
+
+#[test]
+fn resolve_attempt_initial_response_timeout_uses_fallback_tool_defaults() {
+    let mut config = make_failover_config(&[
+        "gemini-cli/google/gemini-2.5-pro/high",
+        "codex/openai/o4-mini/high",
+    ]);
+    config.resources.initial_response_timeout_seconds = None;
+
+    let gemini_timeout = resolve_attempt_initial_response_timeout_seconds(
+        Some(&config),
+        None,
+        None,
+        false,
+        "gemini-cli",
+    );
+    let codex_timeout =
+        resolve_attempt_initial_response_timeout_seconds(Some(&config), None, None, false, "codex");
+
+    assert_eq!(gemini_timeout, Some(120));
+    assert_eq!(
+        codex_timeout,
+        Some(300),
+        "runtime fallback to codex must use codex's default initial-response timeout"
+    );
+}
+
+#[test]
+fn resolve_attempt_initial_response_timeout_disables_codex_watchdog_for_ephemeral_runs() {
+    let mut config = make_failover_config(&["codex/openai/o4-mini/high"]);
+    config.resources.initial_response_timeout_seconds = Some(0);
+
+    let codex_timeout =
+        resolve_attempt_initial_response_timeout_seconds(Some(&config), None, None, false, "codex");
+
+    assert_eq!(
+        codex_timeout, None,
+        "ephemeral codex runs must translate the disabled sentinel before execute_in"
+    );
 }

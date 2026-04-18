@@ -281,16 +281,6 @@ pub(crate) async fn handle_run(
     } else {
         pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout)
     };
-    let initial_response_timeout_seconds = if no_idle_timeout {
-        // --no-idle-timeout disables both idle and initial-response timeouts.
-        None
-    } else {
-        pipeline::resolve_initial_response_timeout(
-            config.as_ref(),
-            initial_response_timeout,
-            idle_timeout,
-        )
-    };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
     let task_needs_edit =
@@ -336,7 +326,6 @@ pub(crate) async fn handle_run(
     let resolved_model = strategy_result.model;
     let strategy_resolved_tier_name = strategy_result.resolved_tier_name;
     let resolved_tool = strategy_result.tool;
-
     if session_arg.is_none()
         && !is_fork
         && !fork_call
@@ -479,7 +468,9 @@ pub(crate) async fn handle_run(
         no_failover,
         wait,
         idle_timeout_seconds,
-        initial_response_timeout_seconds,
+        cli_idle_timeout: idle_timeout,
+        cli_initial_response_timeout: initial_response_timeout,
+        no_idle_timeout,
         run_timeout_seconds,
         run_started_at,
         is_fork,

@@ -272,6 +272,13 @@ impl ProjectConfig {
             .and_then(|t| t.default_thinking.as_deref())
     }
 
+    /// Resolve the per-tool initial-response timeout override.
+    pub fn tool_initial_response_timeout_seconds(&self, tool: &str) -> Option<u64> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.initial_response_timeout_seconds)
+    }
+
     /// Resolve the per-tool transport override.
     pub fn tool_transport(&self, tool: &str) -> Option<ToolTransport> {
         self.tools.get(tool).and_then(|t| t.transport)
@@ -440,3 +447,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_runtime_fs_sandbox_tests.rs"]
 mod fs_sandbox_tests;
+
+#[cfg(test)]
+#[path = "config_runtime_timeout_tests.rs"]
+mod timeout_tests;

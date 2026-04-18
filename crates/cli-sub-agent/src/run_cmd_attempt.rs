@@ -1,13 +1,5 @@
-//! Execution loop for `csa run`.
-//!
-//! Extracted from `run_cmd.rs` to keep module sizes manageable.
-
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-
+//! Execution loop for `csa run`, extracted from `run_cmd.rs` to keep module sizes manageable.
 use anyhow::Result;
-use tracing::{info, warn};
-
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName, ToolSelectionStrategy};
 use csa_executor::structured_output_instructions_for_fork_call;
@@ -15,7 +7,26 @@ use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
     try_acquire_slot,
 };
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
+use tracing::{info, warn};
 
+use super::attempt_exec::{
+    AttemptExecution, EphemeralRunRequest, run_ephemeral_with_timeout,
+    run_ephemeral_without_timeout, run_persistent_with_timeout, run_persistent_without_timeout,
+};
+use super::attempt_support::{
+    allow_cross_tool_failover, build_failover_context_addendum,
+    persist_fork_timeout_result_if_missing, resolve_attempt_initial_response_timeout_seconds,
+};
+use super::policy::is_post_run_commit_policy_block;
+use super::resume::{
+    build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
+    resolve_remaining_run_timeout, run_error_timeout_seconds, signal_interruption_exit_code,
+    signal_name_from_exit_code,
+};
 use crate::pipeline;
 use crate::run_cmd_fork::{
     ForkResolution, cleanup_pre_created_fork_session, pre_create_native_fork_session, resolve_fork,
@@ -27,17 +38,6 @@ use crate::run_cmd_tool_selection::{
     resolve_slot_wait_timeout_seconds, take_next_runtime_fallback_tool,
 };
 use crate::run_helpers::{is_tool_binary_available_for_config, parse_tool_name};
-
-use super::attempt_exec::{
-    AttemptExecution, run_ephemeral_with_timeout, run_ephemeral_without_timeout,
-    run_persistent_with_timeout, run_persistent_without_timeout,
-};
-use super::policy::is_post_run_commit_policy_block;
-use super::resume::{
-    build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
-    resolve_remaining_run_timeout, run_error_timeout_seconds, signal_interruption_exit_code,
-    signal_name_from_exit_code,
-};
 
 pub(crate) struct RunLoopRequest<'a> {
     pub(crate) strategy: ToolSelectionStrategy,
@@ -63,7 +63,9 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) no_failover: bool,
     pub(crate) wait: bool,
     pub(crate) idle_timeout_seconds: u64,
-    pub(crate) initial_response_timeout_seconds: Option<u64>,
+    pub(crate) cli_idle_timeout: Option<u64>,
+    pub(crate) cli_initial_response_timeout: Option<u64>,
+    pub(crate) no_idle_timeout: bool,
     pub(crate) run_timeout_seconds: Option<u64>,
     pub(crate) run_started_at: Instant,
     pub(crate) is_fork: bool,
@@ -92,20 +94,6 @@ pub(crate) struct RunLoopOutcome {
     pub(crate) current_tool: ToolName,
     pub(crate) executed_session_id: Option<String>,
     pub(crate) fork_resolution: Option<ForkResolution>,
-}
-
-fn allow_cross_tool_failover(
-    strategy: ToolSelectionStrategy,
-    resolved_tier_name: Option<&str>,
-    force_ignore_tier_setting: bool,
-    no_failover: bool,
-) -> bool {
-    if no_failover {
-        return false;
-    }
-
-    !matches!(strategy, ToolSelectionStrategy::Explicit(_))
-        || (!force_ignore_tier_setting && resolved_tier_name.is_some())
 }
 
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
@@ -175,6 +163,13 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         .await?;
 
         let tool_name_str = executor.tool_name();
+        let initial_response_timeout_seconds = resolve_attempt_initial_response_timeout_seconds(
+            request.config,
+            request.cli_initial_response_timeout,
+            request.cli_idle_timeout,
+            request.no_idle_timeout,
+            tool_name_str,
+        );
         let max_concurrent = request.global_config.max_concurrent(tool_name_str);
         let mut _slot_guard: Option<ToolSlot>;
 
@@ -391,12 +386,15 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         let attempt_execution = if let Some(timeout_duration) = remaining_run_timeout {
             if request.ephemeral {
                 run_ephemeral_with_timeout(
-                    &executor,
-                    &effective_prompt,
-                    request.project_root,
-                    extra_env.as_ref(),
-                    request.stream_mode,
-                    request.idle_timeout_seconds,
+                    EphemeralRunRequest {
+                        executor: &executor,
+                        effective_prompt: &effective_prompt,
+                        project_root: request.project_root,
+                        extra_env: extra_env.as_ref(),
+                        stream_mode: request.stream_mode,
+                        idle_timeout_seconds: request.idle_timeout_seconds,
+                        initial_response_timeout_seconds,
+                    },
                     timeout_duration,
                 )
                 .await
@@ -417,7 +415,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.context_load_options,
                     request.stream_mode,
                     request.idle_timeout_seconds,
-                    request.initial_response_timeout_seconds,
+                    initial_response_timeout_seconds,
                     timeout_duration,
                     &request.memory_injection,
                     request.global_config,
@@ -430,14 +428,15 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 .await
             }
         } else if request.ephemeral {
-            run_ephemeral_without_timeout(
-                &executor,
-                &effective_prompt,
-                request.project_root,
-                extra_env.as_ref(),
-                request.stream_mode,
-                request.idle_timeout_seconds,
-            )
+            run_ephemeral_without_timeout(EphemeralRunRequest {
+                executor: &executor,
+                effective_prompt: &effective_prompt,
+                project_root: request.project_root,
+                extra_env: extra_env.as_ref(),
+                stream_mode: request.stream_mode,
+                idle_timeout_seconds: request.idle_timeout_seconds,
+                initial_response_timeout_seconds,
+            })
             .await
         } else {
             run_persistent_without_timeout(
@@ -456,7 +455,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 request.context_load_options,
                 request.stream_mode,
                 request.idle_timeout_seconds,
-                request.initial_response_timeout_seconds,
+                initial_response_timeout_seconds,
                 &request.memory_injection,
                 request.global_config,
                 fork_resolution.as_ref(),
@@ -740,59 +739,6 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         executed_session_id,
         fork_resolution,
     })))
-}
-
-/// Build a prompt addendum for rate-limit failover that tells the new tool
-/// how to retrieve the original session's conversation context via xurl.
-///
-/// Returns `None` when there is no session to reference.
-fn build_failover_context_addendum(failed_tool: &str, session_id: Option<&str>) -> Option<String> {
-    let sid = session_id?;
-    // Map tool name to xurl provider name
-    let provider = match failed_tool {
-        "gemini-cli" => "gemini",
-        "claude-code" => "claude",
-        "codex" => "codex",
-        "opencode" => "opencode",
-        other => other,
-    };
-    Some(format!(
-        "[Rate-limit failover context]\n\
-         This task was originally being handled by {failed_tool} (session {sid}) \
-         which hit a rate limit / quota exhaustion.\n\
-         If you need the full conversation context from the previous session, run:\n\
-         ```\n\
-         csa xurl threads --keyword {provider}\n\
-         ```\n\
-         Then use the session/thread ID to read the relevant conversation."
-    ))
-}
-
-fn persist_fork_timeout_result_if_missing(
-    project_root: &Path,
-    is_fork: bool,
-    tool: ToolName,
-    session_id: Option<&str>,
-    execution_start_time: chrono::DateTime<chrono::Utc>,
-    timeout_seconds: u64,
-) {
-    if !is_fork {
-        return;
-    }
-    let Some(session_id) = session_id else {
-        return;
-    };
-
-    let err = anyhow::anyhow!(
-        "wall-clock timeout interrupted forked execution before normal finalization after {timeout_seconds}s"
-    );
-    crate::pipeline_post_exec::ensure_terminal_result_for_session_on_post_exec_error(
-        project_root,
-        session_id,
-        tool.as_str(),
-        execution_start_time,
-        &err,
-    );
 }
 
 #[cfg(test)]

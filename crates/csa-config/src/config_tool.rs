@@ -64,6 +64,13 @@ pub struct ToolConfig {
     /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
+    /// Codex exec initial-response timeout override (seconds).
+    ///
+    /// Currently only used for `[tools.codex]`. When set, it overrides
+    /// `resources.initial_response_timeout_seconds` for codex exec dispatch.
+    /// `0` explicitly disables the initial-response watchdog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_response_timeout_seconds: Option<u64>,
     /// Optional tool transport override.
     ///
     /// Currently meaningful for codex only. `None` means use the build default.
@@ -100,6 +107,7 @@ impl Default for ToolConfig {
             default_model: None,
             default_thinking: None,
             thinking_lock: None,
+            initial_response_timeout_seconds: None,
             transport: None,
             codex_auto_trust: false,
             base_url: None,

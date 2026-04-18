@@ -21,29 +21,35 @@ pub(super) enum AttemptExecution {
     TimedOut,
 }
 
+pub(super) struct EphemeralRunRequest<'a> {
+    pub(super) executor: &'a Executor,
+    pub(super) effective_prompt: &'a str,
+    pub(super) project_root: &'a Path,
+    pub(super) extra_env: Option<&'a std::collections::HashMap<String, String>>,
+    pub(super) stream_mode: csa_process::StreamMode,
+    pub(super) idle_timeout_seconds: u64,
+    pub(super) initial_response_timeout_seconds: Option<u64>,
+}
+
 pub(super) async fn run_ephemeral_with_timeout(
-    executor: &Executor,
-    effective_prompt: &str,
-    project_root: &Path,
-    extra_env: Option<&std::collections::HashMap<String, String>>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
+    request: EphemeralRunRequest<'_>,
     timeout_duration: std::time::Duration,
 ) -> Result<AttemptExecution> {
     let _temp_dir = TempDir::new()?;
     info!(
         "Ephemeral session (metadata: {:?}, cwd: {})",
         _temp_dir.path(),
-        project_root.display()
+        request.project_root.display()
     );
     let execution = match tokio::time::timeout(
         timeout_duration,
-        executor.execute_in(
-            effective_prompt,
-            project_root,
-            extra_env,
-            stream_mode,
-            idle_timeout_seconds,
+        request.executor.execute_in(
+            request.effective_prompt,
+            request.project_root,
+            request.extra_env,
+            request.stream_mode,
+            request.idle_timeout_seconds,
+            request.initial_response_timeout_seconds,
         ),
     )
     .await
@@ -55,27 +61,24 @@ pub(super) async fn run_ephemeral_with_timeout(
 }
 
 pub(super) async fn run_ephemeral_without_timeout(
-    executor: &Executor,
-    effective_prompt: &str,
-    project_root: &Path,
-    extra_env: Option<&std::collections::HashMap<String, String>>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
+    request: EphemeralRunRequest<'_>,
 ) -> Result<AttemptExecution> {
     let _temp_dir = TempDir::new()?;
     info!(
         "Ephemeral session (metadata: {:?}, cwd: {})",
         _temp_dir.path(),
-        project_root.display()
+        request.project_root.display()
     );
     Ok(AttemptExecution::Finished(
-        executor
+        request
+            .executor
             .execute_in(
-                effective_prompt,
-                project_root,
-                extra_env,
-                stream_mode,
-                idle_timeout_seconds,
+                request.effective_prompt,
+                request.project_root,
+                request.extra_env,
+                request.stream_mode,
+                request.idle_timeout_seconds,
+                request.initial_response_timeout_seconds,
             )
             .await,
     ))

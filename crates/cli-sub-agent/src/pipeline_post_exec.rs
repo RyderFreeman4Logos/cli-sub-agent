@@ -23,6 +23,7 @@ use crate::run_helpers::{is_compress_command, parse_token_usage};
 
 const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
 const OUTPUT_LOG_TAIL_READ_BYTES: u64 = 8 * 1024;
+const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
 
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
@@ -100,6 +101,12 @@ pub(crate) async fn process_execution_result(
     // Persist structured output sections from output.log markers before
     // finalizing result.toml so we can repair low-signal summaries.
     persist_output_sections(&ctx.session_dir);
+    let classified_codex_exec_initial_stall = is_codex_exec_initial_stall_summary(
+        ctx.executor.tool_name(),
+        result.exit_code,
+        &result.summary,
+    );
+    let classified_summary = result.summary.clone();
 
     // Write structured result
     let execution_end_time = chrono::Utc::now();
@@ -129,6 +136,14 @@ pub(crate) async fn process_execution_result(
         result.summary = session_result.summary.clone();
         if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
             tool_state.last_action_summary = session_result.summary.clone();
+        }
+    }
+    if classified_codex_exec_initial_stall {
+        session_result.status = SessionResult::status_from_exit_code(1);
+        session_result.summary = classified_summary.clone();
+        result.summary = classified_summary.clone();
+        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+            tool_state.last_action_summary = classified_summary;
         }
     }
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
@@ -218,6 +233,15 @@ pub(crate) async fn process_execution_result(
     maybe_compress_tool_output(ctx.config, ctx.project_root, session, result)?;
 
     Ok(())
+}
+
+fn is_codex_exec_initial_stall_summary(tool_name: &str, exit_code: i32, summary: &str) -> bool {
+    tool_name == "codex"
+        && exit_code == 137
+        && summary.starts_with(&format!(
+            "{CODEX_EXEC_INITIAL_STALL_REASON}: no stdout within "
+        ))
+        && summary.contains(" (effort=")
 }
 
 /// If tool output compression is enabled, persist the original output to
@@ -699,6 +723,45 @@ mod tests {
     }
 
     // Handoff artifact tests are in pipeline_handoff.rs
+
+    #[test]
+    fn codex_exec_initial_stall_summary_forces_failure_status_in_result_toml() {
+        let now = chrono::Utc::now();
+        let mut result = SessionResult {
+            status: SessionResult::status_from_exit_code(137),
+            exit_code: 137,
+            summary: "codex_exec_initial_stall: no stdout within 300s (effort=high, retry_attempted=true, original_effort=xhigh)".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+        };
+
+        if is_codex_exec_initial_stall_summary(&result.tool, result.exit_code, &result.summary) {
+            result.status = SessionResult::status_from_exit_code(1);
+        }
+
+        let toml = toml::to_string_pretty(&result).expect("serialize result.toml");
+        assert_eq!(result.status, "failure");
+        assert!(toml.contains("status = \"failure\""));
+        assert!(toml.contains("codex_exec_initial_stall"));
+    }
+
+    #[test]
+    fn codex_exec_initial_stall_detection_rejects_plain_substring_collisions() {
+        assert!(!is_codex_exec_initial_stall_summary(
+            "codex",
+            0,
+            "completed successfully after discussing codex_exec_initial_stall handling"
+        ));
+        assert!(!is_codex_exec_initial_stall_summary(
+            "claude-code",
+            137,
+            "codex_exec_initial_stall: no stdout within 300s (effort=high, retry_attempted=true)"
+        ));
+    }
 
     #[test]
     fn read_output_log_tail_reads_from_file_end_window() {

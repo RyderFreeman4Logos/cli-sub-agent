@@ -57,6 +57,19 @@ pub use transport_factory::{TransportFactory, TransportMode};
 mod transport_acp_payload_debug;
 use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};
 
+#[path = "transport_codex_exec_stall.rs"]
+mod transport_codex_exec_stall;
+#[cfg(test)]
+use transport_codex_exec_stall::CodexExecInitialStallClassification;
+pub(crate) use transport_codex_exec_stall::resolve_execute_in_initial_response_timeout_seconds;
+pub use transport_codex_exec_stall::resolve_initial_response_timeout;
+use transport_codex_exec_stall::{
+    CODEX_EXEC_INITIAL_STALL_REASON, apply_codex_exec_initial_stall_summary,
+    classify_codex_exec_initial_stall,
+    consume_resolved_execute_in_initial_response_timeout_seconds,
+    consume_resolved_initial_response_timeout_seconds,
+};
+
 #[path = "transport_types.rs"]
 mod transport_types;
 use transport_types::should_stream_acp_stdout_to_stderr;
@@ -101,6 +114,22 @@ pub struct LegacyTransport {
     executor: Executor,
 }
 
+struct ExecuteInAttempt<'a> {
+    executor: &'a Executor,
+    prompt: &'a str,
+    work_dir: &'a Path,
+    extra_env: Option<&'a HashMap<String, String>>,
+    stream_mode: StreamMode,
+    idle_timeout_seconds: u64,
+    /// Already resolved by `Executor::execute_in_with_transport()`.
+    ///
+    /// Contract:
+    /// - `None` disables the watchdog
+    /// - `Some(seconds > 0)` arms the watchdog for that duration
+    /// - `Some(0)` should not reach this layer, but is treated as disabled
+    resolved_initial_response_timeout_seconds: Option<u64>,
+}
+
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
@@ -142,14 +171,13 @@ impl LegacyTransport {
 
     async fn execute_in_single_attempt(
         &self,
-        executor: &Executor,
-        prompt: &str,
-        work_dir: &Path,
-        extra_env: Option<&HashMap<String, String>>,
-        stream_mode: StreamMode,
-        idle_timeout_seconds: u64,
+        request: ExecuteInAttempt<'_>,
     ) -> Result<TransportResult> {
-        let (cmd, stdin_data) = executor.build_execute_in_command(prompt, work_dir, extra_env);
+        let (cmd, stdin_data) = request.executor.build_execute_in_command(
+            request.prompt,
+            request.work_dir,
+            request.extra_env,
+        );
         let spawn_options = SpawnOptions {
             stdin_write_timeout: std::time::Duration::from_secs(
                 csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
@@ -158,24 +186,48 @@ impl LegacyTransport {
             spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         };
+        let initial_response_timeout_seconds =
+            consume_resolved_execute_in_initial_response_timeout_seconds(
+                request.resolved_initial_response_timeout_seconds,
+            );
         let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
+        let child_pid = child.id();
         let execution = wait_and_capture_with_idle_timeout(
             child,
-            stream_mode,
-            std::time::Duration::from_secs(idle_timeout_seconds),
+            request.stream_mode,
+            std::time::Duration::from_secs(request.idle_timeout_seconds),
             std::time::Duration::from_secs(csa_process::DEFAULT_LIVENESS_DEAD_SECS),
             std::time::Duration::from_secs(csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
             None,
             spawn_options,
-            None,
+            initial_response_timeout_seconds.map(std::time::Duration::from_secs),
         )
         .await?;
+        if let Some(classification) = classify_codex_exec_initial_stall(
+            request.executor,
+            &execution,
+            initial_response_timeout_seconds,
+        ) {
+            tracing::warn!(
+                classified_reason = CODEX_EXEC_INITIAL_STALL_REASON,
+                elapsed_seconds = classification.timeout_seconds,
+                effort = classification.effort,
+                child_pid = child_pid.unwrap_or(0),
+                "codex exec initial-response stall detected"
+            );
+        }
         Ok(TransportResult {
             execution,
             provider_session_id: None,
             events: Vec::new(),
             metadata: Default::default(),
         })
+    }
+
+    fn consume_resolved_transport_initial_response_timeout_seconds(
+        resolved_timeout_seconds: Option<u64>,
+    ) -> Option<u64> {
+        consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
     }
 
     async fn execute_single_attempt(
@@ -204,6 +256,10 @@ impl LegacyTransport {
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
         };
+        let initial_response_timeout_seconds =
+            Self::consume_resolved_transport_initial_response_timeout_seconds(
+                options.initial_response_timeout_seconds,
+            );
         let (child, sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
             stdin_data.clone(),
@@ -228,6 +284,7 @@ impl LegacyTransport {
             }
             Err(e) => return Err(e),
         };
+        let child_pid = child.id();
 
         // Start memory monitor for legacy transport (mirrors ACP path).
         let memory_monitor = if let csa_process::SandboxHandle::Cgroup(ref guard) = sandbox_handle {
@@ -251,9 +308,7 @@ impl LegacyTransport {
             std::time::Duration::from_secs(options.termination_grace_period_seconds),
             options.output_spool,
             spawn_options,
-            options
-                .initial_response_timeout_seconds
-                .map(std::time::Duration::from_secs),
+            initial_response_timeout_seconds.map(std::time::Duration::from_secs),
         )
         .await?;
 
@@ -274,6 +329,19 @@ impl LegacyTransport {
             }
         }
         // sandbox_handle is dropped here, cleaning up cgroup scope if applicable.
+        if let Some(classification) = classify_codex_exec_initial_stall(
+            executor,
+            &execution,
+            initial_response_timeout_seconds,
+        ) {
+            tracing::warn!(
+                classified_reason = CODEX_EXEC_INITIAL_STALL_REASON,
+                elapsed_seconds = classification.timeout_seconds,
+                effort = classification.effort,
+                child_pid = child_pid.unwrap_or(0),
+                "codex exec initial-response stall detected"
+            );
+        }
 
         Ok(TransportResult {
             execution,
@@ -283,6 +351,11 @@ impl LegacyTransport {
         })
     }
 
+    /// Execute the legacy direct-entry path.
+    ///
+    /// `initial_response_timeout_seconds` is already resolved by
+    /// `Executor::execute_in_with_transport()`: `None` means disabled, and positive values are
+    /// concrete watchdog durations. This layer must not re-apply executor defaults.
     pub async fn execute_in(
         &self,
         prompt: &str,
@@ -290,6 +363,7 @@ impl LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
+        initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let has_fallback_key = extra_env
@@ -327,14 +401,15 @@ impl LegacyTransport {
             let attempt_env = api_key_env.as_ref().map_or(extra_env, Some);
 
             let result = self
-                .execute_in_single_attempt(
-                    &executor,
+                .execute_in_single_attempt(ExecuteInAttempt {
+                    executor: &executor,
                     prompt,
                     work_dir,
-                    attempt_env,
+                    extra_env: attempt_env,
                     stream_mode,
                     idle_timeout_seconds,
-                )
+                    resolved_initial_response_timeout_seconds: initial_response_timeout_seconds,
+                })
                 .await?;
             if let Some(backoff) =
                 self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
@@ -352,6 +427,59 @@ impl LegacyTransport {
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
+            }
+            if let Some(classification) = classify_codex_exec_initial_stall(
+                &executor,
+                &result.execution,
+                consume_resolved_execute_in_initial_response_timeout_seconds(
+                    initial_response_timeout_seconds,
+                ),
+            ) {
+                if let Some(retry_budget) = classification.retry_effort.clone() {
+                    let mut downgraded_executor = executor.clone();
+                    downgraded_executor.override_thinking_budget(retry_budget.clone());
+                    tracing::info!(
+                        original_effort = classification.effort,
+                        fallback_effort = retry_budget.codex_effort(),
+                        "retrying codex exec after initial-response stall"
+                    );
+                    let mut retry_result = self
+                        .execute_in_single_attempt(ExecuteInAttempt {
+                            executor: &downgraded_executor,
+                            prompt,
+                            work_dir,
+                            extra_env: attempt_env,
+                            stream_mode,
+                            idle_timeout_seconds,
+                            resolved_initial_response_timeout_seconds:
+                                initial_response_timeout_seconds,
+                        })
+                        .await?;
+                    if let Some(retry_classification) = classify_codex_exec_initial_stall(
+                        &downgraded_executor,
+                        &retry_result.execution,
+                        consume_resolved_execute_in_initial_response_timeout_seconds(
+                            initial_response_timeout_seconds,
+                        ),
+                    ) {
+                        apply_codex_exec_initial_stall_summary(
+                            &mut retry_result.execution,
+                            &retry_classification,
+                            true,
+                            Some(classification.effort),
+                        );
+                    }
+                    return Ok(retry_result);
+                }
+
+                let mut result = result;
+                apply_codex_exec_initial_stall_summary(
+                    &mut result.execution,
+                    &classification,
+                    false,
+                    None,
+                );
+                return Ok(result);
             }
             return Ok(result);
         }
