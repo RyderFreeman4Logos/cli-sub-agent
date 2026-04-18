@@ -102,23 +102,16 @@ fn apply_review_target_dir_prefers_project_path_from_session_state() {
 }
 
 #[test]
-fn apply_review_target_dir_routes_review_sessions_when_repo_target_missing() {
+fn apply_review_target_dir_leaves_default_behavior_when_repo_target_missing() {
     let _lock = current_dir_lock().lock().expect("current dir lock");
     let project = tempdir().expect("tempdir");
     let _cwd = CurrentDirGuard::enter(project.path());
     let session_dir = project.path().join("session");
     let mut env = HashMap::new();
-    env.insert(
-        "CARGO_TARGET_DIR".to_string(),
-        "/repo/legacy-review-target".to_string(),
-    );
 
     crate::pipeline_env::apply_review_target_dir(Some("review"), &session_dir, &mut env);
 
-    assert_eq!(
-        env.get("CARGO_TARGET_DIR").map(String::as_str),
-        Some(session_dir.join("target").to_string_lossy().as_ref())
-    );
+    assert_eq!(env.get("CARGO_TARGET_DIR").map(String::as_str), None);
 }
 
 #[test]

@@ -107,6 +107,93 @@ printf 'tool mutation\\n' >> tracked.txt\n",
 
 #[cfg(unix)]
 #[tokio::test]
+async fn execute_review_preserves_codex_default_target_when_project_target_exists() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let target_mount = project_dir.path().join("ssd-target");
+    std::fs::create_dir_all(&target_mount).unwrap();
+    symlink(&target_mount, project_dir.path().join("target")).unwrap();
+
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_codex = bin_dir.join("codex");
+    let cargo_target_log = project_dir.path().join("cargo-target-dir.log");
+    std::fs::write(
+        &fake_codex,
+        format!(
+            "#!/bin/sh\n\
+printf '%s' \"${{CARGO_TARGET_DIR:-}}\" > \"{}\"\n\
+printf '%s\\n' \
+'<!-- CSA:SECTION:summary -->' \
+'PASS' \
+'<!-- CSA:SECTION:summary:END -->' \
+'' \
+'<!-- CSA:SECTION:details -->' \
+'Review used default cargo target behavior.' \
+'<!-- CSA:SECTION:details:END -->'\n",
+            cargo_target_log.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_codex).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_codex, perms).unwrap();
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+    let config = project_config_with_enabled_tools(&["codex"]);
+    let global = GlobalConfig::default();
+    let result = execute_review(
+        ToolName::Codex,
+        "scope=range:main...HEAD mode=review-only security=auto".to_string(),
+        None,
+        None,
+        Some("codex/openai/gpt-5.4/medium".to_string()),
+        None,
+        None,
+        "review: codex-target-default".to_string(),
+        project_dir.path(),
+        Some(&config),
+        &global,
+        ReviewRoutingMetadata {
+            project_profile: ProjectProfile::Unknown,
+            detection_method: "auto",
+        },
+        csa_process::StreamMode::BufferOnly,
+        crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        false,
+        true,
+        true,
+        false,
+        false,
+        &[],
+    )
+    .await
+    .expect("codex review should honor project target");
+
+    assert_eq!(result.execution.execution.exit_code, 0);
+    let session_dir =
+        csa_session::get_session_dir(project_dir.path(), &result.execution.meta_session_id)
+            .unwrap();
+    let observed_target_dir = std::fs::read_to_string(cargo_target_log).unwrap();
+    assert_ne!(
+        observed_target_dir,
+        session_dir.join("target").display().to_string(),
+        "review dispatch must not override CARGO_TARGET_DIR to the session-local target dir"
+    );
+    assert!(
+        !session_dir.join("target").exists(),
+        "review session should not create a session-local target dir"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn execute_review_model_spec_bypasses_tier_enforcement_without_active_tier() {
     use std::os::unix::fs::PermissionsExt;
 
