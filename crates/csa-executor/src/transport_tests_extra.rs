@@ -212,36 +212,18 @@ fn test_legacy_transport_consumes_resolved_timeout_without_reapplying_defaults()
 #[test]
 fn test_acp_transport_preserves_resolved_timeout_for_acp_execution_layer() {
     assert_eq!(
-        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(
-            "codex",
-            Some(42),
-        ),
+        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(Some(42)),
         Some(42),
-        "codex ACP must forward the already-resolved watchdog duration into csa-acp"
+        "ACP path must forward the already-resolved watchdog duration into csa-acp"
     );
 }
 
 #[test]
 fn test_acp_transport_preserves_disabled_resolved_timeout_for_acp_execution_layer() {
     assert_eq!(
-        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(
-            "codex",
-            None,
-        ),
+        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(None),
         None,
-        "codex ACP must keep the outer disabled sentinel and not re-arm a watchdog"
-    );
-}
-
-#[test]
-fn test_acp_transport_ignores_resolved_timeout_for_non_codex_tools() {
-    assert_eq!(
-        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(
-            "claude-code",
-            Some(42),
-        ),
-        None,
-        "non-codex ACP tools must preserve the pre-PR contract and not arm a first-byte watchdog"
+        "ACP path must keep the outer disabled sentinel and not re-arm a watchdog"
     );
 }
 

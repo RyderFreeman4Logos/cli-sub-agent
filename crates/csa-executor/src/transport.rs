@@ -497,6 +497,16 @@ pub struct AcpTransport {
 }
 
 impl AcpTransport {
+    pub fn new(tool_name: &str, session_config: Option<SessionConfig>) -> Self {
+        let (cmd, args) = Self::acp_command_for_tool(tool_name);
+        Self {
+            tool_name: tool_name.to_string(),
+            acp_command: cmd,
+            acp_args: args,
+            session_config,
+        }
+    }
+
     fn acp_command_for_tool(tool_name: &str) -> (String, Vec<String>) {
         // ACP adapters: @zed-industries/{codex,claude-code}-acp via npm;
         // gemini-cli has native ACP mode via `gemini --acp`.
@@ -576,7 +586,6 @@ impl AcpTransport {
         let idle_timeout_seconds = options.idle_timeout_seconds;
         let initial_response_timeout_seconds =
             Self::consume_resolved_transport_initial_response_timeout_seconds(
-                &self.tool_name,
                 options.initial_response_timeout_seconds,
             );
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
