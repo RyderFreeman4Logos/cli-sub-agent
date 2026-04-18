@@ -10,10 +10,23 @@ version = "0.1.0"
 
 Ensures all code is reviewed by csa review before committing.
 Automated fix-and-retry loop: review → fix → re-review → repeat until clean.
-Maximum 3 iterations.
+Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement.
 Because this pattern invokes the downstream `commit` skill, the AI reviewer should verify the
 `Reviewer Guidance` schema required there, including `Timing/Race Scenarios`, `Boundary Cases`,
 and `Regression Tests Added`.
+
+## Variables
+
+- `${FILES}`: Space-separated list of files to stage.
+- `${FIXED_FILES}`: Space-separated list of files to re-stage after fixes.
+- `${REVIEW_HAS_ISSUES}`: `"true"` when the latest review still has blocking issues.
+- `${SELF_AUTHORED}`: `"true"` when the staged diff was authored in the current session.
+- `${SID}`: Session ID returned by the review/debate/commit-message sub-command.
+- `${REVIEW_ROUND}`: Current review round number (defaults to `1` for the initial review).
+- `${MAX_REVIEW_ROUNDS}`: Hard cap for review rounds (defaults to `3`).
+- `${UNBOUNDED_LOOP_AUTHORIZED}`: `"true"` only when the user explicitly authorized unbounded looping.
+- `${ROUND_3_FALSE_POSITIVES_ONLY}`: `"true"` only when round-3 findings are all judged false positives by the orchestrator.
+- `${USER_DECISION_REQUIRED}`: `"true"` when the hard cap was hit and the workflow must stop for user direction.
 
 ## Step 1: Stage Changes
 
@@ -83,11 +96,39 @@ Tool: bash
 git add ${FIXED_FILES}
 ```
 
-## Step 7: Re-review
+## Step 7: Round Cap Check
 
 Tool: bash
 
-Loop back to review. Maximum 3 review-fix cycles.
+Enforce the 3-round hard cap before triggering the next review.
+If round 3 still has non-false-positive P0/P1 findings, stop and require user direction.
+Continue without asking only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
+`${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`.
+
+```bash
+REVIEW_ROUND="${REVIEW_ROUND:-1}"
+MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-3}"
+UNBOUNDED_LOOP_AUTHORIZED="${UNBOUNDED_LOOP_AUTHORIZED:-false}"
+ROUND_3_FALSE_POSITIVES_ONLY="${ROUND_3_FALSE_POSITIVES_ONLY:-false}"
+
+if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ] && \
+   [ "${UNBOUNDED_LOOP_AUTHORIZED}" != "true" ] && \
+   [ "${ROUND_3_FALSE_POSITIVES_ONLY}" != "true" ]; then
+  echo "CSA_VAR:USER_DECISION_REQUIRED=true"
+  echo "Reached the hard cap of ${MAX_REVIEW_ROUNDS} review rounds."
+  echo "User decision required: continue fix-and-review loop?"
+  exit 0
+fi
+
+echo "CSA_VAR:USER_DECISION_REQUIRED=false"
+echo "CSA_VAR:REVIEW_ROUND=$((REVIEW_ROUND + 1))"
+```
+
+## Step 8: Re-review
+
+Tool: bash
+
+Loop back to review only if the hard-cap check allowed another round.
 
 ```bash
 SID=$(csa review --diff --allow-fallback)
@@ -96,7 +137,7 @@ bash scripts/csa/session-wait-until-done.sh "$SID"
 
 ## ENDIF
 
-## Step 8: AGENTS.md Compliance Check
+## Step 9: AGENTS.md Compliance Check
 
 The review MUST include AGENTS.md compliance checklist:
 - Discover AGENTS.md chain (root-to-leaf) for each staged file
@@ -108,7 +149,7 @@ The review MUST include AGENTS.md compliance checklist:
 - If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`
 - Zero unchecked items before proceeding to commit
 
-## Step 9: Generate Commit Message
+## Step 10: Generate Commit Message
 
 Tool: csa
 Tier: tier-1-quick
@@ -120,7 +161,7 @@ SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits messa
 bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
-## Step 10: Commit
+## Step 11: Commit
 
 Tool: bash
 OnFail: abort
