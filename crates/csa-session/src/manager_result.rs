@@ -1,6 +1,7 @@
 use crate::result::{RESULT_FILE_NAME, SessionArtifact, SessionResult};
 use crate::validate::validate_session_id;
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,31 @@ const RUNTIME_RESULT_KEYS: [&str; 8] = [
     "events_count",
     "artifacts",
 ];
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionResultView {
+    pub envelope: SessionResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manager_sidecar: Option<toml::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_sidecar: Option<toml::Value>,
+}
+
+pub fn render_redacted_result_sidecar(sidecar: &toml::Value) -> Result<String> {
+    let redacted = redact_result_sidecar_value(sidecar)?;
+    toml::to_string_pretty(&redacted).context("Failed to render redacted result sidecar")
+}
+
+pub fn redact_result_sidecar_value(sidecar: &toml::Value) -> Result<toml::Value> {
+    let json_value =
+        serde_json::to_value(sidecar).context("Failed to convert result sidecar to JSON")?;
+    let serialized =
+        serde_json::to_string(&json_value).context("Failed to serialize result sidecar JSON")?;
+    let redacted = crate::redact::redact_event(&serialized);
+    let redacted_json: serde_json::Value =
+        serde_json::from_str(&redacted).context("Failed to parse redacted result sidecar JSON")?;
+    toml::Value::try_from(redacted_json).context("Failed to convert redacted sidecar back to TOML")
+}
 
 /// Write a session result to disk
 pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
@@ -203,6 +229,14 @@ pub fn load_result(project_path: &Path, session_id: &str) -> Result<Option<Sessi
     load_result_in(&base_dir, session_id)
 }
 
+pub fn load_result_view(
+    project_path: &Path,
+    session_id: &str,
+) -> Result<Option<SessionResultView>> {
+    let base_dir = super::resolve_read_base_dir(project_path, Some(session_id))?;
+    load_result_view_in(&base_dir, session_id)
+}
+
 pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option<SessionResult>> {
     validate_session_id(session_id)?;
     let session_dir = super::get_session_dir_in(base_dir, session_id);
@@ -215,6 +249,49 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
     let result: SessionResult = toml::from_str(&contents)
         .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
     Ok(Some(result))
+}
+
+pub(crate) fn load_result_view_in(
+    base_dir: &Path,
+    session_id: &str,
+) -> Result<Option<SessionResultView>> {
+    let Some(envelope) = load_result_in(base_dir, session_id)? else {
+        return Ok(None);
+    };
+    let session_dir = super::get_session_dir_in(base_dir, session_id);
+    Ok(Some(SessionResultView {
+        envelope,
+        manager_sidecar: load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)?,
+        legacy_sidecar: load_optional_result_sidecar(
+            &session_dir,
+            LEGACY_USER_RESULT_ARTIFACT_PATH,
+        )?,
+    }))
+}
+
+fn load_optional_result_sidecar(
+    session_dir: &Path,
+    artifact_path: &str,
+) -> Result<Option<toml::Value>> {
+    let sidecar_path = session_dir.join(artifact_path);
+    if !sidecar_path.exists() {
+        return Ok(None);
+    }
+    if !sidecar_path.is_file() {
+        bail!(
+            "Result artifact path exists but is not a file: {}",
+            sidecar_path.display()
+        );
+    }
+    let contents = fs::read_to_string(&sidecar_path)
+        .with_context(|| format!("Failed to read result artifact: {}", sidecar_path.display()))?;
+    let sidecar = toml::from_str(&contents).with_context(|| {
+        format!(
+            "Failed to parse result artifact: {}",
+            sidecar_path.display()
+        )
+    })?;
+    Ok(Some(sidecar))
 }
 
 /// List artifacts in a session's output/ directory

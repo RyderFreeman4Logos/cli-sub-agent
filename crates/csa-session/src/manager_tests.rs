@@ -267,3 +267,4 @@ fn test_create_session_with_tool() {
 }
 
 include!("manager_tests_tail.rs");
+include!("manager_tests_result_view.rs");

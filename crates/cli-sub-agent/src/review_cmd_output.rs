@@ -2,15 +2,22 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
+use anyhow::Result;
 use csa_core::types::{ReviewDecision, ToolName};
+use csa_session::output_parser::parse_sections;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{
-    Finding, ReviewVerdictArtifact, Severity, SeveritySummary, write_review_verdict,
+    Finding, OutputSection, ReviewVerdictArtifact, Severity, SeveritySummary, write_review_verdict,
 };
-use csa_session::{output_parser::parse_sections, output_section::OutputSection};
 use regex::Regex;
 use serde::Deserialize;
 use tracing::{debug, warn};
+
+#[path = "review_cmd_output_summary.rs"]
+mod summary_artifact;
+pub(super) use summary_artifact::{
+    ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
+};
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
@@ -131,10 +138,6 @@ pub(super) fn derive_review_result_summary(output: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(truncate_review_result_summary)
-}
-
-pub(super) fn is_edit_restriction_summary(summary: &str) -> bool {
-    summary.starts_with(EDIT_RESTRICTION_SUMMARY_PREFIX)
 }
 
 fn last_non_empty_section_content(
@@ -722,10 +725,6 @@ fn strip_ansi_escape_sequences(text: &str) -> String {
         }
     }
     stripped
-}
-
-fn truncate_review_result_summary(line: &str) -> String {
-    line.chars().take(REVIEW_RESULT_SUMMARY_MAX_CHARS).collect()
 }
 
 fn contains_verdict_token(haystack: &str, token: &str) -> bool {

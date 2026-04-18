@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use csa_session::SessionResult;
+use csa_session::SessionResultView;
 use csa_session::state::ReviewSessionMeta;
 
 use crate::session_cmds::{
@@ -164,12 +164,36 @@ pub(crate) fn handle_session_result(
     };
     match repaired_result {
         Some(result) => {
+            let result_view = match csa_session::load_result_view(effective_root, &resolved_id) {
+                Ok(Some(view)) => view,
+                Ok(None) => SessionResultView {
+                    envelope: result.clone(),
+                    manager_sidecar: None,
+                    legacy_sidecar: None,
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        session_id = %resolved_id,
+                        error = %err,
+                        "Failed to load result sidecars; continuing with runtime envelope only"
+                    );
+                    SessionResultView {
+                        envelope: result.clone(),
+                        manager_sidecar: None,
+                        legacy_sidecar: None,
+                    }
+                }
+            };
             if json {
-                display_result_json(&result, transcript_summary.as_ref(), review_meta.as_ref())?;
+                display_result_json(
+                    &result_view,
+                    transcript_summary.as_ref(),
+                    review_meta.as_ref(),
+                )?;
             } else {
                 display_result_text(
                     &resolved_id,
-                    &result,
+                    &result_view,
                     transcript_summary.as_ref(),
                     review_meta.as_ref(),
                 );
@@ -198,7 +222,7 @@ pub(crate) fn handle_session_result(
 }
 
 fn display_result_json(
-    result: &SessionResult,
+    result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<()> {
@@ -209,23 +233,26 @@ fn display_result_json(
 
 fn display_result_text(
     session_id: &str,
-    result: &SessionResult,
+    result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
 ) {
+    let envelope = &result.envelope;
     println!("Session: {session_id}");
-    println!("Status:  {}", result.status);
-    println!("Exit:    {}", result.exit_code);
-    println!("Tool:    {}", result.tool);
-    println!("Started: {}", result.started_at);
-    println!("Ended:   {}", result.completed_at);
-    println!("Summary: {}", result.summary);
-    if !result.artifacts.is_empty() {
+    println!("Status:  {}", envelope.status);
+    println!("Exit:    {}", envelope.exit_code);
+    println!("Tool:    {}", envelope.tool);
+    println!("Started: {}", envelope.started_at);
+    println!("Ended:   {}", envelope.completed_at);
+    println!("Summary: {}", envelope.summary);
+    if !envelope.artifacts.is_empty() {
         println!("Artifacts:");
-        for a in &result.artifacts {
+        for a in &envelope.artifacts {
             println!("  - {a}");
         }
     }
+    display_sidecar("Manager Sidecar", result.manager_sidecar.as_ref());
+    display_sidecar("Legacy Sidecar", result.legacy_sidecar.as_ref());
     if let Some(meta) = review_meta {
         println!("Review Iterations: {}", meta.review_iterations);
     }
@@ -256,11 +283,25 @@ fn load_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
 }
 
 fn build_result_json_payload(
-    result: &SessionResult,
+    result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<serde_json::Value> {
-    let mut payload = serde_json::to_value(result)?;
+    let mut payload = serde_json::to_value(&result.envelope)?;
+    if let Some(sidecar) = result
+        .manager_sidecar
+        .as_ref()
+        .and_then(redact_result_sidecar_for_json)
+    {
+        payload["manager_sidecar"] = serde_json::to_value(sidecar)?;
+    }
+    if let Some(sidecar) = result
+        .legacy_sidecar
+        .as_ref()
+        .and_then(redact_result_sidecar_for_json)
+    {
+        payload["legacy_sidecar"] = serde_json::to_value(sidecar)?;
+    }
     if let Some(summary) = transcript_summary {
         payload["transcript_summary"] = serde_json::json!({
             "event_count": summary.event_count,
@@ -273,6 +314,38 @@ fn build_result_json_payload(
         payload["review_meta"] = serde_json::to_value(meta)?;
     }
     Ok(payload)
+}
+
+fn display_sidecar(label: &str, sidecar: Option<&toml::Value>) {
+    if let Some(rendered) = sidecar.and_then(render_result_sidecar_for_text) {
+        println!("{label}:");
+        print_rendered_sidecar(&rendered, 2);
+    }
+}
+
+fn render_result_sidecar_for_text(sidecar: &toml::Value) -> Option<String> {
+    match csa_session::render_redacted_result_sidecar(sidecar) {
+        Ok(rendered) if rendered.trim().is_empty() => None,
+        Ok(rendered) => Some(rendered),
+        Err(err) => Some(format!("<failed to render TOML sidecar: {err}>")),
+    }
+}
+
+fn redact_result_sidecar_for_json(sidecar: &toml::Value) -> Option<toml::Value> {
+    match csa_session::redact_result_sidecar_value(sidecar) {
+        Ok(toml::Value::Table(table)) if table.is_empty() => None,
+        Ok(value) => Some(value),
+        Err(_) => Some(toml::Value::String(
+            "<failed to render TOML sidecar>".to_string(),
+        )),
+    }
+}
+
+fn print_rendered_sidecar(rendered: &str, indent: usize) {
+    let padding = " ".repeat(indent);
+    for line in rendered.lines() {
+        println!("{padding}{line}");
+    }
 }
 
 const FALLBACK_LINES: usize = 20;

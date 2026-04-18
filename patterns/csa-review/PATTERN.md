@@ -74,7 +74,7 @@ Review prompt instructs agent to:
    adversarially (counterexamples, boundary conditions, break attempts).
 7. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN.
    Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.
-8. Generate review-findings.json, output/review-verdict.json, and review-report.md
+8. Generate `$CSA_SESSION_DIR/review-findings.json`, `$CSA_SESSION_DIR/output/review-verdict.json`, and `$CSA_SESSION_DIR/review-report.md`
 9. Parse `[project_profile: <value>]` metadata from the instruction and apply
    framework-aware review dimensions from `references/review-protocol.md`
 

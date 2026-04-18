@@ -1,5 +1,8 @@
 //! Review execution helpers extracted from `review_cmd.rs`.
 
+#[path = "review_cmd_execute_artifact_guard.rs"]
+mod artifact_guard;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,14 +27,15 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 
 use super::output::{
     ToolReviewFailureKind, derive_review_result_summary, detect_tool_review_failure,
-    has_structured_review_content, is_edit_restriction_summary, is_review_output_empty,
+    ensure_review_summary_artifact, has_structured_review_content, is_edit_restriction_summary,
+    is_review_output_empty,
 };
+use artifact_guard::detect_repo_root_review_artifact_violations;
 
 pub(super) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
     pub status_reason: Option<String>,
 }
-
 fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
     let options = ExecutionEnvOptions::with_no_flash_fallback();
     if no_failover {
@@ -118,7 +122,7 @@ pub(super) async fn execute_review(
         effective_prompt = format!("{guard}\n\n{effective_prompt}");
     }
 
-    let mut execution = match execute_review_once(
+    let mut execution = match execute_review_once_with_artifact_guard(
         &executor,
         &tool,
         &effective_prompt,
@@ -146,6 +150,7 @@ pub(super) async fn execute_review(
     };
 
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
+
     repair_completed_review_restriction_result(project_root, tool, &mut execution)?;
 
     let mut status_reason = None;
@@ -165,7 +170,7 @@ pub(super) async fn execute_review(
         );
 
         if let Some(api_key_env) = retry_env {
-            let mut retried = match execute_review_once(
+            let mut retried = match execute_review_once_with_artifact_guard(
                 &executor,
                 &tool,
                 &effective_prompt,
@@ -219,6 +224,9 @@ pub(super) async fn execute_review(
             status_reason = Some(kind.status_reason().to_string());
         }
     }
+
+    let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
+    ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
 
     Ok(ReviewExecutionOutcome {
         execution,
@@ -274,6 +282,69 @@ async fn execute_review_once(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn execute_review_once_with_artifact_guard(
+    executor: &Executor,
+    tool: &ToolName,
+    effective_prompt: &str,
+    session: Option<String>,
+    description: String,
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    extra_env: Option<&HashMap<String, String>>,
+    tier_name: Option<&str>,
+    global_config: &GlobalConfig,
+    stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
+    initial_response_timeout_seconds: Option<u64>,
+    no_fs_sandbox: bool,
+    readonly_project_root: bool,
+    extra_writable: &[PathBuf],
+) -> Result<crate::pipeline::SessionExecutionResult> {
+    let invocation_started_at = Utc::now();
+    match execute_review_once(
+        executor,
+        tool,
+        effective_prompt,
+        session,
+        description,
+        project_root,
+        project_config,
+        extra_env,
+        tier_name,
+        global_config,
+        stream_mode,
+        idle_timeout_seconds,
+        initial_response_timeout_seconds,
+        no_fs_sandbox,
+        readonly_project_root,
+        extra_writable,
+    )
+    .await
+    {
+        Ok(mut execution) => {
+            enforce_review_artifact_contract(
+                project_root,
+                tool,
+                invocation_started_at,
+                Some(&mut execution),
+                None,
+            )?;
+            Ok(execution)
+        }
+        Err(err) => {
+            enforce_review_artifact_contract(
+                project_root,
+                tool,
+                invocation_started_at,
+                None,
+                Some(&err),
+            )?;
+            Err(err)
+        }
+    }
+}
+
 fn build_gemini_api_key_retry_env(
     extra_env: Option<&HashMap<String, String>>,
 ) -> Option<HashMap<String, String>> {
@@ -297,60 +368,7 @@ fn classify_review_failure_result(
     failure: ToolReviewFailureKind,
 ) -> Result<()> {
     let summary = failure.summary_note().to_string();
-    if execution.execution.stderr_output.is_empty() {
-        execution.execution.stderr_output = summary.clone();
-    } else if !execution.execution.stderr_output.contains(&summary) {
-        if !execution.execution.stderr_output.ends_with('\n') {
-            execution.execution.stderr_output.push('\n');
-        }
-        execution.execution.stderr_output.push_str(&summary);
-        execution.execution.stderr_output.push('\n');
-    }
-    execution.execution.exit_code = 1;
-    execution.execution.summary = summary.clone();
-
-    let Some(mut persisted_result) = load_result(project_root, &execution.meta_session_id)
-        .with_context(|| {
-            format!(
-                "failed to load result.toml for classified review session {}",
-                execution.meta_session_id
-            )
-        })?
-    else {
-        return Ok(());
-    };
-    persisted_result.status = SessionResult::status_from_exit_code(1);
-    persisted_result.exit_code = 1;
-    persisted_result.summary = summary.clone();
-    save_result(project_root, &execution.meta_session_id, &persisted_result).with_context(
-        || {
-            format!(
-                "failed to rewrite classified result.toml for review session {}",
-                execution.meta_session_id
-            )
-        },
-    )?;
-
-    let mut session =
-        load_session(project_root, &execution.meta_session_id).with_context(|| {
-            format!(
-                "failed to load session state for classified review session {}",
-                execution.meta_session_id
-            )
-        })?;
-    if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
-        tool_state.last_action_summary = summary;
-        tool_state.last_exit_code = 1;
-        tool_state.updated_at = chrono::Utc::now();
-        save_session(&session).with_context(|| {
-            format!(
-                "failed to rewrite session state for classified review session {}",
-                execution.meta_session_id
-            )
-        })?;
-    }
-
-    Ok(())
+    fail_review_execution(project_root, tool, execution, &summary)
 }
 
 fn maybe_synthesize_missing_review_result(
@@ -489,6 +507,90 @@ fn truncate_for_summary(text: &str, max_chars: usize) -> String {
     truncated.trim().replace('\n', " ")
 }
 
+fn fail_review_execution(
+    project_root: &Path,
+    tool: ToolName,
+    execution: &mut crate::pipeline::SessionExecutionResult,
+    summary: &str,
+) -> Result<()> {
+    if execution.execution.stderr_output.is_empty() {
+        execution.execution.stderr_output = summary.to_string();
+    } else if !execution.execution.stderr_output.contains(summary) {
+        if !execution.execution.stderr_output.ends_with('\n') {
+            execution.execution.stderr_output.push('\n');
+        }
+        execution.execution.stderr_output.push_str(summary);
+        execution.execution.stderr_output.push('\n');
+    }
+    execution.execution.exit_code = 1;
+    execution.execution.summary = summary.to_string();
+
+    rewrite_failed_review_state(project_root, tool, &execution.meta_session_id, summary)
+}
+
+fn rewrite_failed_review_state(
+    project_root: &Path,
+    tool: ToolName,
+    session_id: &str,
+    summary: &str,
+) -> Result<()> {
+    let Some(mut persisted_result) = load_result(project_root, session_id)
+        .with_context(|| format!("failed to load result.toml for review session {session_id}"))?
+    else {
+        return Ok(());
+    };
+    persisted_result.status = SessionResult::status_from_exit_code(1);
+    persisted_result.exit_code = 1;
+    persisted_result.summary = summary.to_string();
+    save_result(project_root, session_id, &persisted_result).with_context(|| {
+        format!("failed to rewrite result.toml for review session {session_id}")
+    })?;
+
+    let mut session = load_session(project_root, session_id)
+        .with_context(|| format!("failed to load session state for review session {session_id}"))?;
+    if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
+        tool_state.last_action_summary = summary.to_string();
+        tool_state.last_exit_code = 1;
+        tool_state.updated_at = chrono::Utc::now();
+        save_session(&session).with_context(|| {
+            format!("failed to rewrite session state for review session {session_id}")
+        })?;
+    }
+
+    Ok(())
+}
+
+fn enforce_review_artifact_contract(
+    project_root: &Path,
+    tool: &ToolName,
+    execution_started_at: DateTime<Utc>,
+    execution: Option<&mut crate::pipeline::SessionExecutionResult>,
+    error: Option<&anyhow::Error>,
+) -> Result<()> {
+    let Some(leaked_paths) =
+        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
+    else {
+        return Ok(());
+    };
+
+    let message = format!(
+        "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
+        leaked_paths.join(", ")
+    );
+
+    if let Some(execution) = execution {
+        fail_review_execution(project_root, *tool, execution, &message)?;
+        return Err(anyhow::anyhow!(message)
+            .context(format!("meta_session_id={}", execution.meta_session_id)));
+    }
+
+    if let Some(session_id) = error.and_then(extract_meta_session_id_from_error) {
+        rewrite_failed_review_state(project_root, *tool, &session_id, &message)?;
+        return Err(anyhow::anyhow!(message).context(format!("meta_session_id={session_id}")));
+    }
+
+    Err(anyhow::anyhow!(message))
+}
 fn repair_completed_review_restriction_result(
     project_root: &Path,
     tool: ToolName,
@@ -596,3 +698,7 @@ pub(super) fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Opti
 #[cfg(test)]
 #[path = "review_cmd_execute_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_cmd_execute_guard_tests.rs"]
+mod guard_tests;

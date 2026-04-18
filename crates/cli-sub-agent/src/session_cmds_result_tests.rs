@@ -1,11 +1,11 @@
 use super::{
     StructuredOutputOpts, build_result_json_payload, compute_token_measurement,
     display_all_sections, display_single_section, display_summary_section, format_number,
-    handle_session_artifacts, handle_session_result,
+    handle_session_artifacts, handle_session_result, render_result_sidecar_for_text,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_session::state::ReviewSessionMeta;
-use csa_session::{SessionResult, create_session, get_session_dir, load_result};
+use csa_session::{SessionResult, SessionResultView, create_session, get_session_dir, load_result};
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -352,7 +352,91 @@ fn build_result_json_payload_includes_review_iterations() {
         diff_fingerprint: Some("sha256:abc123".to_string()),
     };
 
-    let payload = build_result_json_payload(&result, None, Some(&review_meta)).unwrap();
+    let payload = build_result_json_payload(
+        &SessionResultView {
+            envelope: result,
+            manager_sidecar: None,
+            legacy_sidecar: None,
+        },
+        None,
+        Some(&review_meta),
+    )
+    .unwrap();
     assert_eq!(payload["review_meta"]["review_iterations"], 4);
     assert_eq!(payload["review_meta"]["fix_rounds"], 1);
+}
+
+#[test]
+fn build_result_json_payload_includes_result_sidecars() {
+    let now = chrono::Utc::now();
+    let result = SessionResultView {
+        envelope: SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "review completed".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+        },
+        manager_sidecar: Some(
+            toml::toml! {
+                [report]
+                summary = "manager-visible"
+            }
+            .into(),
+        ),
+        legacy_sidecar: Some(
+            toml::toml! {
+                [artifacts]
+                count = 2
+            }
+            .into(),
+        ),
+    };
+
+    let payload = build_result_json_payload(&result, None, None).unwrap();
+    assert_eq!(
+        payload["manager_sidecar"]["report"]["summary"],
+        "manager-visible"
+    );
+    assert_eq!(payload["legacy_sidecar"]["artifacts"]["count"], 2);
+}
+
+#[test]
+fn build_result_json_payload_redacts_result_sidecars() {
+    let now = chrono::Utc::now();
+    let result = SessionResultView {
+        envelope: SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "review completed".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+        },
+        manager_sidecar: Some(
+            toml::toml! {
+                [auth]
+                api_key = "hunter2"
+            }
+            .into(),
+        ),
+        legacy_sidecar: None,
+    };
+
+    let payload = build_result_json_payload(&result, None, None).unwrap();
+    let rendered = serde_json::to_string(&payload).unwrap();
+    assert!(!rendered.contains("hunter2"));
+    assert!(rendered.contains("[REDACTED]"));
+}
+
+#[test]
+fn render_result_sidecar_for_text_skips_empty_tables() {
+    assert!(render_result_sidecar_for_text(&toml::Value::Table(toml::map::Map::new())).is_none());
 }

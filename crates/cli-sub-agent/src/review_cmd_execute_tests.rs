@@ -6,6 +6,7 @@ use crate::session_cmds_result::{StructuredOutputOpts, handle_session_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{GlobalConfig, ProjectProfile, ToolRestrictions, global::GlobalToolConfig};
 use csa_core::types::ToolName;
+use std::path::Path;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -555,5 +556,49 @@ printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
     assert!(
         !auth_attempts.contains("api_key\n"),
         "expected no api-key retry when --no-failover is set, got: {auth_attempts:?}"
+    );
+}
+
+#[test]
+fn csa_review_patterns_do_not_use_relative_output_paths() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root");
+    let review_pattern_root = repo_root.join("patterns/csa-review");
+    let mut offenders = Vec::new();
+
+    fn visit(dir: &Path, offenders: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, offenders);
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            if !matches!(ext, "md" | "toml") {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&path).expect("read pattern file");
+            for (line_no, line) in content.lines().enumerate() {
+                if line.contains("output/")
+                    && !line.contains("$CSA_SESSION_DIR/output/")
+                    && !line.contains("${CSA_SESSION_DIR}/output/")
+                {
+                    offenders.push(format!("{}:{}", path.display(), line_no + 1));
+                }
+            }
+        }
+    }
+
+    visit(&review_pattern_root, &mut offenders);
+    assert!(
+        offenders.is_empty(),
+        "found relative output/ paths in review pattern files:\n{}",
+        offenders.join("\n")
     );
 }

@@ -22,10 +22,13 @@ use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_bas
 use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
-    contract_result_path, legacy_user_result_path, list_artifacts, load_result, save_result,
+    SessionResultView, contract_result_path, legacy_user_result_path, list_artifacts, load_result,
+    load_result_view, redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
 };
 #[cfg(test)]
-pub(crate) use manager_result::{list_artifacts_in, load_result_in, save_result_in};
+pub(crate) use manager_result::{
+    list_artifacts_in, load_result_in, load_result_view_in, save_result_in,
+};
 
 const STATE_FILE_NAME: &str = "state.toml";
 const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
