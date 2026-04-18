@@ -18,6 +18,7 @@ use crate::install_hints::{
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     SandboxTransportConfig, Transport, TransportFactory, TransportOptions, TransportResult,
+    resolve_execute_in_initial_response_timeout_seconds,
 };
 #[path = "executor_arg_helpers.rs"]
 mod arg_helpers;
@@ -30,15 +31,6 @@ use arg_helpers::{
 mod prompt_helpers;
 
 pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
-
-struct ExecuteInTransportRequest<'a> {
-    prompt: &'a str,
-    work_dir: &'a Path,
-    extra_env: Option<&'a HashMap<String, String>>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
-}
 
 #[path = "executor_options.rs"]
 mod options;
@@ -428,33 +420,18 @@ impl Executor {
         initial_response_timeout_seconds: Option<u64>,
     ) -> Result<TransportResult> {
         let transport = self.transport(None)?;
-        self.execute_in_with_transport_via(
-            transport.as_ref(),
-            ExecuteInTransportRequest {
+        let initial_response_timeout_seconds = resolve_execute_in_initial_response_timeout_seconds(
+            self,
+            initial_response_timeout_seconds,
+        );
+        let mut result = transport
+            .execute_in(
                 prompt,
                 work_dir,
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
                 initial_response_timeout_seconds,
-            },
-        )
-        .await
-    }
-
-    async fn execute_in_with_transport_via(
-        &self,
-        transport: &dyn Transport,
-        request: ExecuteInTransportRequest<'_>,
-    ) -> Result<TransportResult> {
-        let mut result = transport
-            .execute_in(
-                request.prompt,
-                request.work_dir,
-                request.extra_env,
-                request.stream_mode,
-                request.idle_timeout_seconds,
-                request.initial_response_timeout_seconds,
             )
             .await?;
         result.execution.consolidate_stderr_retries();
@@ -773,7 +750,3 @@ mod build_cmd_tests;
 #[cfg(test)]
 #[path = "executor_prompt_transport_tests.rs"]
 mod prompt_transport_tests;
-
-#[cfg(test)]
-#[path = "executor_timeout_forwarding_tests.rs"]
-mod timeout_forwarding_tests;

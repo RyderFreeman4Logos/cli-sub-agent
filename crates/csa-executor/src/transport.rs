@@ -20,6 +20,7 @@ use csa_session::{
     new_session_id,
     state::{ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext, ToolState},
 };
+
 #[path = "transport_meta.rs"]
 mod transport_meta;
 pub use transport_meta::PeakMemoryContext;
@@ -60,7 +61,6 @@ use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payloa
 mod transport_codex_exec_stall;
 #[cfg(test)]
 use transport_codex_exec_stall::CodexExecInitialStallClassification;
-#[cfg(test)]
 pub(crate) use transport_codex_exec_stall::resolve_execute_in_initial_response_timeout_seconds;
 pub use transport_codex_exec_stall::resolve_initial_response_timeout;
 use transport_codex_exec_stall::{

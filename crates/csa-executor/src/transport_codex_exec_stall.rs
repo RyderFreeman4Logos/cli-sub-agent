@@ -3,7 +3,6 @@ use csa_process::ExecutionResult;
 
 pub(crate) const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
 const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
-#[cfg(test)]
 const DEFAULT_GENERIC_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 120;
 
 #[derive(Debug, Clone)]
@@ -24,7 +23,6 @@ pub fn resolve_initial_response_timeout(
     }
 }
 
-#[cfg(test)]
 fn executor_default_initial_response_timeout_seconds(executor: &Executor) -> u64 {
     if matches!(executor, Executor::Codex { .. }) {
         DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS
@@ -33,7 +31,6 @@ fn executor_default_initial_response_timeout_seconds(executor: &Executor) -> u64
     }
 }
 
-#[cfg(test)]
 pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
