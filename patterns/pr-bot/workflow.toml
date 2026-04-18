@@ -99,9 +99,6 @@ name = "COMMENT_START_LINE"
 name = "COMMENT_TIMESTAMP"
 
 [[workflow.variables]]
-name = "POST_FIX_REUSED_REVIEW_ID"
-
-[[workflow.variables]]
 name = "COMMIT_COUNT"
 
 [[workflow.variables]]
@@ -126,6 +123,12 @@ name = "CURRENT_HEAD"
 name = "CURRENT_SHA"
 
 [[workflow.variables]]
+name = "CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS"
+
+[[workflow.variables]]
+name = "CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC"
+
+[[workflow.variables]]
 name = "DAEMON_RC"
 
 [[workflow.variables]]
@@ -136,9 +139,6 @@ name = "DELETE_BRANCH_FLAG"
 
 [[workflow.variables]]
 name = "FALLBACK_REVIEW_HAS_ISSUES"
-
-[[workflow.variables]]
-name = "REVIEW_COMPLETED"
 
 [[workflow.variables]]
 name = "FIND_RC"
@@ -174,6 +174,9 @@ name = "GATE_SID"
 name = "HOME"
 
 [[workflow.variables]]
+name = "LATEST_CURRENT_HEAD_TRIGGER_TS"
+
+[[workflow.variables]]
 name = "LATE_ACTIONABLE_COUNT"
 
 [[workflow.variables]]
@@ -192,6 +195,9 @@ name = "MAX_REVIEW_ROUNDS"
 name = "MERGE_BASE"
 
 [[workflow.variables]]
+name = "MERGE_REASON"
+
+[[workflow.variables]]
 name = "MERGE_STRATEGY"
 
 [[workflow.variables]]
@@ -208,6 +214,12 @@ name = "POLL_IDLE_TIMEOUT"
 
 [[workflow.variables]]
 name = "POLL_MAX_TIMEOUT"
+
+[[workflow.variables]]
+name = "POST_FIX_REUSED_REVIEW_ID"
+
+[[workflow.variables]]
+name = "POST_FIX_REVIEW_WINDOW_START"
 
 [[workflow.variables]]
 name = "POST_REBASE_TIMEOUT"
@@ -246,6 +258,33 @@ name = "RETRIGGER_BODY"
 name = "RETRIGGER_TS"
 
 [[workflow.variables]]
+name = "REUSABLE_CURRENT_HEAD_REVIEW_RECORD"
+
+[[workflow.variables]]
+name = "REUSABLE_CURRENT_HEAD_REVIEW_RECORD_RC"
+
+[[workflow.variables]]
+name = "REUSABLE_CURRENT_HEAD_REVIEW_TS"
+
+[[workflow.variables]]
+name = "REUSABLE_POST_FIX_REVIEW_RECORD"
+
+[[workflow.variables]]
+name = "REUSABLE_POST_FIX_REVIEW_RECORD_RC"
+
+[[workflow.variables]]
+name = "REUSABLE_POST_FIX_REVIEW_TS"
+
+[[workflow.variables]]
+name = "REUSE_EXISTING_CURRENT_HEAD_REVIEW"
+
+[[workflow.variables]]
+name = "REUSE_EXISTING_POST_FIX_REVIEW"
+
+[[workflow.variables]]
+name = "REVIEW_COMPLETED"
+
+[[workflow.variables]]
 name = "REVIEW_EVENT_RAW"
 
 [[workflow.variables]]
@@ -267,7 +306,7 @@ name = "ROUND_LIMIT_REACHED"
 name = "SOURCE_OWNER"
 
 [[workflow.variables]]
-name = "STEP_10_OUTPUT"
+name = "STEP_11_OUTPUT"
 
 [[workflow.variables]]
 name = "TRIGGER_BODY"
@@ -309,6 +348,9 @@ name = "branch_count"
 name = "branch_matches"
 
 [[workflow.variables]]
+name = "latest_trigger_ts"
+
+[[workflow.variables]]
 name = "owner_count"
 
 [[workflow.variables]]
@@ -329,6 +371,9 @@ Ensure all changes committed. Set WORKFLOW_BRANCH once (persists through
 clean branch switches in Step 11).
 
 ```bash
+# Force weave to pick up workflow variables used across steps.
+: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}"
+
 WORKFLOW_BRANCH="$(git branch --show-current)"
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
 ```'''
@@ -622,7 +667,6 @@ prompt = '''
 > `cloud_bot_trigger` config and review round) and delegates the long wait to a
 > single CSA-managed step. No explicit caller-side polling loop.
 
-Condition: !(${BOT_UNAVAILABLE})
 
 Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
 - **Round 0** (initial PR creation): follows `cloud_bot_trigger` config
@@ -632,8 +676,9 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   because bots do NOT auto-review on subsequent pushes (#506).
 
 Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then delegate `cloud_bot_poll_max_seconds` (default: `kv_cache.long_poll_seconds`, 240s) polling to CSA.
-If the configured bot already has a review event on the current HEAD, reuse
-that signal instead of aborting on resume/rerun.
+If an exact current-HEAD bot review already exists before this run triggers the
+bot, reuse that specific review object instead of posting a duplicate trigger
+or aborting on resume/rerun.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
@@ -656,16 +701,14 @@ BOT_REUSED_REVIEW_ID=""
 
 # --- Detect whether current HEAD already has a reusable bot review ---
 query_latest_current_head_trigger_ts() {
-  gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""' \
-    2>/dev/null
+  gh api --paginate "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
+    | jq -rs '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
 }
 
 query_reusable_current_head_review_record() {
   local latest_trigger_ts="${1:-}"
-  gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-    --jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""' \
-    2>/dev/null
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
+    | jq -rs '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'
 }
 
 set +e
@@ -730,9 +773,8 @@ BOT_REVIEW_WINDOW_START="${WAIT_BASE_TS}"
 
 # --- Delegate remaining polling to CSA-managed step ---
 query_current_window_current_head_review_ts() {
-  gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-    --jq '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""' \
-    2>/dev/null
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
+    | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
 }
 
 refresh_current_window_review_signal() {
@@ -804,9 +846,8 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   else
     set +e
     REVIEW_EVENT_RAW="$(
-      gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-        --jq '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-        2>/dev/null
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
+        | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length'
     )"
     REVIEW_EVENT_RC=$?
     set -e
@@ -940,7 +981,7 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES_SOURCE=${BOT_HAS_ISSUES_SOURCE}"
 ```'''
 on_fail = "abort"
-condition = "${CLOUD_BOT}"
+condition = "(${CLOUD_BOT}) && (!(${BOT_UNAVAILABLE}))"
 
 [[workflow.steps]]
 id = 7
@@ -1019,71 +1060,10 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((${BOT_UNAVAILABLE}) && (${FALLBACK_REVIEW_HAS_ISSUES}))"
+condition = "(${CLOUD_BOT}) && (${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})"
 
 [[workflow.steps]]
 id = 9
-title = "Step 6a: Merge Without Bot"
-tool = "bash"
-prompt = '''
-> **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
-
-
-Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
-(either initially in Step 4a, or after fix cycle in Step 6-fix). Step 6-fix
-guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
-NOTE: This step only executes when cloud_bot=false (not on timeout — timeout aborts).
-
-**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale
-(bot disabled + local review CLEAN). This provides audit trail for reviewers.
-
-```bash
-# --- Hard gate: unconditional pre-merge check ---
-if [ "${FALLBACK_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
-  echo "ERROR: Reached merge with unresolved fallback review issues."
-  echo "This is a workflow violation. Aborting merge."
-  exit 1
-fi
-if [ "${REBASE_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
-  echo "ERROR: Reached merge with unresolved post-rebase review issues."
-  echo "This is a workflow violation. Aborting merge."
-  exit 1
-fi
-
-# Push fallback fix commits so the remote PR head includes them.
-# Without this, gh pr merge uses the stale remote HEAD and omits fixes.
-git push origin "${WORKFLOW_BRANCH}"
-
-# Audit trail: explain why merging without bot review.
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: Cloud bot (${CLOUD_BOT_NAME}) is disabled (pr_review.cloud_bot=false). Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
-
-MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
-DELETE_BRANCH_FLAG=""
-if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
-  DELETE_BRANCH_FLAG="--delete-branch"
-fi
-# shellcheck disable=SC2086
-gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
-
-# Write pr-bot completion marker (deterministic gate for pre-merge hook).
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
-mkdir -p "${MARKER_DIR}"
-touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
-
-# Post-merge: sync local main with remote
-git fetch origin
-git checkout main
-git merge origin/main --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
-```'''
-on_fail = "abort"
-condition = "!(${CLOUD_BOT})"
-
-[[workflow.steps]]
-id = 10
 title = "Select Current Bot Comment"
 tool = "bash"
 prompt = '''
@@ -1093,8 +1073,8 @@ prompt = '''
 > trigger picks up any remaining findings.
 
 
-Select one actionable bot review comment from the current review window and
-export its metadata as `CURRENT_COMMENT_ID`, `COMMENT_PATH`, and
+Select one actionable bot review comment from the current review window or
+the reusable-review scope and export its metadata as `CURRENT_COMMENT_ID`, `COMMENT_PATH`, and
 `COMMENT_TIMESTAMP`. Initialize `COMMENT_IS_FALSE_POSITIVE=true` and
 `COMMENT_IS_STALE=false` so the current comment always enters the arbitration
 path first unless the staleness guard suppresses it.
@@ -1147,10 +1127,10 @@ echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=true"
 echo "CSA_VAR:COMMENT_IS_STALE=false"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 11
+id = 10
 title = "Step 7a: Staleness Filter"
 tool = "bash"
 prompt = '''
@@ -1174,10 +1154,10 @@ fi
 echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
 ```'''
 on_fail = "skip"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 12
+id = 11
 title = "Arbitrate via Debate"
 tool = "csa"
 prompt = """
@@ -1186,18 +1166,18 @@ prompt = """
 > Orchestrator receives the verdict and posts audit trail to PR."""
 tier = "tier-4-critical"
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
 
 [[workflow.steps]]
-id = 13
+id = 12
 title = "Include debate"
 tool = "weave"
 prompt = "debate"
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
 
 [[workflow.steps]]
-id = 14
+id = 13
 title = "Step 8a: Post Debate Audit Trail Comment"
 tool = "bash"
 prompt = '''
@@ -1214,7 +1194,7 @@ Parse the structured debate result from Step 8.
 
 ```bash
 set -euo pipefail
-DEBATE_OUTPUT="${STEP_10_OUTPUT}"
+DEBATE_OUTPUT="${STEP_11_OUTPUT}"
 VERDICT_COUNT="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
     | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
@@ -1284,10 +1264,10 @@ case "${VERDICT}" in
 esac
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
 
 [[workflow.steps]]
-id = 15
+id = 14
 title = "Fix Real Issue"
 tool = "csa"
 prompt = """
@@ -1300,13 +1280,13 @@ non-false-positive). Fetch the comment body via
 `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`, apply the fix,
 and commit it."""
 tier = "tier-4-critical"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
 
 [workflow.steps.on_fail]
 retry = 2
 
 [[workflow.steps]]
-id = 16
+id = 15
 title = "Push Fixes and Continue Loop"
 tool = "bash"
 prompt = '''
@@ -1430,10 +1410,10 @@ echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 
 Loop back to Step 5 (delegated wait gate).'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 17
+id = 16
 title = "Step 10b: Post-Fix Re-Review Gate (HARD GATE)"
 tool = "bash"
 prompt = '''
@@ -1446,19 +1426,19 @@ to Step 5" above is guidance for LLM orchestrators but is NOT enforced
 by the workflow engine (`csa plan run` executes steps linearly).
 
 **Positive confirmation signal** (#505): The gate checks for a **review event**
-(via `pulls/{pr}/reviews` API) on the current HEAD, preferring activity from
-the current trigger window but reusing an already-posted current-HEAD review
-when the workflow resumes. This distinguishes "bot re-reviewed and found
-nothing" from "bot hasn't re-reviewed yet."
+(via `pulls/{pr}/reviews` API) on the current HEAD. If the current HEAD was
+already re-reviewed before this rerun starts, the gate reuses that exact
+current-HEAD review and skips posting a duplicate retrigger comment. Otherwise
+it waits for a new current-window review before proceeding. This distinguishes
+"bot re-reviewed and found nothing" from "bot hasn't re-reviewed yet."
 
 The gate:
 1. Records push timestamp before checking
-2. Polls for a review event from `${CLOUD_BOT_LOGIN}` on the current HEAD, reusing an already-posted current-HEAD review when resuming the workflow
+2. Checks for an already-posted exact current-HEAD review before retriggering; otherwise polls for a new review event from `${CLOUD_BOT_LOGIN}` on the current HEAD
 3. If review event found AND has P0/P1/P2 inline comments → **abort** (user must re-run pr-bot)
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
-Condition: !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
 Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
 then up to `cloud_bot_poll_max_seconds` of polling.
 
@@ -1475,16 +1455,14 @@ POST_FIX_REUSED_REVIEW_ID=""
 
 # --- Detect whether current HEAD already has a reusable post-fix review ---
 query_latest_current_head_trigger_ts() {
-  gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""' \
-    2>/dev/null
+  gh api --paginate "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
+    | jq -rs '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
 }
 
 query_reusable_current_head_review_record() {
   local latest_trigger_ts="${1:-}"
-  gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-    --jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""' \
-    2>/dev/null
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
+    | jq -rs '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'
 }
 
 set +e
@@ -1526,9 +1504,8 @@ sleep "${CLOUD_BOT_WAIT_SECONDS}"
 POST_FIX_REVIEW_WINDOW_START="${RETRIGGER_TS}"
 
 query_current_window_current_head_review_ts() {
-  gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-    --jq '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""' \
-    2>/dev/null
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
+    | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
 }
 
 refresh_post_fix_review_signal() {
@@ -1602,9 +1579,8 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   else
     set +e
     REVIEW_EVENT_RAW="$(
-      gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-        --jq '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-        2>/dev/null
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
+        | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length'
     )"
     REVIEW_EVENT_RC=$?
     set -e
@@ -1702,18 +1678,21 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
+condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})"
+
+[[workflow.steps]]
+id = 17
+title = "Step 10a: Bot Review Clean"
+tool = "note"
+prompt = """
+No issues found by bot. Proceed to merge.
+This step only runs when the cloud bot is enabled, reachable, has reported no
+issues, and the review loop has not hit the round limit."""
+on_fail = "abort"
+condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})"
 
 [[workflow.steps]]
 id = 18
-title = "Step 10a: Bot Review Clean"
-tool = "note"
-prompt = "No issues found by bot. Proceed to merge."
-on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))"
-
-[[workflow.steps]]
-id = 19
 title = "Step 10.5: Rebase for Clean History (DISABLED)"
 tool = "bash"
 prompt = '''
@@ -1738,6 +1717,10 @@ wait/fix/review loop to a single CSA-managed step.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
+
+This step is disabled unconditionally. Keep the implementation text only as
+historical context; the workflow condition is `false` so the rebase path never
+executes.
 
 ```bash
 set -euo pipefail
@@ -1874,7 +1857,80 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))) && (${REBASE_ENABLED})"
+condition = "false"
+
+[[workflow.steps]]
+id = 19
+title = "Step 6a: Merge Without Bot"
+tool = "bash"
+prompt = '''
+> **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
+
+
+Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
+(either initially in Step 4a, or after fix cycle in Step 6-fix). Step 6-fix
+guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
+This step executes in either of these cases:
+- `cloud_bot=false` (no cloud bot path)
+- `cloud_bot=true`, `BOT_UNAVAILABLE=true`, and fallback local review is clean
+
+**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale.
+This step has two distinct audit-trail cases:
+- `cloud_bot=false`: "cloud_bot=false (disabled in config); merging on local review clean"
+- `cloud_bot=true` and `BOT_UNAVAILABLE=true`: "cloud_bot=true but bot timed out; merging on fallback review clean"
+
+```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+
+# Push fallback fix commits so the remote PR head includes them.
+# Without this, gh pr merge uses the stale remote HEAD and omits fixes.
+git push origin "${WORKFLOW_BRANCH}"
+
+# Audit trail: explain why merging without bot review.
+if [ "${CLOUD_BOT}" = "false" ]; then
+  MERGE_REASON="cloud_bot=false (disabled in config); merging on local review clean"
+elif [ "${BOT_UNAVAILABLE:-false}" = "true" ]; then
+  MERGE_REASON="cloud_bot=true but bot timed out; merging on fallback review clean"
+else
+  echo "ERROR: Step 6a reached without a valid merge-without-bot rationale."
+  exit 1
+fi
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
+  "**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+
+MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
+DELETE_BRANCH_FLAG=""
+if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
+  DELETE_BRANCH_FLAG="--delete-branch"
+fi
+# shellcheck disable=SC2086
+gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+
+# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+mkdir -p "${MARKER_DIR}"
+touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
+
+# Post-merge: sync local main with remote
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+git log --oneline -1  # verify local matches remote
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
+```'''
+on_fail = "abort"
+condition = "!(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES}))"
 
 [[workflow.steps]]
 id = 20

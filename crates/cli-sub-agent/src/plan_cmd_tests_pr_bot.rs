@@ -278,13 +278,13 @@ fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
             );
             assert!(
                 helper.contains(
-                    r#"gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100""#
+                    r#"gh api --paginate "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null"#,
                 ),
-                "{artifact} helper occurrence {occurrence} must paginate and slurp issue comments"
+                "{artifact} helper occurrence {occurrence} must paginate issue comments before piping to jq"
             );
             assert!(
-                helper.contains(r#"--jq '[.[][] | select((.body // "") | test("csa-trigger:"#),
-                "{artifact} helper occurrence {occurrence} must flatten paginated comment pages before sorting"
+                helper.contains(r#"| jq -rs '[.[][] | select((.body // "") | test("csa-trigger:"#),
+                "{artifact} helper occurrence {occurrence} must flatten paginated comment pages via jq slurp before sorting"
             );
         }
     }
@@ -306,14 +306,15 @@ fn pr_bot_artifacts_paginate_reusable_current_head_review_lookup() {
             );
             assert!(
                 helper.contains(
-                    r#"gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
+                    r#"gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null"#,
                 ),
-                "{artifact} helper occurrence {occurrence} must paginate and slurp pull-request reviews"
+                "{artifact} helper occurrence {occurrence} must paginate pull-request reviews before piping to jq"
             );
             assert!(
-                helper
-                    .contains(r#"--jq '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#),
-                "{artifact} helper occurrence {occurrence} must flatten paginated review pages before sorting reusable review records"
+                helper.contains(
+                    r#"| jq -rs '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#
+                ),
+                "{artifact} helper occurrence {occurrence} must flatten paginated review pages via jq slurp before sorting reusable review records"
             );
             assert!(
                 helper.contains(
@@ -341,14 +342,15 @@ fn pr_bot_artifacts_recovery_probe_reuses_null_commit_reviews() {
             );
             assert!(
                 helper.contains(
-                    r#"gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
+                    r#"gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null"#,
                 ),
-                "{artifact} recovery helper occurrence {occurrence} must paginate and slurp pull-request reviews"
+                "{artifact} recovery helper occurrence {occurrence} must paginate pull-request reviews before piping to jq"
             );
             assert!(
-                helper
-                    .contains(r#"--jq '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#),
-                "{artifact} recovery helper occurrence {occurrence} must flatten paginated review pages before selecting current-window signals"
+                helper.contains(
+                    r#"| jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#
+                ),
+                "{artifact} recovery helper occurrence {occurrence} must flatten paginated review pages via jq slurp before selecting current-window signals"
             );
             let expected = format!(
                 "select(.submitted_at >= \"'\"${{{}}}\"'\") | select(.commit_id == \"'\"${{CURRENT_SHA}}\"'\" or .commit_id == null) | .submitted_at",
@@ -374,16 +376,16 @@ fn pr_bot_artifacts_paginate_review_event_counts() {
                 r#"gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
             )
             .count(),
-            0,
-            "{artifact} must slurp every paginated pull-request reviews query"
+            6,
+            "{artifact} must keep all six paginated pull-request review queries in pipe-to-jq form"
         );
         assert_eq!(
             text.matches(
                 r#"gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100""#
             )
             .count(),
-            6,
-            "{artifact} must slurp all six paginated pull-request review queries"
+            0,
+            "{artifact} must not use deprecated gh --slurp pagination for pull-request review queries"
         );
         for window_var in ["BOT_REVIEW_WINDOW_START", "POST_FIX_REVIEW_WINDOW_START"] {
             let expected = format!(
