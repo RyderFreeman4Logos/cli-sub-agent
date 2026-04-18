@@ -149,7 +149,11 @@ pub(super) async fn execute_review(
     repair_completed_review_restriction_result(project_root, tool, &mut execution)?;
 
     let mut status_reason = None;
-    if let Some(kind) = detect_tool_review_failure(tool, &execution.execution.output) {
+    if let Some(kind) = detect_tool_review_failure(
+        tool,
+        &execution.execution.output,
+        &execution.execution.stderr_output,
+    ) {
         let retry_env = (!no_failover)
             .then(|| build_gemini_api_key_retry_env(extra_env_owned.as_ref()))
             .flatten();
@@ -199,7 +203,11 @@ pub(super) async fn execute_review(
             );
             repair_completed_review_restriction_result(project_root, tool, &mut retried)?;
 
-            if let Some(retry_kind) = detect_tool_review_failure(tool, &retried.execution.output) {
+            if let Some(retry_kind) = detect_tool_review_failure(
+                tool,
+                &retried.execution.output,
+                &retried.execution.stderr_output,
+            ) {
                 classify_review_failure_result(project_root, tool, &mut retried, retry_kind)?;
                 status_reason = Some(retry_kind.status_reason().to_string());
                 execution = retried;
