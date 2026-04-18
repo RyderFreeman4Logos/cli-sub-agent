@@ -287,6 +287,7 @@ if [ "${CLOUD_BOT}" = "false" ]; then
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
 FALLBACK_REVIEW_HAS_ISSUES="${FALLBACK_REVIEW_HAS_ISSUES:-false}"
+echo "CSA_VAR:CLOUD_BOT=$CLOUD_BOT"
 echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
 echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
 echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
@@ -373,13 +374,13 @@ BOT_REUSED_REVIEW_ID=""
 # --- Detect whether current HEAD already has a reusable bot review ---
 query_latest_current_head_trigger_ts() {
   gh api --paginate "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
-    | jq -s '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
+    | jq -rs '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
 }
 
 query_reusable_current_head_review_record() {
   local latest_trigger_ts="${1:-}"
   gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
-    | jq -s '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'
+    | jq -rs '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'
 }
 
 set +e
@@ -445,7 +446,7 @@ BOT_REVIEW_WINDOW_START="${WAIT_BASE_TS}"
 # --- Delegate remaining polling to CSA-managed step ---
 query_current_window_current_head_review_ts() {
   gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
-    | jq -s '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
+    | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
 }
 
 refresh_current_window_review_signal() {
@@ -518,7 +519,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     set +e
     REVIEW_EVENT_RAW="$(
       gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
-        | jq -s '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length'
+        | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length'
     )"
     REVIEW_EVENT_RC=$?
     set -e
@@ -730,63 +731,6 @@ fi
 
 FALLBACK_REVIEW_HAS_ISSUES=false
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-```
-
-## Step 6a: Merge Without Bot
-
-> **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
-
-Tool: bash
-
-Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
-(either initially in Step 4a, or after fix cycle in Step 6-fix). Step 6-fix
-guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
-NOTE: This step only executes when cloud_bot=false (not on timeout — timeout aborts).
-
-**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale
-(bot disabled + local review CLEAN). This provides audit trail for reviewers.
-
-```bash
-# --- Hard gate: unconditional pre-merge check ---
-if [ "${FALLBACK_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
-  echo "ERROR: Reached merge with unresolved fallback review issues."
-  echo "This is a workflow violation. Aborting merge."
-  exit 1
-fi
-if [ "${REBASE_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
-  echo "ERROR: Reached merge with unresolved post-rebase review issues."
-  echo "This is a workflow violation. Aborting merge."
-  exit 1
-fi
-
-# Push fallback fix commits so the remote PR head includes them.
-# Without this, gh pr merge uses the stale remote HEAD and omits fixes.
-git push origin "${WORKFLOW_BRANCH}"
-
-# Audit trail: explain why merging without bot review.
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: Cloud bot (${CLOUD_BOT_NAME}) is disabled (pr_review.cloud_bot=false). Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
-
-MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
-DELETE_BRANCH_FLAG=""
-if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
-  DELETE_BRANCH_FLAG="--delete-branch"
-fi
-# shellcheck disable=SC2086
-gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
-
-# Write pr-bot completion marker (deterministic gate for pre-merge hook).
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
-mkdir -p "${MARKER_DIR}"
-touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
-
-# Post-merge: sync local main with remote
-git fetch origin
-git checkout main
-git merge origin/main --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```
 
 ## ELSE
@@ -1202,13 +1146,13 @@ POST_FIX_REUSED_REVIEW_ID=""
 # --- Detect whether current HEAD already has a reusable post-fix review ---
 query_latest_current_head_trigger_ts() {
   gh api --paginate "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
-    | jq -s '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
+    | jq -rs '[.[][] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
 }
 
 query_reusable_current_head_review_record() {
   local latest_trigger_ts="${1:-}"
   gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
-    | jq -s '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'
+    | jq -rs '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or (.commit_id == null and "'"${latest_trigger_ts}"'" != "" and .submitted_at >= "'"${latest_trigger_ts}"'")) | {id: (.id | tostring), submitted_at: .submitted_at}] | sort_by(.submitted_at) | last | select(. != null) | [.id, .submitted_at] | @tsv) // ""'
 }
 
 set +e
@@ -1251,7 +1195,7 @@ POST_FIX_REVIEW_WINDOW_START="${RETRIGGER_TS}"
 
 query_current_window_current_head_review_ts() {
   gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
-    | jq -s '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
+    | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
 }
 
 refresh_post_fix_review_signal() {
@@ -1326,7 +1270,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     set +e
     REVIEW_EVENT_RAW="$(
       gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
-        | jq -s '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length'
+        | jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length'
     )"
     REVIEW_EVENT_RC=$?
     set -e
@@ -1598,6 +1542,69 @@ fi
 
 ## ENDIF
 <!-- End of CLOUD_BOT block -->
+
+## IF !(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES}))
+
+## Step 6a: Merge Without Bot
+
+> **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
+
+Tool: bash
+
+Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
+(either initially in Step 4a, or after fix cycle in Step 6-fix). Step 6-fix
+guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
+This step executes in either of these cases:
+- `cloud_bot=false` (no cloud bot path)
+- `cloud_bot=true`, `BOT_UNAVAILABLE=true`, and fallback local review is clean
+
+**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale
+(bot disabled + local review CLEAN). This provides audit trail for reviewers.
+
+```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+
+# Push fallback fix commits so the remote PR head includes them.
+# Without this, gh pr merge uses the stale remote HEAD and omits fixes.
+git push origin "${WORKFLOW_BRANCH}"
+
+# Audit trail: explain why merging without bot review.
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
+  "**Merge rationale**: Cloud bot (${CLOUD_BOT_NAME}) is disabled (pr_review.cloud_bot=false). Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+
+MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
+DELETE_BRANCH_FLAG=""
+if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
+  DELETE_BRANCH_FLAG="--delete-branch"
+fi
+# shellcheck disable=SC2086
+gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+
+# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+mkdir -p "${MARKER_DIR}"
+touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
+
+# Post-merge: sync local main with remote
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+git log --oneline -1  # verify local matches remote
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
+```
+
+## ENDIF
 
 ## IF !(${BOT_UNAVAILABLE})
 

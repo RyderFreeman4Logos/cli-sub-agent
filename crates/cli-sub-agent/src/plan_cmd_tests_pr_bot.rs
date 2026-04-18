@@ -283,7 +283,7 @@ fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
                 "{artifact} helper occurrence {occurrence} must paginate issue comments before piping to jq"
             );
             assert!(
-                helper.contains(r#"| jq -s '[.[][] | select((.body // "") | test("csa-trigger:"#),
+                helper.contains(r#"| jq -rs '[.[][] | select((.body // "") | test("csa-trigger:"#),
                 "{artifact} helper occurrence {occurrence} must flatten paginated comment pages via jq slurp before sorting"
             );
         }
@@ -312,7 +312,7 @@ fn pr_bot_artifacts_paginate_reusable_current_head_review_lookup() {
             );
             assert!(
                 helper.contains(
-                    r#"| jq -s '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#
+                    r#"| jq -rs '([.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#
                 ),
                 "{artifact} helper occurrence {occurrence} must flatten paginated review pages via jq slurp before sorting reusable review records"
             );
@@ -348,7 +348,7 @@ fn pr_bot_artifacts_recovery_probe_reuses_null_commit_reviews() {
             );
             assert!(
                 helper.contains(
-                    r#"| jq -s '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#
+                    r#"| jq -rs '[.[][] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'")"#
                 ),
                 "{artifact} recovery helper occurrence {occurrence} must flatten paginated review pages via jq slurp before selecting current-window signals"
             );
