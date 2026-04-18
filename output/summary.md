@@ -28,3 +28,9 @@
 ## Blockers encountered
 - Repository pre-commit auto-stages tracked Rust files after `cargo fmt`, so issue-scoped commits required temporarily stashing unrelated tracked `.rs` changes before each commit.
 - Workspace version bump files (`Cargo.toml`, `Cargo.lock`, `weave.lock`) were required by the repository gate `just check-version-bumped`; they were included with `#782` so the branch stays gate-clean.
+
+## #748 Round 2
+- **Root cause**: several flat inline-comment scans still queried `repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100` directly, so page 2+ actionable comments were invisible on high-volume PRs.
+- **Primary fix**: wrapped every remaining `pulls/${PR_NUM}/comments` scan in `gh api --paginate --slurp` and flattened with `[.[] | .[]]` before applying the existing P0/P1/P2 and timestamp filters.
+- **Extra sweep findings**: besides the 6 flagged sites, the sweep found 4 additional non-paginated direct comment scans in the same pattern family; they were updated in the same change so verification sweep hits are all paginated.
+- **Remaining sweep result**: no additional unpaginated `pulls/${PR_NUM}/comments` or `pulls/${PR_NUM}/reviews/*` API calls remain in `patterns/pr-bot/`.

@@ -278,12 +278,13 @@ fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
             );
             assert!(
                 helper.contains(
-                    r#"gh api --paginate "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null"#,
+                    r#"gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null"#,
                 ),
                 "{artifact} helper occurrence {occurrence} must paginate issue comments before piping to jq"
             );
             assert!(
-                helper.contains(r#"| jq -rs '[.[][] | select((.body // "") | test("csa-trigger:"#),
+                helper
+                    .contains(r#"| jq -r '[.[] | .[] | select((.body // "") | test("csa-trigger:"#),
                 "{artifact} helper occurrence {occurrence} must flatten paginated comment pages via jq slurp before sorting"
             );
         }
