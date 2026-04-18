@@ -168,13 +168,3 @@ impl Transport for AcpTransport {
         self
     }
 }
-
-impl AcpTransport {
-    fn consume_resolved_transport_initial_response_timeout_seconds(
-        resolved_timeout_seconds: Option<u64>,
-    ) -> Option<u64> {
-        // ACP already enforces the dual-timeout contract in csa-acp; executor
-        // logic here must only preserve the outer resolved value.
-        consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
-    }
-}
