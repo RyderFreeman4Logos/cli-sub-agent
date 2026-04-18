@@ -347,6 +347,35 @@ fn ensure_review_summary_artifact_preserves_existing_summary_section() {
 }
 
 #[test]
+fn ensure_review_summary_artifact_preserves_existing_multiline_summary_section() {
+    let project_root = temp_project_root("review-summary-preserve-multiline");
+    let session_id = "01TESTSUMMARYMULTILINE000000";
+    let session_dir = create_session_dir(&project_root, session_id);
+    let output = "<!-- CSA:SECTION:summary -->\nLine 1\nLine 2\nLine 3\n<!-- CSA:SECTION:summary:END -->\n\
+<!-- CSA:SECTION:details -->\nFAIL\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
+    csa_session::persist_structured_output(&session_dir, output).expect("persist structured");
+
+    ensure_review_summary_artifact(&session_dir, output).expect("preserve multiline summary");
+
+    let summary = csa_session::read_section(&session_dir, "summary")
+        .expect("read summary section")
+        .expect("summary should exist");
+    assert_eq!(summary, "Line 1\nLine 2\nLine 3");
+
+    let index = csa_session::load_output_index(&session_dir)
+        .expect("load output index")
+        .expect("index should exist");
+    let summary_entries = index
+        .sections
+        .iter()
+        .filter(|section| section.id == "summary")
+        .count();
+    assert_eq!(summary_entries, 1);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn persist_review_verdict_marks_clean_transcript_as_pass() {
     let project_root = temp_project_root("persist-review-verdict-pass");
     let session_id = "01TESTPASS0000000000000000";

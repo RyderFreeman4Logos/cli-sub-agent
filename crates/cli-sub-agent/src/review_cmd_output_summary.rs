@@ -21,19 +21,26 @@ pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -
         return Ok(());
     }
 
-    let Some(summary) = derive_review_result_summary(output) else {
-        return Ok(());
-    };
-    if summary.trim().is_empty() {
-        return Ok(());
-    }
-
     let output_dir = session_dir.join("output");
     fs::create_dir_all(&output_dir)
         .map_err(|error| anyhow::anyhow!("create {}: {error}", output_dir.display()))?;
     let summary_path = output_dir.join("summary.md");
-    fs::write(&summary_path, &summary)
-        .map_err(|error| anyhow::anyhow!("write {}: {error}", summary_path.display()))?;
+    let existing_summary = fs::read_to_string(&summary_path)
+        .ok()
+        .filter(|summary| !summary.trim().is_empty());
+    let summary = if let Some(summary) = existing_summary {
+        summary
+    } else {
+        let Some(summary) = derive_review_result_summary(output) else {
+            return Ok(());
+        };
+        if summary.trim().is_empty() {
+            return Ok(());
+        }
+        fs::write(&summary_path, &summary)
+            .map_err(|error| anyhow::anyhow!("write {}: {error}", summary_path.display()))?;
+        summary
+    };
 
     let mut index = csa_session::load_output_index(session_dir)?.unwrap_or(OutputIndex {
         sections: Vec::new(),
