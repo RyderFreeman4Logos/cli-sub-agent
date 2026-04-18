@@ -115,6 +115,10 @@ static TIER_HINT_RE: LazyLock<Regex> =
 static ONFAIL_HINT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^OnFail:\s*(.+)\s*$").expect("valid regex"));
 
+/// Matches a `Condition: <expr>` line at the start of a step body.
+static CONDITION_HINT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^Condition:\s*(.+)\s*$").expect("valid regex"));
+
 /// Matches a `Session: <id|template>` line at the start of a step body.
 static SESSION_HINT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^Session:\s*(.+)\s*$").expect("valid regex"));
@@ -248,6 +252,7 @@ struct StepHints {
     tier: Option<String>,
     session: Option<String>,
     on_fail: FailAction,
+    condition: Option<String>,
     max_iterations: Option<u32>,
     prompt: String,
 }
@@ -264,6 +269,7 @@ fn extract_hints(body: &str) -> StepHints {
     let mut tier = None;
     let mut session = None;
     let mut on_fail = FailAction::Abort;
+    let mut condition = None;
     let mut max_iterations = None;
     let mut prompt_lines = Vec::new();
     let mut in_hints = true;
@@ -280,6 +286,10 @@ fn extract_hints(body: &str) -> StepHints {
             }
             if let Some(caps) = ONFAIL_HINT_RE.captures(line) {
                 on_fail = parse_fail_action(caps[1].trim());
+                continue;
+            }
+            if let Some(caps) = CONDITION_HINT_RE.captures(line) {
+                condition = Some(caps[1].trim().to_string());
                 continue;
             }
             if let Some(caps) = SESSION_HINT_RE.captures(line) {
@@ -306,6 +316,7 @@ fn extract_hints(body: &str) -> StepHints {
         tier,
         session,
         on_fail,
+        condition,
         max_iterations,
         prompt,
     }
@@ -346,6 +357,9 @@ fn compile_step(title: &str, body: &str, variables: &[String], ctx: &mut Compile
     // Stash max_iterations hint — will be applied to the LoopSpec by
     // compile_for if this step ends up inside a FOR block.
     ctx.pending_max_iterations = hints.max_iterations;
+    if let Some(ref condition) = hints.condition {
+        ctx.collect_vars(condition);
+    }
     if let Some(ref session) = hints.session {
         ctx.collect_vars(session);
     }
@@ -358,7 +372,7 @@ fn compile_step(title: &str, body: &str, variables: &[String], ctx: &mut Compile
         tier: hints.tier,
         depends_on: Vec::new(),
         on_fail: hints.on_fail,
-        condition: None,
+        condition: hints.condition,
         loop_var: None,
         session: hints.session,
     });

@@ -16,7 +16,7 @@ Because this pattern invokes the downstream `commit` skill, the AI reviewer shou
 `Reviewer Guidance` schema required there, including `Timing/Race Scenarios`, `Boundary Cases`,
 and `Regression Tests Added`.
 
-## Variables
+### Variables
 
 - `${FILES}`: Space-separated list of files to stage.
 - `${FIXED_FILES}`: Space-separated list of files to re-stage after fixes.
@@ -33,7 +33,24 @@ and `Regression Tests Added`.
 
 Tool: bash
 
+Initialize and declare workflow variables.
+
+- `${FILES}`: Space-separated list of files to stage.
+- `${FIXED_FILES}`: Space-separated list of files to re-stage after fixes.
+- `${REVIEW_HAS_ISSUES}`: `"true"` when the latest review still has blocking issues.
+- `${REVIEW_ROUND}`: Current review round number (defaults to `1` for the initial review).
+- `${MAX_REVIEW_ROUNDS}`: Hard cap for review rounds (defaults to `3`).
+- `${UNBOUNDED_LOOP_AUTHORIZED}`: `"true"` only when the user explicitly authorized unbounded looping.
+- `${ROUND_3_FALSE_POSITIVES_ONLY}`: `"true"` only when round-3 findings are all judged false positives by the orchestrator.
+- `${USER_DECISION_REQUIRED}`: `"true"` when the hard cap was hit and the workflow must stop for user direction.
+
 ```bash
+: "${FILES}" "${FIXED_FILES}" "${REVIEW_HAS_ISSUES}" "${REVIEW_ROUND}" "${MAX_REVIEW_ROUNDS}" "${UNBOUNDED_LOOP_AUTHORIZED}" "${ROUND_3_FALSE_POSITIVES_ONLY}" "${USER_DECISION_REQUIRED}"
+echo "CSA_VAR:REVIEW_ROUND=${REVIEW_ROUND:-1}"
+echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS:-3}"
+echo "CSA_VAR:UNBOUNDED_LOOP_AUTHORIZED=${UNBOUNDED_LOOP_AUTHORIZED:-false}"
+echo "CSA_VAR:ROUND_3_FALSE_POSITIVES_ONLY=${ROUND_3_FALSE_POSITIVES_ONLY:-false}"
+echo "CSA_VAR:USER_DECISION_REQUIRED=${USER_DECISION_REQUIRED:-false}"
 git add ${FILES}
 ```
 
@@ -125,9 +142,12 @@ echo "CSA_VAR:USER_DECISION_REQUIRED=false"
 echo "CSA_VAR:REVIEW_ROUND=$((REVIEW_ROUND + 1))"
 ```
 
+## ENDIF
+
 ## Step 8: Re-review
 
 Tool: bash
+Condition: ${REVIEW_HAS_ISSUES} && !(${USER_DECISION_REQUIRED})
 
 Run the next review only if the hard-cap check allowed it.
 This is still a single-pass workflow step, not a native weave loop.
@@ -137,9 +157,8 @@ SID=$(csa review --diff --allow-fallback)
 bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
-## ENDIF
-
 ## Step 9: AGENTS.md Compliance Check
+Condition: !(${USER_DECISION_REQUIRED})
 
 The review MUST include AGENTS.md compliance checklist:
 - Discover AGENTS.md chain (root-to-leaf) for each staged file
@@ -156,6 +175,7 @@ The review MUST include AGENTS.md compliance checklist:
 
 Tool: csa
 Tier: tier-1-quick
+Condition: !(${USER_DECISION_REQUIRED})
 
 Delegate commit message generation to cheaper tool.
 Skip when `${USER_DECISION_REQUIRED}` is `"true"`.
@@ -169,6 +189,7 @@ bash scripts/csa/session-wait-until-done.sh "$SID"
 
 Tool: bash
 OnFail: abort
+Condition: !(${USER_DECISION_REQUIRED})
 
 Skip when `${USER_DECISION_REQUIRED}` is `"true"` so the workflow never commits after the hard-cap gate asked for user direction.
 

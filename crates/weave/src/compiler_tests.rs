@@ -181,6 +181,29 @@ Might need retries.
     assert_eq!(plan.steps[0].on_fail, FailAction::Retry(5));
 }
 
+#[test]
+fn test_compile_step_with_condition_hint() {
+    let input = r#"---
+name = "conditional-step"
+---
+## Review Gate
+Tool: bash
+Condition: ${READY} && !(${STOP})
+Run the final gate.
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    let step = &plan.steps[0];
+    assert_eq!(step.tool.as_deref(), Some("bash"));
+    assert_eq!(step.condition.as_deref(), Some("${READY} && !(${STOP})"));
+    assert_eq!(step.prompt, "Run the final gate.");
+
+    let var_names: Vec<&str> = plan.variables.iter().map(|v| v.name.as_str()).collect();
+    assert!(var_names.contains(&"READY"));
+    assert!(var_names.contains(&"STOP"));
+}
+
 // ---------------------------------------------------------------------------
 // IF / ELSE → conditional steps
 // ---------------------------------------------------------------------------

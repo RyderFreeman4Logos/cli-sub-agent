@@ -12,34 +12,31 @@ name = "FILES"
 name = "FIXED_FILES"
 
 [[workflow.variables]]
+name = "MAX_REVIEW_ROUNDS"
+
+[[workflow.variables]]
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
 name = "REVIEW_ROUND"
 
 [[workflow.variables]]
-name = "MAX_REVIEW_ROUNDS"
-
-[[workflow.variables]]
-name = "UNBOUNDED_LOOP_AUTHORIZED"
-
-[[workflow.variables]]
 name = "ROUND_3_FALSE_POSITIVES_ONLY"
-
-[[workflow.variables]]
-name = "USER_DECISION_REQUIRED"
 
 [[workflow.variables]]
 name = "SELF_AUTHORED"
 
 [[workflow.variables]]
-name = "SID"
+name = "UNBOUNDED_LOOP_AUTHORIZED"
+
+[[workflow.variables]]
+name = "USER_DECISION_REQUIRED"
 
 [[workflow.steps]]
 id = 1
 title = "Stage Changes"
 tool = "bash"
-prompt = """
+prompt = '''
 Initialize and declare workflow variables.
 
 - `${FILES}`: Space-separated list of files to stage.
@@ -59,19 +56,19 @@ echo "CSA_VAR:UNBOUNDED_LOOP_AUTHORIZED=${UNBOUNDED_LOOP_AUTHORIZED:-false}"
 echo "CSA_VAR:ROUND_3_FALSE_POSITIVES_ONLY=${ROUND_3_FALSE_POSITIVES_ONLY:-false}"
 echo "CSA_VAR:USER_DECISION_REQUIRED=${USER_DECISION_REQUIRED:-false}"
 git add ${FILES}
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 2
 title = "Size Check"
 tool = "bash"
-prompt = """
+prompt = '''
 Check staged diff size. If >= 500 lines, consider splitting.
 
 ```bash
 git diff --stat --staged
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -87,11 +84,11 @@ on_fail = "abort"
 id = 4
 title = "Step 4a: Run Debate Review"
 tool = "bash"
-prompt = """
+prompt = '''
 ```bash
 SID=$(csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch.")
 bash scripts/csa/session-wait-until-done.sh "$SID"
-```"""
+```'''
 on_fail = "abort"
 condition = "${SELF_AUTHORED}"
 
@@ -99,11 +96,11 @@ condition = "${SELF_AUTHORED}"
 id = 5
 title = "Step 4b: Run CSA Review"
 tool = "bash"
-prompt = """
+prompt = '''
 ```bash
 SID=$(csa review --diff --allow-fallback)
 bash scripts/csa/session-wait-until-done.sh "$SID"
-```"""
+```'''
 on_fail = "abort"
 condition = "!(${SELF_AUTHORED})"
 
@@ -124,10 +121,10 @@ retry = 3
 id = 7
 title = "Re-stage Fixed Files"
 tool = "bash"
-prompt = """
+prompt = '''
 ```bash
 git add ${FIXED_FILES}
-```"""
+```'''
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
@@ -135,8 +132,8 @@ condition = "${REVIEW_HAS_ISSUES}"
 id = 8
 title = "Round Cap Check"
 tool = "bash"
-prompt = """
-Enforce the 3-round hard cap before triggering the next review.
+prompt = '''
+Enforce the 3-round hard cap before triggering the next review attempt inside this single-pass workflow.
 If round 3 still has non-false-positive P0/P1 findings, stop and require user direction.
 Continue without asking only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
 `${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`.
@@ -158,7 +155,7 @@ fi
 
 echo "CSA_VAR:USER_DECISION_REQUIRED=false"
 echo "CSA_VAR:REVIEW_ROUND=$((REVIEW_ROUND + 1))"
-```"""
+```'''
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
@@ -166,13 +163,14 @@ condition = "${REVIEW_HAS_ISSUES}"
 id = 9
 title = "Re-review"
 tool = "bash"
-prompt = """
-Loop back to review only if the hard-cap check allowed another round.
+prompt = '''
+Run the next review only if the hard-cap check allowed it.
+This is still a single-pass workflow step, not a native weave loop.
 
 ```bash
 SID=$(csa review --diff --allow-fallback)
 bash scripts/csa/session-wait-until-done.sh "$SID"
-```"""
+```'''
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES} && !(${USER_DECISION_REQUIRED})"
 
@@ -188,7 +186,8 @@ The review MUST include AGENTS.md compliance checklist:
   mismatched tests are a blocking review failure.
 - If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`
 - If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`
-- Zero unchecked items before proceeding to commit"""
+- Zero unchecked items before proceeding to commit
+- Skip this and all later post-review steps when `${USER_DECISION_REQUIRED}` is `"true"` so the workflow halts cleanly instead of committing past the cap"""
 on_fail = "abort"
 condition = "!(${USER_DECISION_REQUIRED})"
 
@@ -197,8 +196,13 @@ id = 11
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
-Run 'git diff --staged' and generate a Conventional Commits message.
-Output ONLY the commit message, nothing else."""
+Delegate commit message generation to cheaper tool.
+Skip when `${USER_DECISION_REQUIRED}` is `"true"`.
+
+```bash
+SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits message")
+bash scripts/csa/session-wait-until-done.sh "$SID"
+```"""
 tier = "tier-1-quick"
 on_fail = "abort"
 condition = "!(${USER_DECISION_REQUIRED})"
@@ -207,9 +211,11 @@ condition = "!(${USER_DECISION_REQUIRED})"
 id = 12
 title = "Commit"
 tool = "bash"
-prompt = """
+prompt = '''
+Skip when `${USER_DECISION_REQUIRED}` is `"true"` so the workflow never commits after the hard-cap gate asked for user direction.
+
 ```bash
 git commit -m "${COMMIT_MSG}"
-```"""
+```'''
 on_fail = "abort"
 condition = "!(${USER_DECISION_REQUIRED})"
