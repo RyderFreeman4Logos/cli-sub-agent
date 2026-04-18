@@ -144,6 +144,7 @@ printf '%s\\n' \
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+    let _bwrap_preflight_guard = ScopedEnvVarRestore::set("CSA_SKIP_BWRAP_PREFLIGHT", "1");
 
     let config = project_config_with_enabled_tools(&["codex"]);
     let global = GlobalConfig::default();
