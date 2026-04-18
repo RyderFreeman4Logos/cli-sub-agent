@@ -30,6 +30,22 @@ pub struct SessionResultView {
     pub legacy_sidecar: Option<toml::Value>,
 }
 
+pub fn render_redacted_result_sidecar(sidecar: &toml::Value) -> Result<String> {
+    let redacted = redact_result_sidecar_value(sidecar)?;
+    toml::to_string_pretty(&redacted).context("Failed to render redacted result sidecar")
+}
+
+pub fn redact_result_sidecar_value(sidecar: &toml::Value) -> Result<toml::Value> {
+    let json_value =
+        serde_json::to_value(sidecar).context("Failed to convert result sidecar to JSON")?;
+    let serialized =
+        serde_json::to_string(&json_value).context("Failed to serialize result sidecar JSON")?;
+    let redacted = crate::redact::redact_event(&serialized);
+    let redacted_json: serde_json::Value =
+        serde_json::from_str(&redacted).context("Failed to parse redacted result sidecar JSON")?;
+    toml::Value::try_from(redacted_json).context("Failed to convert redacted sidecar back to TOML")
+}
+
 /// Write a session result to disk
 pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
     let base_dir = super::resolve_write_base_dir(project_path, session_id)?;

@@ -404,3 +404,34 @@ fn build_result_json_payload_includes_result_sidecars() {
     );
     assert_eq!(payload["legacy_sidecar"]["artifacts"]["count"], 2);
 }
+
+#[test]
+fn build_result_json_payload_redacts_result_sidecars() {
+    let now = chrono::Utc::now();
+    let result = SessionResultView {
+        envelope: SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "review completed".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+        },
+        manager_sidecar: Some(
+            toml::toml! {
+                [auth]
+                api_key = "hunter2"
+            }
+            .into(),
+        ),
+        legacy_sidecar: None,
+    };
+
+    let payload = build_result_json_payload(&result, None, None).unwrap();
+    let rendered = serde_json::to_string(&payload).unwrap();
+    assert!(!rendered.contains("hunter2"));
+    assert!(rendered.contains("[REDACTED]"));
+}

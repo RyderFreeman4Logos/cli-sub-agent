@@ -251,13 +251,21 @@ fn display_result_text(
             println!("  - {a}");
         }
     }
-    if let Some(sidecar) = &result.manager_sidecar {
+    if let Some(sidecar) = result
+        .manager_sidecar
+        .as_ref()
+        .and_then(render_result_sidecar_for_text)
+    {
         println!("Manager Sidecar:");
-        print_toml_value(sidecar, 2);
+        print_rendered_sidecar(&sidecar, 2);
     }
-    if let Some(sidecar) = &result.legacy_sidecar {
+    if let Some(sidecar) = result
+        .legacy_sidecar
+        .as_ref()
+        .and_then(render_result_sidecar_for_text)
+    {
         println!("Legacy Sidecar:");
-        print_toml_value(sidecar, 2);
+        print_rendered_sidecar(&sidecar, 2);
     }
     if let Some(meta) = review_meta {
         println!("Review Iterations: {}", meta.review_iterations);
@@ -294,10 +302,18 @@ fn build_result_json_payload(
     review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<serde_json::Value> {
     let mut payload = serde_json::to_value(&result.envelope)?;
-    if let Some(sidecar) = &result.manager_sidecar {
+    if let Some(sidecar) = result
+        .manager_sidecar
+        .as_ref()
+        .and_then(redact_result_sidecar_for_json)
+    {
         payload["manager_sidecar"] = serde_json::to_value(sidecar)?;
     }
-    if let Some(sidecar) = &result.legacy_sidecar {
+    if let Some(sidecar) = result
+        .legacy_sidecar
+        .as_ref()
+        .and_then(redact_result_sidecar_for_json)
+    {
         payload["legacy_sidecar"] = serde_json::to_value(sidecar)?;
     }
     if let Some(summary) = transcript_summary {
@@ -314,17 +330,27 @@ fn build_result_json_payload(
     Ok(payload)
 }
 
-fn print_toml_value(value: &toml::Value, indent: usize) {
+fn render_result_sidecar_for_text(sidecar: &toml::Value) -> Option<String> {
+    match csa_session::render_redacted_result_sidecar(sidecar) {
+        Ok(rendered) => Some(rendered),
+        Err(err) => Some(format!("<failed to render TOML sidecar: {err}>")),
+    }
+}
+
+fn redact_result_sidecar_for_json(sidecar: &toml::Value) -> Option<toml::Value> {
+    match csa_session::redact_result_sidecar_value(sidecar) {
+        Ok(toml::Value::Table(table)) if table.is_empty() => None,
+        Ok(value) => Some(value),
+        Err(_) => Some(toml::Value::String(
+            "<failed to render TOML sidecar>".to_string(),
+        )),
+    }
+}
+
+fn print_rendered_sidecar(rendered: &str, indent: usize) {
     let padding = " ".repeat(indent);
-    match toml::to_string_pretty(value) {
-        Ok(rendered) => {
-            for line in rendered.lines() {
-                println!("{padding}{line}");
-            }
-        }
-        Err(err) => {
-            println!("{padding}<failed to render TOML sidecar: {err}>");
-        }
+    for line in rendered.lines() {
+        println!("{padding}{line}");
     }
 }
 

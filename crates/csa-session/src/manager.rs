@@ -23,7 +23,7 @@ use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
     SessionResultView, contract_result_path, legacy_user_result_path, list_artifacts, load_result,
-    load_result_view, save_result,
+    load_result_view, redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
 };
 #[cfg(test)]
 pub(crate) use manager_result::{

@@ -50,3 +50,21 @@ fn test_load_result_view_surfaces_manager_and_legacy_sidecars() {
         ))
     );
 }
+
+#[test]
+fn test_redact_result_sidecar_value_masks_secret_fields() {
+    let redacted = manager_result::redact_result_sidecar_value(
+        &toml::toml! {
+            [auth]
+            api_key = "hunter2"
+            token = "secret-token"
+        }
+        .into(),
+    )
+    .expect("redacted sidecar");
+
+    let rendered = toml::to_string_pretty(&redacted).expect("render redacted sidecar");
+    assert!(!rendered.contains("hunter2"));
+    assert!(!rendered.contains("secret-token"));
+    assert!(rendered.contains("[REDACTED]"));
+}

@@ -84,8 +84,9 @@ pub use manager::{
     list_all_project_session_roots, list_all_sessions, list_all_sessions_all_projects,
     list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,
     load_metadata, load_result, load_result_view, load_session, load_session_global_exact,
-    resolve_fork_source, resolve_resume_session, save_result, save_session, save_session_in,
-    update_last_accessed, validate_tool_access,
+    redact_result_sidecar_value, render_redacted_result_sidecar, resolve_fork_source,
+    resolve_resume_session, save_result, save_session, save_session_in, update_last_accessed,
+    validate_tool_access,
 };
 
 pub use manager::ResumeSessionResolution;

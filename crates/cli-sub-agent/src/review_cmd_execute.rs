@@ -35,7 +35,6 @@ pub(super) struct ReviewExecutionOutcome {
 }
 
 const REVIEW_RELATIVE_ARTIFACT_GUARD_ENV: &str = "CSA_REVIEW_ALLOW_RELATIVE_ARTIFACTS";
-
 fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
     let options = ExecutionEnvOptions::with_no_flash_fallback();
     if no_failover {
@@ -122,7 +121,7 @@ pub(super) async fn execute_review(
         effective_prompt = format!("{guard}\n\n{effective_prompt}");
     }
 
-    let mut execution = match execute_review_once(
+    let mut execution = match execute_review_once_with_artifact_guard(
         &executor,
         &tool,
         &effective_prompt,
@@ -149,30 +148,7 @@ pub(super) async fn execute_review(
         }
     };
 
-    if let Some(leaked_paths) =
-        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
-    {
-        let message = format!(
-            "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
-            leaked_paths.join(", ")
-        );
-        fail_review_execution(project_root, tool, &mut execution, &message)?;
-        return Err(anyhow::anyhow!(message)
-            .context(format!("meta_session_id={}", execution.meta_session_id)));
-    }
-
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
-    if let Some(leaked_paths) =
-        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
-    {
-        let message = format!(
-            "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
-            leaked_paths.join(", ")
-        );
-        fail_review_execution(project_root, tool, &mut execution, &message)?;
-        return Err(anyhow::anyhow!(message)
-            .context(format!("meta_session_id={}", execution.meta_session_id)));
-    }
 
     repair_completed_review_restriction_result(project_root, tool, &mut execution)?;
 
@@ -193,7 +169,7 @@ pub(super) async fn execute_review(
         );
 
         if let Some(api_key_env) = retry_env {
-            let mut retried = match execute_review_once(
+            let mut retried = match execute_review_once_with_artifact_guard(
                 &executor,
                 &tool,
                 &effective_prompt,
@@ -303,6 +279,69 @@ async fn execute_review_once(
         extra_writable,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_review_once_with_artifact_guard(
+    executor: &Executor,
+    tool: &ToolName,
+    effective_prompt: &str,
+    session: Option<String>,
+    description: String,
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    extra_env: Option<&HashMap<String, String>>,
+    tier_name: Option<&str>,
+    global_config: &GlobalConfig,
+    stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
+    initial_response_timeout_seconds: Option<u64>,
+    no_fs_sandbox: bool,
+    readonly_project_root: bool,
+    extra_writable: &[PathBuf],
+) -> Result<crate::pipeline::SessionExecutionResult> {
+    let invocation_started_at = Utc::now();
+    match execute_review_once(
+        executor,
+        tool,
+        effective_prompt,
+        session,
+        description,
+        project_root,
+        project_config,
+        extra_env,
+        tier_name,
+        global_config,
+        stream_mode,
+        idle_timeout_seconds,
+        initial_response_timeout_seconds,
+        no_fs_sandbox,
+        readonly_project_root,
+        extra_writable,
+    )
+    .await
+    {
+        Ok(mut execution) => {
+            enforce_review_artifact_contract(
+                project_root,
+                tool,
+                invocation_started_at,
+                Some(&mut execution),
+                None,
+            )?;
+            Ok(execution)
+        }
+        Err(err) => {
+            enforce_review_artifact_contract(
+                project_root,
+                tool,
+                invocation_started_at,
+                None,
+                Some(&err),
+            )?;
+            Err(err)
+        }
+    }
 }
 
 fn build_gemini_api_key_retry_env(
@@ -485,48 +524,71 @@ fn fail_review_execution(
     execution.execution.exit_code = 1;
     execution.execution.summary = summary.to_string();
 
-    let Some(mut persisted_result) = load_result(project_root, &execution.meta_session_id)
-        .with_context(|| {
-            format!(
-                "failed to load result.toml for review session {}",
-                execution.meta_session_id
-            )
-        })?
+    rewrite_failed_review_state(project_root, tool, &execution.meta_session_id, summary)
+}
+
+fn rewrite_failed_review_state(
+    project_root: &Path,
+    tool: ToolName,
+    session_id: &str,
+    summary: &str,
+) -> Result<()> {
+    let Some(mut persisted_result) = load_result(project_root, session_id)
+        .with_context(|| format!("failed to load result.toml for review session {session_id}"))?
     else {
         return Ok(());
     };
     persisted_result.status = SessionResult::status_from_exit_code(1);
     persisted_result.exit_code = 1;
     persisted_result.summary = summary.to_string();
-    save_result(project_root, &execution.meta_session_id, &persisted_result).with_context(
-        || {
-            format!(
-                "failed to rewrite result.toml for review session {}",
-                execution.meta_session_id
-            )
-        },
-    )?;
+    save_result(project_root, session_id, &persisted_result).with_context(|| {
+        format!("failed to rewrite result.toml for review session {session_id}")
+    })?;
 
-    let mut session =
-        load_session(project_root, &execution.meta_session_id).with_context(|| {
-            format!(
-                "failed to load session state for review session {}",
-                execution.meta_session_id
-            )
-        })?;
+    let mut session = load_session(project_root, session_id)
+        .with_context(|| format!("failed to load session state for review session {session_id}"))?;
     if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
         tool_state.last_action_summary = summary.to_string();
         tool_state.last_exit_code = 1;
         tool_state.updated_at = chrono::Utc::now();
         save_session(&session).with_context(|| {
-            format!(
-                "failed to rewrite session state for review session {}",
-                execution.meta_session_id
-            )
+            format!("failed to rewrite session state for review session {session_id}")
         })?;
     }
 
     Ok(())
+}
+
+fn enforce_review_artifact_contract(
+    project_root: &Path,
+    tool: &ToolName,
+    execution_started_at: DateTime<Utc>,
+    execution: Option<&mut crate::pipeline::SessionExecutionResult>,
+    error: Option<&anyhow::Error>,
+) -> Result<()> {
+    let Some(leaked_paths) =
+        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
+    else {
+        return Ok(());
+    };
+
+    let message = format!(
+        "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
+        leaked_paths.join(", ")
+    );
+
+    if let Some(execution) = execution {
+        fail_review_execution(project_root, *tool, execution, &message)?;
+        return Err(anyhow::anyhow!(message)
+            .context(format!("meta_session_id={}", execution.meta_session_id)));
+    }
+
+    if let Some(session_id) = error.and_then(extract_meta_session_id_from_error) {
+        rewrite_failed_review_state(project_root, *tool, &session_id, &message)?;
+        return Err(anyhow::anyhow!(message).context(format!("meta_session_id={session_id}")));
+    }
+
+    Err(anyhow::anyhow!(message))
 }
 
 fn detect_repo_root_review_artifact_violations(
@@ -541,42 +603,17 @@ fn detect_repo_root_review_artifact_violations(
         return Ok(None);
     }
 
-    let output_dir = project_root.join("output");
-    if !output_dir.is_dir() {
-        return Ok(None);
-    }
-
     let started_at = system_time_from_utc(execution_started_at)
         .checked_sub(Duration::from_secs(1))
         .unwrap_or(UNIX_EPOCH);
     let mut leaked_paths = Vec::new();
-
-    for entry in fs::read_dir(&output_dir)
-        .with_context(|| format!("failed to read {}", output_dir.display()))?
-    {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        if !is_guarded_repo_root_review_artifact(file_name) {
-            continue;
-        }
-
-        let modified_at = entry.metadata()?.modified().with_context(|| {
-            format!(
-                "failed to read modified time for {}",
-                entry.path().display()
-            )
-        })?;
-        if modified_at >= started_at {
-            leaked_paths.push(format!("output/{file_name}"));
-        }
-    }
+    collect_guarded_review_artifacts(
+        &project_root.join("output"),
+        "output",
+        started_at,
+        &mut leaked_paths,
+        is_guarded_repo_root_review_artifact,
+    )?;
 
     if leaked_paths.is_empty() {
         Ok(None)
@@ -589,6 +626,50 @@ fn detect_repo_root_review_artifact_violations(
 fn is_guarded_repo_root_review_artifact(file_name: &str) -> bool {
     matches!(file_name, "result.toml" | "summary.md" | "details.md")
         || file_name.starts_with("review-")
+}
+
+fn collect_guarded_review_artifacts(
+    dir: &Path,
+    prefix: &str,
+    started_at: SystemTime,
+    leaked_paths: &mut Vec<String>,
+    is_guarded: fn(&str) -> bool,
+) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if !is_guarded(file_name) {
+            continue;
+        }
+
+        let modified_at = entry.metadata()?.modified().with_context(|| {
+            format!(
+                "failed to read modified time for {}",
+                entry.path().display()
+            )
+        })?;
+        if modified_at >= started_at {
+            let relative_path = if prefix.is_empty() {
+                file_name.to_string()
+            } else {
+                format!("{prefix}/{file_name}")
+            };
+            leaked_paths.push(relative_path);
+        }
+    }
+
+    Ok(())
 }
 
 fn system_time_from_utc(timestamp: DateTime<Utc>) -> SystemTime {
