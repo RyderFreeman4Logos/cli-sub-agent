@@ -210,6 +210,39 @@ fn retirement_with_fresh_output_and_existing_result_blocks_retirement() {
     assert_eq!(persisted.termination_reason, None);
 }
 
+#[test]
+fn concurrent_reconcile_with_synced_snapshot_still_blocks_synthesis() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("concurrent-reconcile-synced-snapshot"),
+        None,
+        None,
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    fs::write(session_dir.join("output.log"), "fresh output bytes\n").unwrap();
+    write_liveness_snapshot(
+        &session_dir,
+        ["spool_bytes_written=19", "observed_spool_bytes_written=19"],
+    );
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        load_result(project, &session_id).unwrap().is_none(),
+        "fresh output with a synced snapshot should still block synthetic failure"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn stale_output_after_grace_still_allows_synthesis() {

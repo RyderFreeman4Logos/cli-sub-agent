@@ -110,17 +110,15 @@ fn has_reconcile_progress_signal_from_inputs(decision_inputs: &ReconcileDecision
         }
     }
 
-    if decision_inputs.snapshot.is_none() {
-        if decision_inputs.spool_bytes_written.unwrap_or(0) > 0
-            && decision_inputs.output_log_mtime_within_grace
-        {
-            return true;
-        }
-        if decision_inputs.stderr_log_size.unwrap_or(0) > 0
-            && decision_inputs.stderr_log_mtime_within_grace
-        {
-            return true;
-        }
+    if decision_inputs.spool_bytes_written.unwrap_or(0) > 0
+        && decision_inputs.output_log_mtime_within_grace
+    {
+        return true;
+    }
+    if decision_inputs.stderr_log_size.unwrap_or(0) > 0
+        && decision_inputs.stderr_log_mtime_within_grace
+    {
+        return true;
     }
 
     false
