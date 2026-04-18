@@ -379,7 +379,7 @@ Ensure all changes committed. Set `WORKFLOW_BRANCH` and `DEFAULT_BRANCH` once
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
 # Prefer GitHub API (server truth) over locally-cached origin/HEAD (can be stale).
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null)
+DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name // empty' 2>/dev/null)
 if [ -z "$DEFAULT_BRANCH" ]; then
   # gh unavailable or unauthenticated — fall back to cached origin/HEAD
   DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
@@ -468,7 +468,7 @@ prompt = '''
 # --- Precondition gate: review must be complete ---
 if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
   echo "ERROR: Local review (Step 2) was not completed."
-  echo "Run csa review --branch ${DEFAULT_BRANCH} before creating PR."
+  echo "Run csa review --branch \"${DEFAULT_BRANCH}\" before creating PR."
   echo "FORBIDDEN: Creating PR without Step 2 completion."
   exit 1
 fi
@@ -560,12 +560,12 @@ else
     sleep 2
   done
   if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
-    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting ${DEFAULT_BRANCH}." >&2
+    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
     exit 1
   fi
 fi
 if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
-  echo "ERROR: Failed to resolve PR number for branch ${WORKFLOW_BRANCH} targeting ${DEFAULT_BRANCH}." >&2
+  echo "ERROR: Failed to resolve PR number for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
   exit 1
 fi
 REPO="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
