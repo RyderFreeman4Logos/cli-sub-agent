@@ -61,32 +61,24 @@ pub(crate) fn build_merged_env(
 pub(crate) fn apply_review_target_dir(
     task_type: Option<&str>,
     session_dir: &std::path::Path,
-    merged_env: &mut HashMap<String, String>,
+    _merged_env: &mut HashMap<String, String>,
 ) {
     if matches!(task_type, Some("review")) {
         let project_root = resolve_review_project_root(session_dir)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let repo_target_dir = project_root.join("target");
-        let user_configured_target = std::fs::symlink_metadata(&repo_target_dir)
-            .map(|metadata| metadata.is_dir() || metadata.file_type().is_symlink())
-            .unwrap_or(false);
-
-        if user_configured_target {
+        if let Some(target_kind) = detect_project_target_kind(&repo_target_dir) {
             info!(
                 project_target = %repo_target_dir.display(),
-                "Review session: ./target already configured by user (detected symlink/dir), leaving CARGO_TARGET_DIR untouched"
+                target_kind,
+                "honoring user ./target ({target_kind}), CARGO_TARGET_DIR untouched"
             );
             return;
         }
 
-        let review_target_dir = session_dir.join("target");
         info!(
-            "Review session: no user-configured ./target, routing CARGO_TARGET_DIR to {}",
-            review_target_dir.display()
-        );
-        merged_env.insert(
-            "CARGO_TARGET_DIR".to_string(),
-            review_target_dir.display().to_string(),
+            project_target = %repo_target_dir.display(),
+            "no ./target present, CARGO_TARGET_DIR left at codex/cargo default"
         );
     }
 }
@@ -135,4 +127,15 @@ fn resolve_review_project_root(session_dir: &Path) -> Option<PathBuf> {
     let state_value: toml::Value = toml::from_str(&state_contents).ok()?;
     let project_path = state_value.get("project_path")?.as_str()?;
     Some(PathBuf::from(project_path))
+}
+
+fn detect_project_target_kind(repo_target_dir: &Path) -> Option<&'static str> {
+    let metadata = std::fs::symlink_metadata(repo_target_dir).ok()?;
+    if metadata.file_type().is_symlink() {
+        return Some("symlink");
+    }
+    if metadata.is_dir() {
+        return Some("dir");
+    }
+    None
 }
