@@ -70,6 +70,66 @@ fn write_liveness_snapshot(
     .expect("write liveness snapshot");
 }
 
+#[test]
+fn reconciler_does_not_clobber_runtime_liveness_snapshot() {
+    let td = tempdir().expect("tempdir");
+    let session_dir = td.path();
+
+    fs::write(session_dir.join("output.log"), "fresh output bytes\n").expect("write output log");
+    write_liveness_snapshot(&session_dir, ["spool_bytes_written=19"]);
+
+    let snapshot_path = session_dir.join(".liveness.snapshot");
+    let before = fs::read(&snapshot_path).expect("read runtime snapshot before reconcile");
+    let before_mtime = fs::metadata(&snapshot_path)
+        .expect("stat runtime snapshot before reconcile")
+        .modified()
+        .expect("mtime before reconcile");
+
+    let decision = reconcile_liveness_decision(session_dir);
+
+    let after = fs::read(&snapshot_path).expect("read runtime snapshot after reconcile");
+    let after_mtime = fs::metadata(&snapshot_path)
+        .expect("stat runtime snapshot after reconcile")
+        .modified()
+        .expect("mtime after reconcile");
+
+    assert!(
+        decision.blocks_synthesis,
+        "fresh runtime liveness signal should still block synthesis"
+    );
+    assert_eq!(
+        after, before,
+        "reconcile must not rewrite the runtime-owned .liveness.snapshot"
+    );
+    assert_eq!(
+        after_mtime, before_mtime,
+        "reconcile must not update the runtime snapshot mtime"
+    );
+}
+
+#[test]
+fn missing_current_sizes_do_not_count_as_reconcile_progress() {
+    let td = tempdir().expect("tempdir");
+    let session_dir = td.path();
+
+    write_liveness_snapshot(
+        &session_dir,
+        [
+            "observed_spool_bytes_written=19",
+            "acp_events_size=7",
+            "stderr_log_size=3",
+        ],
+    );
+
+    let decision = reconcile_liveness_decision(session_dir);
+
+    assert!(
+        !decision.blocks_synthesis,
+        "missing current files should not be misclassified as fresh progress"
+    );
+    assert_eq!(decision.reason, "no_pid_no_progress");
+}
+
 fn make_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
     let now = Utc::now();
     csa_session::SessionResult {
@@ -176,6 +236,40 @@ fn first_reconcile_with_fresh_output_no_prior_snapshot_blocks_synthesis() {
     assert!(
         load_result(project, &session_id).unwrap().is_none(),
         "fresh output before any observed snapshot should block synthetic failure"
+    );
+}
+
+#[test]
+fn first_reconcile_with_fresh_acp_events_no_prior_snapshot_blocks_synthesis() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("first-reconcile-fresh-acp-events"),
+        None,
+        None,
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    fs::create_dir_all(session_dir.join("output")).unwrap();
+    fs::write(
+        session_dir.join("output/acp-events.jsonl"),
+        "{\"type\":\"event\"}\n",
+    )
+    .unwrap();
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        load_result(project, &session_id).unwrap().is_none(),
+        "fresh ACP event output before any observed snapshot should block synthetic failure"
     );
 }
 

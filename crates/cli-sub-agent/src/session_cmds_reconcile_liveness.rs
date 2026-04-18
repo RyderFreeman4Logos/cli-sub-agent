@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use csa_process::ToolLiveness;
 
-const LIVENESS_SNAPSHOT_FILE: &str = ".liveness.snapshot";
+const RUNTIME_LIVENESS_SNAPSHOT_FILE: &str = ".liveness.snapshot";
 const OUTPUT_LOG_FILE: &str = "output.log";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
@@ -30,6 +30,7 @@ struct ReconcileDecisionInputs {
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
     output_log_mtime_within_grace: bool,
+    acp_events_mtime_within_grace: bool,
     stderr_log_mtime_within_grace: bool,
 }
 
@@ -66,7 +67,7 @@ pub(crate) fn reconcile_liveness_decision(session_dir: &Path) -> ReconcileLivene
 
 fn has_reconcile_progress_signal(session_dir: &Path) -> bool {
     let now = SystemTime::now();
-    let mut snapshot = load_reconcile_liveness_snapshot(session_dir);
+    let snapshot = load_runtime_liveness_snapshot(session_dir);
     let acp_size = fs::metadata(session_dir.join(ACP_EVENTS_LOG_FILE))
         .ok()
         .map(|meta| meta.len());
@@ -82,36 +83,45 @@ fn has_reconcile_progress_signal(session_dir: &Path) -> bool {
             &session_dir.join(OUTPUT_LOG_FILE),
             now,
         ),
+        acp_events_mtime_within_grace: file_modified_recently(
+            &session_dir.join(ACP_EVENTS_LOG_FILE),
+            now,
+        ),
         stderr_log_mtime_within_grace: file_modified_recently(
             &session_dir.join(STDERR_LOG_FILE),
             now,
         ),
     };
 
-    snapshot.observed_spool_bytes_written = snapshot.spool_bytes_written;
-    snapshot.acp_events_size = acp_size;
-    snapshot.stderr_log_size = stderr_size;
-
-    save_reconcile_liveness_snapshot(session_dir, &snapshot);
-
     has_reconcile_progress_signal_from_inputs(&decision_inputs)
 }
 
 fn has_reconcile_progress_signal_from_inputs(decision_inputs: &ReconcileDecisionInputs) -> bool {
     if let Some(snapshot) = &decision_inputs.snapshot {
-        if decision_inputs.spool_bytes_written != snapshot.observed_spool_bytes_written {
+        if decision_inputs.spool_bytes_written.is_some()
+            && decision_inputs.spool_bytes_written != snapshot.observed_spool_bytes_written
+        {
             return true;
         }
-        if decision_inputs.acp_events_size != snapshot.observed_acp_events_size {
+        if decision_inputs.acp_events_size.is_some()
+            && decision_inputs.acp_events_size != snapshot.observed_acp_events_size
+        {
             return true;
         }
-        if decision_inputs.stderr_log_size != snapshot.observed_stderr_log_size {
+        if decision_inputs.stderr_log_size.is_some()
+            && decision_inputs.stderr_log_size != snapshot.observed_stderr_log_size
+        {
             return true;
         }
     }
 
     if decision_inputs.spool_bytes_written.unwrap_or(0) > 0
         && decision_inputs.output_log_mtime_within_grace
+    {
+        return true;
+    }
+    if decision_inputs.acp_events_size.unwrap_or(0) > 0
+        && decision_inputs.acp_events_mtime_within_grace
     {
         return true;
     }
@@ -133,8 +143,8 @@ fn file_modified_recently(path: &Path, now: SystemTime) -> bool {
     elapsed <= Duration::from_secs(RECENT_SESSION_WRITE_WINDOW_SECS)
 }
 
-fn load_reconcile_liveness_snapshot(session_dir: &Path) -> ReconcileLivenessSnapshot {
-    let snapshot_path = session_dir.join(LIVENESS_SNAPSHOT_FILE);
+fn load_runtime_liveness_snapshot(session_dir: &Path) -> ReconcileLivenessSnapshot {
+    let snapshot_path = session_dir.join(RUNTIME_LIVENESS_SNAPSHOT_FILE);
     let Ok(content) = fs::read_to_string(snapshot_path) else {
         return ReconcileLivenessSnapshot::default();
     };
@@ -166,24 +176,4 @@ impl ReconcileLivenessSnapshot {
             observed_stderr_log_size: self.stderr_log_size,
         })
     }
-}
-
-fn save_reconcile_liveness_snapshot(session_dir: &Path, snapshot: &ReconcileLivenessSnapshot) {
-    let mut lines = Vec::with_capacity(4);
-    if let Some(value) = snapshot.spool_bytes_written {
-        lines.push(format!("spool_bytes_written={value}"));
-    }
-    if let Some(value) = snapshot.observed_spool_bytes_written {
-        lines.push(format!("observed_spool_bytes_written={value}"));
-    }
-    if let Some(value) = snapshot.acp_events_size {
-        lines.push(format!("acp_events_size={value}"));
-    }
-    if let Some(value) = snapshot.stderr_log_size {
-        lines.push(format!("stderr_log_size={value}"));
-    }
-    if lines.is_empty() {
-        return;
-    }
-    let _ = fs::write(session_dir.join(LIVENESS_SNAPSHOT_FILE), lines.join("\n"));
 }
