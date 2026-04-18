@@ -15,6 +15,9 @@ use csa_session::{
 use crate::plan_cmd::shell_escape_for_command;
 #[path = "session_cmds_reconcile_cleanup.rs"]
 mod reconcile_cleanup;
+#[path = "session_cmds_reconcile_liveness.rs"]
+mod reconcile_liveness;
+use reconcile_liveness::reconcile_liveness_decision;
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
 const UNPUSHED_COMMITS_SIDECAR_PATH: &str = "output/unpushed_commits.json";
@@ -184,10 +187,6 @@ fn persist_unpushed_commits_sidecar(project_root: &Path, session: &MetaSessionSt
     Ok(rollback_guard)
 }
 
-fn session_has_terminal_process(session_dir: &Path) -> bool {
-    ToolLiveness::has_live_process(session_dir) || ToolLiveness::daemon_pid_is_alive(session_dir)
-}
-
 pub(crate) fn ensure_terminal_result_for_dead_active_session(
     project_root: &Path,
     session_id: &str,
@@ -258,9 +257,22 @@ fn dead_active_session_needs_terminal_result(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if session_has_terminal_process(session_dir) {
+    let liveness = reconcile_liveness_decision(session_dir);
+    if liveness.blocks_synthesis {
+        info!(
+            session_id = %session_id,
+            trigger = %trigger,
+            reconciliation_reason = %liveness.reason,
+            "Dead-session reconciliation skipped because liveness signals still block synthetic fallback"
+        );
         return Ok(false);
     }
+    info!(
+        session_id = %session_id,
+        trigger = %trigger,
+        reconciliation_reason = %liveness.reason,
+        "Dead-session reconciliation confirmed no pid/progress blocker before checking result.toml"
+    );
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     match load_result(project_root, session_id) {
         Ok(Some(_)) => Ok(false),
@@ -300,9 +312,22 @@ where
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
-    if session_has_terminal_process(session_dir) {
+    let liveness = reconcile_liveness_decision(session_dir);
+    if liveness.blocks_synthesis {
+        info!(
+            session_id = %session_id,
+            trigger = %trigger,
+            reconciliation_reason = %liveness.reason,
+            "Dead-session reconciliation re-check skipped synthetic fallback because liveness signals are still present"
+        );
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
+    info!(
+        session_id = %session_id,
+        trigger = %trigger,
+        reconciliation_reason = %liveness.reason,
+        "Dead-session reconciliation re-check confirmed no pid/progress blocker before synthesizing fallback"
+    );
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     match load_result(project_root, session_id) {
         Ok(Some(_)) => return Ok(DeadActiveSessionReconciliation::NoChange),
@@ -491,7 +516,8 @@ fn dead_session_with_result_needs_retire(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if session_has_terminal_process(session_dir) {
+    if ToolLiveness::has_live_process(session_dir) || ToolLiveness::daemon_pid_is_alive(session_dir)
+    {
         return Ok(false);
     }
     Ok(load_result(project_root, session_id)?.is_some())
@@ -508,7 +534,9 @@ fn retire_if_dead_with_result_impl(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if session_has_terminal_process(session_dir) || load_result(project_root, session_id)?.is_none()
+    if ToolLiveness::has_live_process(session_dir)
+        || ToolLiveness::daemon_pid_is_alive(session_dir)
+        || load_result(project_root, session_id)?.is_none()
     {
         return Ok(false);
     }
@@ -746,3 +774,7 @@ mod tests;
 #[cfg(test)]
 #[path = "session_cmds_reconcile_tests_tail.rs"]
 mod tail_tests;
+
+#[cfg(test)]
+#[path = "session_cmds_reconcile_progress_tests.rs"]
+mod progress_tests;

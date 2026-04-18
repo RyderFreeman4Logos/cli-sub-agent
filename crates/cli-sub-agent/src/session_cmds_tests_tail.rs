@@ -413,7 +413,7 @@ fn ensure_terminal_result_for_dead_active_session_preserves_late_real_result() {
 }
 
 #[test]
-fn ensure_terminal_result_for_dead_active_session_reconciles_fresh_output_without_live_process() {
+fn ensure_terminal_result_for_dead_active_session_preserves_session_with_recent_output() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
     let state_home = td.path().join("xdg-state");
@@ -430,16 +430,21 @@ fn ensure_terminal_result_for_dead_active_session_reconciles_fresh_output_withou
         "recent output that should not block reconciliation\n",
     )
     .unwrap();
+    std::fs::write(
+        session_dir.join(".liveness.snapshot"),
+        "spool_bytes_written=48\nobserved_spool_bytes_written=12\n",
+    )
+    .unwrap();
 
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();
     assert_eq!(
         reconciled,
-        DeadActiveSessionReconciliation::SynthesizedFailure,
-        "fresh file writes without a live process should still synthesize a terminal result"
+        DeadActiveSessionReconciliation::NoChange,
+        "recent output growth should block synthetic orphaned_process reconciliation"
     );
-    assert!(load_result(project, &session_id).unwrap().is_some());
+    assert!(load_result(project, &session_id).unwrap().is_none());
 }
 
 #[cfg(unix)]
