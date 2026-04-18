@@ -349,6 +349,77 @@ async fn test_idle_timeout_with_dead_process_kills_after_dead_timeout() {
     );
 }
 
+#[tokio::test]
+async fn initial_response_timeout_ignores_stderr_only_activity_for_legacy_process() {
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        "while true; do printf 'heartbeat\\n' >&2; sleep 0.3; done",
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        None,
+        SpawnOptions::default(),
+        Some(Duration::from_secs(2)),
+    )
+    .await
+    .expect("wait");
+
+    assert_eq!(
+        result.exit_code, 137,
+        "stderr-only chatter must not keep the initial-response watchdog alive"
+    );
+    assert!(
+        result.summary.contains("initial_response_timeout"),
+        "summary should classify the kill as initial_response_timeout, got: {}",
+        result.summary
+    );
+    assert!(
+        result.summary.contains("no stdout output"),
+        "summary should explain that no stdout was observed, got: {}",
+        result.summary
+    );
+}
+
+#[tokio::test]
+async fn idle_timeout_still_respects_stderr_after_first_stdout() {
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        "printf x; for _ in 1 2 3 4 5 6; do printf 'heartbeat\\n' >&2; sleep 0.3; done",
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        Duration::from_secs(10),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        None,
+        SpawnOptions::default(),
+        Some(Duration::from_secs(2)),
+    )
+    .await
+    .expect("wait");
+
+    assert_eq!(
+        result.exit_code, 0,
+        "stderr after first stdout should continue counting as liveness"
+    );
+    assert_eq!(result.output, "x");
+    assert!(
+        !result.summary.contains("initial_response_timeout"),
+        "post-first-stdout process should not be classified as initial_response_timeout"
+    );
+}
+
 #[test]
 fn test_is_working_reads_proc_stat() {
     // Our own process should be in R or S state.

@@ -321,6 +321,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut stderr_output = String::new();
     let execution_start = Instant::now();
     let mut last_activity = Instant::now();
+    let mut last_stdout_activity = last_activity;
     let mut last_heartbeat = execution_start;
     let heartbeat_interval = resolve_heartbeat_interval();
     let mut liveness_dead_since: Option<Instant> = None;
@@ -358,6 +359,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         Ok(n) => {
                             received_first_output = true;
                             last_activity = Instant::now();
+                            last_stdout_activity = last_activity;
                             last_heartbeat = last_activity;
                             liveness_dead_since = None;
                             next_liveness_poll_at = None;
@@ -457,7 +459,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     // Skip liveness polling for initial-response timeout:
                     // kill immediately once elapsed time exceeds the threshold.
                     let should_kill = if !received_first_output && initial_response_timeout.is_some() {
-                        last_activity.elapsed() >= effective_idle
+                        last_stdout_activity.elapsed() >= effective_idle
                     } else {
                         should_terminate_for_idle(
                             &mut last_activity,
@@ -512,6 +514,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         Ok(n) => {
                             received_first_output = true;
                             last_activity = Instant::now();
+                            last_stdout_activity = last_activity;
                             last_heartbeat = last_activity;
                             liveness_dead_since = None;
                             next_liveness_poll_at = None;
@@ -560,7 +563,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     // Skip liveness polling for initial-response timeout:
                     // kill immediately once elapsed time exceeds the threshold.
                     let should_kill = if !received_first_output && initial_response_timeout.is_some() {
-                        last_activity.elapsed() >= effective_idle
+                        last_stdout_activity.elapsed() >= effective_idle
                     } else {
                         should_terminate_for_idle(
                             &mut last_activity,
