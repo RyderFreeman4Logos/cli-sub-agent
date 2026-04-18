@@ -1,12 +1,9 @@
 use super::*;
-use crate::test_env_lock::ScopedEnvVarRestore;
+use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
-use std::sync::Mutex;
 use tempfile::tempdir;
-
-static REVIEWER_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -232,9 +229,7 @@ fn parse_review_verdict_accepts_clean_phrase_without_explicit_token() {
 
 #[test]
 fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_exist() {
-    let _env_lock = REVIEWER_ENV_LOCK
-        .lock()
-        .expect("reviewer env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock poisoned");
     let _parent_guard =
         ScopedEnvVarRestore::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
     let _session_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/child-session");
@@ -250,9 +245,7 @@ fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_ex
 
 #[test]
 fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
-    let _env_lock = REVIEWER_ENV_LOCK
-        .lock()
-        .expect("reviewer env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock poisoned");
     let _parent_guard =
         ScopedEnvVarRestore::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
     let _session_guard = ScopedEnvVarRestore::unset(CSA_SESSION_DIR_ENV_KEY);
@@ -264,9 +257,7 @@ fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
 
 #[test]
 fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_missing() {
-    let _env_lock = REVIEWER_ENV_LOCK
-        .lock()
-        .expect("reviewer env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock poisoned");
     let _parent_guard = ScopedEnvVarRestore::unset(CSA_PARENT_SESSION_DIR_ENV_KEY);
     let _session_guard = ScopedEnvVarRestore::unset(CSA_SESSION_DIR_ENV_KEY);
 

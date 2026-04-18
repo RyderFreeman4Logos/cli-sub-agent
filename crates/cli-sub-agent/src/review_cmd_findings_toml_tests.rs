@@ -1,4 +1,5 @@
 use super::{extract_findings_toml_from_text, persist_review_findings_toml};
+use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{FindingSeverity, FindingsFile, ReviewFinding, ReviewFindingFileRange};
@@ -6,9 +7,12 @@ use serde_json::json;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_subscriber::fmt::MakeWriter;
+
+static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
     ReviewSessionMeta {
@@ -36,6 +40,19 @@ fn temp_project_root(test_name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("csa-{test_name}-{suffix}"));
     fs::create_dir_all(&path).expect("create temp project root");
     path
+}
+
+fn unique_session_id(prefix: &str) -> String {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    let seq = SESSION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{suffix}-{seq}")
+}
+
+fn pin_state_home(project_root: &Path) -> ScopedTestEnvVar {
+    ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"))
 }
 
 fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
@@ -285,8 +302,9 @@ start = 101
 #[test]
 fn persist_review_findings_toml_writes_parsed_artifact() {
     let project_root = temp_project_root("persist-review-findings-toml");
-    let session_id = "01TESTFINDINGSTOML00000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSTOML00000000");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -316,7 +334,7 @@ start = 425
     )
     .expect("write details.md");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let findings_path = session_dir.join("output").join("findings.toml");
@@ -348,8 +366,9 @@ start = 425
 #[test]
 fn persist_review_findings_toml_reads_output_log_when_full_md_is_missing() {
     let project_root = temp_project_root("persist-review-findings-output-log");
-    let session_id = "01TESTFINDINGSTOMLOUTPUTLOG";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSTOMLOUTPUTLOG");
+    let session_dir = create_session_dir(&project_root, &session_id);
     let full_output = [json!({"type":"item.completed","item":{
         "id":"item_1",
         "type":"agent_message",
@@ -383,7 +402,7 @@ start = 88
     )
     .expect("write details.md");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let findings_path = session_dir.join("output").join("findings.toml");
@@ -408,8 +427,9 @@ start = 88
 #[test]
 fn persist_review_findings_toml_writes_synthetic_empty_for_findings_fence_without_toml_extension() {
     let project_root = temp_project_root("persist-review-findings-no-extension");
-    let session_id = "01TESTFINDINGSTOMLNOEXT00";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSTOMLNOEXT00");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"```findings
@@ -429,7 +449,7 @@ start = 130
     )
     .expect("write details.md");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     let buffer = SharedLogBuffer::default();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
@@ -456,8 +476,9 @@ start = 130
 #[test]
 fn persist_review_findings_toml_writes_synthetic_empty_when_block_missing() {
     let project_root = temp_project_root("persist-review-findings-toml-empty");
-    let session_id = "01TESTFINDINGSTOMLEMPTY000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSTOMLEMPTY000");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -475,7 +496,7 @@ No blocking issues found.
     )
     .expect("write details.md");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     let buffer = SharedLogBuffer::default();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
@@ -502,8 +523,9 @@ No blocking issues found.
 #[test]
 fn persist_review_findings_toml_overwrites_existing_empty_artifact() {
     let project_root = temp_project_root("persist-review-findings-overwrite-empty");
-    let session_id = "01TESTFINDINGSEMPTYOVERWR0";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSEMPTYOVERWR0");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -537,7 +559,7 @@ start = 31
     )
     .expect("write empty findings.toml");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
@@ -562,8 +584,9 @@ start = 31
 #[test]
 fn persist_review_findings_toml_overwrites_existing_findings_toml_with_new_content() {
     let project_root = temp_project_root("persist-review-findings-overwrite-existing");
-    let session_id = "01TESTFINDINGSNONEMPTYOVR0";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSNONEMPTYOVR0");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -607,7 +630,7 @@ start = 27
     )
     .expect("write existing findings.toml");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
@@ -632,8 +655,9 @@ start = 27
 #[test]
 fn persist_review_findings_toml_overwrites_existing_empty_artifact_with_derived_empty() {
     let project_root = temp_project_root("persist-review-findings-empty-over-empty");
-    let session_id = "01TESTFINDINGSEMPTYEMPTY00";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSEMPTYEMPTY00");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -656,7 +680,7 @@ No blocking issues found.
     )
     .expect("write empty findings.toml");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
@@ -671,8 +695,9 @@ No blocking issues found.
 #[test]
 fn persist_review_findings_toml_overwrites_unparseable_existing_artifact_with_derived_empty() {
     let project_root = temp_project_root("persist-review-findings-empty-over-garbage");
-    let session_id = "01TESTFINDINGSEMPTYGARBAG0";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSEMPTYGARBAG0");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -695,7 +720,7 @@ No blocking issues found.
     )
     .expect("write invalid findings.toml");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
@@ -710,8 +735,9 @@ No blocking issues found.
 #[test]
 fn persist_review_findings_toml_overwrites_unparseable_existing_artifact() {
     let project_root = temp_project_root("persist-review-findings-overwrite-garbage");
-    let session_id = "01TESTFINDINGSGARBAGEOVR0";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TESTFINDINGSGARBAGEOVR0");
+    let session_dir = create_session_dir(&project_root, &session_id);
     write_review_full_output(
         &session_dir,
         r#"<!-- CSA:SECTION:summary -->
@@ -745,7 +771,7 @@ start = 300
     )
     .expect("write invalid findings.toml");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta(&session_id);
     persist_review_findings_toml(&project_root, &meta);
 
     let actual = fs::read_to_string(session_dir.join("output").join("findings.toml"))
