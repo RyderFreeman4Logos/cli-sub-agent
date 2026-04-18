@@ -785,3 +785,7 @@ pub(super) fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Opti
 #[cfg(test)]
 #[path = "review_cmd_execute_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_cmd_execute_guard_tests.rs"]
+mod guard_tests;

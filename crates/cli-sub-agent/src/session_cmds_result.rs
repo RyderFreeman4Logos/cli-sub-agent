@@ -251,22 +251,8 @@ fn display_result_text(
             println!("  - {a}");
         }
     }
-    if let Some(sidecar) = result
-        .manager_sidecar
-        .as_ref()
-        .and_then(render_result_sidecar_for_text)
-    {
-        println!("Manager Sidecar:");
-        print_rendered_sidecar(&sidecar, 2);
-    }
-    if let Some(sidecar) = result
-        .legacy_sidecar
-        .as_ref()
-        .and_then(render_result_sidecar_for_text)
-    {
-        println!("Legacy Sidecar:");
-        print_rendered_sidecar(&sidecar, 2);
-    }
+    display_sidecar("Manager Sidecar", result.manager_sidecar.as_ref());
+    display_sidecar("Legacy Sidecar", result.legacy_sidecar.as_ref());
     if let Some(meta) = review_meta {
         println!("Review Iterations: {}", meta.review_iterations);
     }
@@ -328,6 +314,13 @@ fn build_result_json_payload(
         payload["review_meta"] = serde_json::to_value(meta)?;
     }
     Ok(payload)
+}
+
+fn display_sidecar(label: &str, sidecar: Option<&toml::Value>) {
+    if let Some(rendered) = sidecar.and_then(render_result_sidecar_for_text) {
+        println!("{label}:");
+        print_rendered_sidecar(&rendered, 2);
+    }
 }
 
 fn render_result_sidecar_for_text(sidecar: &toml::Value) -> Option<String> {
