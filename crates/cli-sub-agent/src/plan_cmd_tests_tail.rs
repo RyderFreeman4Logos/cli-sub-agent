@@ -362,11 +362,11 @@ cp "${body_file}" "${capture}"
 fn step_15_env(
     bin_dir: &Path,
     capture_path: &Path,
-    step_10_output: &str,
+    step_11_output: &str,
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     let existing_path = std::env::var("PATH").unwrap_or_default();
-    vars.insert("STEP_10_OUTPUT".into(), step_10_output.into());
+    vars.insert("STEP_11_OUTPUT".into(), step_11_output.into());
     vars.insert("PR_NUM".into(), "357".into());
     vars.insert("REPO".into(), "RyderFreeman4Logos/cli-sub-agent".into());
     vars.insert("BOT_UNAVAILABLE".into(), "false".into());

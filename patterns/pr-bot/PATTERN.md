@@ -52,6 +52,9 @@ Ensure all changes committed. Set WORKFLOW_BRANCH once (persists through
 clean branch switches in Step 11).
 
 ```bash
+# Force weave to pick up workflow variables used across steps.
+: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}"
+
 WORKFLOW_BRANCH="$(git branch --show-current)"
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
 ```
@@ -888,7 +891,7 @@ Parse the structured debate result from Step 8.
 
 ```bash
 set -euo pipefail
-DEBATE_OUTPUT="${STEP_10_OUTPUT}"
+DEBATE_OUTPUT="${STEP_11_OUTPUT}"
 VERDICT_COUNT="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
     | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
