@@ -4,23 +4,26 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 #[allow(dead_code)]
 pub(crate) static TEST_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn restore_env_var(key: &'static str, original: &mut Option<OsString>) {
+fn restore_env_snapshot(key: &'static str, previous: Option<OsString>) {
     // SAFETY: all tests in this crate that mutate process env must hold TEST_ENV_LOCK
     // for the entire lifetime of the restore guard; private per-module env locks are forbidden.
     unsafe {
-        match original.take() {
+        match previous {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
         }
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct ScopedEnvVarRestore {
     key: &'static str,
     original: Option<OsString>,
 }
 
+#[allow(dead_code)]
 impl ScopedEnvVarRestore {
+    #[allow(dead_code)]
     pub(crate) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let original = std::env::var_os(key);
         // SAFETY: all tests in this crate that touch process env must hold TEST_ENV_LOCK;
@@ -29,6 +32,7 @@ impl ScopedEnvVarRestore {
         Self { key, original }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn unset(key: &'static str) -> Self {
         let original = std::env::var_os(key);
         // SAFETY: all tests in this crate that touch process env must hold TEST_ENV_LOCK;
@@ -40,7 +44,7 @@ impl ScopedEnvVarRestore {
 
 impl Drop for ScopedEnvVarRestore {
     fn drop(&mut self) {
-        restore_env_var(self.key, &mut self.original);
+        restore_env_snapshot(self.key, self.original.take());
     }
 }
 
@@ -68,6 +72,6 @@ impl ScopedTestEnvVar {
 
 impl Drop for ScopedTestEnvVar {
     fn drop(&mut self) {
-        restore_env_var(self.key, &mut self.original);
+        restore_env_snapshot(self.key, self.original.take());
     }
 }
