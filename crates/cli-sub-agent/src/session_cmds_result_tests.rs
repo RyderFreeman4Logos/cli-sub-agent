@@ -1,7 +1,7 @@
 use super::{
     StructuredOutputOpts, build_result_json_payload, compute_token_measurement,
     display_all_sections, display_single_section, display_summary_section, format_number,
-    handle_session_artifacts, handle_session_result,
+    handle_session_artifacts, handle_session_result, render_result_sidecar_for_text,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_session::state::ReviewSessionMeta;
@@ -434,4 +434,9 @@ fn build_result_json_payload_redacts_result_sidecars() {
     let rendered = serde_json::to_string(&payload).unwrap();
     assert!(!rendered.contains("hunter2"));
     assert!(rendered.contains("[REDACTED]"));
+}
+
+#[test]
+fn render_result_sidecar_for_text_skips_empty_tables() {
+    assert!(render_result_sidecar_for_text(&toml::Value::Table(toml::map::Map::new())).is_none());
 }

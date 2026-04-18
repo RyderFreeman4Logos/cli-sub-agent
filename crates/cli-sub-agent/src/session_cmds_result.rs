@@ -325,6 +325,7 @@ fn display_sidecar(label: &str, sidecar: Option<&toml::Value>) {
 
 fn render_result_sidecar_for_text(sidecar: &toml::Value) -> Option<String> {
     match csa_session::render_redacted_result_sidecar(sidecar) {
+        Ok(rendered) if rendered.trim().is_empty() => None,
         Ok(rendered) => Some(rendered),
         Err(err) => Some(format!("<failed to render TOML sidecar: {err}>")),
     }
