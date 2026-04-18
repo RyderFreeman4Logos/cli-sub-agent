@@ -20,7 +20,7 @@ fn review_initial_response_timeout_is_resolved_per_reviewer_tool() {
 
     assert_eq!(
         gemini_timeout,
-        Some(crate::pipeline::DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+        Some(crate::pipeline::DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS)
     );
     assert_eq!(codex_timeout, Some(300));
 }
