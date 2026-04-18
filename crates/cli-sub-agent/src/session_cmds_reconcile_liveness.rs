@@ -1,11 +1,15 @@
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use csa_process::ToolLiveness;
 
 const LIVENESS_SNAPSHOT_FILE: &str = ".liveness.snapshot";
+const OUTPUT_LOG_FILE: &str = "output.log";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
+// Keep this aligned with csa_process::tool_liveness::LIVENESS_RECENT_WINDOW_SECS.
+const RECENT_SESSION_WRITE_WINDOW_SECS: u64 = 30;
 
 pub(crate) struct ReconcileLivenessDecision {
     pub(crate) blocks_synthesis: bool,
@@ -18,6 +22,21 @@ struct ReconcileLivenessSnapshot {
     observed_spool_bytes_written: Option<u64>,
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
+}
+
+struct ReconcileDecisionInputs {
+    snapshot: Option<ReconcileObservedSnapshot>,
+    spool_bytes_written: Option<u64>,
+    acp_events_size: Option<u64>,
+    stderr_log_size: Option<u64>,
+    output_log_mtime_within_grace: bool,
+    stderr_log_mtime_within_grace: bool,
+}
+
+struct ReconcileObservedSnapshot {
+    observed_spool_bytes_written: Option<u64>,
+    observed_acp_events_size: Option<u64>,
+    observed_stderr_log_size: Option<u64>,
 }
 
 pub(crate) fn reconcile_liveness_decision(session_dir: &Path) -> ReconcileLivenessDecision {
@@ -46,37 +65,74 @@ pub(crate) fn reconcile_liveness_decision(session_dir: &Path) -> ReconcileLivene
 }
 
 fn has_reconcile_progress_signal(session_dir: &Path) -> bool {
+    let now = SystemTime::now();
     let mut snapshot = load_reconcile_liveness_snapshot(session_dir);
-    let spool_growth = matches!(
-        (
-            snapshot.spool_bytes_written,
-            snapshot.observed_spool_bytes_written
+    let acp_size = fs::metadata(session_dir.join(ACP_EVENTS_LOG_FILE))
+        .ok()
+        .map(|meta| meta.len());
+    let stderr_size = fs::metadata(session_dir.join(STDERR_LOG_FILE))
+        .ok()
+        .map(|meta| meta.len());
+    let decision_inputs = ReconcileDecisionInputs {
+        snapshot: snapshot.prior_observation(),
+        spool_bytes_written: snapshot.spool_bytes_written,
+        acp_events_size: acp_size,
+        stderr_log_size: stderr_size,
+        output_log_mtime_within_grace: file_modified_recently(
+            &session_dir.join(OUTPUT_LOG_FILE),
+            now,
         ),
-        (Some(current), Some(previous)) if current != previous
-    );
+        stderr_log_mtime_within_grace: file_modified_recently(
+            &session_dir.join(STDERR_LOG_FILE),
+            now,
+        ),
+    };
+
     snapshot.observed_spool_bytes_written = snapshot.spool_bytes_written;
-
-    let (acp_growth, acp_size) = detect_file_growth(
-        &session_dir.join(ACP_EVENTS_LOG_FILE),
-        snapshot.acp_events_size,
-    );
     snapshot.acp_events_size = acp_size;
-
-    let (stderr_growth, stderr_size) =
-        detect_file_growth(&session_dir.join(STDERR_LOG_FILE), snapshot.stderr_log_size);
     snapshot.stderr_log_size = stderr_size;
 
     save_reconcile_liveness_snapshot(session_dir, &snapshot);
-    spool_growth || acp_growth || stderr_growth
+
+    has_reconcile_progress_signal_from_inputs(&decision_inputs)
 }
 
-fn detect_file_growth(path: &Path, previous_size: Option<u64>) -> (bool, Option<u64>) {
-    let current_size = fs::metadata(path).ok().map(|meta| meta.len());
-    let growth = match (previous_size, current_size) {
-        (Some(prev), Some(current)) => current != prev,
-        _ => false,
+fn has_reconcile_progress_signal_from_inputs(decision_inputs: &ReconcileDecisionInputs) -> bool {
+    if let Some(snapshot) = &decision_inputs.snapshot {
+        if decision_inputs.spool_bytes_written != snapshot.observed_spool_bytes_written {
+            return true;
+        }
+        if decision_inputs.acp_events_size != snapshot.observed_acp_events_size {
+            return true;
+        }
+        if decision_inputs.stderr_log_size != snapshot.observed_stderr_log_size {
+            return true;
+        }
+    }
+
+    if decision_inputs.snapshot.is_none() {
+        if decision_inputs.spool_bytes_written.unwrap_or(0) > 0
+            && decision_inputs.output_log_mtime_within_grace
+        {
+            return true;
+        }
+        if decision_inputs.stderr_log_size.unwrap_or(0) > 0
+            && decision_inputs.stderr_log_mtime_within_grace
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn file_modified_recently(path: &Path, now: SystemTime) -> bool {
+    let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified,
+        Err(_) => return false,
     };
-    (growth, current_size)
+    let elapsed = now.duration_since(modified).unwrap_or(Duration::ZERO);
+    elapsed <= Duration::from_secs(RECENT_SESSION_WRITE_WINDOW_SECS)
 }
 
 fn load_reconcile_liveness_snapshot(session_dir: &Path) -> ReconcileLivenessSnapshot {
@@ -99,6 +155,19 @@ fn load_reconcile_liveness_snapshot(session_dir: &Path) -> ReconcileLivenessSnap
         }
     }
     snapshot
+}
+
+impl ReconcileLivenessSnapshot {
+    fn prior_observation(&self) -> Option<ReconcileObservedSnapshot> {
+        let has_prior_observation = self.observed_spool_bytes_written.is_some()
+            || self.acp_events_size.is_some()
+            || self.stderr_log_size.is_some();
+        has_prior_observation.then_some(ReconcileObservedSnapshot {
+            observed_spool_bytes_written: self.observed_spool_bytes_written,
+            observed_acp_events_size: self.acp_events_size,
+            observed_stderr_log_size: self.stderr_log_size,
+        })
+    }
 }
 
 fn save_reconcile_liveness_snapshot(session_dir: &Path, snapshot: &ReconcileLivenessSnapshot) {

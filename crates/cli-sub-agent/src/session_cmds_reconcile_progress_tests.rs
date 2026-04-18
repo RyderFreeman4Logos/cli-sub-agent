@@ -138,6 +138,31 @@ fn fresh_stderr_activity_blocks_synthesis() {
     );
 }
 
+#[test]
+fn first_reconcile_with_fresh_output_no_prior_snapshot_blocks_synthesis() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session =
+        create_session(project, Some("first-reconcile-fresh-output"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    fs::write(session_dir.join("output.log"), "fresh output bytes\n").unwrap();
+    write_liveness_snapshot(&session_dir, ["spool_bytes_written=19"]);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        load_result(project, &session_id).unwrap().is_none(),
+        "fresh output before any observed snapshot should block synthetic failure"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn stale_output_after_grace_still_allows_synthesis() {
