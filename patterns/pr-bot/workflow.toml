@@ -379,7 +379,15 @@ Ensure all changes committed. Set `WORKFLOW_BRANCH` and `DEFAULT_BRANCH` once
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-if [ -z "$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH="main"; fi
+if [ -z "$DEFAULT_BRANCH" ]; then
+  # origin/HEAD not set locally — resolve from GitHub API as secondary source
+  DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null)
+fi
+if [ -z "$DEFAULT_BRANCH" ]; then
+  echo "ERROR: cannot determine default branch (neither origin/HEAD nor 'gh repo view' succeeded)" >&2
+  echo "Fix: run 'git remote set-head origin --auto' or set GH auth, then retry" >&2
+  exit 1
+fi
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
 echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 ```'''
