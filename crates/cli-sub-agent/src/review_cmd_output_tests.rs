@@ -105,7 +105,7 @@ fn derive_decision_from_text_clean_phrase_without_skip_stays_pass() {
 #[test]
 fn detect_tool_review_failure_flags_gemini_oauth_prompt_without_real_turn() {
     let stdout = "Opening authentication page\nDo you want to continue? [Y/n]\n";
-    let detected = detect_tool_review_failure(ToolName::GeminiCli, stdout);
+    let detected = detect_tool_review_failure(ToolName::GeminiCli, stdout, "");
     assert_eq!(
         detected,
         Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
@@ -119,13 +119,34 @@ fn detect_tool_review_failure_ignores_normal_review_output() {
         "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
         "output_tokens: 12\n"
     );
-    assert!(detect_tool_review_failure(ToolName::GeminiCli, stdout).is_none());
+    assert!(detect_tool_review_failure(ToolName::GeminiCli, stdout, "").is_none());
 }
 
 #[test]
 fn detect_tool_review_failure_never_fires_for_non_gemini_tools() {
     let stdout = "Opening authentication page\nDo you want to continue? [Y/n]\n";
-    assert!(detect_tool_review_failure(ToolName::Codex, stdout).is_none());
+    assert!(detect_tool_review_failure(ToolName::Codex, stdout, "").is_none());
+}
+
+#[test]
+fn detect_tool_review_failure_handles_guarded_browser_prompt_variant() {
+    let stdout = concat!(
+        "<csa-caller-sa-guard>\n",
+        "SA MODE ACTIVE\n",
+        "</csa-caller-sa-guard>\n",
+        "\n",
+        "Opening authentication page in your browser. Do you want to continue? [Y/n]: ",
+        "<csa-caller-sa-guard>\n",
+        "SA MODE ACTIVE\n",
+        "</csa-caller-sa-guard>\n",
+    );
+    let stderr =
+        "[stdout] Opening authentication page in your browser. Do you want to continue? [Y/n]: \n";
+    let detected = detect_tool_review_failure(ToolName::GeminiCli, stdout, stderr);
+    assert_eq!(
+        detected,
+        Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
+    );
 }
 
 #[test]

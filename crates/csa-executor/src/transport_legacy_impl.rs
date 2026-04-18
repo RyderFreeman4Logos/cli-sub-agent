@@ -35,6 +35,23 @@ impl Transport for LegacyTransport {
                     options.clone(),
                 )
                 .await?;
+            if is_gemini_oauth_prompt_result(&result.execution) {
+                if attempt == 1
+                    && gemini_inject_api_key_fallback(extra_env).is_some()
+                    && !crate::transport_gemini_retry::gemini_is_no_failover(extra_env)
+                {
+                    tracing::warn!(
+                        attempt,
+                        "gemini-cli legacy OAuth browser prompt detected; retrying with API key"
+                    );
+                    attempt = attempt.saturating_add(1);
+                    continue;
+                }
+
+                let mut result = result;
+                classify_gemini_oauth_prompt_result(&mut result.execution);
+                return Ok(result);
+            }
             if let Some(backoff) =
                 self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
             {

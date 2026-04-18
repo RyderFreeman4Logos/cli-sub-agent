@@ -99,6 +99,48 @@ impl Transport for AcpTransport {
                 Err(e) => is_gemini_rate_limited_error(&format!("{e:#}")),
             };
 
+            if let Ok(mut transport_result) = result {
+                if is_gemini_oauth_prompt_result(&transport_result.execution) {
+                    if attempt == 1
+                        && gemini_inject_api_key_fallback(extra_env).is_some()
+                        && !crate::transport_gemini_retry::gemini_is_no_failover(extra_env)
+                    {
+                        tracing::warn!(
+                            attempt,
+                            "gemini-cli ACP OAuth browser prompt detected; retrying with API key"
+                        );
+                        attempt = attempt.saturating_add(1);
+                        continue;
+                    }
+
+                    classify_gemini_oauth_prompt_result(&mut transport_result.execution);
+                    append_gemini_retry_report(&mut transport_result.execution, &retry_phases);
+                    return Ok(transport_result);
+                }
+
+                if should_retry && attempt < max_attempts {
+                    tracing::info!(
+                        attempt,
+                        phase_desc = gemini_phase_desc(attempt),
+                        "gemini-cli ACP rate limited; advancing phase"
+                    );
+                    tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
+                    attempt = attempt.saturating_add(1);
+                    continue;
+                }
+
+                if should_retry {
+                    tracing::warn!(
+                        attempt,
+                        max_attempts,
+                        "gemini-cli ACP: all retry phases exhausted, returning last result"
+                    );
+                }
+
+                append_gemini_retry_report(&mut transport_result.execution, &retry_phases);
+                return Ok(transport_result);
+            }
+
             if should_retry && attempt < max_attempts {
                 tracing::info!(
                     attempt,
@@ -118,13 +160,10 @@ impl Transport for AcpTransport {
                 );
             }
 
-            return match result {
-                Ok(mut transport_result) => {
-                    append_gemini_retry_report(&mut transport_result.execution, &retry_phases);
-                    Ok(transport_result)
-                }
-                Err(error) => Err(annotate_gemini_retry_error(error, &retry_phases)),
-            };
+            return Err(annotate_gemini_retry_error(
+                result.expect_err("only Err remains after Ok path handled"),
+                &retry_phases,
+            ));
         }
     }
 

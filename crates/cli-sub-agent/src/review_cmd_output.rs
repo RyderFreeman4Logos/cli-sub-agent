@@ -570,18 +570,26 @@ pub(super) fn detect_tool_diagnostic(stdout: &str, stderr: &str) -> Option<Strin
 pub(super) fn detect_tool_review_failure(
     tool: ToolName,
     stdout: &str,
+    stderr: &str,
 ) -> Option<ToolReviewFailureKind> {
     if tool != ToolName::GeminiCli {
         return None;
     }
+    let normalized_stdout = normalize_gemini_prompt_text(stdout);
+    let normalized_stderr = normalize_gemini_prompt_text(stderr);
+    let combined = if normalized_stderr.is_empty() {
+        normalized_stdout.clone()
+    } else if normalized_stdout.is_empty() {
+        normalized_stderr.clone()
+    } else {
+        format!("{normalized_stdout}\n{normalized_stderr}")
+    };
 
-    let has_oauth_prompt = stdout.contains("Opening authentication page")
-        || stdout.contains("Do you want to continue? [Y/n]");
-    if !has_oauth_prompt {
+    if !contains_gemini_oauth_prompt(&combined) {
         return None;
     }
 
-    let saw_turn_completed = stdout.lines().any(|line| {
+    let saw_turn_completed = combined.lines().any(|line| {
         line.contains("\"type\":\"turn.completed\"")
             || line.contains("\"type\": \"turn.completed\"")
             || line.trim() == "turn.completed"
@@ -590,17 +598,12 @@ pub(super) fn detect_tool_review_failure(
         return None;
     }
 
-    let output_tokens = crate::run_helpers::parse_token_usage(stdout)
+    let output_tokens = crate::run_helpers::parse_token_usage(&combined)
         .and_then(|usage| usage.output_tokens)
         .unwrap_or(0);
     if output_tokens != 0 {
         return None;
     }
-
-    if stdout.len() >= 200 {
-        return None;
-    }
-
     Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
 }
 
@@ -661,6 +664,64 @@ fn strip_prompt_guards(text: &str) -> String {
         result.push('\n');
     }
     result
+}
+
+fn contains_gemini_oauth_prompt(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("opening authentication page in your browser")
+        || (lower.contains("opening authentication page")
+            && lower.contains("do you want to continue"))
+        || (lower.contains("authentication page in your browser")
+            && lower.contains("do you want to continue"))
+}
+
+fn normalize_gemini_prompt_text(text: &str) -> String {
+    let stripped = strip_prompt_guards(&strip_ansi_escape_sequences(text));
+    let mut cleaned = String::new();
+    let mut in_sa_guard = false;
+    for raw_line in stripped.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.starts_with("<csa-caller-sa-guard") {
+            in_sa_guard = true;
+            continue;
+        }
+        if trimmed.starts_with("</csa-caller-sa-guard>") {
+            in_sa_guard = false;
+            continue;
+        }
+        if in_sa_guard
+            || trimmed.is_empty()
+            || trimmed.starts_with("WARNING: weave.lock")
+            || trimmed.starts_with("csa run context:")
+            || trimmed.starts_with("Running scope as unit:")
+        {
+            continue;
+        }
+        let stripped = trimmed.strip_prefix("[stdout] ").unwrap_or(trimmed);
+        cleaned.push_str(stripped);
+        cleaned.push('\n');
+    }
+    cleaned
+}
+fn strip_ansi_escape_sequences(text: &str) -> String {
+    let mut stripped = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            stripped.push(ch);
+            continue;
+        }
+        if !matches!(chars.peek(), Some('[')) {
+            continue;
+        }
+        let _ = chars.next();
+        for next in chars.by_ref() {
+            if ('@'..='~').contains(&next) {
+                break;
+            }
+        }
+    }
+    stripped
 }
 
 fn truncate_review_result_summary(line: &str) -> String {

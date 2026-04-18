@@ -33,10 +33,11 @@ use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
     apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
-    classify_join_error, ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
-    gemini_phase_desc, gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
+    classify_gemini_oauth_prompt_result, classify_join_error,
+    ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure, gemini_phase_desc,
+    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
+    is_gemini_oauth_prompt_result,
 };
-
 #[path = "transport_gemini_acp_runtime.rs"]
 mod transport_gemini_acp_runtime;
 use transport_gemini_acp_runtime::{gemini_runtime_home_from_env, prepare_gemini_acp_runtime};
@@ -781,16 +782,16 @@ include!("transport_acp_impl.rs");
 
 #[cfg(test)]
 mod tests {
-    use csa_acp::SessionConfig;
-    use csa_resource::isolation_plan::IsolationPlan;
-
     use super::*;
     use crate::transport_gemini_retry::*;
+    use csa_acp::SessionConfig;
+    use csa_resource::isolation_plan::IsolationPlan;
 
     include!("transport_tests_tail.rs");
     include!("transport_tests_ephemeral.rs");
     include!("transport_tests_gemini_fallback.rs");
     include!("transport_tests_gemini_init_classification.rs");
+    include!("transport_tests_gemini_oauth_prompt.rs");
     include!("transport_tests_extra.rs");
 }
 
