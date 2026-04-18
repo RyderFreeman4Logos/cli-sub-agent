@@ -872,7 +872,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     local setup_body
     setup_body="$(
       gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-        --jq '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
+        | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
         2>/dev/null
     )"
     set -e
@@ -902,13 +902,13 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
       ACTIONABLE_COMMENT_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
-          --jq '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
           2>/dev/null
       )"
     else
       ACTIONABLE_COMMENT_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-          --jq '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
           2>/dev/null
       )"
     fi
@@ -949,13 +949,13 @@ if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
   if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
     OTHER_BOT_COUNT="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        --jq '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
         2>/dev/null || echo "0"
     )"
   else
     OTHER_BOT_COUNT="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        --jq '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
         2>/dev/null || echo "0"
     )"
   fi
@@ -1103,13 +1103,13 @@ case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
     fi
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
-        --jq '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
   current_sha_comments)
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        --jq '[.[] | .[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
   *)
@@ -1120,7 +1120,7 @@ case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
     # Query from ANY bot (not just target) to also catch non-target bot findings
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        --jq '[.[] | .[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
 esac
@@ -1606,7 +1606,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     local setup_body
     setup_body="$(
       gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-        --jq '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
+        | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
         2>/dev/null
     )"
     set -e
@@ -1629,13 +1629,13 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "true" ]; then
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${POST_FIX_REUSED_REVIEW_ID}/comments?per_page=100" \
-          --jq '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
           2>/dev/null
       )"
     else
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-          --jq '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
           2>/dev/null
       )"
     fi
@@ -1828,7 +1828,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   set +e
   LATE_ACTIONABLE_COUNT="$(
     gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-      --jq '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+      | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
       2>/dev/null
   )"
   LATE_ACTIONABLE_RC=$?

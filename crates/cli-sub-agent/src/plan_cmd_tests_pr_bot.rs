@@ -287,6 +287,10 @@ fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
                     .contains(r#"| jq -r '[.[] | .[] | select((.body // "") | test("csa-trigger:"#),
                 "{artifact} helper occurrence {occurrence} must flatten paginated comment pages via jq slurp before sorting"
             );
+            assert!(
+                !helper.contains("--jq"),
+                "{artifact} helper occurrence {occurrence} must pipe slurped pages into jq instead of combining --slurp with --jq"
+            );
         }
     }
 }
