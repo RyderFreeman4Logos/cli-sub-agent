@@ -209,6 +209,24 @@ fn test_legacy_transport_consumes_resolved_timeout_without_reapplying_defaults()
     );
 }
 
+#[test]
+fn test_acp_transport_preserves_resolved_timeout_for_acp_execution_layer() {
+    assert_eq!(
+        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(Some(42)),
+        Some(42),
+        "ACP path must forward the already-resolved watchdog duration into csa-acp"
+    );
+}
+
+#[test]
+fn test_acp_transport_preserves_disabled_resolved_timeout_for_acp_execution_layer() {
+    assert_eq!(
+        super::AcpTransport::consume_resolved_transport_initial_response_timeout_seconds(None),
+        None,
+        "ACP path must keep the outer disabled sentinel and not re-arm a watchdog"
+    );
+}
+
 #[tokio::test]
 async fn test_legacy_transport_execute_preserves_disabled_resolved_timeout_on_persistent_codex_path()
 {
