@@ -222,7 +222,7 @@ fn inspect_doctor_project_config_from(project_root: &Path) -> DoctorProjectConfi
     match load_doctor_project_config_from(project_root) {
         Ok(Some(config)) => DoctorProjectConfigStatus::Valid(Box::new(config)),
         Ok(None) => DoctorProjectConfigStatus::Missing,
-        Err(error) => DoctorProjectConfigStatus::Invalid(error.to_string()),
+        Err(error) => DoctorProjectConfigStatus::Invalid(format!("{error:#}")),
     }
 }
 
@@ -230,7 +230,7 @@ fn inspect_doctor_effective_config_from(project_root: &Path) -> DoctorEffectiveC
     match load_doctor_effective_config_from(project_root) {
         Ok(Some(config)) => DoctorEffectiveConfigStatus::Valid(Box::new(config)),
         Ok(None) => DoctorEffectiveConfigStatus::Defaults,
-        Err(error) => DoctorEffectiveConfigStatus::Invalid(error.to_string()),
+        Err(error) => DoctorEffectiveConfigStatus::Invalid(format!("{error:#}")),
     }
 }
 

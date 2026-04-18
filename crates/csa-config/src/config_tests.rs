@@ -516,7 +516,8 @@ fn test_max_recursion_depth_override() {
 
     config.save(dir.path()).unwrap();
 
-    let loaded = ProjectConfig::load(dir.path()).unwrap();
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let loaded = ProjectConfig::load_with_paths(None, &project_path).unwrap();
     assert!(loaded.is_some());
     let loaded = loaded.unwrap();
 

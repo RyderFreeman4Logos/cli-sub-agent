@@ -181,6 +181,94 @@ fn test_merged_schema_version_uses_max_when_explicit() {
 }
 
 #[test]
+fn test_invalid_user_transport_override_fails_before_merge() {
+    let tmp = tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tools.claude-code]
+transport = "cli"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[tools.codex]
+transport = "acp"
+"#,
+    )
+    .unwrap();
+
+    let err = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .expect_err("invalid user-layer transport override should fail");
+    let rendered = format!("{err:#}");
+
+    assert!(
+        rendered.contains("Invalid user config:"),
+        "error should identify the user config layer: {rendered}"
+    );
+    assert!(
+        rendered.contains(&user_path.display().to_string()),
+        "error should include the user config path: {rendered}"
+    );
+    assert!(
+        rendered.contains("[tools.claude-code].transport"),
+        "error should surface the invalid user transport key: {rendered}"
+    );
+}
+
+#[test]
+fn test_invalid_project_transport_override_fails_before_merge() {
+    let tmp = tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tools.codex]
+transport = "cli"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[tools.claude-code]
+transport = "cli"
+"#,
+    )
+    .unwrap();
+
+    let err = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .expect_err("invalid project-layer transport override should fail");
+    let rendered = format!("{err:#}");
+
+    assert!(
+        rendered.contains("Invalid project config:"),
+        "error should identify the project config layer: {rendered}"
+    );
+    assert!(
+        rendered.contains(&project_path.display().to_string()),
+        "error should include the project config path: {rendered}"
+    );
+    assert!(
+        rendered.contains("[tools.claude-code].transport"),
+        "error should surface the invalid project transport key: {rendered}"
+    );
+}
+
+#[test]
 #[serial]
 fn test_user_config_path_returns_some() {
     let dir = tempdir().unwrap();
