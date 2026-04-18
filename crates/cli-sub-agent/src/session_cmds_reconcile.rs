@@ -1,16 +1,14 @@
 use anyhow::{Context, Result, anyhow};
 use csa_core::vcs::VcsKind;
+use csa_session::{
+    MetaSessionState, SessionPhase, SessionResult, get_session_dir, load_result, load_session,
+};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::{info, warn};
-
-use csa_process::ToolLiveness;
-use csa_session::{
-    MetaSessionState, SessionPhase, SessionResult, get_session_dir, load_result, load_session,
-};
+use tracing::{debug, info, warn};
 
 use crate::plan_cmd::shell_escape_for_command;
 #[path = "session_cmds_reconcile_cleanup.rs"]
@@ -516,8 +514,13 @@ fn dead_session_with_result_needs_retire(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if ToolLiveness::has_live_process(session_dir) || ToolLiveness::daemon_pid_is_alive(session_dir)
-    {
+    let liveness = reconcile_liveness_decision(session_dir);
+    if liveness.blocks_synthesis {
+        debug!(
+            session_id = %session_id,
+            reason = %liveness.reason,
+            "Dead-session retirement deferred: progress/liveness still detected"
+        );
         return Ok(false);
     }
     Ok(load_result(project_root, session_id)?.is_some())
@@ -534,10 +537,16 @@ fn retire_if_dead_with_result_impl(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if ToolLiveness::has_live_process(session_dir)
-        || ToolLiveness::daemon_pid_is_alive(session_dir)
-        || load_result(project_root, session_id)?.is_none()
-    {
+    let liveness = reconcile_liveness_decision(session_dir);
+    if liveness.blocks_synthesis {
+        debug!(
+            session_id = %session_id,
+            reason = %liveness.reason,
+            "retire_if_dead_with_result: progress/liveness detected, skipping retirement"
+        );
+        return Ok(false);
+    }
+    if load_result(project_root, session_id)?.is_none() {
         return Ok(false);
     }
     if session

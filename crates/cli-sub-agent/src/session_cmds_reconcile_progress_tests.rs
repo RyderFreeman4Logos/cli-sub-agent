@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_env_lock::TEST_ENV_LOCK;
-use csa_session::{create_session, get_session_dir, load_result};
+use chrono::Utc;
+use csa_session::{create_session, get_session_dir, load_result, load_session, save_result};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -67,6 +68,21 @@ fn write_liveness_snapshot(
         format!("{contents}\n"),
     )
     .expect("write liveness snapshot");
+}
+
+fn make_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
+    let now = Utc::now();
+    csa_session::SessionResult {
+        status: status.to_string(),
+        exit_code,
+        summary: "summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+    }
 }
 
 #[cfg(unix)]
@@ -163,6 +179,37 @@ fn first_reconcile_with_fresh_output_no_prior_snapshot_blocks_synthesis() {
     );
 }
 
+#[test]
+fn retirement_with_fresh_output_and_existing_result_blocks_retirement() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("retirement-fresh-output-existing-result"),
+        None,
+        None,
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    save_result(project, &session_id, &make_result("success", 0)).unwrap();
+    fs::write(session_dir.join("output.log"), "fresh output bytes\n").unwrap();
+    write_liveness_snapshot(&session_dir, ["spool_bytes_written=19"]);
+
+    let retired = retire_if_dead_with_result(project, &session_id, "session list").unwrap();
+
+    assert!(
+        !retired,
+        "fresh output should block dead-session retirement even when result.toml exists"
+    );
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, csa_session::SessionPhase::Active);
+    assert_eq!(persisted.termination_reason, None);
+}
+
 #[cfg(unix)]
 #[test]
 fn stale_output_after_grace_still_allows_synthesis() {
@@ -194,6 +241,43 @@ fn stale_output_after_grace_still_allows_synthesis() {
         load_result(project, &session_id).unwrap().is_some(),
         "stale output without live pid/progress should still synthesize a terminal result"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_with_stale_output_and_existing_result_still_retires() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("retirement-stale-output-existing-result"),
+        None,
+        None,
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    save_result(project, &session_id, &make_result("success", 0)).unwrap();
+    let output_path = session_dir.join("output.log");
+    fs::write(&output_path, "old output bytes\n").unwrap();
+    set_file_mtime_seconds_ago(&output_path, 31);
+    write_liveness_snapshot(
+        &session_dir,
+        ["spool_bytes_written=16", "observed_spool_bytes_written=16"],
+    );
+
+    let retired = retire_if_dead_with_result(project, &session_id, "session list").unwrap();
+
+    assert!(
+        retired,
+        "stale output should still allow legitimate retirement"
+    );
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, csa_session::SessionPhase::Retired);
+    assert_eq!(persisted.termination_reason.as_deref(), Some("completed"));
 }
 
 #[cfg(target_os = "linux")]
