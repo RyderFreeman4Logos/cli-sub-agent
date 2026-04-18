@@ -170,11 +170,27 @@ impl Transport for AcpTransport {
 }
 
 impl AcpTransport {
+    pub fn new(tool_name: &str, session_config: Option<SessionConfig>) -> Self {
+        let (cmd, args) = Self::acp_command_for_tool(tool_name);
+        Self {
+            tool_name: tool_name.to_string(),
+            acp_command: cmd,
+            acp_args: args,
+            session_config,
+        }
+    }
+
     fn consume_resolved_transport_initial_response_timeout_seconds(
+        tool_name: &str,
         resolved_timeout_seconds: Option<u64>,
     ) -> Option<u64> {
-        // ACP already enforces the dual-timeout contract in csa-acp; executor
-        // logic here must only preserve the outer resolved value.
+        // Only codex ACP uses the outer first-byte watchdog. Other ACP tools
+        // retain the pre-existing dual-timeout contract (init + idle) without
+        // adding a new first-byte deadline at the ACP boundary.
+        if tool_name != "codex" {
+            return None;
+        }
+
         consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
     }
 }
