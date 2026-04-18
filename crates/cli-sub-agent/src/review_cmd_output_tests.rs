@@ -63,8 +63,10 @@ fn temp_project_root(test_name: &str) -> PathBuf {
 }
 
 fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
-    let session_dir =
-        csa_session::get_session_dir(project_root, session_id).expect("resolve session dir");
+    let session_dir = csa_session::get_session_root(project_root)
+        .expect("resolve session root")
+        .join("sessions")
+        .join(session_id);
     fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
     session_dir
 }
