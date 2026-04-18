@@ -777,13 +777,13 @@ case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
     fi
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
-        | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
   current_sha_comments)
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
   *)
@@ -794,7 +794,7 @@ case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
     # Query from ANY bot (not just target) to also catch non-target bot findings
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
 esac
