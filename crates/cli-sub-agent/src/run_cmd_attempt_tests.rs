@@ -541,7 +541,10 @@ fn resolve_attempt_initial_response_timeout_uses_fallback_tool_defaults() {
     let codex_timeout =
         resolve_attempt_initial_response_timeout_seconds(Some(&config), None, None, false, "codex");
 
-    assert_eq!(gemini_timeout, Some(120));
+    assert_eq!(
+        gemini_timeout,
+        Some(crate::pipeline::DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+    );
     assert_eq!(
         codex_timeout,
         Some(300),

@@ -264,6 +264,38 @@ fn test_resolve_initial_response_timeout_for_codex_defaults_to_300_without_overr
 }
 
 #[test]
+fn test_resolve_initial_response_timeout_for_gemini_cli_default() {
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig {
+            initial_response_timeout_seconds: None,
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    assert_eq!(
+        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "gemini-cli"),
+        Some(DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS)
+    );
+}
+
+#[test]
 fn test_resolve_initial_response_timeout_for_non_codex_cli_zero_disables_watchdog() {
     let cfg = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -290,6 +322,112 @@ fn test_resolve_initial_response_timeout_for_non_codex_cli_zero_disables_watchdo
         resolve_initial_response_timeout_for_tool(Some(&cfg), Some(0), None, "gemini-cli"),
         None,
         "non-codex callers must translate the disabled sentinel before csa-process sees it"
+    );
+}
+
+#[test]
+fn test_resolve_initial_response_timeout_gemini_cli_honors_override() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            initial_response_timeout_seconds: Some(900),
+            ..Default::default()
+        },
+    );
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    assert_eq!(
+        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "gemini-cli"),
+        Some(900)
+    );
+}
+
+#[test]
+fn test_resolve_initial_response_timeout_gemini_cli_disable() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            initial_response_timeout_seconds: Some(0),
+            ..Default::default()
+        },
+    );
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    assert_eq!(
+        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "gemini-cli"),
+        None
+    );
+}
+
+#[test]
+fn test_resolve_initial_response_timeout_for_unknown_tool_uses_global_default() {
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig {
+            initial_response_timeout_seconds: None,
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    assert_eq!(
+        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "opencode"),
+        Some(DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS)
     );
 }
 

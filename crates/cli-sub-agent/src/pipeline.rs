@@ -52,6 +52,7 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
 pub(crate) const DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
+pub(crate) const DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParentSessionSource {
@@ -113,22 +114,36 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
         );
     }
 
-    if tool_name == "codex" {
-        let configured = if let Some(seconds) =
-            config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name))
-        {
-            Some(seconds)
-        } else {
-            config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds)
-        };
+    let tool_override = config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name));
 
-        return csa_executor::resolve_initial_response_timeout(
-            configured,
-            DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
-        );
+    match tool_name {
+        "codex" => {
+            let configured = tool_override
+                .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
+            csa_executor::resolve_initial_response_timeout(
+                configured,
+                DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+            )
+        }
+        "gemini-cli" => {
+            let configured = tool_override
+                .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
+            csa_executor::resolve_initial_response_timeout(
+                configured,
+                DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+            )
+        }
+        _ => {
+            if let Some(seconds) = tool_override {
+                csa_executor::resolve_initial_response_timeout(
+                    Some(seconds),
+                    DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+                )
+            } else {
+                resolve_initial_response_timeout_seconds(config, None)
+            }
+        }
     }
-
-    resolve_initial_response_timeout_seconds(config, None)
 }
 
 pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {
