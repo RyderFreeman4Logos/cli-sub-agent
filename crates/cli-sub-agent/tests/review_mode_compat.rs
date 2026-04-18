@@ -6,6 +6,9 @@ mod review_consensus;
 #[allow(dead_code)]
 #[path = "../src/review_prior_rounds.rs"]
 mod review_prior_rounds;
+#[allow(dead_code)]
+#[path = "../src/test_env_lock.rs"]
+mod test_env_lock;
 
 use chrono::{TimeZone, Utc};
 use clap::{Parser, error::ErrorKind};

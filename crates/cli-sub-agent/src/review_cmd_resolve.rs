@@ -614,49 +614,20 @@ pub(crate) struct ReviewProjectPromptOptions<'a> {
 #[cfg(test)]
 mod tests {
     use super::write_multi_reviewer_consolidated_artifact;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
     use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
     use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
     use std::fs;
-    use std::sync::Mutex;
     use tempfile::tempdir;
 
-    static REVIEW_RESOLVE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct ScopedEnvVar {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl ScopedEnvVar {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: test-scoped env mutation guarded by REVIEW_RESOLVE_ENV_LOCK.
-            unsafe { std::env::set_var(key, value) };
-            Self { key, original }
-        }
-    }
-
-    impl Drop for ScopedEnvVar {
-        fn drop(&mut self) {
-            // SAFETY: test-scoped env mutation guarded by REVIEW_RESOLVE_ENV_LOCK.
-            unsafe {
-                match self.original.take() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
     #[test]
-    fn write_multi_reviewer_consolidated_artifact_reads_parent_reviewer_dir() {
-        let _env_lock = REVIEW_RESOLVE_ENV_LOCK
-            .lock()
-            .expect("review resolve env lock poisoned");
+    fn write_multi_reviewer_consolidated_artifact_reads_current_session_reviewer_dir() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock poisoned");
         let temp = tempdir().expect("tempdir should be created");
         let session_dir = temp.path().display().to_string();
-        let _session_dir_guard = ScopedEnvVar::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
-        let _session_id_guard = ScopedEnvVar::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+        let _session_id_guard =
+            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
 
         let reviewer_dir = temp.path().join("reviewer-1");
         fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
