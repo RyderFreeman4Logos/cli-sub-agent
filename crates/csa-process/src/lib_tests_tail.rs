@@ -388,6 +388,50 @@ async fn initial_response_timeout_ignores_stderr_only_activity_for_legacy_proces
 }
 
 #[tokio::test]
+async fn initial_response_timeout_fires_under_high_frequency_stderr() {
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        "while true; do printf 'tick\\n' >&2; sleep 0.01; done",
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let start = Instant::now();
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+        Duration::from_millis(100),
+        None,
+        SpawnOptions::default(),
+        Some(Duration::from_secs(1)),
+    )
+    .await
+    .expect("wait");
+    let elapsed = start.elapsed();
+
+    assert_eq!(
+        result.exit_code, 137,
+        "high-frequency stderr chatter must not starve the initial-response watchdog"
+    );
+    assert!(
+        result.summary.contains("initial_response_timeout"),
+        "summary should classify the kill as initial_response_timeout, got: {}",
+        result.summary
+    );
+    assert!(
+        result.summary.contains("no stdout output"),
+        "summary should explain that no stdout was observed, got: {}",
+        result.summary
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "watchdog should still fire promptly under stderr chatter, elapsed={elapsed:?}"
+    );
+}
+
+#[tokio::test]
 async fn idle_timeout_still_respects_stderr_after_first_stdout() {
     let mut cmd = Command::new("bash");
     cmd.args([
