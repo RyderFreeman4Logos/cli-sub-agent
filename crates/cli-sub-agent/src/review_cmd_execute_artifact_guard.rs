@@ -21,13 +21,13 @@ pub(super) fn detect_repo_root_review_artifact_violations(
 ) -> Result<Option<Vec<String>>> {
     if std::env::var_os(REVIEW_RELATIVE_ARTIFACT_GUARD_ENV).as_deref() == Some("1".as_ref()) {
         warn!(
-            "{}=1 bypasses deprecated review artifact contract guard",
+            "{}=1 bypasses the review artifact contract guard",
             REVIEW_RELATIVE_ARTIFACT_GUARD_ENV
         );
         return Ok(None);
     }
 
-    let started_at = system_time_from_utc(execution_started_at)
+    let started_at = SystemTime::from(execution_started_at)
         .checked_sub(Duration::from_secs(1))
         .unwrap_or(UNIX_EPOCH);
     let mut leaked_paths = Vec::new();
@@ -105,10 +105,4 @@ fn collect_guarded_review_artifacts(
     }
 
     Ok(())
-}
-
-fn system_time_from_utc(timestamp: DateTime<Utc>) -> SystemTime {
-    UNIX_EPOCH
-        + Duration::from_secs(timestamp.timestamp().max(0) as u64)
-        + Duration::from_nanos(u64::from(timestamp.timestamp_subsec_nanos()))
 }
