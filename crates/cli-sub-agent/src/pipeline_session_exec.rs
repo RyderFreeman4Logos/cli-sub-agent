@@ -35,7 +35,6 @@ use csa_session::{
 };
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
-
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
 pub(crate) async fn execute_with_session(
@@ -60,6 +59,7 @@ pub(crate) async fn execute_with_session(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -84,12 +84,12 @@ pub(crate) async fn execute_with_session(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
+        extra_readable,
     )
     .await?;
 
     Ok(execution.execution)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool))]
 pub(crate) async fn execute_with_session_and_meta(
@@ -115,6 +115,7 @@ pub(crate) async fn execute_with_session_and_meta(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
         executor,
@@ -141,10 +142,10 @@ pub(crate) async fn execute_with_session_and_meta(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
+        extra_readable,
     )
     .await
 }
-
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]
 pub(crate) async fn execute_with_session_and_meta_with_parent_source(
@@ -172,6 +173,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg
@@ -362,7 +364,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
-    // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
     let is_first_turn = session
         .tools
         .get(executor.tool_name())
@@ -375,7 +376,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &mut effective_prompt,
         );
     }
-    // Inject memory after context, before restrictions.
     let is_review_or_debate = matches!(task_type, Some("review" | "debate"));
     if !is_review_or_debate {
         let memory_cfg = config
@@ -404,7 +404,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             }
         }
     }
-    // Apply restrictions after context and memory injection.
     if !can_edit || !can_write_new {
         info!(
             tool = %executor.tool_name(),
@@ -563,6 +562,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
+        extra_readable,
     ) {
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {

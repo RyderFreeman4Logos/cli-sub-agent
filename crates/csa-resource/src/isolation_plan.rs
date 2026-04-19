@@ -41,6 +41,8 @@ pub struct IsolationPlan {
     pub filesystem: FilesystemCapability,
     /// Paths the sandboxed process is allowed to write to.
     pub writable_paths: Vec<PathBuf>,
+    /// Paths the sandboxed process may read via read-only bind mounts.
+    pub readable_paths: Vec<PathBuf>,
     /// Extra environment variables injected into the child process.
     pub env_overrides: HashMap<String, String>,
     /// Human-readable reasons when capabilities were downgraded.
@@ -85,6 +87,7 @@ pub struct IsolationPlanBuilder {
     resource: ResourceCapability,
     filesystem: FilesystemCapability,
     writable_paths: Vec<PathBuf>,
+    readable_paths: Vec<PathBuf>,
     env_overrides: HashMap<String, String>,
     degraded_reasons: Vec<String>,
     memory_max_mb: Option<u64>,
@@ -105,6 +108,7 @@ impl IsolationPlanBuilder {
             resource: ResourceCapability::None,
             filesystem: FilesystemCapability::None,
             writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
             memory_max_mb: None,
@@ -132,6 +136,12 @@ impl IsolationPlanBuilder {
     /// Add a single writable path to the plan.
     pub fn with_writable_path(mut self, path: PathBuf) -> Self {
         self.writable_paths.push(path);
+        self
+    }
+
+    /// Add a single read-only readable path to the plan.
+    pub fn with_readable_path(mut self, path: PathBuf) -> Self {
+        self.readable_paths.push(path);
         self
     }
 
@@ -361,6 +371,7 @@ impl IsolationPlanBuilder {
             resource: self.resource,
             filesystem: self.filesystem,
             writable_paths: self.writable_paths,
+            readable_paths: self.readable_paths,
             env_overrides: self.env_overrides,
             degraded_reasons: self.degraded_reasons,
             memory_max_mb: self.memory_max_mb,
@@ -391,31 +402,120 @@ fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: 
 /// Returns an error listing any rejected paths that are not under an allowed
 /// parent directory.
 pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
-    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
-    let allowed_parents: &[&Path] = &[project_root, home.as_path(), Path::new("/tmp")];
+    validate_sandbox_paths(
+        paths,
+        project_root,
+        PathValidationOptions {
+            kind: "writable_paths",
+            require_absolute: false,
+            require_exists: false,
+            reject_tmp_root: false,
+            canonicalize_for_allowlist: false,
+        },
+    )
+}
 
+/// Validate that readable paths are safe to expose into the sandbox.
+///
+/// Read-only binds are stricter than writable paths: every path must be
+/// absolute, must exist on disk, `/tmp` itself is forbidden, and symlinked
+/// paths are validated against the canonical target to prevent bind-mounting a
+/// safe-looking path that resolves somewhere outside the allowlist.
+pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
+    validate_sandbox_paths(
+        paths,
+        project_root,
+        PathValidationOptions {
+            kind: "readable_paths",
+            require_absolute: true,
+            require_exists: true,
+            reject_tmp_root: true,
+            canonicalize_for_allowlist: true,
+        },
+    )
+}
+
+struct PathValidationOptions<'a> {
+    kind: &'a str,
+    require_absolute: bool,
+    require_exists: bool,
+    reject_tmp_root: bool,
+    canonicalize_for_allowlist: bool,
+}
+
+fn validate_sandbox_paths(
+    paths: &[PathBuf],
+    project_root: &Path,
+    options: PathValidationOptions<'_>,
+) -> anyhow::Result<()> {
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let allowed_parents: [&Path; 3] = [project_root, home.as_path(), Path::new("/tmp")];
     let mut rejected = Vec::new();
+
     for path in paths {
-        if path == Path::new("/") {
-            rejected.push(path.clone());
-            continue;
-        }
+        let path_for_allowlist = match validate_single_path(path, &allowed_parents, &options) {
+            Ok(candidate) => candidate,
+            Err(reason) => {
+                rejected.push(format!("{} ({reason})", path.display()));
+                continue;
+            }
+        };
+
         let is_allowed = allowed_parents
             .iter()
-            .any(|parent| path.starts_with(parent));
+            .any(|parent| path_for_allowlist.starts_with(parent));
         if !is_allowed {
-            rejected.push(path.clone());
+            rejected.push(format!(
+                "{} (outside allowed roots: home, /tmp, project root)",
+                path.display()
+            ));
         }
     }
 
     if rejected.is_empty() {
-        Ok(())
-    } else {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "{} validation failed: rejected paths [{}]. Allowed: subpaths of home dir, /tmp, or project root",
+        options.kind,
+        rejected.join(", ")
+    );
+}
+
+fn validate_single_path(
+    path: &Path,
+    allowed_parents: &[&Path],
+    options: &PathValidationOptions<'_>,
+) -> anyhow::Result<PathBuf> {
+    if path == Path::new("/") {
+        anyhow::bail!("root path is forbidden");
+    }
+    if options.reject_tmp_root && path == Path::new("/tmp") {
+        anyhow::bail!("/tmp itself is forbidden; expose a specific sub-path instead");
+    }
+    if options.require_absolute && !path.is_absolute() {
+        anyhow::bail!("path must be absolute");
+    }
+    if options.require_exists && !path.exists() {
+        anyhow::bail!("path must exist");
+    }
+
+    if !options.canonicalize_for_allowlist {
+        return Ok(path.to_path_buf());
+    }
+
+    let canonical = path.canonicalize()?;
+    let canonical_allowed = allowed_parents
+        .iter()
+        .any(|parent| canonical.starts_with(parent));
+    if !canonical_allowed {
         anyhow::bail!(
-            "writable_paths validation failed: rejected paths {rejected:?}. \
-             Allowed: subpaths of home dir, /tmp, or project root"
+            "resolved path {} escapes allowed roots",
+            canonical.display()
         );
     }
+    Ok(canonical)
 }
 
 /// Add `dir` to `paths` if it exists, otherwise pre-create it when its

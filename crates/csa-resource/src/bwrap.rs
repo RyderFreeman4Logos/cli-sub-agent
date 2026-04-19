@@ -1,8 +1,4 @@
 //! Bubblewrap command builder for filesystem sandboxing.
-//!
-//! Constructs a `bwrap` invocation that wraps a tool binary inside a
-//! read-only root filesystem with selective writable bind mounts,
-//! PID isolation, and parent-death signalling.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,21 +9,12 @@ use crate::isolation_plan::IsolationPlan;
 /// Environment variable set inside the sandbox to signal filesystem isolation.
 const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
 
-/// Builder for constructing a `bwrap` (bubblewrap) command.
-///
-/// Default configuration:
-/// - `--ro-bind / /` — read-only root filesystem
-/// - `--tmpfs /tmp` — writable scratch space
-/// - `--dev /dev` — device nodes
-/// - `--proc /proc` — process information
-/// - `--share-net` — keep network access
-/// - `--unshare-pid` — PID namespace isolation
-/// - `--die-with-parent` — child dies when parent exits
-/// - `--setenv CSA_FS_SANDBOXED 1` — sandbox marker
+/// Builder for constructing a `bwrap` command with explicit read/write binds.
 pub struct BwrapCommandBuilder {
     tool_binary: String,
     tool_args: Vec<String>,
     writable_paths: Vec<PathBuf>,
+    readable_paths: Vec<PathBuf>,
     ro_binds: Vec<(PathBuf, PathBuf)>,
     env_vars: Vec<(String, String)>,
 }
@@ -39,6 +26,7 @@ impl BwrapCommandBuilder {
             tool_binary: tool_binary.to_owned(),
             tool_args: tool_args.to_vec(),
             writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
             ro_binds: Vec::new(),
             env_vars: Vec::new(),
         }
@@ -47,6 +35,26 @@ impl BwrapCommandBuilder {
     /// Add a path that the sandboxed process may write to (bind-mounted rw).
     pub fn with_writable_path(&mut self, path: &Path) -> &mut Self {
         self.writable_paths.push(path.to_path_buf());
+        self
+    }
+
+    /// Add a path that the sandboxed process may read (bind-mounted ro).
+    pub fn with_readable_path(&mut self, path: &Path) -> &mut Self {
+        assert!(
+            path.is_absolute(),
+            "readable sandbox path must be absolute: {}",
+            path.display()
+        );
+        assert!(
+            path != Path::new("/tmp"),
+            "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
+        );
+        assert!(
+            path.exists(),
+            "readable sandbox path must exist: {}",
+            path.display()
+        );
+        self.readable_paths.push(path.to_path_buf());
         self
     }
 
@@ -79,26 +87,14 @@ impl BwrapCommandBuilder {
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
 
-        // Writable bind mounts (after tmpfs so /tmp/* mounts are visible).
-        //
-        // Special handling for /tmp paths:
-        // - "/tmp" itself is SKIPPED: --tmpfs /tmp already provides a writable
-        //   /tmp.  Bind-mounting the host's /tmp would expose host temp files,
-        //   sockets and caches to the sandbox — a security/isolation regression.
-        // - Sub-paths (e.g. /tmp/foo) get --dir to create the mount-point
-        //   directory inside the fresh tmpfs (which starts empty), then --bind
-        //   to overlay the host directory.  This is correct for the common case
-        //   where writable paths are directories.  For nested paths (/tmp/a/b)
-        //   we also create intermediate parent directories.
+        // Writable bind mounts (after tmpfs). /tmp itself is skipped; /tmp
+        // sub-paths get pre-created mount points inside the fresh tmpfs.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
             let s = path.to_string_lossy();
             if path == tmp_prefix {
-                // /tmp itself is already writable via --tmpfs; skip to avoid
-                // exposing host /tmp content inside the sandbox.
                 continue;
             } else if path.starts_with(tmp_prefix) {
-                // Create intermediate parent directories if deeper than /tmp/.
                 if let Some(parent) = path.parent()
                     && parent != tmp_prefix
                 {
@@ -110,6 +106,22 @@ impl BwrapCommandBuilder {
             } else {
                 cmd.args(["--bind", &s, &s]);
             }
+        }
+
+        // Read-only readable paths. For /tmp files, only create parent dirs.
+        for path in &self.readable_paths {
+            let s = path.to_string_lossy();
+            assert!(
+                path != tmp_prefix,
+                "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
+            );
+            if path.starts_with(tmp_prefix)
+                && let Some(parent) = path.parent()
+                && parent != tmp_prefix
+            {
+                cmd.args(["--dir", &parent.to_string_lossy()]);
+            }
+            cmd.args(["--ro-bind", &s, &s]);
         }
 
         // Extra read-only bind mounts.  When the dest path differs from src
@@ -220,6 +232,10 @@ pub fn from_isolation_plan(
         }
     }
 
+    for path in &plan.readable_paths {
+        builder.with_readable_path(path);
+    }
+
     for (key, value) in &plan.env_overrides {
         builder.with_env(key, value);
     }
@@ -307,6 +323,7 @@ mod tests {
             resource: ResourceCapability::None,
             filesystem: FilesystemCapability::Bwrap,
             writable_paths: vec![PathBuf::from("/project")],
+            readable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
             memory_max_mb: None,
@@ -333,6 +350,7 @@ mod tests {
             resource: ResourceCapability::None,
             filesystem: FilesystemCapability::None,
             writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
             memory_max_mb: None,
@@ -455,6 +473,7 @@ mod tests {
             resource: ResourceCapability::None,
             filesystem: FilesystemCapability::Bwrap,
             writable_paths: vec![PathBuf::from("/project")],
+            readable_paths: Vec::new(),
             env_overrides,
             degraded_reasons: Vec::new(),
             memory_max_mb: None,
@@ -484,6 +503,7 @@ mod tests {
             resource: ResourceCapability::None,
             filesystem: FilesystemCapability::Bwrap,
             writable_paths: vec![PathBuf::from("/project"), PathBuf::from("/tmp/session")],
+            readable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
             memory_max_mb: None,
@@ -610,6 +630,81 @@ mod tests {
         assert!(
             bind_tmp_foo_pos < separator_pos,
             "--bind must come before -- separator"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_command_with_readable_tmp_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let readable = temp.path().join("foo.json");
+        std::fs::write(&readable, "{}").expect("write readable file");
+
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_readable_path(&readable);
+        let cmd = builder.build();
+        let args = command_args(&cmd);
+        let readable_str = readable.to_string_lossy().into_owned();
+
+        let tmpfs_pos = args
+            .iter()
+            .position(|arg| arg == "--tmpfs")
+            .expect("--tmpfs must be present");
+        let ro_bind_pos = args
+            .windows(3)
+            .position(|window| {
+                window[0] == "--ro-bind" && window[1] == readable_str && window[2] == readable_str
+            })
+            .expect("--ro-bind readable path must be present");
+
+        assert_eq!(args[tmpfs_pos + 1], "/tmp");
+        assert!(
+            tmpfs_pos < ro_bind_pos,
+            "readable --ro-bind must come after --tmpfs /tmp; args: {args:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be /tmp itself")]
+    fn test_bwrap_readable_tmp_root_rejected() {
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_readable_path(Path::new("/tmp"));
+    }
+
+    #[test]
+    fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let readable = temp.path().join("bar.txt");
+        std::fs::write(&readable, "hello").expect("write readable file");
+
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_writable_path(Path::new("/tmp/work"));
+        builder.with_readable_path(&readable);
+        let cmd = builder.build();
+        let args = command_args(&cmd);
+        let readable_str = readable.to_string_lossy().into_owned();
+
+        let tmpfs_pos = args
+            .iter()
+            .position(|arg| arg == "--tmpfs")
+            .expect("--tmpfs must be present");
+        let writable_bind_pos = args
+            .windows(3)
+            .position(|window| window[0] == "--bind" && window[1] == "/tmp/work")
+            .expect("writable bind should be present");
+        let readable_bind_pos = args
+            .windows(3)
+            .position(|window| {
+                window[0] == "--ro-bind" && window[1] == readable_str && window[2] == readable_str
+            })
+            .expect("readable ro-bind should be present");
+
+        assert!(
+            tmpfs_pos < writable_bind_pos,
+            "writable bind must come after tmpfs; args: {args:?}"
+        );
+        assert!(
+            tmpfs_pos < readable_bind_pos,
+            "readable bind must come after tmpfs; args: {args:?}"
         );
     }
 

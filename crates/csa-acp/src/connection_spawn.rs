@@ -700,6 +700,7 @@ mod tests {
                 PathBuf::from("/project"),
                 PathBuf::from("/tmp/cli-sub-agent-gemini/01TEST"),
             ],
+            readable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
             memory_max_mb: None,

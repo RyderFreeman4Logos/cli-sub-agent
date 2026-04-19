@@ -114,6 +114,7 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
         false,
         false,
         Vec::new(),
+        Vec::new(),
     )
     .await
     .expect_err("model-spec + tier conflict must return an error");

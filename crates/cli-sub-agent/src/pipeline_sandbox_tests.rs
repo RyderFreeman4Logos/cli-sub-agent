@@ -45,6 +45,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         false,
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -73,6 +74,7 @@ fn test_none_config_lightweight_skips_sandbox() {
         false,
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -105,6 +107,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         false,
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -189,6 +192,7 @@ writable_paths = ["/tmp"]
         false,
         false, // readonly_project_root (not set by caller)
         &[],   // extra_writable
+        &[],   // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -245,6 +249,7 @@ memory_max_mb = 2048
         false,
         true, // readonly_project_root (set by review/debate caller)
         &[],  // extra_writable
+        &[],  // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -294,6 +299,7 @@ writable_paths = ["/"]
         false,
         false,
         &[], // extra_writable
+        &[], // extra_readable
     );
 
     assert!(
@@ -361,6 +367,7 @@ enforcement_mode = "best-effort"
         false,
         false,
         &[],
+        &[],
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -418,6 +425,7 @@ enforcement_mode = "best-effort"
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -476,6 +484,7 @@ writable_paths = ["/tmp/restricted-only"]
         false,
         false,
         &[], // extra_writable
+        &[], // extra_readable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -539,6 +548,7 @@ enforcement_mode = "best-effort"
         false,
         false,
         &extra,
+        &[],
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -588,10 +598,60 @@ enforcement_mode = "best-effort"
         false,
         false,
         &extra,
+        &[],
     );
 
     assert!(
         matches!(result, SandboxResolution::RequiredButUnavailable(ref msg) if msg.contains("extra-writable")),
         "dangerous path in --extra-writable should be rejected"
     );
+}
+
+#[test]
+fn test_expose_readable_appended_to_isolation_plan() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let first = temp.path().join("foo.json");
+    let second = temp.path().join("bar.txt");
+    std::fs::write(&first, "{}").expect("write first readable file");
+    std::fs::write(&second, "bar").expect("write second readable file");
+    let readable = vec![first.clone(), second.clone()];
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "claude-code",
+        "test-session",
+        &current_project_root(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &[],
+        &readable,
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+
+    let Some(ref sandbox) = opts.sandbox else {
+        return;
+    };
+
+    assert_eq!(
+        sandbox.isolation_plan.readable_paths.len(),
+        2,
+        "expected two readable paths in the isolation plan"
+    );
+    assert!(sandbox.isolation_plan.readable_paths.contains(&first));
+    assert!(sandbox.isolation_plan.readable_paths.contains(&second));
 }

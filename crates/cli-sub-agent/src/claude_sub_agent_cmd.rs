@@ -113,6 +113,7 @@ pub(crate) async fn handle_claude_sub_agent(
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     )
     .await?;
 

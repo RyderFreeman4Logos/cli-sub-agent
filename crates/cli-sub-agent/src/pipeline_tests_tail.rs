@@ -655,6 +655,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     )
     .await
     .unwrap();
@@ -726,6 +727,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     )
     .await
     .unwrap();

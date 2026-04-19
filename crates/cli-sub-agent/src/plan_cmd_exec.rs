@@ -251,6 +251,7 @@ pub(super) async fn execute_csa_step(
             false, // no_fs_sandbox
             false, // readonly_project_root
             &[],   // extra_writable
+            &[],   // extra_readable
         )
     };
     let result = match execute_once(session_arg.clone()).await {

@@ -225,19 +225,20 @@ pub enum Commands {
         #[arg(long)]
         tier: Option<String>,
 
-        /// Bypass tier routing for direct --tool/--model overrides.
-        /// Use without --tier; --tool + --tier + --force-ignore-tier-setting is an error.
+        /// Bypass tier routing for direct --tool/--model overrides; invalid with `--tier`.
         #[arg(long, alias = "force-tier")]
         force_ignore_tier_setting: bool,
 
         /// Disable filesystem sandbox isolation (bwrap/landlock)
         #[arg(long)]
         no_fs_sandbox: bool,
-
         /// Append extra writable paths to the filesystem sandbox (comma-separated)
         #[arg(long, value_delimiter = ',', value_name = "PATH")]
         extra_writable: Vec<PathBuf>,
 
+        /// Expose extra host paths to the filesystem sandbox as read-only binds.
+        #[arg(long, value_name = "PATH")]
+        expose_readable: Vec<PathBuf>,
         /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
         #[arg(long, hide = true)]
         daemon: bool,

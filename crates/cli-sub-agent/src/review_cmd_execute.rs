@@ -278,6 +278,7 @@ async fn execute_review_once(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
+        &[],
     )
     .await
 }
