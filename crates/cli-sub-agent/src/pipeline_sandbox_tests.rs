@@ -608,7 +608,7 @@ enforcement_mode = "best-effort"
 }
 
 #[test]
-fn test_expose_readable_appended_to_isolation_plan() {
+fn test_extra_readable_appended_to_isolation_plan() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let cfg = parse_project_config(
         r#"

@@ -97,7 +97,7 @@ pub(crate) async fn handle_run(
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
     extra_writable: Vec<PathBuf>,
-    expose_readable: Vec<PathBuf>,
+    extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
     let effective_repo =
@@ -488,7 +488,7 @@ pub(crate) async fn handle_run(
         task_needs_edit,
         no_fs_sandbox,
         extra_writable,
-        extra_readable: expose_readable,
+        extra_readable,
     })
     .await?;
 

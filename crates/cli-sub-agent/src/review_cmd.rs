@@ -385,6 +385,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             args.no_fs_sandbox,
             readonly_project_root,
             &args.extra_writable,
+            &args.extra_readable,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -504,6 +505,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             no_failover: args.no_failover,
             no_fs_sandbox: args.no_fs_sandbox,
             extra_writable: &args.extra_writable,
+            extra_readable: &args.extra_readable,
             timeout: args.timeout,
             project_root: &project_root,
             scope,
@@ -591,6 +593,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let reviewer_force_override = args.force_override_user_config;
         let reviewer_no_fs_sandbox = args.no_fs_sandbox;
         let reviewer_extra_writable = args.extra_writable.clone();
+        let reviewer_extra_readable = args.extra_readable.clone();
         // Keep every reviewer on the resolved tier when possible by binding
         // each tool to its tier model spec. Fall back to the primary spec only
         // when we only have a single tier-resolved reviewer tool.
@@ -637,6 +640,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_no_fs_sandbox,
                 readonly_project_root,
                 &reviewer_extra_writable,
+                &reviewer_extra_readable,
             )
             .await?;
             build_reviewer_outcome(reviewer_index, reviewer_tool, &session_result)

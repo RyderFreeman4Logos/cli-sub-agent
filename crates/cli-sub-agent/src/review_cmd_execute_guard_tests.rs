@@ -68,6 +68,7 @@ printf '%s\\n' \
         false,
         false,
         &[],
+        &[],
     )
     .await
     {
@@ -139,6 +140,7 @@ exit 7\n",
         false,
         false,
         false,
+        &[],
         &[],
     )
     .await
@@ -228,6 +230,7 @@ fi\n",
         false,
         false,
         &[],
+        &[],
     )
     .await
     {
@@ -307,6 +310,7 @@ printf '%s\\n' \
         false,
         false,
         false,
+        &[],
         &[],
     )
     .await

@@ -237,8 +237,8 @@ pub enum Commands {
         extra_writable: Vec<PathBuf>,
 
         /// Expose extra host paths to the filesystem sandbox as read-only binds.
-        #[arg(long, value_name = "PATH")]
-        expose_readable: Vec<PathBuf>,
+        #[arg(long = "extra-readable", value_delimiter = ',', value_name = "PATH")]
+        extra_readable: Vec<PathBuf>,
         /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
         #[arg(long, hide = true)]
         daemon: bool,

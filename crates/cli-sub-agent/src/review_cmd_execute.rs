@@ -68,6 +68,7 @@ pub(super) async fn execute_review(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
     let enforce_tier =
@@ -139,6 +140,7 @@ pub(super) async fn execute_review(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
+        extra_readable,
     )
     .await
     {
@@ -187,6 +189,7 @@ pub(super) async fn execute_review(
                 no_fs_sandbox,
                 readonly_project_root,
                 extra_writable,
+                extra_readable,
             )
             .await
             {
@@ -252,6 +255,7 @@ async fn execute_review_once(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     crate::pipeline::execute_with_session_and_meta_with_parent_source(
         executor,
@@ -278,7 +282,7 @@ async fn execute_review_once(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
-        &[],
+        extra_readable,
     )
     .await
 }
@@ -301,6 +305,7 @@ async fn execute_review_once_with_artifact_guard(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let invocation_started_at = Utc::now();
     match execute_review_once(
@@ -320,6 +325,7 @@ async fn execute_review_once_with_artifact_guard(
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
+        extra_readable,
     )
     .await
     {

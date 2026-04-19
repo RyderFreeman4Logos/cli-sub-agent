@@ -184,6 +184,10 @@ pub struct ReviewArgs {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_writable: Vec<PathBuf>,
 
+    /// Expose extra host paths to the filesystem sandbox as read-only binds.
+    #[arg(long, value_delimiter = ',', value_name = "PATH")]
+    pub extra_readable: Vec<PathBuf>,
+
     /// Read supplementary prompt/context from a file (bypasses shell quoting issues)
     #[arg(long, value_name = "PATH")]
     pub prompt_file: Option<PathBuf>,
@@ -409,6 +413,10 @@ pub struct DebateArgs {
     /// Append extra writable paths to the filesystem sandbox (comma-separated)
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_writable: Vec<PathBuf>,
+
+    /// Expose extra host paths to the filesystem sandbox as read-only binds.
+    #[arg(long, value_delimiter = ',', value_name = "PATH")]
+    pub extra_readable: Vec<PathBuf>,
 
     /// Read the debate question from a file (bypasses shell quoting issues)
     #[arg(long, value_name = "PATH", conflicts_with_all = ["question", "topic"])]

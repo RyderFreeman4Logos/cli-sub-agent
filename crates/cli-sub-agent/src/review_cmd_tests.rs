@@ -424,6 +424,7 @@ fn default_review_args() -> ReviewArgs {
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         extra_writable: vec![],
+        extra_readable: vec![],
         prompt_file: None,
         prior_rounds_summary: None,
         daemon: false,

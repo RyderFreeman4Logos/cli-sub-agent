@@ -356,7 +356,7 @@ async fn run() -> Result<()> {
             force_ignore_tier_setting,
             no_fs_sandbox,
             extra_writable,
-            expose_readable,
+            extra_readable,
             daemon: _daemon,
             no_daemon,
             daemon_child,
@@ -419,7 +419,7 @@ async fn run() -> Result<()> {
                 force_ignore_tier_setting,
                 no_fs_sandbox,
                 extra_writable,
-                expose_readable,
+                extra_readable,
             )
             .await;
             // Report errors while fd 2 is still open (guard holds stderr rotation).
