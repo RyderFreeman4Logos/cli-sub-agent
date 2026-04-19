@@ -39,6 +39,9 @@ name = "BOT_SETTLE_SECS"
 name = "BOT_UNAVAILABLE"
 
 [[workflow.variables]]
+name = "CANDIDATE"
+
+[[workflow.variables]]
 name = "CLEAN_BRANCH"
 
 [[workflow.variables]]
@@ -523,6 +526,15 @@ DEFAULT_BRANCH=$(gh repo view "${REPO_SLUG}" --json defaultBranchRef --jq '.defa
 if [ -z "$DEFAULT_BRANCH" ]; then
   # gh unavailable or unauthenticated — fall back to cached remote HEAD
   DEFAULT_BRANCH=$(git symbolic-ref "refs/remotes/${REMOTE_NAME}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME}/@@")
+fi
+if [ -z "$DEFAULT_BRANCH" ]; then
+  # Push aliases may not have cached HEAD refs locally; try any fetched remote.
+  for CANDIDATE in $(git remote); do
+    DEFAULT_BRANCH=$(git symbolic-ref "refs/remotes/${CANDIDATE}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${CANDIDATE}/@@")
+    if [ -n "$DEFAULT_BRANCH" ]; then
+      break
+    fi
+  done
 fi
 if [ -z "$DEFAULT_BRANCH" ]; then
   echo "ERROR: cannot determine default branch (neither 'gh repo view' nor '${REMOTE_NAME}/HEAD' succeeded)" >&2

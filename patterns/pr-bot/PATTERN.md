@@ -110,6 +110,15 @@ if [ -z "$DEFAULT_BRANCH" ]; then
   DEFAULT_BRANCH=$(git symbolic-ref "refs/remotes/${REMOTE_NAME}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME}/@@")
 fi
 if [ -z "$DEFAULT_BRANCH" ]; then
+  # Push aliases may not have cached HEAD refs locally; try any fetched remote.
+  for CANDIDATE in $(git remote); do
+    DEFAULT_BRANCH=$(git symbolic-ref "refs/remotes/${CANDIDATE}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${CANDIDATE}/@@")
+    if [ -n "$DEFAULT_BRANCH" ]; then
+      break
+    fi
+  done
+fi
+if [ -z "$DEFAULT_BRANCH" ]; then
   echo "ERROR: cannot determine default branch (neither 'gh repo view' nor '${REMOTE_NAME}/HEAD' succeeded)" >&2
   echo "Fix: run 'gh auth login' OR 'git remote set-head ${REMOTE_NAME} --auto', then retry" >&2
   exit 1
