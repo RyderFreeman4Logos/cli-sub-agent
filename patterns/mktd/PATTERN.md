@@ -352,7 +352,7 @@ DEBATE_PROMPT="$(printf '%s\n' \
 "" \
 "## Output Requirements" \
 "Provide explicit verdict and confidence in your conclusion." )"
-SID=$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3 --format json --idle-timeout 120 --no-stream-stdout) || { echo "csa debate failed" >&2; exit 1; }
+SID=$(csa debate --sa-mode true --rounds 3 --format json --idle-timeout 600 --no-stream-stdout "${DEBATE_PROMPT}") || { echo "csa debate failed" >&2; exit 1; }
 DEBATE_JSON="$(csa session wait --session "$SID" 2>&1)" || { echo "csa debate failed" >&2; exit 1; }
 [[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
 RAW_VERDICT="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.verdict // "UNKNOWN"' | tr '[:lower:]' '[:upper:]')"
