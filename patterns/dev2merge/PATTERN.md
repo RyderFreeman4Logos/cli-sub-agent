@@ -136,9 +136,8 @@ Even FAST_PATH runs cumulative review before push.
 
 ```bash
 set -euo pipefail
-SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
-REVIEW_OUTPUT="$(bash scripts/csa/session-wait-until-done.sh "$SID" 2>&1)"
-printf '%s\n' "${REVIEW_OUTPUT}"
+bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}" -- \
+  csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ```
@@ -252,26 +251,16 @@ Sets REVIEW_COMPLETED=true as gate for push step.
 
 ```bash
 set -euo pipefail
-REVIEW_OUTPUT_FILE="$(mktemp)"
-set +e
-SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
-bash scripts/csa/session-wait-until-done.sh "$SID" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
-REVIEW_STATUS=${PIPESTATUS[0]}
-set -e
-REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"
-rm -f "${REVIEW_OUTPUT_FILE}"
-if [ "${REVIEW_STATUS}" -ne 0 ]; then
-  echo "ERROR: Cumulative review failed (exit ${REVIEW_STATUS})." >&2
-  exit 1
-fi
-VERDICT_LINE="$(printf '%s\n' "${REVIEW_OUTPUT}" | grep '^final_decision:' | tail -1 || true)"
-if [ "${VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
-  echo "ERROR: Cumulative review found issues. Cannot push." >&2
-  exit 1
-fi
+bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}" -- \
+  csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ```
+
+When global config sets `[review].batch_commits >= 2`, intermediate cumulative
+reviews can be skipped until the branch accumulates enough new commits after
+the last passed `main...HEAD` review. Set `CSA_REVIEW_NOW=1` to bypass batching
+for the current run.
 
 ## ENDIF
 

@@ -47,6 +47,7 @@ max_concurrent = 3  # Default max parallel instances per tool
 # Optional: set `thinking` for default thinking budget (low/medium/high/xhigh).
 [review]
 tool = "auto"
+# batch_commits = 1
 # tier = "tier-4-critical"
 # thinking = "xhigh"
 

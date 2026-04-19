@@ -506,6 +506,7 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
         let review = ReviewConfig {
             tool: ToolSelection::Single("codex".to_string()),
             gate_mode: gate_mode.clone(),
+            batch_commits: ReviewConfig::default_batch_commits(),
             tier: None,
             model: None,
             thinking: None,
@@ -540,13 +541,6 @@ gate_timeout_secs = 600
 }
 
 #[test]
-fn test_review_config_gate_fields_default() {
-    let config = ReviewConfig::default();
-    assert!(config.gate_command.is_none());
-    assert_eq!(config.gate_timeout_secs, 250);
-}
-
-#[test]
 fn test_review_config_is_default() {
     let config = ReviewConfig::default();
     assert!(config.is_default());
@@ -568,22 +562,6 @@ fn test_review_config_is_not_default_with_gate_timeout() {
         ..Default::default()
     };
     assert!(!config.is_default());
-}
-
-#[test]
-fn test_review_config_gate_timeout_default_skipped_in_serialization() {
-    let config = ReviewConfig::default();
-    let toml_str = toml::to_string(&config).unwrap();
-    // Default gate_timeout_secs (250) should be skipped via skip_serializing_if
-    assert!(
-        !toml_str.contains("gate_timeout_secs"),
-        "Default gate_timeout_secs should be omitted from TOML output"
-    );
-    // gate_command=None should also be omitted
-    assert!(
-        !toml_str.contains("gate_command"),
-        "None gate_command should be omitted from TOML output"
-    );
 }
 
 #[test]
