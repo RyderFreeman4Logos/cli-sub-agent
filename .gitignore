@@ -91,3 +91,10 @@ strix_runs
 result.toml
 .letta/
 proptest-regressions/
+
+# Override ~/.gitignore_noai's `patterns` blanket rule —
+# this dev repo tracks patterns/ by design (CLAUDE.md rule 036 exception).
+# Without this negation, `git add patterns/...` is silently blocked for NEW files
+# (existing tracked files still work because git doesn't re-check ignore on tracked paths).
+!patterns
+!patterns/**

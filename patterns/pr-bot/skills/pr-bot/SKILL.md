@@ -131,6 +131,7 @@ cloud_bot_name = "gemini-code-assist"      # bot name (for @mention and display)
 cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
 cloud_bot_login = ""                       # bot GitHub login override (default: "${cloud_bot_name}[bot]")
 cloud_bot_retrigger_command = ""           # command to re-trigger after fix push (default: derived from name)
+cloud_bot_poll_interval_seconds = 30       # helper-script gh poll interval (default: 30s)
 merge_strategy = "merge"                   # "merge" | "rebase" (squash is forbidden for audit)
 delete_branch = false                      # delete remote branch after merge
 ```
@@ -148,10 +149,14 @@ Default: `/gemini review` for gemini-code-assist, `@{name} review` for others.
 Override via `cloud_bot_retrigger_command`.
 
 **Timeout behavior**: If bot does not respond within the configured polling window
-(`cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, default ~5 minutes via `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`),
+(`cloud_bot_wait_seconds` + helper timeout `cloud_bot_poll_max_seconds`, with helper poll interval `cloud_bot_poll_interval_seconds`, default ~5 minutes via `kv_cache.frequent_poll_seconds = 60`, `cloud_bot_poll_interval_seconds = 30`, and `kv_cache.long_poll_seconds = 240`),
 the workflow **aborts** and presents options to the user. It does NOT silently
 fall back to local review and merge, except for the explicit quota-exhaustion
 path described below.
+
+**Helper env overrides**: the built-in polling helper honors `CSA_PR_BOT_TIMEOUT`
+and `CSA_PR_BOT_INTERVAL` for ad-hoc override/testing. Normal workflow runs pass
+explicit CLI arguments, so these env vars are mainly for direct script use.
 
 **Quota auto-skip cache**: When the configured cloud bot posts a warning that
 contains `daily quota limit` (case-insensitive), pr-bot records a 24h skip
@@ -199,7 +204,7 @@ breaks prompt-guard propagation.
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
    - **Round 0** (initial PR): follows `cloud_bot_trigger` config (`"comment"` → @mention, `"auto"` → skip).
    - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist) because bots do NOT auto-review on subsequent pushes.
-   - Wait `cloud_bot_wait_seconds` quietly, then delegate `cloud_bot_poll_max_seconds` polling to CSA. Defaults are `kv_cache.frequent_poll_seconds` (60s) for the quiet wait and `kv_cache.long_poll_seconds` (240s) for the total poll budget unless explicitly overridden.
+   - Wait `cloud_bot_wait_seconds` quietly, then launch `patterns/pr-bot/scripts/pr-bot-wait.sh` once. The helper polls GitHub in shell using `cloud_bot_poll_interval_seconds` (default: 30s) and writes an atomic JSON result file; the main workflow only checks that file after up to two `kv_cache.long_poll_seconds` windows.
    - **Positive signal**: verifies a review EVENT exists (via `pulls/{pr}/reviews` API with `submitted_at` > push time), not merely absence of comments.
    - **Quota warning shortcut**: if bot comments contain `daily quota limit`, record the 24h quota cache entry and route to the merge-without-bot path instead of repeatedly waiting for a reply that cannot arrive during the quota window.
    - If bot times out: **ABORT workflow** and present options to user. NO silent fallback.
@@ -238,7 +243,7 @@ breaks prompt-guard propagation.
 2. Any local review issues are fixed before PR creation.
 3. PR resolved for the workflow branch (existing PR reused or a new PR created via strict owner-aware match, with create-race recovery and Step 4 precondition verified: `REVIEW_COMPLETED=true`).
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
-5. **If cloud_bot enabled (default)**: cloud bot triggered (round-aware: auto on round 0, explicit retrigger on round 1+), wait handled by delegated CSA gate with hard timeout and positive review-event signal checks, and timeout path handled. If bot responds with environment/configuration setup message instead of actual review, workflow STOPS and reports to user (Step 5a).
+5. **If cloud_bot enabled (default)**: cloud bot triggered (round-aware: auto on round 0, explicit retrigger on round 1+), wait handled by the built-in `pr-bot-wait.sh` helper with hard timeout and positive review-event signal checks, and timeout path handled. If bot responds with environment/configuration setup message instead of actual review, workflow STOPS and reports to user (Step 5a).
 6. **If cloud_bot disabled**: supplementary check completed via one of:
    - fast-path: SHA match, review skipped, or
    - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch main` executed.
