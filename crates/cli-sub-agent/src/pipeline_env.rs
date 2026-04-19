@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use csa_config::ProjectConfig;
 use tracing::info;
@@ -58,39 +58,34 @@ pub(crate) fn build_merged_env(
     merged_env
 }
 
-pub(crate) fn apply_review_target_dir(
-    task_type: Option<&str>,
-    session_dir: &std::path::Path,
-    _merged_env: &mut HashMap<String, String>,
-) {
-    if matches!(task_type, Some("review")) {
-        let project_root = resolve_review_project_root(session_dir)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let repo_target_dir = project_root.join("target");
-        if let Some(target_kind) = detect_project_target_kind(&repo_target_dir) {
-            info!(
-                project_target = %repo_target_dir.display(),
-                target_kind,
-                "honoring user ./target ({target_kind}), CARGO_TARGET_DIR untouched"
-            );
-            return;
-        }
-
+pub(crate) fn apply_review_target_dir(project_root: &Path, tool_name: &str) {
+    let repo_target_dir = project_root.join("target");
+    if let Some(target_kind) = detect_project_target_kind(&repo_target_dir) {
         info!(
             project_target = %repo_target_dir.display(),
-            "no ./target present, CARGO_TARGET_DIR left at codex/cargo default"
+            tool = tool_name,
+            target_kind,
+            "honoring user ./target ({target_kind}), CARGO_TARGET_DIR untouched"
         );
+        return;
     }
+
+    info!(
+        project_target = %repo_target_dir.display(),
+        tool = tool_name,
+        "no ./target present, CARGO_TARGET_DIR left at codex/cargo default"
+    );
 }
 
 pub(crate) fn apply_task_target_dir_guards(
     task_type: Option<&str>,
     tool_name: &str,
     project_root: &Path,
-    session_dir: &Path,
     merged_env: &mut HashMap<String, String>,
 ) {
-    apply_review_target_dir(task_type, session_dir, merged_env);
+    if matches!(task_type, Some("review")) {
+        apply_review_target_dir(project_root, tool_name);
+    }
     apply_run_target_dir_guard(task_type, tool_name, project_root, merged_env);
 }
 
@@ -98,11 +93,13 @@ pub(crate) fn apply_run_target_dir_guard(
     task_type: Option<&str>,
     tool_name: &str,
     project_root: &Path,
-    _merged_env: &mut HashMap<String, String>,
+    merged_env: &mut HashMap<String, String>,
 ) {
     if !matches!(task_type, Some("run")) || tool_name != "codex" {
         return;
     }
+
+    let _ = merged_env;
 
     let repo_target_dir = project_root.join("target");
     let user_configured_target = std::fs::symlink_metadata(&repo_target_dir).is_ok();
@@ -119,14 +116,6 @@ pub(crate) fn apply_run_target_dir_guard(
         project_target = %repo_target_dir.display(),
         "Run session: no user-configured ./target, leaving codex default CARGO_TARGET_DIR behavior (no CSA override)"
     );
-}
-
-fn resolve_review_project_root(session_dir: &Path) -> Option<PathBuf> {
-    let state_path = session_dir.join("state.toml");
-    let state_contents = std::fs::read_to_string(state_path).ok()?;
-    let state_value: toml::Value = toml::from_str(&state_contents).ok()?;
-    let project_path = state_value.get("project_path")?.as_str()?;
-    Some(PathBuf::from(project_path))
 }
 
 fn detect_project_target_kind(repo_target_dir: &Path) -> Option<&'static str> {
