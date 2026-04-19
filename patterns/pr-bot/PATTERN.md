@@ -57,19 +57,19 @@ Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, `REPO_SLUG`,
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
 CURRENT_BRANCH="${WORKFLOW_BRANCH:-$(git branch --show-current)}"
-# Resolve the push target using Git's push-side precedence before fetch-side fallbacks.
+# Resolve the push target using push-side precedence, then fork-safe origin, then fetch-side fallbacks.
 REMOTE_NAME=$(git config --get "branch.${CURRENT_BRANCH}.pushRemote" 2>/dev/null || true)
 if [ -z "$REMOTE_NAME" ]; then
   REMOTE_NAME=$(git config --get remote.pushDefault 2>/dev/null || true)
+fi
+if [ -z "$REMOTE_NAME" ] && git remote | grep -qx origin; then
+  REMOTE_NAME=origin
 fi
 if [ -z "$REMOTE_NAME" ]; then
   REMOTE_NAME=$(git config --get "branch.${CURRENT_BRANCH}.remote" 2>/dev/null || true)
 fi
 if [ -z "$REMOTE_NAME" ]; then
   REMOTE_NAME=$(git config --get checkout.defaultRemote 2>/dev/null || true)
-fi
-if [ -z "$REMOTE_NAME" ] && git remote | grep -qx origin; then
-  REMOTE_NAME=origin
 fi
 if [ -z "$REMOTE_NAME" ]; then
   REMOTE_COUNT=$(git remote | wc -l | tr -d ' ')
