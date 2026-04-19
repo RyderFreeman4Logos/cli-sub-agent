@@ -129,6 +129,84 @@ assert_json_value() {
   fi
 }
 
+run_wait_wrapper_loop() {
+  local output_file="$1"
+  local poll_pid="$2"
+  local wait_long_poll_secs="$3"
+  local cloud_bot_poll_max_seconds="$4"
+  local pr_number="$5"
+  local wait_result_grace_secs="${6:-1}"
+  local wait_started_at
+  local wait_elapsed_secs
+
+  wait_started_at="$(date +%s)"
+  wait_elapsed_secs=0
+
+  while [ "${wait_elapsed_secs}" -lt "${cloud_bot_poll_max_seconds}" ]; do
+    if [ -f "${output_file}" ]; then
+      break
+    fi
+    if ! kill -0 "${poll_pid}" 2>/dev/null; then
+      sleep "${wait_result_grace_secs}"
+      break
+    fi
+
+    local remaining=$((cloud_bot_poll_max_seconds - wait_elapsed_secs))
+    local step="${wait_long_poll_secs}"
+    if [ "${step}" -gt "${remaining}" ]; then
+      step="${remaining}"
+    fi
+
+    sleep "${step}" &
+    local wait_sleep_pid=$!
+    wait -n "${poll_pid}" "${wait_sleep_pid}" 2>/dev/null || true
+    if kill -0 "${wait_sleep_pid}" 2>/dev/null; then
+      kill "${wait_sleep_pid}" 2>/dev/null || true
+      wait "${wait_sleep_pid}" 2>/dev/null || true
+    fi
+    wait_elapsed_secs=$(( $(date +%s) - wait_started_at ))
+  done
+
+  wait_elapsed_secs=$(( $(date +%s) - wait_started_at ))
+
+  if [ ! -f "${output_file}" ]; then
+    if kill -0 "${poll_pid}" 2>/dev/null; then
+      kill "${poll_pid}" 2>/dev/null || true
+      wait "${poll_pid}" 2>/dev/null || true
+    fi
+    printf '{"status":"timeout","pr":%s,"elapsed_seconds":%s}\n' \
+      "${pr_number}" "${wait_elapsed_secs}" > "${output_file}.tmp"
+    mv "${output_file}.tmp" "${output_file}"
+  fi
+}
+
+SPAWNED_WAIT_WRAPPER_PID=""
+
+spawn_wait_wrapper_helper() {
+  local output_file="$1"
+  local delay_seconds="$2"
+  local status="$3"
+
+  (
+    sleep "${delay_seconds}"
+    printf '{"status":"%s"}\n' "${status}" > "${output_file}.tmp"
+    mv "${output_file}.tmp" "${output_file}"
+  ) &
+  SPAWNED_WAIT_WRAPPER_PID="$!"
+}
+
+assert_elapsed_between() {
+  local actual="$1"
+  local min_expected="$2"
+  local max_expected="$3"
+  local description="$4"
+
+  if [ "${actual}" -lt "${min_expected}" ] || [ "${actual}" -gt "${max_expected}" ]; then
+    echo "${description}: expected elapsed in [${min_expected}, ${max_expected}], got ${actual}" >&2
+    exit 1
+  fi
+}
+
 run_replied_test() {
   local case_dir="${TMP_ROOT}/replied"
   local repo_dir="${case_dir}/repo"
@@ -322,10 +400,44 @@ run_quiet_wait_window_regression_test() {
   assert_json_value "${output_without_window}" '.status' 'timeout'
 }
 
+run_wait_wrapper_short_helper_timeout_test() {
+  local case_dir="${TMP_ROOT}/wait-wrapper-short-helper"
+  local output_file="${case_dir}/result.json"
+  local started_at
+  local elapsed_seconds
+
+  mkdir -p "${case_dir}"
+  spawn_wait_wrapper_helper "${output_file}" 3 replied
+  started_at="$(date +%s)"
+  run_wait_wrapper_loop "${output_file}" "${SPAWNED_WAIT_WRAPPER_PID}" 240 30 42
+  elapsed_seconds=$(( $(date +%s) - started_at ))
+
+  assert_elapsed_between "${elapsed_seconds}" 2 5 "short helper timeout wrapper regression"
+  assert_json_value "${output_file}" '.status' 'replied'
+}
+
+run_wait_wrapper_long_helper_timeout_test() {
+  local case_dir="${TMP_ROOT}/wait-wrapper-long-helper"
+  local output_file="${case_dir}/result.json"
+  local started_at
+  local elapsed_seconds
+
+  mkdir -p "${case_dir}"
+  spawn_wait_wrapper_helper "${output_file}" 15 timeout
+  started_at="$(date +%s)"
+  run_wait_wrapper_loop "${output_file}" "${SPAWNED_WAIT_WRAPPER_PID}" 10 15 77
+  elapsed_seconds=$(( $(date +%s) - started_at ))
+
+  assert_elapsed_between "${elapsed_seconds}" 14 20 "long helper timeout wrapper regression"
+  assert_json_value "${output_file}" '.status' 'timeout'
+}
+
 run_replied_test
 run_quota_test
 run_null_commit_replied_test
 run_timeout_test
 run_quiet_wait_window_regression_test
+run_wait_wrapper_short_helper_timeout_test
+run_wait_wrapper_long_helper_timeout_test
 
 echo "pr-bot-wait tests: PASS"

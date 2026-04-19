@@ -939,6 +939,7 @@ fi
 OUTPUT_FILE="$(mktemp -t pr-bot-wait-${PR_NUM}-XXXXXX.json)"
 INTERVAL="$(csa config get pr_review.cloud_bot_poll_interval_seconds --default 30)"
 WAIT_LONG_POLL_SECS="$(csa config get kv_cache.long_poll_seconds --default 240)"
+WAIT_RESULT_GRACE_SECS=1
 POLL_RESULT_STATUS=""
 WAIT_MARKER=""
 CSA_PR_BOT_NAME="${CLOUD_BOT_NAME}" nohup "${PR_BOT_WAIT_SCRIPT}" "${PR_NUM}" \
@@ -951,19 +952,44 @@ CSA_PR_BOT_NAME="${CLOUD_BOT_NAME}" nohup "${PR_BOT_WAIT_SCRIPT}" "${PR_NUM}" \
   --output "${OUTPUT_FILE}" \
   >/dev/null 2>&1 &
 POLL_PID=$!
+WAIT_STARTED_AT="$(date +%s)"
+WAIT_ELAPSED_SECS=0
 
-sleep "${WAIT_LONG_POLL_SECS}"
-if [ ! -f "${OUTPUT_FILE}" ]; then
-  echo "Polling helper still running after first long-poll window; waiting one more window."
-  sleep "${WAIT_LONG_POLL_SECS}"
-fi
+while [ "${WAIT_ELAPSED_SECS}" -lt "${CLOUD_BOT_POLL_MAX_SECONDS}" ]; do
+  if [ -f "${OUTPUT_FILE}" ]; then
+    break
+  fi
+  if ! kill -0 "${POLL_PID}" 2>/dev/null; then
+    sleep "${WAIT_RESULT_GRACE_SECS}"
+    break
+  fi
+
+  remaining=$((CLOUD_BOT_POLL_MAX_SECONDS - WAIT_ELAPSED_SECS))
+  step="${WAIT_LONG_POLL_SECS}"
+  if [ "${step}" -gt "${remaining}" ]; then
+    step="${remaining}"
+  fi
+
+  sleep "${step}" &
+  WAIT_SLEEP_PID=$!
+  wait -n "${POLL_PID}" "${WAIT_SLEEP_PID}" 2>/dev/null || true
+  if kill -0 "${WAIT_SLEEP_PID}" 2>/dev/null; then
+    kill "${WAIT_SLEEP_PID}" 2>/dev/null || true
+    wait "${WAIT_SLEEP_PID}" 2>/dev/null || true
+  fi
+  WAIT_ELAPSED_SECS=$(( $(date +%s) - WAIT_STARTED_AT ))
+done
+
+WAIT_ELAPSED_SECS=$(( $(date +%s) - WAIT_STARTED_AT ))
 
 if [ ! -f "${OUTPUT_FILE}" ]; then
   if kill -0 "${POLL_PID}" 2>/dev/null; then
     kill "${POLL_PID}" 2>/dev/null || true
+    wait "${POLL_PID}" 2>/dev/null || true
   fi
-  echo "ERROR: Cloud bot polling helper did not produce a result file after two long-poll windows." >&2
-  exit 1
+  printf '{"status":"timeout","pr":%s,"elapsed_seconds":%s}\n' \
+    "${PR_NUM}" "${WAIT_ELAPSED_SECS}" > "${OUTPUT_FILE}.tmp"
+  mv "${OUTPUT_FILE}.tmp" "${OUTPUT_FILE}"
 fi
 
 POLL_RESULT_STATUS="$(jq -r '.status // empty' "${OUTPUT_FILE}")"
