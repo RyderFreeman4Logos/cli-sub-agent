@@ -263,6 +263,36 @@ fn pr_bot_pattern_and_workflow_reuse_existing_current_head_reviews() {
 }
 
 #[test]
+fn pr_bot_artifacts_drop_timeout_merge_branch_and_step_local_manifest_vars() {
+    let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
+    let pattern = pr_bot_artifact_text("patterns/pr-bot/PATTERN.md");
+
+    for artifact in [&workflow, &pattern] {
+        assert!(
+            !artifact
+                .contains("cloud_bot=true but bot timed out; merging on fallback review clean"),
+            "pr-bot merge-without-bot path must not retain the dead timeout rationale branch"
+        );
+        assert!(
+            artifact.contains("cloud_bot=true`, bot is skipped due to cached quota exhaustion, and fallback local review is clean"),
+            "pr-bot merge-without-bot docs must describe the reachable quota-exhausted path"
+        );
+    }
+
+    for dead_var in [
+        "REUSABLE_CURRENT_HEAD_REVIEW_RECORD",
+        "REUSABLE_CURRENT_HEAD_REVIEW_RECORD_RC",
+        "REUSABLE_CURRENT_HEAD_REVIEW_TS",
+        "REUSE_EXISTING_CURRENT_HEAD_REVIEW",
+    ] {
+        assert!(
+            !workflow.contains(&format!("name = \"{dead_var}\"")),
+            "workflow manifest must not declare step-local variable {dead_var}"
+        );
+    }
+}
+
+#[test]
 fn pr_bot_artifacts_paginate_current_head_trigger_lookup() {
     for artifact in [
         "patterns/pr-bot/workflow.toml",

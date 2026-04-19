@@ -496,26 +496,26 @@ query_reusable_current_head_review_record() {
 set +e
 LATEST_CURRENT_HEAD_TRIGGER_TS="$(query_latest_current_head_trigger_ts)"
 LATEST_CURRENT_HEAD_TRIGGER_TS_RC=$?
-REUSABLE_CURRENT_HEAD_REVIEW_RECORD="$(query_reusable_current_head_review_record "${LATEST_CURRENT_HEAD_TRIGGER_TS}")"
-REUSABLE_CURRENT_HEAD_REVIEW_RECORD_RC=$?
+reusable_current_head_review_record="$(query_reusable_current_head_review_record "${LATEST_CURRENT_HEAD_TRIGGER_TS}")"
+reusable_current_head_review_record_rc=$?
 set -e
 
-REUSABLE_CURRENT_HEAD_REVIEW_TS=""
-if [ "${REUSABLE_CURRENT_HEAD_REVIEW_RECORD_RC}" -eq 0 ] && [ -n "${REUSABLE_CURRENT_HEAD_REVIEW_RECORD}" ]; then
-  IFS=$'\t' read -r BOT_REUSED_REVIEW_ID REUSABLE_CURRENT_HEAD_REVIEW_TS <<<"${REUSABLE_CURRENT_HEAD_REVIEW_RECORD}"
+reusable_current_head_review_ts=""
+if [ "${reusable_current_head_review_record_rc}" -eq 0 ] && [ -n "${reusable_current_head_review_record}" ]; then
+  IFS=$'\t' read -r BOT_REUSED_REVIEW_ID reusable_current_head_review_ts <<<"${reusable_current_head_review_record}"
 fi
 
-REUSE_EXISTING_CURRENT_HEAD_REVIEW=false
-if [ -n "${BOT_REUSED_REVIEW_ID}" ] && [ -n "${REUSABLE_CURRENT_HEAD_REVIEW_TS}" ]; then
-  REUSE_EXISTING_CURRENT_HEAD_REVIEW=true
+reuse_existing_current_head_review=false
+if [ -n "${BOT_REUSED_REVIEW_ID}" ] && [ -n "${reusable_current_head_review_ts}" ]; then
+  reuse_existing_current_head_review=true
   BOT_UNAVAILABLE=false
-  BOT_REVIEW_WINDOW_START="${REUSABLE_CURRENT_HEAD_REVIEW_TS}"
+  BOT_REVIEW_WINDOW_START="${reusable_current_head_review_ts}"
   WAIT_MARKER="BOT_REPLY=received"
-  echo "Reusable @${CLOUD_BOT_NAME} review #${BOT_REUSED_REVIEW_ID} already exists for HEAD ${CURRENT_SHA} at ${REUSABLE_CURRENT_HEAD_REVIEW_TS}; skipping trigger and delegated wait."
+  echo "Reusable @${CLOUD_BOT_NAME} review #${BOT_REUSED_REVIEW_ID} already exists for HEAD ${CURRENT_SHA} at ${reusable_current_head_review_ts}; skipping trigger and delegated wait."
 fi
 
 # --- Trigger cloud bot review for current HEAD ---
-if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "false" ]; then
+if [ "${reuse_existing_current_head_review}" = "false" ]; then
 TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Round-aware trigger logic (#506):
@@ -678,7 +678,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   # --- Positive signal check (#505): verify a current-HEAD review EVENT exists ---
   # If this run reused a specific current-HEAD review object, that selection is
   # already the positive signal and later checks must stay scoped to that review.
-  if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+  if [ "${reuse_existing_current_head_review}" = "true" ]; then
     REVIEW_EVENT_RC=0
     REVIEW_EVENT_COUNT=1
   else
@@ -744,7 +744,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   # post inline comments without a formal review event.
   if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
     set +e
-    if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+    if [ "${reuse_existing_current_head_review}" = "true" ]; then
       ACTIONABLE_COMMENT_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
           | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
@@ -770,7 +770,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
         ;;
     esac
     if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
-      if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+      if [ "${reuse_existing_current_head_review}" = "true" ]; then
         echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) in reusable review #${BOT_REUSED_REVIEW_ID}; marking BOT_HAS_ISSUES=true."
         BOT_HAS_ISSUES_SOURCE="reused_review_comments"
       else
@@ -791,7 +791,7 @@ fi
 # --- Check for non-target bot comments (e.g., codex auto-review) ---
 if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
   set +e
-  if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+  if [ "${reuse_existing_current_head_review}" = "true" ]; then
     OTHER_BOT_COUNT="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
         | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
@@ -809,7 +809,7 @@ if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
     echo "WARNING: Detected ${OTHER_BOT_COUNT} actionable comment(s) from non-target bot(s)." >&2
     echo "WARNING: These may consume coding quota for the originating bot service." >&2
     echo "Including non-target bot findings in review."
-    if [ "${REUSE_EXISTING_CURRENT_HEAD_REVIEW}" = "true" ]; then
+    if [ "${reuse_existing_current_head_review}" = "true" ]; then
       BOT_HAS_ISSUES_SOURCE="current_sha_comments"
     else
       BOT_HAS_ISSUES_SOURCE="current_window_comments"
@@ -1757,12 +1757,12 @@ Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
 guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
 This step executes in either of these cases:
 - `cloud_bot=false` (no cloud bot path)
-- `cloud_bot=true`, `BOT_UNAVAILABLE=true`, and fallback local review is clean
+- `cloud_bot=true`, bot is skipped due to cached quota exhaustion, and fallback local review is clean
 
 **MANDATORY**: Before merging, leave a PR comment explaining the merge rationale.
-This step has three audit-trail cases:
+This step has two audit-trail cases:
 - `cloud_bot=false`: "cloud_bot=false (disabled in config); merging on local review clean"
-- `cloud_bot=true` and `BOT_UNAVAILABLE=true`: "cloud_bot=true but bot timed out; merging on fallback review clean"
+- `MERGE_WITHOUT_BOT_REASON_KIND=cloud_bot_quota_exhausted`: explain the cached quota window and cite the local review session ID
 When `MERGE_WITHOUT_BOT_REASON_KIND=cloud_bot_quota_exhausted`, the audit trail
 must explain the cached quota window and cite the local review session ID.
 
@@ -1807,10 +1807,6 @@ ${DIFF_SUMMARY}
 \`\`\`
 EOF
 )"
-elif [ "${BOT_UNAVAILABLE:-false}" = "true" ]; then
-  MERGE_REASON="cloud_bot=true but bot timed out; merging on fallback review clean"
-  MERGE_WITHOUT_BOT_REASON_KIND="${MERGE_WITHOUT_BOT_REASON_KIND:-cloud_bot_timeout}"
-  COMMENT_BODY="**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch ${DEFAULT_BRANCH}\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 else
   echo "ERROR: Step 6a reached without a valid merge-without-bot rationale."
   exit 1
