@@ -24,7 +24,7 @@ transport = "acp"
     );
 
     let err = validate_config_with_paths(None, &config_path).unwrap_err();
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("[tools.codex].transport"),
@@ -97,7 +97,7 @@ transport = "stdio"
     );
 
     let err = validate_config_with_paths(None, &config_path).unwrap_err();
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("[tools.codex].transport"),
@@ -125,7 +125,7 @@ transport = "cli"
     );
 
     let err = validate_config_with_paths(None, &config_path).unwrap_err();
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("[tools.gemini-cli].transport"),

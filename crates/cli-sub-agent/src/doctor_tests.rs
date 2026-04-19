@@ -202,7 +202,7 @@ transport = "acp"
     );
 
     let err = load_doctor_project_config_from(td.path()).unwrap_err();
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("[tools.codex].transport"),
@@ -311,9 +311,7 @@ transport = "cli"
 
     let merged_error = ProjectConfig::load(td.path()).expect_err("merged load should fail");
     assert!(
-        merged_error
-            .to_string()
-            .contains("[tools.claude-code].transport"),
+        format!("{merged_error:#}").contains("[tools.claude-code].transport"),
         "test fixture should exercise an invalid user-level transport override: {merged_error}"
     );
 
