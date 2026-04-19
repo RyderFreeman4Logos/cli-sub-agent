@@ -56,8 +56,15 @@ Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, `REPO_SLUG`,
 : "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${REPO_SLUG}" "${DEFAULT_BRANCH}"
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
-# Prefer explicit branch mapping over repo-level defaults or conventions.
-REMOTE_NAME=$(git config --get "branch.${WORKFLOW_BRANCH:-$(git branch --show-current)}.remote" 2>/dev/null || true)
+CURRENT_BRANCH="${WORKFLOW_BRANCH:-$(git branch --show-current)}"
+# Resolve the push target using Git's push-side precedence before fetch-side fallbacks.
+REMOTE_NAME=$(git config --get "branch.${CURRENT_BRANCH}.pushRemote" 2>/dev/null || true)
+if [ -z "$REMOTE_NAME" ]; then
+  REMOTE_NAME=$(git config --get remote.pushDefault 2>/dev/null || true)
+fi
+if [ -z "$REMOTE_NAME" ]; then
+  REMOTE_NAME=$(git config --get "branch.${CURRENT_BRANCH}.remote" 2>/dev/null || true)
+fi
 if [ -z "$REMOTE_NAME" ]; then
   REMOTE_NAME=$(git config --get checkout.defaultRemote 2>/dev/null || true)
 fi
@@ -72,13 +79,14 @@ if [ -z "$REMOTE_NAME" ]; then
 fi
 if [ -z "$REMOTE_NAME" ]; then
   echo "ERROR: cannot determine target remote. Multiple remotes exist and neither" >&2
-  echo "  'branch.${WORKFLOW_BRANCH:-<branch>}.remote', 'checkout.defaultRemote', nor 'origin' is set." >&2
-  echo "  Configure one with: git config --local checkout.defaultRemote <name>" >&2
+  echo "  'branch.${CURRENT_BRANCH}.pushRemote', 'remote.pushDefault'," >&2
+  echo "  'branch.${CURRENT_BRANCH}.remote', 'checkout.defaultRemote', nor 'origin' is set." >&2
+  echo "  Configure one with: git config --local branch.${CURRENT_BRANCH}.pushRemote <name>" >&2
   exit 1
 fi
-REMOTE_URL=$(git remote get-url "$REMOTE_NAME" 2>/dev/null)
+REMOTE_URL=$(git remote get-url --push "$REMOTE_NAME" 2>/dev/null)
 if [ -z "$REMOTE_URL" ]; then
-  echo "ERROR: git remote '$REMOTE_NAME' has no URL" >&2
+  echo "ERROR: git remote '$REMOTE_NAME' has no push URL" >&2
   exit 1
 fi
 
@@ -203,7 +211,7 @@ if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | gre
 fi
 
 git push --force-with-lease -u "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
-ORIGIN_URL="$(git remote get-url "${REMOTE_NAME}")"
+ORIGIN_URL="$(git remote get-url --push "${REMOTE_NAME}")"
 SOURCE_OWNER="$(
   printf '%s\n' "${ORIGIN_URL}" | sed -nE \
     -e 's#^https?://([^@/]+@)?github\\.com/([^/]+)/[^/]+(\\.git)?$#\\2#p' \
