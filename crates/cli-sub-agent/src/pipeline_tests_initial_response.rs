@@ -133,6 +133,14 @@ fn test_resolve_initial_response_timeout_uses_config_value() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_per_tool_default_unknown_tool_uses_resources_default() {
+    assert_eq!(
+        per_tool_default("opencode"),
+        DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS
+    );
+}
+
+#[test]
 fn test_resolve_initial_response_timeout_for_tool_disabled_when_idle_timeout_explicit() {
     // User set --idle-timeout but NOT --initial-response-timeout → disabled.
     let cfg = ProjectConfig {
