@@ -443,7 +443,7 @@ fn persist_review_verdict_marks_clean_transcript_as_pass() {
 }
 
 #[test]
-fn persist_review_verdict_plain_text_full_output_falls_back_to_review_meta_findings() {
+fn persist_review_verdict_plain_text_full_output_without_review_message_emits_uncertain_verdict() {
     let session_id = "01TESTMETAFALLBACK000000000";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("persist-review-verdict-meta-fallback", session_id);
@@ -461,8 +461,8 @@ fn persist_review_verdict_plain_text_full_output_falls_back_to_review_meta_findi
     let artifact: ReviewVerdictArtifact =
         serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
             .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Fail);
-    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
@@ -538,7 +538,7 @@ fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
 }
 
 #[test]
-fn persist_review_verdict_json_transcript_without_review_message_falls_back_to_review_meta() {
+fn persist_review_verdict_json_transcript_without_review_message_emits_uncertain_verdict() {
     let session_id = "01TESTJSONNOREVIEWMESSAGE00";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("persist-review-verdict-json-no-review-message", session_id);
@@ -570,8 +570,8 @@ fn persist_review_verdict_json_transcript_without_review_message_falls_back_to_r
     let artifact: ReviewVerdictArtifact =
         serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
             .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Fail);
-    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");

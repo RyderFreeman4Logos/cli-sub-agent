@@ -289,8 +289,8 @@ fn derive_review_verdict_artifact(
 
     Ok(ReviewVerdictArtifact::from_parts(
         meta.session_id.clone(),
-        ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain),
-        meta.verdict.clone(),
+        ReviewDecision::Uncertain,
+        legacy_verdict_for_decision(ReviewDecision::Uncertain, "UNCERTAIN"),
         findings,
         Vec::new(),
     ))
