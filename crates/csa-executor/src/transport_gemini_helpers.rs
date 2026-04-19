@@ -6,10 +6,13 @@ use anyhow::anyhow;
 use csa_process::ExecutionResult;
 use csa_resource::isolation_plan::IsolationPlan;
 
+use super::transport_codex_exec_stall::resolve_initial_response_timeout;
 use crate::transport_gemini_retry::{gemini_retry_model, gemini_should_use_api_key};
 
 pub(crate) const GEMINI_OAUTH_PROMPT_SUMMARY: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no tool output produced";
+pub(crate) const GEMINI_ACP_INITIAL_STALL_REASON: &str = "gemini_acp_initial_stall";
+const DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 180;
 
 #[derive(Debug, Clone)]
 pub(super) struct GeminiRetryPhase {
@@ -30,6 +33,62 @@ impl GeminiRetryPhase {
             model: gemini_retry_model(attempt).unwrap_or("inherit"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct GeminiAcpInitialStallClassification {
+    pub(super) code: &'static str,
+    pub(super) timeout_seconds: u64,
+}
+
+pub(super) fn gemini_acp_initial_response_timeout_seconds(
+    tool_name: &str,
+    configured_timeout_seconds: Option<u64>,
+) -> Option<u64> {
+    if tool_name != "gemini-cli" {
+        return None;
+    }
+
+    resolve_initial_response_timeout(
+        configured_timeout_seconds,
+        DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+    )
+}
+
+pub(super) fn classify_gemini_acp_initial_stall(
+    execution: &ExecutionResult,
+    timeout_seconds: Option<u64>,
+) -> Option<GeminiAcpInitialStallClassification> {
+    if !execution.output.is_empty()
+        || execution.exit_code != 137
+        || !execution.summary.starts_with("initial response timeout:")
+    {
+        return None;
+    }
+
+    Some(GeminiAcpInitialStallClassification {
+        code: GEMINI_ACP_INITIAL_STALL_REASON,
+        timeout_seconds: timeout_seconds
+            .unwrap_or(DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS),
+    })
+}
+
+pub(super) fn apply_gemini_acp_initial_stall_summary(
+    execution: &mut ExecutionResult,
+    classification: &GeminiAcpInitialStallClassification,
+) {
+    let summary = format!(
+        "{reason}: no ACP events/stderr within {}s",
+        classification.timeout_seconds,
+        reason = classification.code
+    );
+
+    execution.summary = summary.clone();
+    if !execution.stderr_output.is_empty() && !execution.stderr_output.ends_with('\n') {
+        execution.stderr_output.push('\n');
+    }
+    execution.stderr_output.push_str(&summary);
+    execution.stderr_output.push('\n');
 }
 
 pub(super) fn gemini_phase_desc(attempt: u8) -> &'static str {
