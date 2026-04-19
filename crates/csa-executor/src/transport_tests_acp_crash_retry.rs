@@ -59,6 +59,14 @@ fn test_out_of_memory_is_not_retryable() {
 }
 
 #[test]
+fn test_oom_word_boundary_cases() {
+    assert!(is_oom_error("ACP transport failed: out of memory"));
+    assert!(is_oom_error("kernel logged: oom killed process X"));
+    assert!(!is_oom_error("room available"));
+    assert!(!is_oom_error("zoom level"));
+}
+
+#[test]
 fn test_signal_90_is_not_oom_false_positive() {
     // "signal 90" should NOT match the OOM pattern for signal 9.
     let err = "ACP process exited unexpectedly: killed by signal 90";
@@ -357,6 +365,14 @@ fn extract_parses_code_with_equals() {
 }
 
 #[test]
+fn extract_parses_negative_exit_code() {
+    assert_eq!(
+        extract_crash_exit_code("exit code: -9"),
+        Some(CrashExitCode::ExitCode(-9))
+    );
+}
+
+#[test]
 fn extract_rejects_oom_as_substring_of_room() {
     assert_ne!(
         extract_crash_exit_code("something involving bedroom and classroom"),
@@ -377,6 +393,26 @@ fn extract_accepts_standalone_oom_with_word_boundary() {
     assert_eq!(
         extract_crash_exit_code("kernel logged: oom killed process X"),
         Some(CrashExitCode::OomEvent)
+    );
+}
+
+#[test]
+fn extract_signal_9_variants_and_sigkill() {
+    assert_eq!(
+        extract_crash_exit_code("ACP process exited unexpectedly: signal 9"),
+        Some(CrashExitCode::Signal(9))
+    );
+    assert_eq!(
+        extract_crash_exit_code("ACP process exited unexpectedly: signal:9"),
+        Some(CrashExitCode::Signal(9))
+    );
+    assert_eq!(
+        extract_crash_exit_code("ACP process exited unexpectedly: signal: 9"),
+        Some(CrashExitCode::Signal(9))
+    );
+    assert_eq!(
+        extract_crash_exit_code("ACP process exited unexpectedly: SIGKILL"),
+        Some(CrashExitCode::Signal(9))
     );
 }
 
@@ -405,4 +441,24 @@ fn test_format_codex_acp_crash_retry_exhausted_preserves_failover_anchor() {
     let msg = formatted.to_string().to_ascii_lowercase();
     assert!(msg.contains("acp crash retry exhausted"));
     assert!(msg.contains("codex_acp_crash_runtime"));
+}
+
+#[test]
+fn classify_signal_9_variants_as_oom() {
+    for signal_variant in ["signal 9", "signal:9", "signal: 9", "sigkill"] {
+        let classification =
+            classify_codex_acp_crash("ACP process exited unexpectedly", extract_crash_exit_code(signal_variant), None, Some(3072));
+        assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
+    }
+}
+
+#[test]
+fn classify_signal_negative_9_as_oom() {
+    let classification = classify_codex_acp_crash(
+        "ACP process exited unexpectedly: exit code -9",
+        extract_crash_exit_code("ACP process exited unexpectedly: exit code -9"),
+        None,
+        Some(3072),
+    );
+    assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
 }
