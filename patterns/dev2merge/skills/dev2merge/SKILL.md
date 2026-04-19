@@ -86,6 +86,25 @@ Do NOT launch narrowed or duplicate review/debate sessions for the same scope
 unless there is explicit crash/error evidence, persistent liveness failure, or
 direct user instruction.
 
+## While awaiting review/fix session
+
+This is the while-waiting checklist. When you background a `csa session wait` via `run_in_background: true`, the next task-notification wakes you up automatically. Do not add sleep, hand-rolled polling, or a redundant wakeup on top.
+
+**Safe parallel work**:
+1. Draft the PR body or changelog entry for the current branch as local text only; do not run `gh pr create` yet.
+2. For deferred MEDIUM findings from prior rounds, queue issue-template drafts locally and batch filing later when the review cluster is clear.
+3. Read the next sprint task or issue to preload context for the next non-conflicting step.
+4. Check existing issues for possible duplicate-of candidates for findings already queued.
+5. Clean up stale TaskCreate or TaskUpdate entries.
+
+**Do NOT**:
+- Start new `csa run` or `csa review` sessions that could race on git branch or checkout state with the waiting one (single-checkout sequential rule, AGENTS.md 028).
+- Edit source files while the main agent is acting as the Layer 0 orchestrator; that violates the SA-mode separation this wait is protecting.
+- Run state-mutating git commands such as `git commit`, `git checkout <other-branch>`, or `git push`.
+- Stack a ScheduleWakeup backup on top of the backgrounded wait; the task-notification is already the wake signal (AGENTS.md 042f).
+
+If there is no useful parallel work available, return control and wait for the notification. Do not invent speculative work just to stay busy.
+
 ### Pipeline Steps
 
 The workflow is compiled from the companion `../../PATTERN.md` file (relative to this `SKILL.md`) into `workflow.toml`.
