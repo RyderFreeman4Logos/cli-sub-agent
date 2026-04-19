@@ -946,6 +946,7 @@ CSA_PR_BOT_NAME="${CLOUD_BOT_NAME}" nohup "${PR_BOT_WAIT_SCRIPT}" "${PR_NUM}" \
   --interval "${INTERVAL}" \
   --bot-login "${CLOUD_BOT_LOGIN}" \
   --push-sha "${CURRENT_SHA}" \
+  --window-start "${WAIT_BASE_TS}" \
   --quota-cache "${CLOUD_BOT_QUOTA_CACHE_FILE}" \
   --output "${OUTPUT_FILE}" \
   >/dev/null 2>&1 &
