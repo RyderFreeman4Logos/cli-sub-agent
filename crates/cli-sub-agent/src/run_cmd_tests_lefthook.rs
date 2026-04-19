@@ -352,6 +352,12 @@ fn segment_contains_forbidden_lefthook_bypass_blocks_separator_resets_after_env_
     assert!(segment_contains_forbidden_lefthook_bypass(
         "sh -c \"export FOO=1 BAR ; LEFTHOOK=0 other_cmd\""
     ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "export FOO=1 LEFTHOOK=0 git status"
+    ));
+    assert!(segment_contains_forbidden_lefthook_bypass(
+        "env -i FOO=1 LEFTHOOK=0 git status"
+    ));
 }
 
 #[test]

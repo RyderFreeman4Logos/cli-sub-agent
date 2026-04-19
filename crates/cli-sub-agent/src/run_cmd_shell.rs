@@ -715,43 +715,21 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
         if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
-            while idx < tokens.len() {
-                let next = tokens[idx].as_str();
-                if is_command_separator_token(next) {
-                    idx += 1;
-                    idx = skip_command_wrapper_tokens(tokens, idx);
-                    break;
-                }
-                if !is_env_assignment(next) {
-                    idx = skip_to_next_command_boundary(tokens, idx + 1);
-                    break;
-                }
-                if is_lefthook_env_assignment(next) {
-                    return true;
-                }
-                idx += 1;
+            let (contains_bypass, next_idx) = scan_env_assignments_for_lefthook_bypass(tokens, idx);
+            if contains_bypass {
+                return true;
             }
+            idx = next_idx;
             continue;
         }
 
         if token.eq_ignore_ascii_case("export") {
             idx += 1;
-            while idx < tokens.len() {
-                let next = tokens[idx].as_str();
-                if is_command_separator_token(next) {
-                    idx += 1;
-                    idx = skip_command_wrapper_tokens(tokens, idx);
-                    break;
-                }
-                if !is_env_assignment(next) {
-                    idx = skip_to_next_command_boundary(tokens, idx + 1);
-                    break;
-                }
-                if is_lefthook_env_assignment(next) {
-                    return true;
-                }
-                idx += 1;
+            let (contains_bypass, next_idx) = scan_env_assignments_for_lefthook_bypass(tokens, idx);
+            if contains_bypass {
+                return true;
             }
+            idx = next_idx;
             continue;
         }
 
@@ -767,6 +745,27 @@ fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
     }
 
     false
+}
+
+fn scan_env_assignments_for_lefthook_bypass(tokens: &[String], mut idx: usize) -> (bool, usize) {
+    while idx < tokens.len() {
+        let next = tokens[idx].as_str();
+        if is_command_separator_token(next) {
+            idx += 1;
+            idx = skip_command_wrapper_tokens(tokens, idx);
+            break;
+        }
+        if !is_env_assignment(next) {
+            idx = skip_to_next_command_boundary(tokens, idx + 1);
+            break;
+        }
+        if is_lefthook_env_assignment(next) {
+            return (true, idx);
+        }
+        idx += 1;
+    }
+
+    (false, idx)
 }
 
 /// Return true if `token` is `LEFTHOOK=<val>` or `LEFTHOOK_SKIP=<val>`.
