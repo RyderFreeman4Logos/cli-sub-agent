@@ -246,10 +246,8 @@ fn flatten_transcript_to_temp(
         .with_context(|| format!("Failed to open {}", output_log_path.display()))?;
     let reader = BufReader::new(file);
 
-    let mut first_non_empty_line = None;
     let mut saw_json_line = false;
-    let mut flattened = NamedTempFile::new_in(session_dir)
-        .with_context(|| format!("Failed to create temp file in {}", session_dir.display()))?;
+    let mut flattened: Option<NamedTempFile> = None;
     let mut wrote_text = false;
 
     for line_result in reader.lines() {
@@ -257,13 +255,6 @@ fn flatten_transcript_to_temp(
             .with_context(|| format!("Failed to read line from {}", output_log_path.display()))?;
         if line.trim().is_empty() {
             continue;
-        }
-
-        if first_non_empty_line.is_none() {
-            first_non_empty_line = Some(line.clone());
-            if serde_json::from_str::<TranscriptEvent>(&line).is_err() {
-                return Ok(None);
-            }
         }
 
         let Ok(event) = serde_json::from_str::<TranscriptEvent>(&line) else {
@@ -279,6 +270,10 @@ fn flatten_transcript_to_temp(
             && item.item_type == "agent_message"
             && let Some(text) = item.text
         {
+            let flattened =
+                flattened.get_or_insert(NamedTempFile::new_in(session_dir).with_context(|| {
+                    format!("Failed to create temp file in {}", session_dir.display())
+                })?);
             if wrote_text {
                 writeln!(flattened)?;
             }
@@ -288,11 +283,15 @@ fn flatten_transcript_to_temp(
     }
 
     if saw_json_line {
-        flattened
-            .as_file_mut()
-            .flush()
-            .context("Failed to flush flattened transcript temp file")?;
-        Ok(Some(flattened))
+        if let Some(mut flattened) = flattened {
+            flattened
+                .as_file_mut()
+                .flush()
+                .context("Failed to flush flattened transcript temp file")?;
+            Ok(Some(flattened))
+        } else {
+            Ok(None)
+        }
     } else {
         Ok(None)
     }
@@ -347,6 +346,31 @@ mod tests {
             fs::read_to_string(flattened.path()).unwrap(),
             "line 1\nline 2\n<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->"
         );
+    }
+
+    #[test]
+    fn flatten_transcript_to_temp_returns_none_for_plain_text_without_temp_file() {
+        let tmp = write_output_log(
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
+        );
+
+        let temp_before = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != "output.log")
+            .count();
+
+        let flattened =
+            flatten_transcript_to_temp(tmp.path(), &tmp.path().join("output.log")).unwrap();
+
+        let temp_after = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != "output.log")
+            .count();
+
+        assert!(flattened.is_none());
+        assert_eq!(temp_before, temp_after);
     }
 
     #[test]
