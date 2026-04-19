@@ -48,26 +48,32 @@ Each step below is annotated with its execution layer.
 
 Tool: bash
 
-Ensure all changes committed. Set `WORKFLOW_BRANCH` and `DEFAULT_BRANCH` once
+Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, and `DEFAULT_BRANCH` once
 (both persist through clean branch switches in Step 11).
 
 ```bash
 # Force weave to pick up workflow variables used across steps.
-: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${DEFAULT_BRANCH}"
+: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${DEFAULT_BRANCH}"
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
-# Prefer GitHub API (server truth) over locally-cached origin/HEAD (can be stale).
+REMOTE_NAME=$(git config --get checkout.defaultRemote 2>/dev/null || git remote | head -1)
+if [ -z "$REMOTE_NAME" ]; then
+  echo "ERROR: no git remote configured" >&2
+  exit 1
+fi
+# Prefer GitHub API (server truth) over locally-cached remote HEAD (can be stale).
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name // empty' 2>/dev/null)
 if [ -z "$DEFAULT_BRANCH" ]; then
-  # gh unavailable or unauthenticated — fall back to cached origin/HEAD
-  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+  # gh unavailable or unauthenticated — fall back to cached remote HEAD
+  DEFAULT_BRANCH=$(git symbolic-ref "refs/remotes/${REMOTE_NAME}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME}/@@")
 fi
 if [ -z "$DEFAULT_BRANCH" ]; then
-  echo "ERROR: cannot determine default branch (neither 'gh repo view' nor 'origin/HEAD' succeeded)" >&2
-  echo "Fix: run 'gh auth login' OR 'git remote set-head origin --auto', then retry" >&2
+  echo "ERROR: cannot determine default branch (neither 'gh repo view' nor '${REMOTE_NAME}/HEAD' succeeded)" >&2
+  echo "Fix: run 'gh auth login' OR 'git remote set-head ${REMOTE_NAME} --auto', then retry" >&2
   exit 1
 fi
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
+echo "CSA_VAR:REMOTE_NAME=$REMOTE_NAME"
 echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 ```
 
@@ -156,13 +162,13 @@ fi
 set -euo pipefail
 
 # --- Early-push detection: warn if branch was already pushed before review ---
-if git ls-remote --heads origin "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
+if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
   echo "WARNING: Branch '${WORKFLOW_BRANCH}' was already pushed to remote before this skill ran."
   echo "Unreviewed code may have been visible to CI/reviewers. Continuing with force-push of reviewed code."
 fi
 
-git push --force-with-lease -u origin "${WORKFLOW_BRANCH}"
-ORIGIN_URL="$(git remote get-url origin)"
+git push --force-with-lease -u "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+ORIGIN_URL="$(git remote get-url "${REMOTE_NAME}")"
 SOURCE_OWNER="$(
   printf '%s\n' "${ORIGIN_URL}" | sed -nE \
     -e 's#^https?://([^@/]+@)?github\\.com/([^/]+)/[^/]+(\\.git)?$#\\2#p' \
@@ -1234,7 +1240,7 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       ROUND_LIMIT_REACHED=false  # Clear so Steps 10.5/11/12 are unblocked
       # Push any Category C fixes from Step 9 so remote HEAD includes them.
       # Without this, gh pr merge merges the stale remote head.
-      git push origin "${WORKFLOW_BRANCH}"
+      git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
       echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
       echo "CSA_VAR:ROUND_LIMIT_ACTION="
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
@@ -1289,7 +1295,7 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
 fi
 
 # --- Push fixes only (next trigger happens in Step 5) ---
-git push origin "${WORKFLOW_BRANCH}"
+git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 ROUND_LIMIT_REACHED=false
 echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
 echo "CSA_VAR:REVIEW_ROUND=$REVIEW_ROUND"
@@ -1740,7 +1746,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   FALLBACK_REVIEW_HAS_ISSUES=false
   echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
   echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-  git push origin "${WORKFLOW_BRANCH}"
+  git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 fi
 ```
 
@@ -1781,7 +1787,7 @@ fi
 
 # Push fallback fix commits so the remote PR head includes them.
 # Without this, gh pr merge uses the stale remote HEAD and omits fixes.
-git push origin "${WORKFLOW_BRANCH}"
+git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 
 # Audit trail: explain why merging without bot review.
 DIFF_SUMMARY="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" | sed -n '1,20p')"
@@ -1828,9 +1834,9 @@ mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 # Post-merge: sync local default branch with remote
-git fetch origin
+git fetch "${REMOTE_NAME}"
 git checkout "${DEFAULT_BRANCH}"
-git merge "origin/${DEFAULT_BRANCH}" --ff-only
+git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```
@@ -1852,7 +1858,7 @@ If fixes accumulated, create clean branch for final review.
 ```bash
 CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
-git push -u origin "${CLEAN_BRANCH}"
+git push -u "${REMOTE_NAME}" "${CLEAN_BRANCH}"
 gh pr create --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```
 
@@ -1878,7 +1884,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
-git push origin "${WORKFLOW_BRANCH}"
+git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
@@ -1894,9 +1900,9 @@ mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 # Post-merge: sync local default branch with remote
-git fetch origin
+git fetch "${REMOTE_NAME}"
 git checkout "${DEFAULT_BRANCH}"
-git merge "origin/${DEFAULT_BRANCH}" --ff-only
+git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
@@ -1925,7 +1931,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
-git push origin "${WORKFLOW_BRANCH}"
+git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
@@ -1941,9 +1947,9 @@ mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 # Post-merge: sync local default branch with remote
-git fetch origin
+git fetch "${REMOTE_NAME}"
 git checkout "${DEFAULT_BRANCH}"
-git merge "origin/${DEFAULT_BRANCH}" --ff-only
+git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
