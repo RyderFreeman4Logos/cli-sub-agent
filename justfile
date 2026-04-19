@@ -382,9 +382,9 @@ install:
     cargo build --release --all-features -p cli-sub-agent -p weave
     install -m 755 "${target_dir}/release/csa" /usr/local/bin/csa
     install -m 755 "${target_dir}/release/weave" /usr/local/bin/weave
-    @echo "Verifying installation..."
-    @csa --version
-    @weave --version
+    echo "Verifying installation..."
+    csa --version
+    weave --version
 
 # Bump patch version of all workspace crates atomically.
 # All crates inherit version.workspace, so a single workspace bump suffices.
