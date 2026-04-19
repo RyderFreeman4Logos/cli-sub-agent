@@ -121,6 +121,17 @@ impl Transport for LegacyTransport {
                 );
                 return Ok(result);
             }
+            if let Some(classification) = classify_gemini_legacy_initial_stall(
+                &executor,
+                &result.execution,
+                Self::consume_resolved_transport_initial_response_timeout_seconds(
+                    options.initial_response_timeout_seconds,
+                ),
+            ) {
+                let mut result = result;
+                apply_gemini_legacy_initial_stall_summary(&mut result.execution, &classification);
+                return Ok(result);
+            }
             return Ok(result);
         }
     }

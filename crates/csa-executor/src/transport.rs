@@ -31,8 +31,9 @@ mod transport_gemini_helpers;
 use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
-    apply_gemini_acp_initial_stall_summary, apply_gemini_sandbox_runtime_env_overrides,
-    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
+    apply_gemini_acp_initial_stall_summary, apply_gemini_legacy_initial_stall_summary,
+    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
+    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
     classify_gemini_oauth_prompt_result, classify_join_error,
     ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
