@@ -1036,6 +1036,26 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
   fi
   # Helper: check for setup/configuration messages before marking unavailable
+  check_quota_message_step5() {
+    set +e
+    local quota_body
+    quota_body="$(
+      gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+        | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body // "") | test("daily quota limit"; "i"))] | .[0].body // ""' \
+        2>/dev/null
+    )"
+    set -e
+    if [ -n "${quota_body}" ]; then
+      echo "Quota exhaustion detected from cloud bot comment during post-poll verification." >&2
+      CLOUD_BOT_SKIPPED=true
+      CLOUD_BOT_SKIP_KIND="quota_exhausted"
+      CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"
+      BOT_UNAVAILABLE=true
+      return 0
+    fi
+    return 1
+  }
+
   _check_setup_message_step5() {
     set +e
     local setup_body

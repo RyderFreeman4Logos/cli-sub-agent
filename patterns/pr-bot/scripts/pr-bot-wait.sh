@@ -10,6 +10,7 @@ usage: pr-bot-wait.sh <PR_NUMBER> [options]
   --bot-login <LOGIN>     bot GitHub login to match
   --output <FILE>         result JSON path
   --push-sha <SHA>        only accept reviews whose commit_id == this
+  --window-start <ISO8601> accept null-commit reviews submitted at/after this window
   --quota-cache <FILE>    quota cache file
 EOF
 }
@@ -27,6 +28,8 @@ INTERVAL_SEC="${CSA_PR_BOT_INTERVAL:-30}"
 BOT_LOGIN="${CSA_PR_BOT_LOGIN:-}"
 OUTPUT_FILE="${CSA_PR_BOT_OUTPUT:-/tmp/pr-bot-wait-${PR_NUMBER}.json}"
 PUSH_SHA=""
+SCRIPT_START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+WINDOW_START="${CSA_PR_BOT_WINDOW_START:-${SCRIPT_START_TIME}}"
 QUOTA_CACHE_FILE="${CSA_PR_BOT_QUOTA_CACHE:-${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml}"
 BOT_NAME="${CSA_PR_BOT_NAME:-}"
 
@@ -50,6 +53,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --push-sha)
       PUSH_SHA="${2:?missing value for --push-sha}"
+      shift 2
+      ;;
+    --window-start)
+      WINDOW_START="${2:?missing value for --window-start}"
       shift 2
       ;;
     --quota-cache)
@@ -181,21 +188,29 @@ write_quota_cache() {
 
 review_filter() {
   if [ -n "${BOT_LOGIN}" ]; then
-    jq -c --arg login "${BOT_LOGIN}" --arg push_time "${PUSH_TIME}" --arg push_sha "${PUSH_SHA}" '
+    jq -c --arg login "${BOT_LOGIN}" --arg push_time "${PUSH_TIME}" --arg push_sha "${PUSH_SHA}" --arg window_start "${WINDOW_START}" '
       [ .[] | .[]
         | select((.user.login // "") == $login)
         | select($push_time == "" or (.submitted_at // "") > $push_time)
-        | select($push_sha == "" or (.commit_id // "") == $push_sha)
+        | select(
+            $push_sha == ""
+            or (.commit_id // "") == $push_sha
+            or (.commit_id == null and $window_start != "" and (.submitted_at // "") >= $window_start)
+          )
       ]
       | sort_by(.submitted_at)
       | last // empty
     '
   else
-    jq -c --arg push_time "${PUSH_TIME}" --arg push_sha "${PUSH_SHA}" '
+    jq -c --arg push_time "${PUSH_TIME}" --arg push_sha "${PUSH_SHA}" --arg window_start "${WINDOW_START}" '
       [ .[] | .[]
         | select((.user.type // "") == "Bot" or ((.user.login // "") | test("\\[bot\\]$")))
         | select($push_time == "" or (.submitted_at // "") > $push_time)
-        | select($push_sha == "" or (.commit_id // "") == $push_sha)
+        | select(
+            $push_sha == ""
+            or (.commit_id // "") == $push_sha
+            or (.commit_id == null and $window_start != "" and (.submitted_at // "") >= $window_start)
+          )
       ]
       | sort_by(.submitted_at)
       | last // empty

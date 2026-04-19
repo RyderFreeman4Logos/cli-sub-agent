@@ -51,6 +51,11 @@ if [ "${1:-}" = "api" ]; then
 [[{"id":101,"state":"COMMENTED","submitted_at":"2026-04-19T10:01:00Z","commit_id":"__PUSH_SHA__","user":{"login":"test-bot[bot]","type":"Bot"}}]]
 JSON
           ;;
+        replied-null-commit)
+          cat <<'JSON'
+[[{"id":102,"state":"COMMENTED","submitted_at":"2026-04-19T10:02:00Z","commit_id":null,"user":{"login":"test-bot[bot]","type":"Bot"}}]]
+JSON
+          ;;
         quota|timeout)
           echo '[[]]'
           ;;
@@ -182,6 +187,38 @@ run_quota_test() {
   grep -q 'last_pr_seen = 77' "${quota_cache}"
 }
 
+run_null_commit_replied_test() {
+  local case_dir="${TMP_ROOT}/replied-null-commit"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local output_file="${case_dir}/result.json"
+  local push_sha
+
+  make_repo "${repo_dir}"
+  push_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
+  GH_STUB_PUSH_SHA="${push_sha}" make_gh_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    GH_STUB_STATE_DIR="${case_dir}" \
+    GH_STUB_SCENARIO="replied-null-commit" \
+    GH_STUB_PUSH_SHA="${push_sha}" \
+    CSA_PR_BOT_NAME="test-bot" \
+    "${SCRIPT_PATH}" 52 \
+      --timeout 3 \
+      --interval 1 \
+      --bot-login "test-bot[bot]" \
+      --push-sha "${push_sha}" \
+      --window-start "2026-04-19T10:00:00Z" \
+      --output "${output_file}"
+  )
+
+  assert_json_value "${output_file}" '.status' 'replied'
+  assert_json_value "${output_file}" '.review.id' '102'
+  assert_json_value "${output_file}" '.review.commit_id' 'null'
+}
+
 run_timeout_test() {
   local case_dir="${TMP_ROOT}/timeout"
   local repo_dir="${case_dir}/repo"
@@ -222,6 +259,7 @@ run_timeout_test() {
 
 run_replied_test
 run_quota_test
+run_null_commit_replied_test
 run_timeout_test
 
 echo "pr-bot-wait tests: PASS"
