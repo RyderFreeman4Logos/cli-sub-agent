@@ -66,6 +66,10 @@ fn write_project_config(project_root: &Path, config: &ProjectConfig) {
     std::fs::write(config_path, toml::to_string_pretty(config).unwrap()).unwrap();
 }
 
+fn run_config_without_routable_tools() -> ProjectConfig {
+    run_config_with_tier("default", Vec::new(), &[])
+}
+
 #[tokio::test]
 async fn handle_run_persists_result_for_model_spec_tier_conflict() {
     let project_dir = tempdir().unwrap();
@@ -120,6 +124,10 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
     .expect_err("model-spec + tier conflict must return an error");
 
     assert!(
+        crate::run_helpers::is_routing_conflict(&err),
+        "routing conflict classification should be structured: {err:#}"
+    );
+    assert!(
         err.chain()
             .any(|cause| cause.to_string().contains("Conflicting routing flags")),
         "unexpected error chain: {err:#}"
@@ -144,5 +152,71 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
         result
             .summary
             .contains("--model-spec and --tier are mutually exclusive")
+    );
+}
+
+#[tokio::test]
+async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let config = run_config_without_routable_tools();
+    write_project_config(project_dir.path(), &config);
+
+    let err = handle_run(
+        None,
+        None,
+        None,
+        Some("inspect the repository".to_string()),
+        None,
+        None,
+        None,
+        false,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        false,
+        Some(project_dir.path().display().to_string()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        0,
+        OutputFormat::Text,
+        csa_process::StreamMode::BufferOnly,
+        None,
+        false,
+        false,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
+    .expect_err("non-conflict pre-exec error must return an error");
+
+    assert!(
+        !crate::run_helpers::is_routing_conflict(&err),
+        "unrelated pre-exec failures should not classify as routing conflicts: {err:#}"
+    );
+    assert!(
+        err.to_string()
+            .contains("No tool specified and no tier-based or auto-selectable tool available"),
+        "unexpected error: {err:#}"
+    );
+
+    let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    assert!(
+        sessions.is_empty(),
+        "non-conflict pre-exec errors should not create persisted run sessions"
     );
 }

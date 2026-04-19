@@ -301,7 +301,7 @@ pub(crate) async fn handle_run(
         force_ignore_tier_setting,
     )
     .map_err(|err| {
-        if err.to_string().contains("Conflicting routing flags") {
+        if crate::run_helpers::is_routing_conflict(&err) {
             crate::session_guard::persist_pre_exec_error_result(
                 crate::session_guard::PreExecErrorCtx {
                     project_root: &project_root,

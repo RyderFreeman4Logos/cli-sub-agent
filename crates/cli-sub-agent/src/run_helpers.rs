@@ -11,10 +11,13 @@ use csa_session::TokenUsage;
 
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
+#[path = "run_helpers_routing_conflict.rs"]
+mod routing_conflict;
 #[path = "run_helpers_tool_availability.rs"]
 mod tool_availability;
 
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
+pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_tool_binary_name,
     tool_binary_availability,
@@ -35,12 +38,12 @@ pub(crate) fn validate_tool_tier_override_flags(
     force_ignore_tier_setting: bool,
 ) -> Result<()> {
     if explicit_tool_requested && tier.is_some() && force_ignore_tier_setting {
-        anyhow::bail!(
+        return Err(routing_conflict_error(
             "Conflicting routing flags: --tool + --tier uses the tier's model/thinking for \
              that tool, while --force-ignore-tier-setting bypasses tier routing.\n\
              Remove --force-ignore-tier-setting to use tier routing, or remove --tier to \
-             bypass tiers entirely."
-        );
+             bypass tiers entirely.",
+        ));
     }
 
     Ok(())
@@ -52,10 +55,10 @@ pub(crate) fn validate_model_spec_tier_conflict(
     command: &str,
 ) -> Result<()> {
     if model_spec.is_some() && tier.is_some() {
-        anyhow::bail!(
+        return Err(routing_conflict_error(format!(
             "Conflicting routing flags for `csa {command}`: --model-spec and --tier are mutually exclusive.\n\
              Use --model-spec for an exact `tool/provider/model/thinking` selection, or use --tier for tier-managed routing and failover."
-        );
+        )));
     }
 
     Ok(())
@@ -202,13 +205,13 @@ pub(crate) fn resolve_tool_and_model(
         if let Some(requested_tool) = tool.filter(|_| !tool_is_auto_resolved)
             && requested_tool != tool_name
         {
-            anyhow::bail!(
+            return Err(routing_conflict_error(format!(
                 "Conflicting routing flags: --tool {} does not match --model-spec {}.\n\
                  The model spec selects tool {}. Use a matching --tool value or omit --tool.",
                 requested_tool.as_str(),
                 spec,
                 tool_name.as_str()
-            );
+            )));
         }
         // Enforce tool enablement from user config
         if let Some(cfg) = config {
