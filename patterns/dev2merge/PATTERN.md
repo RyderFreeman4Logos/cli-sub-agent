@@ -59,8 +59,8 @@ path to avoid no-op commit/version-bump steps.
 
 ```bash
 set -euo pipefail
-CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
-TOTAL_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -c . || true)"
+CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | awk '!/\.(md|txt|lock|toml)$/ { count++ } END { print count + 0 }')"
+TOTAL_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | wc -l | xargs)"
 TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
 if [ "${TOTAL_FILES}" -eq 0 ]; then
   # Empty diff means HEAD matches the base branch; do not treat that as docs-only,

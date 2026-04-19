@@ -2,6 +2,7 @@ use super::{
     PersistedReviewArtifact, ToolReviewFailureKind, derive_decision_from_text,
     detect_tool_review_failure, ensure_review_summary_artifact, persist_review_verdict,
 };
+use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{Finding, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
@@ -9,6 +10,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
@@ -69,6 +71,18 @@ fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
         .join(session_id);
     fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
     session_dir
+}
+
+fn lock_test_session(
+    test_name: &str,
+    session_id: &str,
+) -> (MutexGuard<'static, ()>, PathBuf, PathBuf) {
+    let env_lock = TEST_ENV_LOCK
+        .lock()
+        .expect("review_cmd_output env lock poisoned");
+    let project_root = temp_project_root(test_name);
+    let session_dir = create_session_dir(&project_root, session_id);
+    (env_lock, project_root, session_dir)
 }
 
 #[test]
@@ -153,9 +167,9 @@ fn detect_tool_review_failure_handles_guarded_browser_prompt_variant() {
 
 #[test]
 fn persist_review_verdict_skips_when_ai_file_exists() {
-    let project_root = temp_project_root("persist-review-verdict-skip");
     let session_id = "01TESTSKIP0000000000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-skip", session_id);
     let verdict_path = session_dir.join("output").join("review-verdict.json");
     let ai_payload = r#"{"ai":"preserved"}"#;
     fs::write(&verdict_path, ai_payload).expect("write AI verdict artifact");
@@ -171,9 +185,9 @@ fn persist_review_verdict_skips_when_ai_file_exists() {
 
 #[test]
 fn persist_review_verdict_prefers_structured_findings_summary() {
-    let project_root = temp_project_root("persist-review-verdict-findings");
     let session_id = "01TESTFINDINGS000000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-findings", session_id);
     let findings_path = session_dir.join("review-findings.json");
     let findings = vec![
         make_finding(Severity::High, "high"),
@@ -219,9 +233,9 @@ fn persist_review_verdict_prefers_structured_findings_summary() {
 
 #[test]
 fn persist_review_verdict_falls_back_to_full_output_transcript_counts() {
-    let project_root = temp_project_root("persist-review-verdict-full-output");
     let session_id = "01TESTFULL0000000000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-full-output", session_id);
     let full_output = [
         json!({"type":"thread.started","thread_id":"thread-1"}),
         json!({"type":"item.completed","item":{
@@ -257,9 +271,9 @@ fn persist_review_verdict_falls_back_to_full_output_transcript_counts() {
 
 #[test]
 fn persist_review_verdict_falls_back_to_priority_markers_in_full_output() {
-    let project_root = temp_project_root("persist-review-verdict-priority-markers");
     let session_id = "01TESTPRIORITYMARKERS000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-priority-markers", session_id);
     let full_output = [json!({"type":"item.completed","item":{
         "id":"item_1",
         "type":"agent_message",
@@ -292,9 +306,9 @@ fn persist_review_verdict_falls_back_to_priority_markers_in_full_output() {
 
 #[test]
 fn ensure_review_summary_artifact_synthesizes_summary_from_details_only_output() {
-    let project_root = temp_project_root("review-summary-synthesis");
     let session_id = "01TESTSUMMARYSYNTH000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("review-summary-synthesis", session_id);
     let details_only =
         "<!-- CSA:SECTION:details -->\nFAIL\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
     csa_session::persist_structured_output(&session_dir, details_only).expect("persist details");
@@ -319,9 +333,9 @@ fn ensure_review_summary_artifact_synthesizes_summary_from_details_only_output()
 
 #[test]
 fn ensure_review_summary_artifact_preserves_existing_summary_section() {
-    let project_root = temp_project_root("review-summary-preserve");
     let session_id = "01TESTSUMMARYKEEP0000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("review-summary-preserve", session_id);
     let output = "<!-- CSA:SECTION:summary -->\nReview completed successfully.\n<!-- CSA:SECTION:summary:END -->\n\
 <!-- CSA:SECTION:details -->\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
     csa_session::persist_structured_output(&session_dir, output).expect("persist structured");
@@ -348,9 +362,9 @@ fn ensure_review_summary_artifact_preserves_existing_summary_section() {
 
 #[test]
 fn ensure_review_summary_artifact_preserves_existing_multiline_summary_section() {
-    let project_root = temp_project_root("review-summary-preserve-multiline");
     let session_id = "01TESTSUMMARYMULTILINE000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("review-summary-preserve-multiline", session_id);
     let output = "<!-- CSA:SECTION:summary -->\nLine 1\nLine 2\nLine 3\n<!-- CSA:SECTION:summary:END -->\n\
 <!-- CSA:SECTION:details -->\nFAIL\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
     csa_session::persist_structured_output(&session_dir, output).expect("persist structured");
@@ -377,9 +391,9 @@ fn ensure_review_summary_artifact_preserves_existing_multiline_summary_section()
 
 #[test]
 fn ensure_review_summary_artifact_replaces_stale_summary_for_same_session_fix_rounds() {
-    let project_root = temp_project_root("review-summary-same-session-fix");
     let session_id = "01TESTSUMMARYSAMEROUND000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("review-summary-same-session-fix", session_id);
     let round_1 = "<!-- CSA:SECTION:summary -->\nFAIL: stale finding\n<!-- CSA:SECTION:summary:END -->\n\
 <!-- CSA:SECTION:details -->\nFAIL: stale finding\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
     csa_session::persist_structured_output(&session_dir, round_1).expect("persist round 1");
@@ -399,9 +413,9 @@ fn ensure_review_summary_artifact_replaces_stale_summary_for_same_session_fix_ro
 
 #[test]
 fn persist_review_verdict_marks_clean_transcript_as_pass() {
-    let project_root = temp_project_root("persist-review-verdict-pass");
     let session_id = "01TESTPASS0000000000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-pass", session_id);
     let full_output = [json!({"type":"item.completed","item":{
         "id":"item_1",
         "type":"agent_message",
@@ -430,9 +444,9 @@ fn persist_review_verdict_marks_clean_transcript_as_pass() {
 
 #[test]
 fn persist_review_verdict_plain_text_full_output_falls_back_to_review_meta_findings() {
-    let project_root = temp_project_root("persist-review-verdict-meta-fallback");
     let session_id = "01TESTMETAFALLBACK000000000";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-meta-fallback", session_id);
     fs::write(
         session_dir.join("output").join("full.md"),
         "Findings\n1. [High][regression] fallback path should preserve review_meta\nOverall risk: high",
@@ -460,9 +474,9 @@ fn persist_review_verdict_plain_text_full_output_falls_back_to_review_meta_findi
 
 #[test]
 fn persist_review_verdict_concrete_findings_override_uncertain_token() {
-    let project_root = temp_project_root("persist-review-verdict-concrete-over-uncertain");
     let session_id = "01TESTCONCRETEOVERUNCERTAIN";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-concrete-over-uncertain", session_id);
     let full_output = [json!({"type":"item.completed","item":{
         "id":"item_1",
         "type":"agent_message",
@@ -492,9 +506,11 @@ fn persist_review_verdict_concrete_findings_override_uncertain_token() {
 
 #[test]
 fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
-    let project_root = temp_project_root("persist-review-verdict-empty-findings-uncertain");
     let session_id = "01TESTEMPTYFINDINGSUNCERTAIN";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) = lock_test_session(
+        "persist-review-verdict-empty-findings-uncertain",
+        session_id,
+    );
     let findings_path = session_dir.join("review-findings.json");
     let artifact = json!({
         "findings": [],
@@ -523,9 +539,9 @@ fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
 
 #[test]
 fn persist_review_verdict_json_transcript_without_review_message_falls_back_to_review_meta() {
-    let project_root = temp_project_root("persist-review-verdict-json-no-review-message");
     let session_id = "01TESTJSONNOREVIEWMESSAGE00";
-    let session_dir = create_session_dir(&project_root, session_id);
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-json-no-review-message", session_id);
     let full_output = [
         json!({"type":"thread.started","thread_id":"thread-1"}),
         json!({"type":"item.completed","item":{

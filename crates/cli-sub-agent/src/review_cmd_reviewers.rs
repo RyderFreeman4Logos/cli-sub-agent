@@ -124,7 +124,9 @@ pub(crate) fn resolve_effective_reviewer_count(request: &AutoReviewerRequest<'_>
         info!(
             "Auto-selected {} heterogeneous reviewers from tier '{}': {}",
             selection.reviewers,
-            request.resolved_tier_name.unwrap_or("unknown"),
+            request
+                .resolved_tier_name
+                .unwrap_or("no tier name resolved"),
             tool_list
         );
         selection.reviewers
