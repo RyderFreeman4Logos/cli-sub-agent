@@ -25,39 +25,35 @@ use csa_session::{
 mod transport_meta;
 pub use transport_meta::PeakMemoryContext;
 use transport_meta::{build_summary, run_acp_sandboxed};
-
 #[path = "transport_gemini_helpers.rs"]
 mod transport_gemini_helpers;
 #[cfg(test)]
 use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
-    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
+    apply_gemini_acp_initial_stall_summary, apply_gemini_sandbox_runtime_env_overrides,
+    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
     classify_gemini_oauth_prompt_result, classify_join_error,
-    ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure, gemini_phase_desc,
+    ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
+    gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
     gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
     is_gemini_oauth_prompt_result,
 };
 #[path = "transport_gemini_acp_runtime.rs"]
 mod transport_gemini_acp_runtime;
 use transport_gemini_acp_runtime::{gemini_runtime_home_from_env, prepare_gemini_acp_runtime};
-
 #[path = "transport_acp_crash_retry.rs"]
 mod transport_acp_crash_retry;
 use transport_acp_crash_retry::execute_with_crash_retry;
-
 #[path = "transport_fork.rs"]
 mod transport_fork;
 pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
-
 #[path = "transport_factory.rs"]
 mod transport_factory;
 pub use transport_factory::{TransportFactory, TransportMode};
-
 #[path = "transport_acp_payload_debug.rs"]
 mod transport_acp_payload_debug;
 use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};
-
 #[path = "transport_codex_exec_stall.rs"]
 mod transport_codex_exec_stall;
 #[cfg(test)]
@@ -585,9 +581,10 @@ impl AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
-        // ACP transport: skip initial_response_timeout; ACP init_timeout already catches
-        // startup failures, and idle_timeout handles post-start hangs for heavy post-init tools.
-        let initial_response_timeout_seconds: Option<u64> = None;
+        let initial_response_timeout_seconds = gemini_acp_initial_response_timeout_seconds(
+            &self.tool_name,
+            options.initial_response_timeout_seconds,
+        );
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
         let termination_grace_period_seconds = options.termination_grace_period_seconds;
         let session_meta = Self::build_session_meta(
@@ -761,13 +758,21 @@ impl AcpTransport {
                     error
                 }
             })?;
-        let execution = ExecutionResult {
+        let mut execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
             output: output.output,
             stderr_output: output.stderr,
             exit_code: output.exit_code,
             peak_memory_mb: output.peak_memory_mb,
         };
+        if let Some(classification) = (self.tool_name == "gemini-cli")
+            .then(|| {
+                classify_gemini_acp_initial_stall(&execution, initial_response_timeout_seconds)
+            })
+            .flatten()
+        {
+            apply_gemini_acp_initial_stall_summary(&mut execution, &classification);
+        }
 
         Ok(TransportResult {
             execution,
@@ -781,19 +786,8 @@ impl AcpTransport {
 include!("transport_acp_impl.rs");
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::transport_gemini_retry::*;
-    use csa_acp::SessionConfig;
-    use csa_resource::isolation_plan::IsolationPlan;
-
-    include!("transport_tests_tail.rs");
-    include!("transport_tests_ephemeral.rs");
-    include!("transport_tests_gemini_fallback.rs");
-    include!("transport_tests_gemini_init_classification.rs");
-    include!("transport_tests_gemini_oauth_prompt.rs");
-    include!("transport_tests_extra.rs");
-}
+#[path = "transport_tests_mod.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "transport_lean_mode_tests.rs"]

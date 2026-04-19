@@ -82,6 +82,74 @@ fn test_classify_gemini_acp_init_failure_defaults_to_handshake_timeout() {
     assert_eq!(classification.code, "gemini_acp_init_handshake_timeout");
 }
 
+#[test]
+fn test_gemini_acp_initial_response_timeout_resolver_is_gemini_only() {
+    assert_eq!(
+        gemini_acp_initial_response_timeout_seconds("gemini-cli", None),
+        Some(180)
+    );
+    assert_eq!(
+        gemini_acp_initial_response_timeout_seconds("gemini-cli", Some(0)),
+        None
+    );
+    assert_eq!(
+        gemini_acp_initial_response_timeout_seconds("gemini-cli", Some(45)),
+        Some(45)
+    );
+    assert_eq!(
+        gemini_acp_initial_response_timeout_seconds("claude-code", None),
+        None
+    );
+    assert_eq!(gemini_acp_initial_response_timeout_seconds("codex", None), None);
+}
+
+#[test]
+fn test_classify_gemini_acp_initial_stall_detects_first_response_timeout() {
+    let execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial response timeout: no ACP events/stderr for 180s; process killed"
+            .to_string(),
+        summary: "initial response timeout: no ACP events/stderr for 180s; process killed"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+
+    let classification = classify_gemini_acp_initial_stall(&execution, Some(180))
+        .expect("gemini ACP initial timeout should classify");
+    assert_eq!(classification.code, "gemini_acp_initial_stall");
+    assert_eq!(classification.timeout_seconds, 180);
+}
+
+#[test]
+fn test_apply_gemini_acp_initial_stall_summary_rewrites_summary() {
+    let mut execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial response timeout: no ACP events/stderr for 180s; process killed"
+            .to_string(),
+        summary: "initial response timeout: no ACP events/stderr for 180s; process killed"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+    let classification = classify_gemini_acp_initial_stall(&execution, Some(180))
+        .expect("gemini ACP initial timeout should classify");
+
+    apply_gemini_acp_initial_stall_summary(&mut execution, &classification);
+
+    assert_eq!(
+        execution.summary,
+        "gemini_acp_initial_stall: no ACP events/stderr within 180s"
+    );
+    assert!(
+        execution
+            .stderr_output
+            .contains("gemini_acp_initial_stall: no ACP events/stderr within 180s"),
+        "expected stable classifier in stderr, got: {}",
+        execution.stderr_output
+    );
+}
+
 #[tokio::test]
 async fn test_execute_in_classifies_pre_handshake_gemini_failure_with_child_stderr() {
     use std::os::unix::fs::PermissionsExt;
