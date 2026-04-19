@@ -48,12 +48,12 @@ Each step below is annotated with its execution layer.
 
 Tool: bash
 
-Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, and `DEFAULT_BRANCH` once
+Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, `REPO_SLUG`, and `DEFAULT_BRANCH` once
 (both persist through clean branch switches in Step 11).
 
 ```bash
 # Force weave to pick up workflow variables used across steps.
-: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${DEFAULT_BRANCH}"
+: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${REPO_SLUG}" "${DEFAULT_BRANCH}"
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
 # Prefer explicit branch mapping over repo-level defaults or conventions.
@@ -76,8 +76,27 @@ if [ -z "$REMOTE_NAME" ]; then
   echo "  Configure one with: git config --local checkout.defaultRemote <name>" >&2
   exit 1
 fi
+REMOTE_URL=$(git remote get-url "$REMOTE_NAME" 2>/dev/null)
+if [ -z "$REMOTE_URL" ]; then
+  echo "ERROR: git remote '$REMOTE_NAME' has no URL" >&2
+  exit 1
+fi
+
+# Parse owner/repo slug from SSH (git@github.com:owner/repo.git) or HTTPS (https://github.com/owner/repo.git).
+REPO_SLUG="$(
+  printf '%s' "$REMOTE_URL" | sed -E \
+    -e 's|^git@[^:]+:||' \
+    -e 's|^https?://[^/]+/||' \
+    -e 's|^ssh://([^@]+@)?[^/]+/||' \
+    -e 's|\.git$||'
+)"
+
+if [ -z "$REPO_SLUG" ] || ! printf '%s' "$REPO_SLUG" | grep -qE '^[^/]+/[^/]+$'; then
+  echo "ERROR: could not derive owner/repo slug from remote URL: $REMOTE_URL" >&2
+  exit 1
+fi
 # Prefer GitHub API (server truth) over locally-cached remote HEAD (can be stale).
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name // empty' 2>/dev/null)
+DEFAULT_BRANCH=$(gh repo view "${REPO_SLUG}" --json defaultBranchRef --jq '.defaultBranchRef.name // empty' 2>/dev/null)
 if [ -z "$DEFAULT_BRANCH" ]; then
   # gh unavailable or unauthenticated — fall back to cached remote HEAD
   DEFAULT_BRANCH=$(git symbolic-ref "refs/remotes/${REMOTE_NAME}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME}/@@")
@@ -89,6 +108,7 @@ if [ -z "$DEFAULT_BRANCH" ]; then
 fi
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
 echo "CSA_VAR:REMOTE_NAME=$REMOTE_NAME"
+echo "CSA_VAR:REPO_SLUG=$REPO_SLUG"
 echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 ```
 
@@ -191,12 +211,12 @@ SOURCE_OWNER="$(
     | head -n 1
 )"
 if [ -z "${SOURCE_OWNER}" ]; then
-  SOURCE_OWNER="$(gh repo view --json owner -q '.owner.login')"
+  SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
 find_branch_pr() {
   local owner_matches owner_count branch_matches branch_count
   owner_matches="$(
-    gh pr list --base "${DEFAULT_BRANCH}" --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
+    gh pr list --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
       --jq '.[].number' 2>/dev/null || true
   )"
   owner_count="$(printf '%s\n' "${owner_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -210,7 +230,7 @@ find_branch_pr() {
   fi
 
   branch_matches="$(
-    gh pr list --base "${DEFAULT_BRANCH}" --state open --head "${WORKFLOW_BRANCH}" --json number \
+    gh pr list --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --state open --head "${WORKFLOW_BRANCH}" --json number \
       --jq '.[].number' 2>/dev/null || true
   )"
   branch_count="$(printf '%s\n' "${branch_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -235,7 +255,7 @@ elif [ "${FIND_RC}" = "1" ]; then
   exit 1
 else
   set +e
-  CREATE_OUTPUT="$(gh pr create --base "${DEFAULT_BRANCH}" --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1)"
+  CREATE_OUTPUT="$(gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1)"
   CREATE_RC=$?
   set -e
   if [ "${CREATE_RC}" != "0" ]; then
@@ -269,7 +289,7 @@ if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
   echo "ERROR: Failed to resolve PR number for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
   exit 1
 fi
-REPO="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
+REPO="${REPO_SLUG}"
 echo "CSA_VAR:PR_NUM=$PR_NUM"
 echo "CSA_VAR:REPO=$REPO"
 echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" required=true -->'
@@ -1843,8 +1863,8 @@ fi
 gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
 
 # Write pr-bot completion marker (deterministic gate for pre-merge hook).
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
@@ -1874,7 +1894,7 @@ If fixes accumulated, create clean branch for final review.
 CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
 git push -u "${REMOTE_NAME}" "${CLEAN_BRANCH}"
-gh pr create --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
+gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```
 
 ## Step 12: Final Merge
@@ -1909,8 +1929,8 @@ fi
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
 
 # Write pr-bot completion marker (deterministic gate for pre-merge hook).
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
@@ -1956,8 +1976,8 @@ fi
 gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
 
 # Write pr-bot completion marker (deterministic gate for pre-merge hook).
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
