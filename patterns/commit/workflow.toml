@@ -519,8 +519,9 @@ Perform a cumulative review of the entire feature branch before pushing.
 This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
-SID=$(csa review --range main...HEAD)
-bash scripts/csa/session-wait-until-done.sh "$SID"
+set -euo pipefail
+bash scripts/csa/cumulative-review-batch.sh --default-branch main -- \
+  csa review --range main...HEAD
 echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 19)" required=true -->'
 ```"""
 tier = "tier-2-standard"

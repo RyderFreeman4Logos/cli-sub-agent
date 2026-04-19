@@ -457,10 +457,16 @@ Perform a cumulative review of the entire feature branch before pushing.
 This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
-SID=$(csa review --range main...HEAD)
-bash scripts/csa/session-wait-until-done.sh "$SID"
+set -euo pipefail
+bash scripts/csa/cumulative-review-batch.sh --default-branch main -- \
+  csa review --range main...HEAD
 echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 19)" required=true -->'
 ```
+
+When global config sets `[review].batch_commits >= 2`, intermediate cumulative
+reviews may be skipped until enough new commits have landed since the last
+passed `main...HEAD` review on this branch. Set `CSA_REVIEW_NOW=1` to force the
+review immediately and refresh the recorded HEAD.
 
 ## Step 19: Auto PR Transaction
 

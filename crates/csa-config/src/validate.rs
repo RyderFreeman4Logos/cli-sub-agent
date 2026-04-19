@@ -306,6 +306,9 @@ fn validate_review(config: &ProjectConfig) -> Result<()> {
     };
 
     validate_tool_selection(&review.tool, "review")?;
+    if review.batch_commits == 0 {
+        bail!("[review].batch_commits must be at least 1");
+    }
     if let Some(tier_name) = &review.tier
         && !config.tiers.contains_key(tier_name)
     {

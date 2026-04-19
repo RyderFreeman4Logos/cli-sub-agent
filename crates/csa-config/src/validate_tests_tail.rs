@@ -156,6 +156,49 @@ fn test_validate_review_tool_auto_accepted() {
 }
 
 #[test]
+fn test_validate_review_batch_commits_zero_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: Some(ReviewConfig {
+            batch_commits: 0,
+            ..Default::default()
+        }),
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    let err = result.expect_err("batch_commits=0 should be rejected");
+    assert!(
+        err.to_string()
+            .contains("[review].batch_commits must be at least 1"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_validate_all_known_review_tools_accepted() {
     let known = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
     for tool_name in &known {

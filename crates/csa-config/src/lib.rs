@@ -12,6 +12,7 @@ pub mod config_tool;
 pub mod gc;
 pub mod global;
 mod global_env;
+mod global_impl;
 mod global_kv_cache;
 mod global_template;
 pub mod init;
