@@ -76,9 +76,13 @@ case "${cmd}" in
     xdg_state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
     session_dir="${xdg_state_home}/cli-sub-agent/${project_root#/}/sessions/${session_id}"
     mkdir -p "${session_dir}/output"
-    cat >"${session_dir}/output/review-verdict.json" <<JSON
-{"severity_summary":{"critical":0,"high":0,"medium":0,"low":0,"info":0}}
+    if [ -n "${CSA_STUB_VERDICT_JSON:-}" ]; then
+      printf '%s\n' "${CSA_STUB_VERDICT_JSON}" >"${session_dir}/output/review-verdict.json"
+    else
+      cat >"${session_dir}/output/review-verdict.json" <<JSON
+{"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0}}
 JSON
+    fi
     printf '%s\n' "${session_id}"
     ;;
   session)
@@ -207,8 +211,83 @@ run_override_case() {
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
+run_rewritten_history_runs_review_case() {
+  local case_dir="${TMP_ROOT}/rewritten-history"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+  local stale_sha
+  local new_head_sha
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  stale_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
+  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  mkdir -p "$(dirname "${state_file}")"
+  printf '%s\n' "${stale_sha}" >"${state_file}"
+
+  git -C "${repo_dir}" reset --hard HEAD~1 >/dev/null 2>&1
+  add_commit "${repo_dir}" "file.txt" "rewritten" "rewritten commit"
+  new_head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
+  git -C "${repo_dir}" cat-file -e "${stale_sha}^{commit}"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "rewritten history review count"
+  assert_equals "${new_head_sha}" "$(tr -d '\n' < "${state_file}")" "rewritten history recorded head"
+  if grep -q "csa review: skip - batched" "${output_file}"; then
+    echo "rewritten history should not skip review" >&2
+    exit 1
+  fi
+}
+
+run_high_severity_verdict_does_not_record_case() {
+  local case_dir="${TMP_ROOT}/high-severity"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    CSA_STUB_VERDICT_JSON='{"decision":"pass","severity_counts":{"critical":0,"high":1,"medium":0,"low":0,"info":0}}' \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "high severity review count"
+  if [ -f "${state_file}" ]; then
+    echo "high severity verdict should not record passed head" >&2
+    exit 1
+  fi
+  grep -q "final_decision: CLEAN" "${output_file}"
+}
+
 run_skip_case
 run_missing_state_runs_review_case
 run_override_case
+run_rewritten_history_runs_review_case
+run_high_severity_verdict_does_not_record_case
 
 echo "cumulative-review-batch tests: ok"

@@ -81,9 +81,11 @@ should_record_passed_head() {
     return 1
   fi
 
+  # Do not gate on .decision here: a known review-meta parsing bug can emit
+  # decision=fail even when severity_counts correctly reports no blocking findings.
   jq -e '
-    (.severity_summary.critical // 0) == 0
-    and (.severity_summary.high // 0) == 0
+    (.severity_counts.critical // 0) == 0
+    and (.severity_counts.high // 0) == 0
   ' "${verdict_path}" >/dev/null
 }
 
@@ -96,7 +98,7 @@ fi
 last_sha_file="$(state_file_path "${current_branch}")"
 if [ "${CSA_REVIEW_NOW:-0}" != "1" ] && [ "${batch_commits}" -ge 2 ] && [ -f "${last_sha_file}" ]; then
   last_sha="$(tr -d '\n' < "${last_sha_file}")"
-  if [ -n "${last_sha}" ] && git cat-file -e "${last_sha}^{commit}" 2>/dev/null; then
+  if [ -n "${last_sha}" ] && git merge-base --is-ancestor "${last_sha}" HEAD 2>/dev/null; then
     new_commits="$(git rev-list --count "${last_sha}..HEAD")"
     if [ "${new_commits}" -lt "${batch_commits}" ]; then
       echo "csa review: skip - batched (${new_commits}/${batch_commits} commits since last passed cumulative review ${last_sha:0:8})"
