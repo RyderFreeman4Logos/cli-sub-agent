@@ -1,12 +1,12 @@
 use crate::{executor::Executor, model_spec::ThinkingBudget};
 use csa_process::ExecutionResult;
 
-pub(crate) const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
-const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
+pub const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
+pub const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
 const DEFAULT_GENERIC_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 120;
 
 #[derive(Debug, Clone)]
-pub(crate) struct CodexExecInitialStallClassification {
+pub struct CodexExecInitialStallClassification {
     pub(crate) effort: &'static str,
     pub(crate) timeout_seconds: u64,
     pub(crate) retry_effort: Option<ThinkingBudget>,
@@ -31,7 +31,7 @@ fn executor_default_initial_response_timeout_seconds(executor: &Executor) -> u64
     }
 }
 
-pub(crate) fn resolve_execute_in_initial_response_timeout_seconds(
+pub fn resolve_execute_in_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
 ) -> Option<u64> {
@@ -60,7 +60,7 @@ pub(crate) fn consume_resolved_execute_in_initial_response_timeout_seconds(
     consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
 }
 
-pub(crate) fn classify_codex_exec_initial_stall(
+pub fn classify_codex_exec_initial_stall(
     executor: &Executor,
     execution: &ExecutionResult,
     timeout_seconds: Option<u64>,
@@ -88,7 +88,7 @@ pub(crate) fn classify_codex_exec_initial_stall(
     })
 }
 
-pub(crate) fn apply_codex_exec_initial_stall_summary(
+pub fn apply_codex_exec_initial_stall_summary(
     execution: &mut ExecutionResult,
     classification: &CodexExecInitialStallClassification,
     retry_attempted: bool,
