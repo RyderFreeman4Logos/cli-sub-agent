@@ -36,11 +36,15 @@ _check_writable path attempted:
     fi
     echo >&2 "ERROR: attempted to write ${attempted} at ${path} (resolved: ${resolved_path}), but the path is not writable."
     echo >&2 "Adjust filesystem_sandbox.extra_writable in ~/.config/cli-sub-agent/config.toml to include ${resolved_path}."
+    echo >&2 "If ${resolved_path} does not exist yet, create it first (for example: mkdir -p '${resolved_path}'). CSA only auto-creates the default cargo/rustup/tmp writable paths, not user-supplied extra_writable entries."
     echo >&2 "If this is unexpected, file an issue: GH_CONFIG_DIR=~/.config/gh-aider gh issue create --repo RyderFreeman4Logos/cli-sub-agent --title \"Sandbox write denial for ${attempted}\" --body \"Attempted to write ${attempted} at ${path} (resolved: ${resolved_path}), but the sandbox denied it. Please include your sandbox mode and the writable path you expected.\""
     exit 2
 
 check-cargo-target-writable:
-    just _check_writable "{{_repo_root}}/target" "cargo build artifacts"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target_dir="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
+    just _check_writable "$target_dir" "cargo build artifacts"
 
 check-nextest-state-writable:
     #!/usr/bin/env bash
@@ -371,10 +375,13 @@ install-hooks:
 
 # Install latest local build to /usr/local/bin (reuses workspace target/ cache).
 install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target_dir="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
     just check-cargo-target-writable
     cargo build --release --all-features -p cli-sub-agent -p weave
-    install -m 755 "{{_repo_root}}"/target/release/csa /usr/local/bin/csa
-    install -m 755 "{{_repo_root}}"/target/release/weave /usr/local/bin/weave
+    install -m 755 "${target_dir}/release/csa" /usr/local/bin/csa
+    install -m 755 "${target_dir}/release/weave" /usr/local/bin/weave
     @echo "Verifying installation..."
     @csa --version
     @weave --version
