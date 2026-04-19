@@ -609,6 +609,7 @@ enforcement_mode = "best-effort"
 
 #[test]
 fn test_expose_readable_appended_to_isolation_plan() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
     let cfg = parse_project_config(
         r#"
 [resources]
@@ -617,7 +618,7 @@ enforcement_mode = "best-effort"
 "#,
     );
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in(project_root.path()).expect("tempdir");
     let first = temp.path().join("foo.json");
     let second = temp.path().join("bar.txt");
     std::fs::write(&first, "{}").expect("write first readable file");
@@ -628,7 +629,7 @@ enforcement_mode = "best-effort"
         Some(&cfg),
         "claude-code",
         "test-session",
-        &current_project_root(),
+        project_root.path(),
         StreamMode::BufferOnly,
         120,
         600,

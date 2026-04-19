@@ -449,7 +449,10 @@ fn validate_sandbox_paths(
     options: PathValidationOptions<'_>,
 ) -> anyhow::Result<()> {
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
-    let allowed_parents: [&Path; 3] = [project_root, home.as_path(), Path::new("/tmp")];
+    let project_root = project_root.to_path_buf();
+    let home = canonicalize_or_fallback(home.as_path());
+    let tmp_root = canonicalize_or_fallback(Path::new("/tmp"));
+    let allowed_parents = [project_root, home, tmp_root];
     let mut rejected = Vec::new();
 
     for path in paths {
@@ -485,7 +488,7 @@ fn validate_sandbox_paths(
 
 fn validate_single_path(
     path: &Path,
-    allowed_parents: &[&Path],
+    allowed_parents: &[PathBuf],
     options: &PathValidationOptions<'_>,
 ) -> anyhow::Result<PathBuf> {
     if path == Path::new("/") {
@@ -516,6 +519,10 @@ fn validate_single_path(
         );
     }
     Ok(canonical)
+}
+
+fn canonicalize_or_fallback(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Add `dir` to `paths` if it exists, otherwise pre-create it when its
