@@ -22,8 +22,13 @@ fn runtime_binary_file_name(runtime_binary: &str) -> Option<&str> {
         .and_then(|name| name.to_str())
 }
 
-fn runtime_binary_indicates_codex_acp(runtime_binary: &str) -> bool {
-    runtime_binary_file_name(runtime_binary).is_some_and(|name| name.contains("codex-acp"))
+pub(super) fn runtime_binary_indicates_codex_acp_file_name(file_name: &str) -> bool {
+    file_name.contains("codex-acp")
+}
+
+pub(super) fn runtime_binary_indicates_codex_acp(runtime_binary: &str) -> bool {
+    runtime_binary_file_name(runtime_binary)
+        .is_some_and(runtime_binary_indicates_codex_acp_file_name)
 }
 
 fn routes_session_output_to_output_log(metadata: &csa_session::metadata::SessionMetadata) -> bool {
@@ -86,7 +91,7 @@ fn attach_primary_output_from_metadata_fragment(
     let tool = metadata_fragment_value(contents, "tool").or_else(|| {
         let binary = runtime_binary.as_deref()?;
         let file_name = runtime_binary_file_name(binary).unwrap_or(binary);
-        if file_name == "codex" || runtime_binary_indicates_codex_acp(binary) {
+        if file_name == "codex" || runtime_binary_indicates_codex_acp_file_name(file_name) {
             return Some("codex".to_string());
         }
         file_name

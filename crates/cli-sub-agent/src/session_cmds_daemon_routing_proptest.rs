@@ -115,16 +115,9 @@ fn attach_tool_cases() -> [&'static str; 4] {
 }
 
 fn codex_routes_to_output_log(tool: &str, runtime_binary: Option<&str>) -> bool {
-    tool == "codex" && runtime_binary.is_none_or(runtime_binary_indicates_codex_acp)
+    tool == "codex" && runtime_binary.is_none_or(super::attach::runtime_binary_indicates_codex_acp)
 }
 
 fn routes_to_output_log_independent_of_files(tool: &str, runtime_binary: Option<&str>) -> bool {
     tool == "claude-code" || codex_routes_to_output_log(tool, runtime_binary)
-}
-
-fn runtime_binary_indicates_codex_acp(runtime_binary: &str) -> bool {
-    std::path::Path::new(runtime_binary)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains("codex-acp"))
 }
