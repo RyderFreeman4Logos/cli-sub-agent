@@ -157,11 +157,11 @@ Generate a TODO plan via mktd. Auto-selects intensity based on change size:
 ```bash
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
-FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
+FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
-MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-gemini-cli}}"
+MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-codex}}" # Default codex; gemini-cli ACP blocked by #778/#755
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
-  MKTD_TOOL_ARGS=(--force-ignore-tier-setting --tool "${MKTD_TOOL_EFFECTIVE}")
+  MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 else
   MKTD_TOOL_ARGS=()
 fi
