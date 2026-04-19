@@ -273,6 +273,59 @@ fn test_apply_gemini_legacy_initial_stall_summary_rewrites_summary() {
 }
 
 #[tokio::test]
+async fn test_execute_in_rewrites_gemini_legacy_initial_stall_summary() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script_path = temp.path().join("gemini");
+    std::fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+sleep 2
+"#,
+    )
+    .expect("write fake gemini");
+    let mut perms = std::fs::metadata(&script_path)
+        .expect("metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script_path, perms).expect("chmod +x");
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let env = HashMap::from([(
+        "PATH".to_string(),
+        format!("{}:{old_path}", temp.path().display()),
+    )]);
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let result = transport
+        .execute_in(
+            "test direct-entry gemini legacy initial stall",
+            temp.path(),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+            Some(1),
+        )
+        .await
+        .expect("execute_in should return classified gemini legacy stall");
+
+    assert_eq!(result.execution.exit_code, 137);
+    assert!(
+        result
+            .execution
+            .summary
+            .starts_with("gemini_legacy_initial_stall:"),
+        "expected stable gemini legacy initial stall summary, got: {}",
+        result.execution.summary
+    );
+}
+
+#[tokio::test]
 async fn test_execute_in_classifies_pre_handshake_gemini_failure_with_child_stderr() {
     use std::os::unix::fs::PermissionsExt;
 

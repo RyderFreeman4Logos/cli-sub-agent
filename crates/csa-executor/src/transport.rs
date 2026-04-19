@@ -426,13 +426,12 @@ impl LegacyTransport {
                 attempt = attempt.saturating_add(1);
                 continue;
             }
-            if let Some(classification) = classify_codex_exec_initial_stall(
-                &executor,
-                &result.execution,
-                consume_resolved_execute_in_initial_response_timeout_seconds(
-                    initial_response_timeout_seconds,
-                ),
-            ) {
+            let direct_timeout = consume_resolved_execute_in_initial_response_timeout_seconds(
+                initial_response_timeout_seconds,
+            );
+            if let Some(classification) =
+                classify_codex_exec_initial_stall(&executor, &result.execution, direct_timeout)
+            {
                 if let Some(retry_budget) = classification.retry_effort.clone() {
                     let mut downgraded_executor = executor.clone();
                     downgraded_executor.override_thinking_budget(retry_budget.clone());
@@ -456,9 +455,7 @@ impl LegacyTransport {
                     if let Some(retry_classification) = classify_codex_exec_initial_stall(
                         &downgraded_executor,
                         &retry_result.execution,
-                        consume_resolved_execute_in_initial_response_timeout_seconds(
-                            initial_response_timeout_seconds,
-                        ),
+                        direct_timeout,
                     ) {
                         apply_codex_exec_initial_stall_summary(
                             &mut retry_result.execution,
@@ -477,6 +474,13 @@ impl LegacyTransport {
                     false,
                     None,
                 );
+                return Ok(result);
+            }
+            if let Some(classification) =
+                classify_gemini_legacy_initial_stall(&executor, &result.execution, direct_timeout)
+            {
+                let mut result = result;
+                apply_gemini_legacy_initial_stall_summary(&mut result.execution, &classification);
                 return Ok(result);
             }
             return Ok(result);
