@@ -9,6 +9,18 @@
 
 set -euo pipefail
 
+# Auto-bypass when running inside a nested CSA session (depth > 0).
+# Rationale: parent orchestrator reviews the final SHA before the user push
+# (pr-bot Step 2 cumulative local review + Step 8 fix re-review). Employee
+# push attempts should NOT trigger a nested csa review — that duplicates the
+# audit the parent already runs, burning ~1M tokens per duplicate session
+# (issue #890). The bypass is logged below with a distinguishable reason
+# starting with "nested CSA session" so audit trail is preserved.
+if [ -z "${CSA_SKIP_REVIEW_CHECK:-}" ] && [ "${CSA_DEPTH:-0}" -gt 0 ]; then
+  CSA_SKIP_REVIEW_CHECK=1
+  CSA_SKIP_REVIEW_CHECK_REASON="nested CSA session (depth=${CSA_DEPTH}, sid=${CSA_SESSION_ID:-<unknown>}); parent will review final SHA"
+fi
+
 if [ "${CSA_SKIP_REVIEW_CHECK:-0}" = "1" ]; then
   timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   head_sha="$(git rev-parse HEAD 2>/dev/null || echo "<unknown-head>")"
