@@ -1,6 +1,13 @@
 #[path = "../src/cli.rs"]
 mod cli_defs;
 
+#[allow(dead_code)]
+#[path = "../src/bug_class.rs"]
+mod bug_class;
+#[allow(dead_code)]
+#[path = "../src/test_session_sandbox.rs"]
+mod test_session_sandbox;
+
 #[path = "../src/review_consensus.rs"]
 mod review_consensus;
 #[allow(dead_code)]
