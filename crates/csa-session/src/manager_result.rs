@@ -36,14 +36,9 @@ pub fn render_redacted_result_sidecar(sidecar: &toml::Value) -> Result<String> {
 }
 
 pub fn redact_result_sidecar_value(sidecar: &toml::Value) -> Result<toml::Value> {
-    let json_value =
-        serde_json::to_value(sidecar).context("Failed to convert result sidecar to JSON")?;
-    let serialized =
-        serde_json::to_string(&json_value).context("Failed to serialize result sidecar JSON")?;
-    let redacted = crate::redact::redact_event(&serialized);
-    let redacted_json: serde_json::Value =
-        serde_json::from_str(&redacted).context("Failed to parse redacted result sidecar JSON")?;
-    toml::Value::try_from(redacted_json).context("Failed to convert redacted sidecar back to TOML")
+    let mut redacted = sidecar.clone();
+    redact_toml_value(&mut redacted, None)?;
+    Ok(redacted)
 }
 
 /// Write a session result to disk
@@ -221,6 +216,103 @@ fn artifacts_value_matches_runtime_schema(value: &toml::Value) -> bool {
         }
         _ => false,
     })
+}
+
+fn redact_toml_value(value: &mut toml::Value, key: Option<&str>) -> Result<()> {
+    if key.is_some_and(is_sensitive_key) {
+        *value = toml::Value::String("[REDACTED]".to_string());
+        return Ok(());
+    }
+
+    match value {
+        toml::Value::Table(table) => {
+            for (child_key, child_value) in table {
+                redact_toml_value(child_value, Some(child_key.as_str()))?;
+            }
+        }
+        toml::Value::Array(items) => {
+            for item in items {
+                redact_toml_value(item, None)?;
+            }
+        }
+        toml::Value::String(text) => {
+            let serialized =
+                serde_json::to_string(text).context("Failed to serialize result sidecar string")?;
+            let redacted = crate::redact::redact_event(&serialized);
+            *text = serde_json::from_str(&redacted)
+                .context("Failed to parse redacted result sidecar string")?;
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "password"
+            | "passwd"
+            | "pwd"
+            | "secret"
+            | "clientsecret"
+            | "apikey"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_result_sidecar_value;
+
+    #[test]
+    fn manager_result_redaction_preserves_toml_datetime_values() {
+        let sidecar = toml::toml! {
+            started_at = 2026-04-19T12:34:56Z
+            [auth]
+            token = "secret-token"
+        }
+        .into();
+
+        let redacted = redact_result_sidecar_value(&sidecar).expect("redacted sidecar");
+
+        assert!(matches!(
+            redacted.get("started_at"),
+            Some(toml::Value::Datetime(_))
+        ));
+        assert_eq!(
+            redacted
+                .get("auth")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("token")),
+            Some(&toml::Value::String("[REDACTED]".to_string()))
+        );
+    }
+
+    #[test]
+    fn manager_result_redaction_preserves_nested_json_string_redaction() {
+        let sidecar = toml::toml! {
+            payload = "{\"secret\":\"top-secret\"}"
+        }
+        .into();
+
+        let redacted = redact_result_sidecar_value(&sidecar).expect("redacted sidecar");
+        let payload = redacted
+            .get("payload")
+            .and_then(toml::Value::as_str)
+            .expect("payload string");
+
+        assert!(!payload.contains("top-secret"));
+        assert!(payload.contains("[REDACTED]"));
+    }
 }
 
 /// Load a session result
