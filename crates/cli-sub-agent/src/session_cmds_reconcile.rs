@@ -7,14 +7,16 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tracing::{debug, info, warn};
 
 use crate::plan_cmd::shell_escape_for_command;
 #[path = "session_cmds_reconcile_cleanup.rs"]
 mod reconcile_cleanup;
+#[path = "session_cmds_reconcile_git.rs"]
+mod reconcile_git;
 #[path = "session_cmds_reconcile_liveness.rs"]
 mod reconcile_liveness;
+use reconcile_git::{git_output, git_success, resolve_fallback_base_branch};
 use reconcile_liveness::reconcile_liveness_decision;
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
@@ -85,20 +87,6 @@ fn with_reconcile_lock<R>(
 
 fn noop_path(_: &Path) {}
 
-fn git_output(project_root: &Path, args: &[&str]) -> Result<std::process::Output> {
-    Command::new("git")
-        .args(args)
-        .current_dir(project_root)
-        .output()
-        .with_context(|| format!("Failed to run git {:?}", args))
-}
-
-fn git_success(project_root: &Path, args: &[&str]) -> bool {
-    git_output(project_root, args)
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
 fn inspect_unpushed_commits(
     project_root: &Path,
     branch: &str,
@@ -117,18 +105,11 @@ fn inspect_unpushed_commits(
             Some(format!("origin/{branch}")),
             format!("origin/{branch}..{session_branch_ref}"),
         )
-    } else if git_success(
-        project_root,
-        &["rev-parse", "--verify", "--quiet", "refs/heads/main"],
-    ) {
-        (None, format!("main..{session_branch_ref}"))
-    } else if git_success(
-        project_root,
-        &["rev-parse", "--verify", "--quiet", "refs/heads/master"],
-    ) {
-        (None, format!("master..{session_branch_ref}"))
     } else {
-        return Ok(None);
+        let Some(base_branch) = resolve_fallback_base_branch(project_root) else {
+            return Ok(None);
+        };
+        (None, format!("{base_branch}..{session_branch_ref}"))
     };
     let (remote_ref, rev_range) = range;
 
