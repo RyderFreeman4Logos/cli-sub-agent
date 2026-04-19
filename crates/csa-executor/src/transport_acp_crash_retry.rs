@@ -27,10 +27,11 @@ const OOM_SIGNALS: &[i32] = &[
 static EXIT_137_RE: LazyLock<Regex> =
     LazyLock::new(|| compile_regex(r"\bexit(?:\s+code)?[\s:=]+137\b"));
 static EXIT_CODE_RE: LazyLock<Regex> =
-    LazyLock::new(|| compile_regex(r"\bexit(?:\s+code)?[\s:=]+(?P<code>\d+)\b"));
+    LazyLock::new(|| compile_regex(r"\bexit(?:\s+code)?[\s:=]+(?P<code>-?\d+)\b"));
 static BARE_CODE_RE: LazyLock<Regex> =
-    LazyLock::new(|| compile_regex(r"\bcode[\s:=]+(?P<code>\d+)\b"));
+    LazyLock::new(|| compile_regex(r"\bcode[\s:=]+(?P<code>-?\d+)\b"));
 static OOM_WORD_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"\boom\b"));
+static SIGNAL_9_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"\bsignal\s*[:\-]?\s*9\b"));
 
 fn compile_regex(pattern: &str) -> Regex {
     match Regex::new(pattern) {
@@ -114,6 +115,7 @@ fn is_oom_lowered(lowered: &str) -> bool {
         || lowered.contains("out of memory")
         || lowered.contains("memory.max")
         || lowered.contains("memorymax")
+        || OOM_WORD_RE.is_match(lowered)
 }
 
 /// Authentication or authorization failures (deterministic, never retry).
@@ -217,15 +219,14 @@ pub(crate) fn extract_crash_exit_code(error_str: &str) -> Option<CrashExitCode> 
         return Some(CrashExitCode::ExitCode(137));
     }
 
-    if lowered.contains("signal: 9") || lowered.contains("sigkill") {
+    if SIGNAL_9_RE.is_match(&lowered) || lowered.contains("sigkill") {
         return Some(CrashExitCode::Signal(9));
     }
 
-    if lowered.contains("memory.max")
-        || lowered.contains("oom-kill")
+    if lowered.contains("oom-kill")
         || lowered.contains("memory.events")
         || lowered.contains("memory.events.local")
-        || OOM_WORD_RE.is_match(&lowered)
+        || is_oom_lowered(&lowered)
     {
         return Some(CrashExitCode::OomEvent);
     }
@@ -267,6 +268,7 @@ pub(crate) fn classify_codex_acp_crash(
     let exit_code_oom = matches!(
         exit_code,
         Some(CrashExitCode::ExitCode(137))
+            | Some(CrashExitCode::ExitCode(-9))
             | Some(CrashExitCode::Signal(9))
             | Some(CrashExitCode::OomEvent)
     );
