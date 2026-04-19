@@ -85,16 +85,34 @@ pub(crate) fn resolve_idle_timeout_seconds(
 ///
 /// Priority: CLI override > project config > default (120s).
 /// Returns `None` when explicitly disabled (set to 0 in config or CLI).
+fn resolve_initial_response_timeout_with_default(
+    config: Option<&ProjectConfig>,
+    cli_override: Option<u64>,
+    default_seconds: u64,
+) -> Option<u64> {
+    let raw = cli_override
+        .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
+    csa_executor::resolve_initial_response_timeout(raw, default_seconds)
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_initial_response_timeout_seconds(
     config: Option<&ProjectConfig>,
     cli_override: Option<u64>,
 ) -> Option<u64> {
-    let raw = cli_override
-        .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
-    csa_executor::resolve_initial_response_timeout(
-        raw,
+    resolve_initial_response_timeout_with_default(
+        config,
+        cli_override,
         DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
     )
+}
+
+fn per_tool_default(tool_name: &str) -> u64 {
+    match tool_name {
+        "codex" => DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+        "gemini-cli" => DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+        _ => DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+    }
 }
 
 pub(crate) fn resolve_initial_response_timeout_for_tool(
@@ -110,40 +128,15 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
     if let Some(cli_override) = cli_initial_response_timeout {
         return csa_executor::resolve_initial_response_timeout(
             Some(cli_override),
-            DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+            per_tool_default(tool_name),
         );
     }
 
-    let tool_override = config.and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name));
+    let configured = config
+        .and_then(|cfg| cfg.tool_initial_response_timeout_seconds(tool_name))
+        .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
 
-    match tool_name {
-        "codex" => {
-            let configured = tool_override
-                .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
-            csa_executor::resolve_initial_response_timeout(
-                configured,
-                DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
-            )
-        }
-        "gemini-cli" => {
-            let configured = tool_override
-                .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
-            csa_executor::resolve_initial_response_timeout(
-                configured,
-                DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS,
-            )
-        }
-        _ => {
-            if let Some(seconds) = tool_override {
-                csa_executor::resolve_initial_response_timeout(
-                    Some(seconds),
-                    DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
-                )
-            } else {
-                resolve_initial_response_timeout_seconds(config, None)
-            }
-        }
-    }
+    resolve_initial_response_timeout_with_default(config, configured, per_tool_default(tool_name))
 }
 
 pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {
