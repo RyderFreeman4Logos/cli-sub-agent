@@ -88,6 +88,7 @@ pub(crate) fn resolve_tool_and_model(
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+    let exact_selection_active = model_spec.is_some();
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
     // unless --force-ignore-tier-setting (or --force) is active. --model-spec is the
@@ -98,6 +99,7 @@ pub(crate) fn resolve_tool_and_model(
     if tiers_configured
         && !bypass_tier
         && tier.is_none()
+        && !exact_selection_active
         && (tool_triggers_enforcement || model.is_some())
     {
         let cfg = config.unwrap();
@@ -197,11 +199,27 @@ pub(crate) fn resolve_tool_and_model(
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
+        if let Some(requested_tool) = tool.filter(|_| !tool_is_auto_resolved)
+            && requested_tool != tool_name
+        {
+            anyhow::bail!(
+                "Conflicting routing flags: --tool {} does not match --model-spec {}.\n\
+                 The model spec selects tool {}. Use a matching --tool value or omit --tool.",
+                requested_tool.as_str(),
+                spec,
+                tool_name.as_str()
+            );
+        }
         // Enforce tool enablement from user config
         if let Some(cfg) = config {
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
         }
-        return Ok((tool_name, Some(spec.to_string()), None));
+        let resolved_model = model.map(|m| {
+            config
+                .map(|cfg| cfg.resolve_alias(m))
+                .unwrap_or_else(|| m.to_string())
+        });
+        return Ok((tool_name, Some(spec.to_string()), resolved_model));
     }
 
     // Case 2: tool provided → use it with optional model (apply alias resolution)
@@ -745,6 +763,14 @@ mod tier_tests;
 #[cfg(test)]
 #[path = "run_helpers_transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_model_spec_tests.rs"]
+mod model_spec_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_override_tests.rs"]
+mod override_tests;
 
 #[cfg(test)]
 #[path = "run_helpers_transport_integration_tests.rs"]

@@ -23,32 +23,16 @@ pub(crate) async fn handle_claude_sub_agent(
     // 3. Read prompt
     let prompt = crate::run_helpers::read_prompt(args.question)?;
 
-    // 6. Resolve tool
-    let user_explicit_tool = args.tool.is_some();
     let parent_tool = crate::run_helpers::detect_parent_tool();
-    let tool = resolve_claude_tool(
+    let (tool_name, resolved_model_spec, resolved_model) = resolve_claude_sub_agent_tool_and_model(
         args.tool,
+        args.model_spec.as_deref(),
+        args.model.as_deref(),
         config.as_ref(),
         &global_config,
         parent_tool.as_deref(),
         &project_root,
     )?;
-
-    // 7. Resolve model
-    let (tool_name, resolved_model_spec, resolved_model) =
-        crate::run_helpers::resolve_tool_and_model(
-            Some(tool),
-            args.model_spec.as_deref(),
-            args.model.as_deref(),
-            config.as_ref(),
-            &project_root,
-            false,               // claude-sub-agent does not support --force
-            false,               // claude-sub-agent does not support --force-override-user-config
-            false,               // claude-sub-agent does not require edit-capable tool filtering
-            None,                // claude-sub-agent does not support --tier
-            false,               // claude-sub-agent does not support --force-ignore-tier-setting
-            !user_explicit_tool, // auto-selected unless the caller explicitly passed --tool
-        )?;
 
     // 8. Build executor and validate tool
     let executor = crate::pipeline::build_and_validate_executor(
@@ -134,6 +118,46 @@ pub(crate) async fn handle_claude_sub_agent(
     }
 
     Ok(result.exit_code)
+}
+
+fn resolve_claude_sub_agent_tool_and_model(
+    arg_tool: Option<ToolArg>,
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    parent_tool: Option<&str>,
+    project_root: &Path,
+) -> Result<(ToolName, Option<String>, Option<String>)> {
+    let user_explicit_tool = matches!(
+        arg_tool.as_ref(),
+        Some(ToolArg::Specific(_) | ToolArg::Alias(_))
+    );
+    let resolved_tool = if model_spec.is_some() && !user_explicit_tool {
+        None
+    } else {
+        Some(resolve_claude_tool(
+            arg_tool,
+            project_config,
+            global_config,
+            parent_tool,
+            project_root,
+        )?)
+    };
+
+    crate::run_helpers::resolve_tool_and_model(
+        resolved_tool,
+        model_spec,
+        model,
+        project_config,
+        project_root,
+        false,               // claude-sub-agent does not support --force
+        false,               // claude-sub-agent does not support --force-override-user-config
+        false,               // claude-sub-agent does not require edit-capable tool filtering
+        None,                // claude-sub-agent does not support --tier
+        false,               // claude-sub-agent does not support --force-ignore-tier-setting
+        !user_explicit_tool, // treat auto/implicit selection as non-explicit
+    )
 }
 
 /// Maximum SKILL.md file size (256 KB) to prevent excessive memory/token usage
@@ -368,6 +392,62 @@ mod tests {
         assert_eq!(tool_name, ToolName::Codex);
         assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
         assert!(model.is_none());
+    }
+
+    #[test]
+    fn resolve_claude_sub_agent_tool_and_model_short_circuits_auto_select_for_model_spec() {
+        let global = GlobalConfig::default();
+
+        let auto_select_error = resolve_claude_tool(
+            None,
+            None,
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect_err("without model-spec, auto-select should fail when no config enables tools");
+        assert!(
+            auto_select_error
+                .to_string()
+                .contains("No suitable tool found for claude-sub-agent"),
+            "{auto_select_error}"
+        );
+
+        let (tool_name, model_spec, model) = super::resolve_claude_sub_agent_tool_and_model(
+            None,
+            Some("codex/openai/gpt-5.4/medium"),
+            None,
+            None,
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect("model-spec exact selection should not require auto-selected tool");
+
+        assert_eq!(tool_name, ToolName::Codex);
+        assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/medium"));
+        assert!(model.is_none());
+    }
+
+    #[test]
+    fn resolve_claude_sub_agent_tool_and_model_rejects_tool_model_spec_mismatch() {
+        let global = GlobalConfig::default();
+
+        let error = super::resolve_claude_sub_agent_tool_and_model(
+            Some(ToolArg::Specific(ToolName::GeminiCli)),
+            Some("codex/openai/gpt-5.4/medium"),
+            None,
+            None,
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect_err("mismatched explicit --tool + --model-spec must error");
+
+        let message = error.to_string();
+        assert!(message.contains("--tool gemini-cli"));
+        assert!(message.contains("--model-spec codex/openai/gpt-5.4/medium"));
+        assert!(message.contains("tool codex"));
     }
 
     #[test]
