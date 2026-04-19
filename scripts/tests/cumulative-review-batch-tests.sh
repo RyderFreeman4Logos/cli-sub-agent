@@ -284,10 +284,109 @@ run_high_severity_verdict_does_not_record_case() {
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
+run_uncertain_verdict_does_not_record_case() {
+  local case_dir="${TMP_ROOT}/uncertain"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    CSA_STUB_VERDICT_JSON='{"decision":"uncertain","severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "uncertain verdict review count"
+  if [ -f "${state_file}" ]; then
+    echo "uncertain verdict should not record passed head" >&2
+    exit 1
+  fi
+  grep -q "final_decision: CLEAN" "${output_file}"
+}
+
+run_skip_decision_does_not_record_case() {
+  local case_dir="${TMP_ROOT}/skip-decision"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    CSA_STUB_VERDICT_JSON='{"decision":"skip","severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "skip verdict review count"
+  if [ -f "${state_file}" ]; then
+    echo "skip verdict should not record passed head" >&2
+    exit 1
+  fi
+  grep -q "final_decision: CLEAN" "${output_file}"
+}
+
+run_fail_zero_severity_records_case() {
+  local case_dir="${TMP_ROOT}/fail-zero-severity"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+  local head_sha
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
+  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    CSA_STUB_VERDICT_JSON='{"decision":"fail","severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "fail zero severity review count"
+  # Known review-meta parsing bug can mislabel clean reviews as decision=fail.
+  assert_equals "${head_sha}" "$(tr -d '\n' < "${state_file}")" "fail zero severity recorded head"
+  grep -q "final_decision: CLEAN" "${output_file}"
+}
+
 run_skip_case
 run_missing_state_runs_review_case
 run_override_case
 run_rewritten_history_runs_review_case
 run_high_severity_verdict_does_not_record_case
+run_uncertain_verdict_does_not_record_case
+run_skip_decision_does_not_record_case
+run_fail_zero_severity_records_case
 
 echo "cumulative-review-batch tests: ok"

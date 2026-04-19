@@ -81,10 +81,12 @@ should_record_passed_head() {
     return 1
   fi
 
-  # Do not gate on .decision here: a known review-meta parsing bug can emit
-  # decision=fail even when severity_counts correctly reports no blocking findings.
+  # Negative list avoids known review-meta parsing bug producing decision=fail on
+  # clean reviews; reject only confirmed non-pass states.
   jq -e '
-    (.severity_counts.critical // 0) == 0
+    (.decision // "fail") != "uncertain"
+    and (.decision // "fail") != "skip"
+    and (.severity_counts.critical // 0) == 0
     and (.severity_counts.high // 0) == 0
   ' "${verdict_path}" >/dev/null
 }
