@@ -30,9 +30,10 @@ pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
 pub use session_id::{extract_session_id, extract_session_id_from_transport};
 pub use transport::{
-    AcpTransport, LegacyTransport, PeakMemoryContext, SandboxTransportConfig, Transport,
-    TransportFactory, TransportMode, TransportOptions, TransportResult,
-    resolve_initial_response_timeout,
+    AcpTransport, CODEX_EXEC_INITIAL_STALL_REASON, DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+    LegacyTransport, PeakMemoryContext, SandboxTransportConfig, Transport, TransportFactory,
+    TransportMode, TransportOptions, TransportResult, apply_codex_exec_initial_stall_summary,
+    classify_codex_exec_initial_stall, resolve_initial_response_timeout,
 };
 
 // Re-export session config types from csa-acp for pipeline integration.

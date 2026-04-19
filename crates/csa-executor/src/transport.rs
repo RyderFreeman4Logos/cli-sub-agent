@@ -57,15 +57,20 @@ mod transport_acp_payload_debug;
 use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};
 #[path = "transport_codex_exec_stall.rs"]
 mod transport_codex_exec_stall;
-#[cfg(test)]
-use transport_codex_exec_stall::CodexExecInitialStallClassification;
+#[path = "transport_legacy_codex_exec_stall.rs"]
+mod transport_legacy_codex_exec_stall;
 pub(crate) use transport_codex_exec_stall::resolve_execute_in_initial_response_timeout_seconds;
 pub use transport_codex_exec_stall::resolve_initial_response_timeout;
+pub use transport_codex_exec_stall::{
+    CODEX_EXEC_INITIAL_STALL_REASON, DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+    apply_codex_exec_initial_stall_summary, classify_codex_exec_initial_stall,
+};
 use transport_codex_exec_stall::{
-    CODEX_EXEC_INITIAL_STALL_REASON, apply_codex_exec_initial_stall_summary,
-    classify_codex_exec_initial_stall,
     consume_resolved_execute_in_initial_response_timeout_seconds,
     consume_resolved_initial_response_timeout_seconds,
+};
+use transport_legacy_codex_exec_stall::{
+    apply_and_maybe_retry_codex_exec_initial_stall, log_codex_exec_initial_stall,
 };
 
 #[path = "transport_types.rs"]
@@ -206,13 +211,7 @@ impl LegacyTransport {
             &execution,
             initial_response_timeout_seconds,
         ) {
-            tracing::warn!(
-                classified_reason = CODEX_EXEC_INITIAL_STALL_REASON,
-                elapsed_seconds = classification.timeout_seconds,
-                effort = classification.effort,
-                child_pid = child_pid.unwrap_or(0),
-                "codex exec initial-response stall detected"
-            );
+            log_codex_exec_initial_stall(&classification, child_pid);
         }
         Ok(TransportResult {
             execution,
@@ -332,13 +331,7 @@ impl LegacyTransport {
             &execution,
             initial_response_timeout_seconds,
         ) {
-            tracing::warn!(
-                classified_reason = CODEX_EXEC_INITIAL_STALL_REASON,
-                elapsed_seconds = classification.timeout_seconds,
-                effort = classification.effort,
-                child_pid = child_pid.unwrap_or(0),
-                "codex exec initial-response stall detected"
-            );
+            log_codex_exec_initial_stall(&classification, child_pid);
         }
 
         Ok(TransportResult {
@@ -429,18 +422,15 @@ impl LegacyTransport {
             let direct_timeout = consume_resolved_execute_in_initial_response_timeout_seconds(
                 initial_response_timeout_seconds,
             );
-            if let Some(classification) =
-                classify_codex_exec_initial_stall(&executor, &result.execution, direct_timeout)
-            {
-                if let Some(retry_budget) = classification.retry_effort.clone() {
-                    let mut downgraded_executor = executor.clone();
-                    downgraded_executor.override_thinking_budget(retry_budget.clone());
-                    tracing::info!(
-                        original_effort = classification.effort,
-                        fallback_effort = retry_budget.codex_effort(),
-                        "retrying codex exec after initial-response stall"
-                    );
-                    let mut retry_result = self
+            let retry_executor = executor.clone();
+            let result = apply_and_maybe_retry_codex_exec_initial_stall(
+                &executor,
+                result,
+                direct_timeout,
+                |retry_budget| async move {
+                    let mut downgraded_executor = retry_executor;
+                    downgraded_executor.override_thinking_budget(retry_budget);
+                    let retry_result = self
                         .execute_in_single_attempt(ExecuteInAttempt {
                             executor: &downgraded_executor,
                             prompt,
@@ -452,30 +442,10 @@ impl LegacyTransport {
                                 initial_response_timeout_seconds,
                         })
                         .await?;
-                    if let Some(retry_classification) = classify_codex_exec_initial_stall(
-                        &downgraded_executor,
-                        &retry_result.execution,
-                        direct_timeout,
-                    ) {
-                        apply_codex_exec_initial_stall_summary(
-                            &mut retry_result.execution,
-                            &retry_classification,
-                            true,
-                            Some(classification.effort),
-                        );
-                    }
-                    return Ok(retry_result);
-                }
-
-                let mut result = result;
-                apply_codex_exec_initial_stall_summary(
-                    &mut result.execution,
-                    &classification,
-                    false,
-                    None,
-                );
-                return Ok(result);
-            }
+                    Ok((downgraded_executor, retry_result))
+                },
+            )
+            .await?;
             if let Some(classification) =
                 classify_gemini_legacy_initial_stall(&executor, &result.execution, direct_timeout)
             {

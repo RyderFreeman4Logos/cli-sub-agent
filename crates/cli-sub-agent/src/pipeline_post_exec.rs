@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_executor::Executor;
+use csa_executor::{CODEX_EXEC_INITIAL_STALL_REASON, Executor};
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_session::{
     MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState, get_session_dir,
@@ -23,8 +23,6 @@ use crate::run_helpers::{is_compress_command, parse_token_usage};
 
 const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
 const OUTPUT_LOG_TAIL_READ_BYTES: u64 = 8 * 1024;
-const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
-
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
     pub executor: &'a Executor,
@@ -746,7 +744,7 @@ mod tests {
         let toml = toml::to_string_pretty(&result).expect("serialize result.toml");
         assert_eq!(result.status, "failure");
         assert!(toml.contains("status = \"failure\""));
-        assert!(toml.contains("codex_exec_initial_stall"));
+        assert!(toml.contains(CODEX_EXEC_INITIAL_STALL_REASON));
     }
 
     #[test]

@@ -282,7 +282,7 @@ echo "ok persistent"
 
 #[test]
 fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() {
-    let classification = super::CodexExecInitialStallClassification {
+    let classification = super::transport_codex_exec_stall::CodexExecInitialStallClassification {
         effort: "high",
         timeout_seconds: 300,
         retry_effort: None,
@@ -314,9 +314,9 @@ fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() 
     };
     let toml = toml::to_string_pretty(&result).expect("serialize session result");
 
-    assert!(execution.summary.contains("codex_exec_initial_stall"));
+    assert!(execution.summary.contains(CODEX_EXEC_INITIAL_STALL_REASON));
     assert!(execution.summary.contains("retry_attempted=true"));
-    assert!(toml.contains("codex_exec_initial_stall"));
+    assert!(toml.contains(CODEX_EXEC_INITIAL_STALL_REASON));
 }
 
 #[test]

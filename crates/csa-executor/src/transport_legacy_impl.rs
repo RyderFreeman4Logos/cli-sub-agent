@@ -69,64 +69,36 @@ impl Transport for LegacyTransport {
                 attempt = attempt.saturating_add(1);
                 continue;
             }
-            if let Some(classification) = classify_codex_exec_initial_stall(
-                &executor,
-                &result.execution,
-                Self::consume_resolved_transport_initial_response_timeout_seconds(
-                    options.initial_response_timeout_seconds,
-                ),
-            ) {
-                if let Some(retry_budget) = classification.retry_effort.clone() {
-                    let mut downgraded_executor = executor.clone();
-                    downgraded_executor.override_thinking_budget(retry_budget.clone());
-                    tracing::info!(
-                        original_effort = classification.effort,
-                        fallback_effort = retry_budget.codex_effort(),
-                        "retrying codex exec after initial-response stall"
-                    );
-                    let mut retry_result = self
-                        .execute_single_attempt(
-                            &downgraded_executor,
-                            prompt,
-                            tool_state,
-                            session,
-                            attempt_env,
-                            options.clone(),
-                        )
-                        .await?;
-                    if let Some(retry_classification) = classify_codex_exec_initial_stall(
-                        &downgraded_executor,
-                        &retry_result.execution,
-                        Self::consume_resolved_transport_initial_response_timeout_seconds(
-                            options.initial_response_timeout_seconds,
-                        ),
-                    )
-                    {
-                        apply_codex_exec_initial_stall_summary(
-                            &mut retry_result.execution,
-                            &retry_classification,
-                            true,
-                            Some(classification.effort),
-                        );
-                    }
-                    return Ok(retry_result);
-                }
-
-                let mut result = result;
-                apply_codex_exec_initial_stall_summary(
-                    &mut result.execution,
-                    &classification,
-                    false,
-                    None,
-                );
-                return Ok(result);
-            }
+            let codex_timeout = Self::consume_resolved_transport_initial_response_timeout_seconds(
+                options.initial_response_timeout_seconds,
+            );
+            let retry_executor = executor.clone();
+            let retry_options = options.clone();
+            let result = apply_and_maybe_retry_codex_exec_initial_stall(
+                    &executor,
+                    result,
+                    codex_timeout,
+                    |retry_budget| async move {
+                        let mut downgraded_executor = retry_executor;
+                        downgraded_executor.override_thinking_budget(retry_budget);
+                        let retry_result = self
+                            .execute_single_attempt(
+                                &downgraded_executor,
+                                prompt,
+                                tool_state,
+                                session,
+                                attempt_env,
+                                retry_options,
+                            )
+                            .await?;
+                        Ok((downgraded_executor, retry_result))
+                    },
+                )
+                .await?;
             if let Some(classification) = classify_gemini_legacy_initial_stall(
                 &executor,
                 &result.execution,
-                Self::consume_resolved_transport_initial_response_timeout_seconds(
-                    options.initial_response_timeout_seconds,
-                ),
+                codex_timeout,
             ) {
                 let mut result = result;
                 apply_gemini_legacy_initial_stall_summary(&mut result.execution, &classification);
