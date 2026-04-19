@@ -253,12 +253,8 @@ impl ProjectConfig {
         // Check for deprecated keys before deserializing (serde silently ignores them)
         if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             warn_deprecated_keys(&raw, &path.display().to_string());
-            crate::validate::validate_tool_transport_overrides_in_raw_config(&raw).map_err(
-                |error| {
-                    let summary = error.to_string();
-                    error.context(format!("Invalid config: {}: {summary}", path.display()))
-                },
-            )?;
+            crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
+                .with_context(|| format!("Invalid config: {}", path.display()))?;
         }
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
@@ -287,24 +283,10 @@ impl ProjectConfig {
         // Check for deprecated keys in both configs
         warn_deprecated_keys(&base_val, &base_path.display().to_string());
         warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
-        crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val).map_err(
-            |error| {
-                let summary = error.to_string();
-                error.context(format!(
-                    "Invalid user config: {}: {summary}",
-                    base_path.display()
-                ))
-            },
-        )?;
-        crate::validate::validate_tool_transport_overrides_in_raw_config(&overlay_val).map_err(
-            |error| {
-                let summary = error.to_string();
-                error.context(format!(
-                    "Invalid project config: {}: {summary}",
-                    overlay_path.display()
-                ))
-            },
-        )?;
+        crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val)
+            .with_context(|| format!("Invalid user config: {}", base_path.display()))?;
+        crate::validate::validate_tool_transport_overrides_in_raw_config(&overlay_val)
+            .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
 
         // Preserve the higher schema_version before merging so that
         // check_schema_version() catches incompatibility from either source.
@@ -336,12 +318,8 @@ impl ProjectConfig {
         // cannot reverse — this prevents stale project configs from resurrecting
         // tools the user explicitly disabled at the global level.
         enforce_global_tool_disables(&base_val, &mut merged);
-        crate::validate::validate_tool_transport_overrides_in_raw_config(&merged).map_err(
-            |error| {
-                let summary = error.to_string();
-                error.context(format!("Invalid merged config after layering: {summary}"))
-            },
-        )?;
+        crate::validate::validate_tool_transport_overrides_in_raw_config(&merged)
+            .context("Invalid merged config after layering")?;
 
         // Roundtrip through string for reliable deserialization
         let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;

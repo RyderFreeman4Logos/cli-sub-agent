@@ -112,7 +112,7 @@ transport = "acp"
     );
 
     let err = ProjectConfig::load_project_only(dir.path()).expect_err("config should fail");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("[tools.codex].transport"),

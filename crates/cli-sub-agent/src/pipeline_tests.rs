@@ -98,7 +98,7 @@ transport = "acp"
     .unwrap();
 
     let err = load_and_validate(tmp.path(), 0).unwrap_err();
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("[tools.codex].transport"),
