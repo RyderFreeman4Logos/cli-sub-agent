@@ -471,7 +471,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         task_type,
         executor.tool_name(),
         project_root,
-        &session_dir,
         &mut merged_env,
     );
     let merged_env_ref = if merged_env.is_empty() {
