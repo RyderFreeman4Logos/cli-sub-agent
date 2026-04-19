@@ -1800,19 +1800,19 @@ if [ "${CLOUD_BOT}" = "false" ]; then
   COMMENT_BODY="**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch ${DEFAULT_BRANCH}\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 elif [ "${MERGE_WITHOUT_BOT_REASON_KIND:-}" = "cloud_bot_quota_exhausted" ]; then
   MERGE_REASON="cloud_bot=true but ${CLOUD_BOT_NAME} quota is exhausted; merging on local review clean"
-  COMMENT_BODY="$(cat <<EOF
-## Merge audit trail — cloud bot skipped (quota exhausted)
-
-Configured cloud bot \`${CLOUD_BOT_NAME}\` is quota-exhausted (detected at \`${CLOUD_BOT_QUOTA_EXHAUSTED_AT:-unknown}\`, expected reset \`${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT:-unknown}\`). Per pr-bot Step 4 auto-skip, routing directly to bot-unavailable + local-review-clean merge path.
-
-**Local pre-merge review verdict**: CLEAN (session \`${LOCAL_REVIEW_SESSION_ID:-unknown}\`)
-
-**Diff scope**:
-\`\`\`
-${DIFF_SUMMARY}
-\`\`\`
-EOF
-)"
+  COMMENT_BODY="$(
+    printf '%s\n' \
+      '## Merge audit trail — cloud bot skipped (quota exhausted)' \
+      '' \
+      "Configured cloud bot \`${CLOUD_BOT_NAME}\` is quota-exhausted (detected at \`${CLOUD_BOT_QUOTA_EXHAUSTED_AT:-unknown}\`, expected reset \`${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT:-unknown}\`). Per pr-bot Step 4 auto-skip, routing directly to bot-unavailable + local-review-clean merge path." \
+      '' \
+      "**Local pre-merge review verdict**: CLEAN (session \`${LOCAL_REVIEW_SESSION_ID:-unknown}\`)" \
+      '' \
+      '**Diff scope**:' \
+      '\`\`\`' \
+      "${DIFF_SUMMARY}" \
+      '\`\`\`'
+  )"
 else
   echo "ERROR: Step 6a reached without a valid merge-without-bot rationale."
   exit 1
