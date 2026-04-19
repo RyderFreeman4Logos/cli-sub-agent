@@ -16,6 +16,7 @@ use std::path::PathBuf;
 /// [filesystem_sandbox]
 /// enforcement_mode = "best-effort"   # "best-effort" | "required" | "off"
 /// extra_writable = ["/tmp/my-cache"]
+/// extra_readable = ["/tmp/host-data.json"]
 ///
 /// [filesystem_sandbox.tool_writable_overrides]
 /// claude-code = ["/home/user/.special"]
@@ -38,6 +39,10 @@ pub struct FilesystemSandboxConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_writable: Vec<PathBuf>,
 
+    /// Additional readable paths granted to all tools as read-only binds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_readable: Vec<PathBuf>,
+
     /// Per-tool writable path overrides.  Keys are canonical tool names
     /// (e.g. `"claude-code"`, `"gemini-cli"`).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -52,6 +57,7 @@ impl FilesystemSandboxConfig {
     pub fn is_default(&self) -> bool {
         self.enforcement_mode.is_none()
             && self.extra_writable.is_empty()
+            && self.extra_readable.is_empty()
             && self.tool_writable_overrides.is_empty()
     }
 }
@@ -89,6 +95,7 @@ mod tests {
         let cfg = FilesystemSandboxConfig {
             enforcement_mode: Some("required".to_string()),
             extra_writable: vec![PathBuf::from("/opt/data")],
+            extra_readable: vec![PathBuf::from("/tmp/foo.json")],
             tool_writable_overrides: HashMap::from([(
                 "claude-code".to_string(),
                 vec![PathBuf::from("/home/user/.claude-extra")],
@@ -98,6 +105,20 @@ mod tests {
         let decoded: FilesystemSandboxConfig = toml::from_str(&toml_str).expect("deserialize");
         assert_eq!(decoded.enforcement_mode, cfg.enforcement_mode);
         assert_eq!(decoded.extra_writable, cfg.extra_writable);
+        assert_eq!(decoded.extra_readable, cfg.extra_readable);
         assert_eq!(decoded.tool_writable_overrides, cfg.tool_writable_overrides);
+    }
+
+    #[test]
+    fn test_deserialize_extra_readable() {
+        let decoded: FilesystemSandboxConfig = toml::from_str(
+            r#"
+enforcement_mode = "best-effort"
+extra_readable = ["/tmp/foo.json"]
+"#,
+        )
+        .expect("deserialize");
+
+        assert_eq!(decoded.extra_readable, vec![PathBuf::from("/tmp/foo.json")]);
     }
 }

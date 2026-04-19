@@ -74,6 +74,7 @@ printf 'tool mutation\\n' >> tracked.txt\n",
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     )
     .await
     .expect("review should succeed after reclassifying edit restriction");
@@ -174,6 +175,7 @@ printf '%s\\n' \
         false,
         false,
         &[],
+        &[],
     )
     .await
     .expect("codex review should honor project target");
@@ -265,6 +267,7 @@ printf '%s\\n' \
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     )
     .await
     .expect("explicit review model spec should bypass tier enforcement");
@@ -396,6 +399,7 @@ fi\n",
         false,
         false,
         &[],
+        &[],
     )
     .await
     .expect("gemini auth retry should succeed");
@@ -459,6 +463,7 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
         false,
         false,
         false,
+        &[],
         &[],
     )
     .await
@@ -546,6 +551,7 @@ printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
         false,
         false,
         true,
+        &[],
         &[],
     )
     .await

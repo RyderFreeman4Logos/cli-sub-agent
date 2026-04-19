@@ -55,6 +55,7 @@ fn writable_paths_tool_level_replaces_project_root() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/tmp")]),
+                readable_paths: None,
                 enforcement_mode: None,
             }),
             ..Default::default()
@@ -77,6 +78,7 @@ fn writable_paths_tool_level_appends_global_extra_writable() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/tmp")]),
+                readable_paths: None,
                 enforcement_mode: None,
             }),
             ..Default::default()
@@ -136,6 +138,7 @@ fn writable_paths_new_style_takes_priority_over_legacy() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/new/path")]),
+                readable_paths: None,
                 enforcement_mode: None,
             }),
             ..Default::default()
@@ -157,6 +160,7 @@ fn writable_paths_other_tool_unaffected() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/tmp")]),
+                readable_paths: None,
                 enforcement_mode: None,
             }),
             ..Default::default()
@@ -190,6 +194,7 @@ fn fs_enforcement_tool_level_override_wins() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: None,
+                readable_paths: Some(vec![PathBuf::from("/tmp/readable.json")]),
                 enforcement_mode: Some("required".to_string()),
             }),
             ..Default::default()
@@ -221,6 +226,7 @@ fn fs_enforcement_safety_net_promotes_off_with_writable_paths() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/tmp")]),
+                readable_paths: None,
                 enforcement_mode: Some("off".to_string()),
             }),
             ..Default::default()
@@ -241,6 +247,7 @@ fn fs_enforcement_safety_net_promotes_absent_with_writable_paths() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/tmp")]),
+                readable_paths: None,
                 enforcement_mode: None,
             }),
             ..Default::default()
@@ -262,6 +269,7 @@ fn fs_enforcement_safety_net_uses_global_when_writable_paths_set() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: Some(vec![PathBuf::from("/tmp")]),
+                readable_paths: None,
                 enforcement_mode: None,
             }),
             ..Default::default()
@@ -282,6 +290,7 @@ fn fs_enforcement_off_without_writable_paths_stays_off() {
         ToolConfig {
             filesystem_sandbox: Some(ToolFilesystemSandboxConfig {
                 writable_paths: None,
+                readable_paths: None,
                 enforcement_mode: Some("off".to_string()),
             }),
             ..Default::default()

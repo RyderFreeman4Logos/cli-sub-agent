@@ -58,6 +58,7 @@ pub(crate) fn resolve_sandbox_options(
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -129,7 +130,7 @@ pub(crate) fn resolve_sandbox_options(
             if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
                 builder = builder.with_writable_path(slots);
             }
-            // CLI --extra-writable (no-config path).
+            // CLI --extra-writable / --expose-readable (no-config path).
             if !extra_writable.is_empty() {
                 if let Err(e) = csa_resource::isolation_plan::validate_writable_paths(
                     extra_writable,
@@ -141,6 +142,19 @@ pub(crate) fn resolve_sandbox_options(
                 }
                 for path in extra_writable {
                     builder = builder.with_writable_path(path.clone());
+                }
+            }
+            if !extra_readable.is_empty() {
+                if let Err(e) = csa_resource::isolation_plan::validate_readable_paths(
+                    extra_readable,
+                    project_root,
+                ) {
+                    return SandboxResolution::RequiredButUnavailable(format!(
+                        "--expose-readable validation failed: {e}"
+                    ));
+                }
+                for path in extra_readable {
+                    builder = builder.with_readable_path(path.clone());
                 }
             }
         }
@@ -247,6 +261,11 @@ pub(crate) fn resolve_sandbox_options(
     } else {
         None
     };
+    let per_tool_readable = if !no_fs_sandbox {
+        cfg.sandbox_readable_paths(tool_name)
+    } else {
+        None
+    };
 
     // When per-tool writable paths are set, project root becomes read-only
     // (the per-tool paths provide fine-grained write access instead).
@@ -295,6 +314,19 @@ pub(crate) fn resolve_sandbox_options(
                 builder = builder.with_writable_path(path.clone());
             }
         }
+
+        if let Some(ref paths) = per_tool_readable {
+            if let Err(e) =
+                csa_resource::isolation_plan::validate_readable_paths(paths, project_root)
+            {
+                return SandboxResolution::RequiredButUnavailable(format!(
+                    "Per-tool readable_paths validation failed for '{tool_name}': {e}"
+                ));
+            }
+            for path in paths {
+                builder = builder.with_readable_path(path.clone());
+            }
+        }
     }
 
     // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
@@ -308,6 +340,20 @@ pub(crate) fn resolve_sandbox_options(
         }
         for path in extra_writable {
             builder = builder.with_writable_path(path.clone());
+        }
+    }
+
+    // CLI --expose-readable paths: always appended after config resolution.
+    if !no_fs_sandbox && !extra_readable.is_empty() {
+        if let Err(e) =
+            csa_resource::isolation_plan::validate_readable_paths(extra_readable, project_root)
+        {
+            return SandboxResolution::RequiredButUnavailable(format!(
+                "--expose-readable validation failed: {e}"
+            ));
+        }
+        for path in extra_readable {
+            builder = builder.with_readable_path(path.clone());
         }
     }
 

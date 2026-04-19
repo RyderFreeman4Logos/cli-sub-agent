@@ -52,6 +52,7 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         false,
         false,
         &[],
+        &[],
     )
     .await;
     let err = match execution {

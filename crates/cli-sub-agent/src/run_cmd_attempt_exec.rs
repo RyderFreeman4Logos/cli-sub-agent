@@ -110,6 +110,7 @@ pub(super) async fn run_persistent_with_timeout(
     pre_created_fork_session_id: &mut Option<String>,
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<AttemptExecution> {
     match tokio::time::timeout(
         timeout_duration,
@@ -138,6 +139,7 @@ pub(super) async fn run_persistent_with_timeout(
             pre_created_fork_session_id,
             no_fs_sandbox,
             extra_writable,
+            extra_readable,
         ),
     )
     .await
@@ -172,6 +174,7 @@ pub(super) async fn run_persistent_without_timeout(
     pre_created_fork_session_id: &mut Option<String>,
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<AttemptExecution> {
     execute_persistent(
         executor,
@@ -198,6 +201,7 @@ pub(super) async fn run_persistent_without_timeout(
         pre_created_fork_session_id,
         no_fs_sandbox,
         extra_writable,
+        extra_readable,
     )
     .await
 }
@@ -228,6 +232,7 @@ async fn execute_persistent(
     pre_created_fork_session_id: &mut Option<String>,
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
 ) -> Result<AttemptExecution> {
     let effective_description = if let Some(fork_res) = fork_resolution {
         description.clone().or_else(|| {
@@ -271,6 +276,7 @@ async fn execute_persistent(
         no_fs_sandbox,
         false, // readonly_project_root: `csa run` allows writes
         extra_writable,
+        extra_readable,
     )
     .await
     {

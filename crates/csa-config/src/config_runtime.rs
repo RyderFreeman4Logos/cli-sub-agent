@@ -346,6 +346,27 @@ impl ProjectConfig {
         None
     }
 
+    /// Returns the readable paths for a tool's filesystem sandbox.
+    ///
+    /// Priority chain (REPLACE semantics):
+    /// 1. Tool-level `readable_paths` from `[tools.<name>.filesystem_sandbox]`
+    /// 2. Global `extra_readable` from `[filesystem_sandbox]`
+    /// 3. Default: `None`
+    pub fn sandbox_readable_paths(&self, tool: &str) -> Option<Vec<PathBuf>> {
+        let tool_paths = self
+            .tools
+            .get(tool)
+            .and_then(|t| t.filesystem_sandbox.as_ref())
+            .and_then(|fs| fs.readable_paths.as_ref());
+
+        if let Some(paths) = tool_paths {
+            return Some(paths.clone());
+        }
+
+        (!self.filesystem_sandbox.extra_readable.is_empty())
+            .then(|| self.filesystem_sandbox.extra_readable.clone())
+    }
+
     /// Returns the filesystem sandbox enforcement mode for a tool.
     ///
     /// Priority chain:
@@ -354,9 +375,9 @@ impl ProjectConfig {
     /// 3. Default: `None` (caller decides)
     ///
     /// Safety net: if tool-level FS sandbox section exists with `writable_paths`
-    /// but enforcement_mode resolves to `"off"` or is absent, auto-promote to
-    /// `"best-effort"` with a warning — configuring paths without enforcement
-    /// is almost certainly a mistake.
+    /// or `readable_paths` but enforcement_mode resolves to `"off"` or is
+    /// absent, auto-promote to `"best-effort"` with a warning — configuring
+    /// paths without enforcement is almost certainly a mistake.
     pub fn tool_fs_enforcement_mode(&self, tool: &str) -> Option<String> {
         let tool_fs = self
             .tools
@@ -365,12 +386,15 @@ impl ProjectConfig {
 
         // Layer 1: tool-level enforcement_mode
         if let Some(mode) = tool_fs.and_then(|fs| fs.enforcement_mode.as_ref()) {
-            // Safety net: writable_paths configured but enforcement is "off"
-            if mode == "off" && tool_fs.is_some_and(|fs| fs.writable_paths.is_some()) {
+            // Safety net: readable/writable paths configured but enforcement is "off"
+            if mode == "off"
+                && tool_fs
+                    .is_some_and(|fs| fs.writable_paths.is_some() || fs.readable_paths.is_some())
+            {
                 tracing::warn!(
                     tool,
                     "Auto-promoting filesystem enforcement_mode 'off' → 'best-effort': \
-                     writable_paths are configured but enforcement is off, which would \
+                     readable_paths/writable_paths are configured but enforcement is off, which would \
                      make the paths meaningless. Set enforcement_mode = 'off' on the \
                      global [filesystem_sandbox] to suppress this warning."
                 );
@@ -379,8 +403,8 @@ impl ProjectConfig {
             return Some(mode.clone());
         }
 
-        // Safety net: tool has writable_paths but no enforcement_mode at all
-        if tool_fs.is_some_and(|fs| fs.writable_paths.is_some()) {
+        // Safety net: tool has readable_paths/writable_paths but no enforcement_mode at all
+        if tool_fs.is_some_and(|fs| fs.writable_paths.is_some() || fs.readable_paths.is_some()) {
             // Check global enforcement before auto-promoting
             if let Some(ref global_mode) = self.filesystem_sandbox.enforcement_mode {
                 return Some(global_mode.clone());
@@ -388,7 +412,7 @@ impl ProjectConfig {
             tracing::warn!(
                 tool,
                 "Auto-promoting filesystem enforcement_mode to 'best-effort': \
-                 tool has writable_paths configured but no enforcement_mode set. \
+                 tool has readable_paths/writable_paths configured but no enforcement_mode set. \
                  Set enforcement_mode explicitly to suppress this warning."
             );
             return Some("best-effort".to_string());

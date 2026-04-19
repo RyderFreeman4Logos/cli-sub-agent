@@ -34,6 +34,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub no_failover: bool,
     pub no_fs_sandbox: bool,
     pub extra_writable: &'a [PathBuf],
+    pub extra_readable: &'a [PathBuf],
     pub timeout: Option<u64>,
     pub project_root: &'a Path,
     pub scope: String,
@@ -86,6 +87,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.no_fs_sandbox,
             false, // fix pass must write — override readonly_project_root
             ctx.extra_writable,
+            ctx.extra_readable,
         );
 
         let fix_result = if let Some(timeout_secs) = ctx.timeout {

@@ -625,6 +625,7 @@ async fn execute_task(
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
+        &[],   // extra_readable
     )
     .await;
 

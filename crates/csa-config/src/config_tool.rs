@@ -142,8 +142,9 @@ impl Default for ToolRestrictions {
 
 /// Per-tool filesystem sandbox configuration.
 /// When `writable_paths` is set, it REPLACES the default project root
-/// writable access (REPLACE semantics). Session dir and tool config dirs
-/// are always preserved regardless.
+/// writable access (REPLACE semantics). When `readable_paths` is set, it
+/// REPLACES the global `extra_readable` list for the tool. Session dir and tool
+/// config dirs are always preserved regardless.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ToolFilesystemSandboxConfig {
     /// Writable paths for this tool. When set, REPLACES the default
@@ -151,6 +152,11 @@ pub struct ToolFilesystemSandboxConfig {
     /// to only writing to /tmp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writable_paths: Option<Vec<PathBuf>>,
+
+    /// Read-only host paths for this tool. When set, REPLACES the global
+    /// `extra_readable` list for the tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readable_paths: Option<Vec<PathBuf>>,
 
     /// Per-tool enforcement mode override. When set, overrides the
     /// global `[filesystem_sandbox].enforcement_mode` for this tool.
@@ -163,7 +169,9 @@ impl ToolFilesystemSandboxConfig {
     /// Required by serde(default) rule — default values are
     /// indistinguishable from "not set".
     pub fn is_default(&self) -> bool {
-        self.writable_paths.is_none() && self.enforcement_mode.is_none()
+        self.writable_paths.is_none()
+            && self.readable_paths.is_none()
+            && self.enforcement_mode.is_none()
     }
 }
 
@@ -179,12 +187,21 @@ mod tests {
 
         let cfg = ToolFilesystemSandboxConfig {
             writable_paths: Some(vec![PathBuf::from("/tmp")]),
+            readable_paths: None,
             enforcement_mode: None,
         };
         assert!(!cfg.is_default());
 
         let cfg = ToolFilesystemSandboxConfig {
             writable_paths: None,
+            readable_paths: None,
+            enforcement_mode: Some("required".to_string()),
+        };
+        assert!(!cfg.is_default());
+
+        let cfg = ToolFilesystemSandboxConfig {
+            writable_paths: None,
+            readable_paths: Some(vec![PathBuf::from("/tmp/foo.json")]),
             enforcement_mode: Some("required".to_string()),
         };
         assert!(!cfg.is_default());
@@ -203,6 +220,7 @@ enabled = true
 
 [tools.gemini-cli.filesystem_sandbox]
 writable_paths = ["/tmp"]
+readable_paths = ["/tmp/resp_ccp.json"]
 enforcement_mode = "required"
 "#;
         let wrapper: Wrapper = toml::from_str(toml_str).expect("should parse TOML");
@@ -213,6 +231,10 @@ enforcement_mode = "required"
             .expect("filesystem_sandbox missing");
 
         assert_eq!(fs_sandbox.writable_paths, Some(vec![PathBuf::from("/tmp")]));
+        assert_eq!(
+            fs_sandbox.readable_paths,
+            Some(vec![PathBuf::from("/tmp/resp_ccp.json")])
+        );
         assert_eq!(fs_sandbox.enforcement_mode, Some("required".to_string()));
         assert!(!fs_sandbox.is_default());
     }

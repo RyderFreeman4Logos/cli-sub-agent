@@ -345,6 +345,7 @@ pub(crate) async fn handle_debate(
             args.no_fs_sandbox,
             readonly_project_root,
             &args.extra_writable,
+            &args.extra_readable,
         );
 
         let execute_result = if let Some(timeout_secs) = timeout_seconds {
