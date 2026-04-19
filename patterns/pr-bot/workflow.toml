@@ -465,9 +465,24 @@ Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, and `DEFAULT
 : "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${DEFAULT_BRANCH}"
 
 WORKFLOW_BRANCH="$(git branch --show-current)"
-REMOTE_NAME=$(git config --get checkout.defaultRemote 2>/dev/null || git remote | head -1)
+# Prefer explicit branch mapping over repo-level defaults or conventions.
+REMOTE_NAME=$(git config --get "branch.${WORKFLOW_BRANCH:-$(git branch --show-current)}.remote" 2>/dev/null || true)
 if [ -z "$REMOTE_NAME" ]; then
-  echo "ERROR: no git remote configured" >&2
+  REMOTE_NAME=$(git config --get checkout.defaultRemote 2>/dev/null || true)
+fi
+if [ -z "$REMOTE_NAME" ] && git remote | grep -qx origin; then
+  REMOTE_NAME=origin
+fi
+if [ -z "$REMOTE_NAME" ]; then
+  REMOTE_COUNT=$(git remote | wc -l | tr -d ' ')
+  if [ "$REMOTE_COUNT" = "1" ]; then
+    REMOTE_NAME=$(git remote | head -1)
+  fi
+fi
+if [ -z "$REMOTE_NAME" ]; then
+  echo "ERROR: cannot determine target remote. Multiple remotes exist and neither" >&2
+  echo "  'branch.${WORKFLOW_BRANCH:-<branch>}.remote', 'checkout.defaultRemote', nor 'origin' is set." >&2
+  echo "  Configure one with: git config --local checkout.defaultRemote <name>" >&2
   exit 1
 fi
 # Prefer GitHub API (server truth) over locally-cached remote HEAD (can be stale).
