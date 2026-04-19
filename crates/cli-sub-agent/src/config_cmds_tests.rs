@@ -381,6 +381,7 @@ schema_version = 1
 [pr_review]
 cloud_bot_name = "gemini-code-assist"
 cloud_bot_trigger = "comment"
+cloud_bot_poll_interval_seconds = 30
 merge_strategy = "merge"
 delete_branch = false
 "#,
@@ -402,6 +403,12 @@ delete_branch = false
             .unwrap()
             .and_then(|value| value.as_str().map(str::to_string)),
         Some("comment".to_string())
+    );
+    assert_eq!(
+        resolve_lookup_sources(&lookup.sources, "pr_review.cloud_bot_poll_interval_seconds")
+            .unwrap()
+            .and_then(|value| value.as_integer()),
+        Some(30)
     );
     assert_eq!(
         resolve_lookup_sources(&lookup.sources, "pr_review.merge_strategy")

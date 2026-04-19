@@ -437,10 +437,11 @@ If `CLOUD_BOT` is `false`:
 
 ## Step 5: Trigger Cloud Bot Review and Delegate Waiting
 
-> **Layer**: 0 + 1 (Orchestrator + CSA executor).
+> **Layer**: 0 (Orchestrator + shell helper).
 > Layer 0 triggers cloud bot review (via @mention or auto-review depending on
-> `cloud_bot_trigger` config and review round) and delegates the long wait to a
-> single CSA-managed step. No explicit caller-side polling loop.
+> `cloud_bot_trigger` config and review round), launches a self-contained shell
+> poller once, then checks a deterministic result file after at most two
+> long-poll windows. Intermediate GitHub polling happens entirely in shell.
 
 Tool: bash
 OnFail: abort
@@ -453,7 +454,7 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
 
-Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then delegate `cloud_bot_poll_max_seconds` (default: `kv_cache.long_poll_seconds`, 240s) polling to CSA.
+Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then launch `patterns/pr-bot/scripts/pr-bot-wait.sh` with `cloud_bot_poll_max_seconds` (default: `kv_cache.long_poll_seconds`, 240s) as its internal timeout and `cloud_bot_poll_interval_seconds` (default: `30`) as its shell-level poll interval.
 If an exact current-HEAD bot review already exists before this run triggers the
 bot, reuse that specific review object instead of posting a duplicate trigger
 or aborting on resume/rerun.
@@ -550,122 +551,123 @@ echo "Waiting ${CLOUD_BOT_WAIT_SECONDS}s before polling (bot responses rarely ar
 sleep "${CLOUD_BOT_WAIT_SECONDS}"
 BOT_REVIEW_WINDOW_START="${WAIT_BASE_TS}"
 
-# --- Delegate remaining polling to CSA-managed step ---
+# Compatibility + recovery probe: keep the current-window review helper shape
+# so pr-bot can still confirm a HEAD-matching review event when the helper's
+# result file only contains a comment timestamp.
 query_current_window_current_head_review_ts() {
   gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" 2>/dev/null \
     | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at >= "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null) | .submitted_at] | sort | last // ""'
 }
 
-refresh_current_window_review_signal() {
-  set +e
-  CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS="$(query_current_window_current_head_review_ts)"
-  CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC=$?
-  set -e
-  if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] \
-    && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]
-  then
-    echo "Detected current-window @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA} at ${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}."
-  fi
-}
-check_quota_message_step5() {
-  local quota_message_body
-  set +e
-  quota_message_body="$(
-    gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-      | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body // "") | test("daily quota limit"; "i"))] | sort_by(.created_at) | last | .body // ""' \
-      2>/dev/null
-  )"
-  set -e
-  if [ -z "${quota_message_body}" ]; then
-    return 1
-  fi
-
-  quota_section_header="[cloud_bot_quota.${CLOUD_BOT_NAME}]"
-  quota_write_tmp="${CLOUD_BOT_QUOTA_CACHE_FILE}.tmp"
-  quota_body_tmp="${CLOUD_BOT_QUOTA_CACHE_FILE}.body.tmp"
-  quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  quota_expected_reset_at="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+24H +%Y-%m-%dT%H:%M:%SZ)"
-  quota_short_message="$(printf '%s' "${quota_message_body}" | tr '\r\n\t' '   ' | head -c 200)"
-  quota_short_message_escaped="$(printf '%s' "${quota_short_message}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  mkdir -p "$(dirname "${CLOUD_BOT_QUOTA_CACHE_FILE}")"
-  if [ -f "${CLOUD_BOT_QUOTA_CACHE_FILE}" ]; then
-    awk -v target="${quota_section_header}" '
-      $0 == target { skip = 1; next }
-      skip && /^\[/ { skip = 0 }
-      !skip { print }
-    ' "${CLOUD_BOT_QUOTA_CACHE_FILE}" >"${quota_body_tmp}"
-  else
-    : >"${quota_body_tmp}"
-  fi
-  {
-    cat "${quota_body_tmp}"
-    if [ -s "${quota_body_tmp}" ]; then
-      printf '\n'
-    fi
-    printf '%s\n' "${quota_section_header}"
-    printf 'exhausted_at = "%s"\n' "${quota_now_utc}"
-    printf 'expected_reset_at = "%s"\n' "${quota_expected_reset_at}"
-    printf 'last_pr_seen = %s\n' "${PR_NUM}"
-    printf 'last_quota_message = "%s"\n' "${quota_short_message_escaped}"
-  } >"${quota_write_tmp}"
-  rm -f "${quota_body_tmp}"
-  mv "${quota_write_tmp}" "${CLOUD_BOT_QUOTA_CACHE_FILE}"
-  CLOUD_BOT_QUOTA_EXHAUSTED_AT="${quota_now_utc}"
-  CLOUD_BOT_QUOTA_EXPECTED_RESET_AT="${quota_expected_reset_at}"
-  CLOUD_BOT_SKIPPED=true
-  CLOUD_BOT_SKIP_KIND="quota_exhausted"
-  CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"
-  BOT_UNAVAILABLE=true
-  BOT_HAS_ISSUES=false
-  BOT_HAS_ISSUES_SOURCE=""
-  MERGE_WITHOUT_BOT_REASON_KIND="cloud_bot_quota_exhausted"
-  echo "Quota exhaustion detected for ${CLOUD_BOT_NAME}; cache updated at ${CLOUD_BOT_QUOTA_CACHE_FILE}. Routing to merge-without-bot path." >&2
-  return 0
-}
-WAIT_MARKER=""
-# POLL_IDLE_TIMEOUT and POLL_MAX_TIMEOUT are pre-computed in Step 4a.
-set +e
-WAIT_SID="$(csa run --sa-mode true --tier tier-1 --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait ${CLOUD_BOT_POLL_MAX_SECONDS} seconds (quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
-DAEMON_RC=$?
-set -e
-if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
-  echo "WARN: Failed to launch daemon for bot wait (rc=${DAEMON_RC}); treating cloud bot as unavailable." >&2
-  BOT_UNAVAILABLE=true
+# --- Launch self-contained poller once; main workflow only checks the result file ---
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  PR_BOT_WAIT_SCRIPT="${CSA_WORKFLOW_DIR}/scripts/pr-bot-wait.sh"
 else
-  set +e
-  WAIT_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${WAIT_SID}")"
-  WAIT_RC=$?
-  set -e
-  if [ "${WAIT_RC}" -ne 0 ]; then
-    echo "WARN: Delegated bot wait failed (rc=${WAIT_RC}); treating cloud bot as unavailable." >&2
-    BOT_UNAVAILABLE=true
-  else
-    WAIT_MARKER="$(
-      printf '%s\n' "${WAIT_RESULT}" \
-        | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
-        | tail -n 1 \
-        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
-        || true
-    )"
-    if [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
-      BOT_UNAVAILABLE=true
-    elif [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
-      echo "WARN: Delegated bot wait returned no marker; treating cloud bot as unavailable." >&2
-      BOT_UNAVAILABLE=true
-    fi
-  fi
+  PR_BOT_WAIT_SCRIPT="patterns/pr-bot/scripts/pr-bot-wait.sh"
 fi
+OUTPUT_FILE="$(mktemp -t pr-bot-wait-${PR_NUM}-XXXXXX.json)"
+INTERVAL="$(csa config get pr_review.cloud_bot_poll_interval_seconds --default 30)"
+WAIT_LONG_POLL_SECS="$(csa config get kv_cache.long_poll_seconds --default 240)"
+WAIT_RESULT_GRACE_SECS=1
+POLL_RESULT_STATUS=""
+WAIT_MARKER=""
+CSA_PR_BOT_NAME="${CLOUD_BOT_NAME}" nohup "${PR_BOT_WAIT_SCRIPT}" "${PR_NUM}" \
+  --timeout "${CLOUD_BOT_POLL_MAX_SECONDS}" \
+  --interval "${INTERVAL}" \
+  --bot-login "${CLOUD_BOT_LOGIN}" \
+  --push-sha "${CURRENT_SHA}" \
+  --window-start "${WAIT_BASE_TS}" \
+  --quota-cache "${CLOUD_BOT_QUOTA_CACHE_FILE}" \
+  --output "${OUTPUT_FILE}" \
+  >/dev/null 2>&1 &
+POLL_PID=$!
+WAIT_STARTED_AT="$(date +%s)"
+WAIT_ELAPSED_SECS=0
+
+while [ "${WAIT_ELAPSED_SECS}" -lt "${CLOUD_BOT_POLL_MAX_SECONDS}" ]; do
+  if [ -f "${OUTPUT_FILE}" ]; then
+    break
+  fi
+  if ! kill -0 "${POLL_PID}" 2>/dev/null; then
+    sleep "${WAIT_RESULT_GRACE_SECS}"
+    break
+  fi
+
+  remaining=$((CLOUD_BOT_POLL_MAX_SECONDS - WAIT_ELAPSED_SECS))
+  step="${WAIT_LONG_POLL_SECS}"
+  if [ "${step}" -gt "${remaining}" ]; then
+    step="${remaining}"
+  fi
+
+  sleep "${step}" &
+  WAIT_SLEEP_PID=$!
+  wait -n "${POLL_PID}" "${WAIT_SLEEP_PID}" 2>/dev/null || true
+  if kill -0 "${WAIT_SLEEP_PID}" 2>/dev/null; then
+    kill "${WAIT_SLEEP_PID}" 2>/dev/null || true
+    wait "${WAIT_SLEEP_PID}" 2>/dev/null || true
+  fi
+  WAIT_ELAPSED_SECS=$(( $(date +%s) - WAIT_STARTED_AT ))
+done
+
+WAIT_ELAPSED_SECS=$(( $(date +%s) - WAIT_STARTED_AT ))
+
+if [ ! -f "${OUTPUT_FILE}" ]; then
+  if kill -0 "${POLL_PID}" 2>/dev/null; then
+    kill "${POLL_PID}" 2>/dev/null || true
+    wait "${POLL_PID}" 2>/dev/null || true
+  fi
+  printf '{"status":"timeout","pr":%s,"elapsed_seconds":%s}\n' \
+    "${PR_NUM}" "${WAIT_ELAPSED_SECS}" > "${OUTPUT_FILE}.tmp"
+  mv "${OUTPUT_FILE}.tmp" "${OUTPUT_FILE}"
 fi
 
-if [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
-  refresh_current_window_review_signal
-  if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]; then
+POLL_RESULT_STATUS="$(jq -r '.status // empty' "${OUTPUT_FILE}")"
+case "${POLL_RESULT_STATUS}" in
+  replied)
     WAIT_MARKER="BOT_REPLY=received"
     BOT_UNAVAILABLE=false
-    echo "Detected current-window @${CLOUD_BOT_NAME} review for HEAD ${CURRENT_SHA} after delegated wait; continuing."
-  else
-    check_quota_message_step5 || true
-  fi
+    BOT_REVIEW_WINDOW_START="$(jq -r '.review.submitted_at // .comment.created_at // empty' "${OUTPUT_FILE}")"
+    if [ -z "${BOT_REVIEW_WINDOW_START}" ]; then
+      set +e
+      CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS="$(query_current_window_current_head_review_ts)"
+      CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC=$?
+      set -e
+      if [ "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS_RC}" -eq 0 ] && [ -n "${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}" ]; then
+        BOT_REVIEW_WINDOW_START="${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}"
+      else
+        BOT_REVIEW_WINDOW_START="${WAIT_BASE_TS}"
+      fi
+    fi
+    ;;
+  quota_exhausted)
+    WAIT_MARKER="BOT_REPLY=quota_exhausted"
+    BOT_UNAVAILABLE=true
+    BOT_HAS_ISSUES=false
+    BOT_HAS_ISSUES_SOURCE=""
+    CLOUD_BOT_SKIPPED=true
+    CLOUD_BOT_SKIP_KIND="quota_exhausted"
+    CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"
+    CLOUD_BOT_QUOTA_EXHAUSTED_AT="$(jq -r '.exhausted_at // empty' "${OUTPUT_FILE}")"
+    CLOUD_BOT_QUOTA_EXPECTED_RESET_AT="$(jq -r '.expected_reset_at // empty' "${OUTPUT_FILE}")"
+    MERGE_WITHOUT_BOT_REASON_KIND="cloud_bot_quota_exhausted"
+    BOT_REVIEW_WINDOW_START="$(jq -r '.comment.created_at // empty' "${OUTPUT_FILE}")"
+    if [ -z "${BOT_REVIEW_WINDOW_START}" ]; then
+      BOT_REVIEW_WINDOW_START="${WAIT_BASE_TS}"
+    fi
+    echo "Quota exhaustion detected for ${CLOUD_BOT_NAME}; cache updated at ${CLOUD_BOT_QUOTA_CACHE_FILE}. Routing to merge-without-bot path." >&2
+    ;;
+  timeout)
+    echo "ERROR: Cloud bot did not respond within ${CLOUD_BOT_POLL_MAX_SECONDS}s after the quiet wait." >&2
+    echo "Options: retry later, inspect the PR page manually, or disable the cloud bot for this run." >&2
+    exit 1
+    ;;
+  *)
+    echo "ERROR: Unknown polling helper status '${POLL_RESULT_STATUS}'." >&2
+    cat "${OUTPUT_FILE}" >&2
+    exit 1
+    ;;
+esac
+rm -f "${OUTPUT_FILE}"
 fi
 
 if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
@@ -690,6 +692,26 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
   fi
   # Helper: check for setup/configuration messages before marking unavailable
+  check_quota_message_step5() {
+    set +e
+    local quota_body
+    quota_body="$(
+      gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+        | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body // "") | test("daily quota limit"; "i"))] | .[0].body // ""' \
+        2>/dev/null
+    )"
+    set -e
+    if [ -n "${quota_body}" ]; then
+      echo "Quota exhaustion detected from cloud bot comment during post-poll verification." >&2
+      CLOUD_BOT_SKIPPED=true
+      CLOUD_BOT_SKIP_KIND="quota_exhausted"
+      CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"
+      BOT_UNAVAILABLE=true
+      return 0
+    fi
+    return 1
+  }
+
   _check_setup_message_step5() {
     set +e
     local setup_body

@@ -256,6 +256,7 @@ max_recursion_depth = 5
 #                                            # Default: "/gemini review" for gemini-code-assist,
 #                                            #          "@<name> review" for others
 # cloud_bot_wait_seconds = 60                # Quiet wait before polling (default: kv_cache.frequent_poll_seconds = 60)
+# cloud_bot_poll_interval_seconds = 30       # Shell helper poll interval during wait script (default: 30)
 # cloud_bot_poll_max_seconds = 240           # Max poll duration after quiet wait (default: kv_cache.long_poll_seconds = 240)
 # merge_strategy = "merge"                   # "merge" | "rebase" (squash is forbidden, default: "merge")
 # delete_branch = false                      # Delete remote branch after merge (default: false)
