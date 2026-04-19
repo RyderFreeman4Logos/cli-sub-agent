@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+mode="head-only"
+if [ "${1:-}" = "--session-record" ]; then
+  mode="session-record"
+  shift
+fi
+
 project_root="${CSA_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
 branch="${1:-$(git -C "${project_root}" branch --show-current)}"
 state_base="${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent"
@@ -25,7 +31,11 @@ while IFS= read -r session_id; do
     ' "${review_meta_path}" 2>/dev/null || true
   )"
   if [ -n "${head_sha}" ]; then
-    printf '%s\n' "${head_sha}"
+    if [ "${mode}" = "session-record" ]; then
+      printf '%s\t%s\n' "${session_id}" "${head_sha}"
+    else
+      printf '%s\n' "${head_sha}"
+    fi
     exit 0
   fi
 done < <(

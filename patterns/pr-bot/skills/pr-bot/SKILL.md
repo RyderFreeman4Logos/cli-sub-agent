@@ -29,7 +29,7 @@ triggers:
 
 ## Purpose
 
-Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus configurable cloud bot review (default: gemini-code-assist; configurable via `pr_review.cloud_bot_name`). When bot times out, the workflow **aborts** (no silent fallback merge). Performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). Non-target bot comments (e.g., codex auto-review) are also detected and processed with a quota warning. Merges with `--merge` to preserve per-commit audit trail.
+Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus configurable cloud bot review (default: gemini-code-assist; configurable via `pr_review.cloud_bot_name`). When bot times out, the workflow **aborts** (no silent fallback merge). The one explicit exception is a detected quota-exhaustion warning, which is cached and routed through the merge-without-bot audit path. Performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). Non-target bot comments (e.g., codex auto-review) are also detected and processed with a quota warning. Merges with `--merge` to preserve per-commit audit trail.
 
 **MANDATORY AUDIT TRAIL**: When an agent determines a PR-page review finding
 (for example, a cloud bot finding) is NOT a real issue or is acceptable in
@@ -150,7 +150,21 @@ Override via `cloud_bot_retrigger_command`.
 **Timeout behavior**: If bot does not respond within the configured polling window
 (`cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, default ~5 minutes via `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`),
 the workflow **aborts** and presents options to the user. It does NOT silently
-fall back to local review and merge.
+fall back to local review and merge, except for the explicit quota-exhaustion
+path described below.
+
+**Quota auto-skip cache**: When the configured cloud bot posts a warning that
+contains `daily quota limit` (case-insensitive), pr-bot records a 24h skip
+window in `${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml`.
+Subsequent PR runs skip Step 4 bot triggering/polling during that window and go
+straight to the existing merge-without-bot path after confirming the local
+review state. When the window elapses, the cached section is cleared
+automatically and normal bot triggering resumes.
+
+**Manual override / reset**:
+- `CSA_PR_BOT_FORCE=1` bypasses the quota cache for a single invocation.
+- Manual cache clear: `rm "${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml"`
+- There is currently no dedicated CLI flag wiring for `--force-cloud-bot` in this skill entrypoint.
 
 When `cloud_bot = false`:
 - Steps 4-9 (cloud bot trigger, delegated wait gate, classify, arbitrate, fix) are **skipped entirely**
@@ -187,6 +201,7 @@ breaks prompt-guard propagation.
    - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist) because bots do NOT auto-review on subsequent pushes.
    - Wait `cloud_bot_wait_seconds` quietly, then delegate `cloud_bot_poll_max_seconds` polling to CSA. Defaults are `kv_cache.frequent_poll_seconds` (60s) for the quiet wait and `kv_cache.long_poll_seconds` (240s) for the total poll budget unless explicitly overridden.
    - **Positive signal**: verifies a review EVENT exists (via `pulls/{pr}/reviews` API with `submitted_at` > push time), not merely absence of comments.
+   - **Quota warning shortcut**: if bot comments contain `daily quota limit`, record the 24h quota cache entry and route to the merge-without-bot path instead of repeatedly waiting for a reply that cannot arrive during the quota window.
    - If bot times out: **ABORT workflow** and present options to user. NO silent fallback.
    - Non-target bot comments (e.g., codex auto-review) are also detected and included with a quota warning.
 5. **Evaluate bot comments**: Classify each as:
@@ -199,7 +214,7 @@ breaks prompt-guard propagation.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
 10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Squash merges are forbidden for audit reasons.
-11. **Merge**: When `cloud_bot=false`, leave audit trail comment explaining merge rationale (bot disabled + local review CLEAN). When `cloud_bot=true`, bot must have confirmed no issues before reaching this step (timeout aborts the workflow, never falls through to merge). Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
+11. **Merge**: When `cloud_bot=false`, leave audit trail comment explaining merge rationale (bot disabled + local review CLEAN). When `cloud_bot=true`, either the bot must have confirmed no issues before reaching this step, or Step 4 must have explicitly routed through the quota-exhausted merge-without-bot path with an audit comment citing the cached window and local review session. Plain timeout still aborts and never falls through to merge. Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 
 ## Example Usage
 

@@ -96,15 +96,22 @@ else
   CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
 fi
 CURRENT_HEAD="$(git rev-parse HEAD)"
-REVIEW_HEAD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh")"
+REVIEW_SESSION_RECORD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh" --session-record)"
+LOCAL_REVIEW_SESSION_ID="${LOCAL_REVIEW_SESSION_ID:-}"
+REVIEW_HEAD=""
+if [ -n "${REVIEW_SESSION_RECORD}" ]; then
+  IFS=$'\t' read -r LOCAL_REVIEW_SESSION_ID REVIEW_HEAD <<<"${REVIEW_SESSION_RECORD}"
+fi
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
 else
   SID=$(csa review --branch "${DEFAULT_BRANCH}")
+  LOCAL_REVIEW_SESSION_ID="${SID}"
   bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
+echo "CSA_VAR:LOCAL_REVIEW_SESSION_ID=${LOCAL_REVIEW_SESSION_ID}"
 echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 4)" required=true -->'
 ```
 
@@ -255,6 +262,10 @@ Tool: bash
 OnFail: abort
 
 Check whether cloud bot review is enabled for this project.
+Before triggering the bot, consult the persisted quota cache at
+`${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml`.
+If the configured bot is still inside a recorded quota-exhaustion window and
+`CSA_PR_BOT_FORCE` is not set, skip the bot path and route directly to Step 6a.
 
 ```bash
 set -euo pipefail
@@ -287,16 +298,88 @@ fi
 # Configurable wait/poll timeouts for cloud bot response.
 CLOUD_BOT_WAIT_SECONDS=$(csa config get pr_review.cloud_bot_wait_seconds --default "$(csa config get kv_cache.frequent_poll_seconds --default 60)")
 CLOUD_BOT_POLL_MAX_SECONDS=$(csa config get pr_review.cloud_bot_poll_max_seconds --default "$(csa config get kv_cache.long_poll_seconds --default 240)")
+CLOUD_BOT_SKIPPED=false
+CLOUD_BOT_SKIP_KIND=""
+CLOUD_BOT_SKIP_REASON=""
+CLOUD_BOT_QUOTA_CACHE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml"
+CLOUD_BOT_QUOTA_EXHAUSTED_AT=""
+CLOUD_BOT_QUOTA_EXPECTED_RESET_AT=""
+MERGE_WITHOUT_BOT_REASON_KIND="${MERGE_WITHOUT_BOT_REASON_KIND:-}"
+quota_section_header="[cloud_bot_quota.${CLOUD_BOT_NAME}]"
+quota_read_field() {
+  local field_name="$1"
+  [ -f "${CLOUD_BOT_QUOTA_CACHE_FILE}" ] || return 0
+  awk -v target="${quota_section_header}" -v field="${field_name}" '
+    $0 == target { in_section = 1; next }
+    in_section && /^\[/ { exit }
+    in_section && index($0, field " = ") == 1 {
+      value = substr($0, length(field) + 4)
+      if (value ~ /^".*"$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      print value
+      exit
+    }
+  ' "${CLOUD_BOT_QUOTA_CACHE_FILE}"
+}
+quota_clear_section() {
+  local tmp_file
+  tmp_file="${CLOUD_BOT_QUOTA_CACHE_FILE}.tmp"
+  mkdir -p "$(dirname "${CLOUD_BOT_QUOTA_CACHE_FILE}")"
+  if [ -f "${CLOUD_BOT_QUOTA_CACHE_FILE}" ]; then
+    awk -v target="${quota_section_header}" '
+      $0 == target { skip = 1; next }
+      skip && /^\[/ { skip = 0 }
+      !skip { print }
+    ' "${CLOUD_BOT_QUOTA_CACHE_FILE}" >"${tmp_file}"
+  else
+    : >"${tmp_file}"
+  fi
+  mv "${tmp_file}" "${CLOUD_BOT_QUOTA_CACHE_FILE}"
+}
+if [ "${CLOUD_BOT}" = "true" ]; then
+  CLOUD_BOT_QUOTA_EXHAUSTED_AT="$(quota_read_field exhausted_at)"
+  CLOUD_BOT_QUOTA_EXPECTED_RESET_AT="$(quota_read_field expected_reset_at)"
+  if [ "${CSA_PR_BOT_FORCE:-0}" != "1" ] \
+    && [ -n "${CLOUD_BOT_QUOTA_EXHAUSTED_AT}" ] \
+    && [ -n "${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT}" ]
+  then
+    NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ "${NOW_UTC}" < "${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT}" ]]; then
+      CLOUD_BOT_SKIPPED=true
+      CLOUD_BOT_SKIP_KIND="quota_exhausted"
+      CLOUD_BOT_SKIP_REASON="quota exhausted at ${CLOUD_BOT_QUOTA_EXHAUSTED_AT}; expected reset ${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT}"
+    else
+      echo "Cloud bot quota window elapsed for ${CLOUD_BOT_NAME}; clearing ${CLOUD_BOT_QUOTA_CACHE_FILE} and retrying normally." >&2
+      quota_clear_section
+      CLOUD_BOT_QUOTA_EXHAUSTED_AT=""
+      CLOUD_BOT_QUOTA_EXPECTED_RESET_AT=""
+    fi
+  fi
+fi
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
+  MERGE_WITHOUT_BOT_REASON_KIND="cloud_bot_disabled"
+elif [ "${CLOUD_BOT_SKIPPED}" = "true" ] && [ "${CLOUD_BOT_SKIP_KIND}" = "quota_exhausted" ]; then
+  BOT_UNAVAILABLE=true
+  echo "SKIPPING cloud bot trigger — ${CLOUD_BOT_NAME} ${CLOUD_BOT_SKIP_REASON}" >&2
+  MERGE_WITHOUT_BOT_REASON_KIND="cloud_bot_quota_exhausted"
+fi
+if [ "${BOT_UNAVAILABLE:-false}" = "true" ]; then
   FALLBACK_REVIEW_HAS_ISSUES=false
   CURRENT_HEAD="$(git rev-parse HEAD)"
-  REVIEW_HEAD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh")"
+  REVIEW_SESSION_RECORD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh" --session-record)"
+  LOCAL_REVIEW_SESSION_ID="${LOCAL_REVIEW_SESSION_ID:-}"
+  REVIEW_HEAD=""
+  if [ -n "${REVIEW_SESSION_RECORD}" ]; then
+    IFS=$'\t' read -r LOCAL_REVIEW_SESSION_ID REVIEW_HEAD <<<"${REVIEW_SESSION_RECORD}"
+  fi
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
-    echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
+    echo "Merge-without-bot fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
-    echo "Cloud bot disabled and fast-path invalid. Running full local review."
+    echo "Merge-without-bot fast-path invalid. Running full local review."
     SID=$(csa review --branch "${DEFAULT_BRANCH}")
+    LOCAL_REVIEW_SESSION_ID="${SID}"
     bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
   fi
 fi
@@ -307,6 +390,12 @@ echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
 echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
 echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
 echo "CSA_VAR:CLOUD_BOT_RETRIGGER_CMD=$CLOUD_BOT_RETRIGGER_CMD"
+echo "CSA_VAR:CLOUD_BOT_QUOTA_CACHE_FILE=$CLOUD_BOT_QUOTA_CACHE_FILE"
+echo "CSA_VAR:CLOUD_BOT_QUOTA_EXHAUSTED_AT=${CLOUD_BOT_QUOTA_EXHAUSTED_AT}"
+echo "CSA_VAR:CLOUD_BOT_QUOTA_EXPECTED_RESET_AT=${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT}"
+echo "CSA_VAR:CLOUD_BOT_SKIPPED=$CLOUD_BOT_SKIPPED"
+echo "CSA_VAR:CLOUD_BOT_SKIP_KIND=${CLOUD_BOT_SKIP_KIND}"
+echo "CSA_VAR:CLOUD_BOT_SKIP_REASON=${CLOUD_BOT_SKIP_REASON}"
 echo "CSA_VAR:CLOUD_BOT_WAIT_SECONDS=$CLOUD_BOT_WAIT_SECONDS"
 echo "CSA_VAR:CLOUD_BOT_POLL_MAX_SECONDS=$CLOUD_BOT_POLL_MAX_SECONDS"
 # Centralized timeout computation — reused by Step 5, Step 10b, Step 10.5.
@@ -333,6 +422,8 @@ echo "CSA_VAR:POLL_MAX_TIMEOUT=$POLL_MAX_TIMEOUT"
 echo "CSA_VAR:POST_REBASE_TIMEOUT=$POST_REBASE_TIMEOUT"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
+echo "CSA_VAR:LOCAL_REVIEW_SESSION_ID=${LOCAL_REVIEW_SESSION_ID:-}"
+echo "CSA_VAR:MERGE_WITHOUT_BOT_REASON_KIND=${MERGE_WITHOUT_BOT_REASON_KIND:-}"
 ```
 
 If `CLOUD_BOT` is `false`:
@@ -369,6 +460,9 @@ or aborting on resume/rerun.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
+If a bot issue comment contains `daily quota limit` (case-insensitive), record
+the 24h quota window in the cache file, mark the bot unavailable, and continue
+through the Step 6a merge-without-bot path instead of spending another wait cycle.
 
 ```bash
 set -euo pipefail
@@ -473,6 +567,61 @@ refresh_current_window_review_signal() {
     echo "Detected current-window @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA} at ${CURRENT_WINDOW_CURRENT_HEAD_REVIEW_TS}."
   fi
 }
+check_quota_message_step5() {
+  local quota_message_body
+  set +e
+  quota_message_body="$(
+    gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+      | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body // "") | test("daily quota limit"; "i"))] | sort_by(.created_at) | last | .body // ""' \
+      2>/dev/null
+  )"
+  set -e
+  if [ -z "${quota_message_body}" ]; then
+    return 1
+  fi
+
+  quota_section_header="[cloud_bot_quota.${CLOUD_BOT_NAME}]"
+  quota_write_tmp="${CLOUD_BOT_QUOTA_CACHE_FILE}.tmp"
+  quota_body_tmp="${CLOUD_BOT_QUOTA_CACHE_FILE}.body.tmp"
+  quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  quota_expected_reset_at="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+24H +%Y-%m-%dT%H:%M:%SZ)"
+  quota_short_message="$(printf '%s' "${quota_message_body}" | tr '\r\n\t' '   ' | head -c 200)"
+  quota_short_message_escaped="$(printf '%s' "${quota_short_message}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  mkdir -p "$(dirname "${CLOUD_BOT_QUOTA_CACHE_FILE}")"
+  if [ -f "${CLOUD_BOT_QUOTA_CACHE_FILE}" ]; then
+    awk -v target="${quota_section_header}" '
+      $0 == target { skip = 1; next }
+      skip && /^\[/ { skip = 0 }
+      !skip { print }
+    ' "${CLOUD_BOT_QUOTA_CACHE_FILE}" >"${quota_body_tmp}"
+  else
+    : >"${quota_body_tmp}"
+  fi
+  {
+    cat "${quota_body_tmp}"
+    if [ -s "${quota_body_tmp}" ]; then
+      printf '\n'
+    fi
+    printf '%s\n' "${quota_section_header}"
+    printf 'exhausted_at = "%s"\n' "${quota_now_utc}"
+    printf 'expected_reset_at = "%s"\n' "${quota_expected_reset_at}"
+    printf 'last_pr_seen = %s\n' "${PR_NUM}"
+    printf 'last_quota_message = "%s"\n' "${quota_short_message_escaped}"
+  } >"${quota_write_tmp}"
+  rm -f "${quota_body_tmp}"
+  mv "${quota_write_tmp}" "${CLOUD_BOT_QUOTA_CACHE_FILE}"
+  CLOUD_BOT_QUOTA_EXHAUSTED_AT="${quota_now_utc}"
+  CLOUD_BOT_QUOTA_EXPECTED_RESET_AT="${quota_expected_reset_at}"
+  CLOUD_BOT_SKIPPED=true
+  CLOUD_BOT_SKIP_KIND="quota_exhausted"
+  CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"
+  BOT_UNAVAILABLE=true
+  BOT_HAS_ISSUES=false
+  BOT_HAS_ISSUES_SOURCE=""
+  MERGE_WITHOUT_BOT_REASON_KIND="cloud_bot_quota_exhausted"
+  echo "Quota exhaustion detected for ${CLOUD_BOT_NAME}; cache updated at ${CLOUD_BOT_QUOTA_CACHE_FILE}. Routing to merge-without-bot path." >&2
+  return 0
+}
 WAIT_MARKER=""
 # POLL_IDLE_TIMEOUT and POLL_MAX_TIMEOUT are pre-computed in Step 4a.
 set +e
@@ -514,6 +663,8 @@ if [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
     WAIT_MARKER="BOT_REPLY=received"
     BOT_UNAVAILABLE=false
     echo "Detected current-window @${CLOUD_BOT_NAME} review for HEAD ${CURRENT_SHA} after delegated wait; continuing."
+  else
+    check_quota_message_step5 || true
   fi
 fi
 
@@ -561,7 +712,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
 
   if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
     echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
-    _check_setup_message_step5 || {
+    check_quota_message_step5 || _check_setup_message_step5 || {
       echo "Treating as bot unavailable — API failure with no setup message." >&2
       BOT_UNAVAILABLE=true
     }
@@ -607,7 +758,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
       BOT_HAS_ISSUES=true
     elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
       echo "WARN: No current-HEAD review event or inline comments for HEAD ${CURRENT_SHA} since ${BOT_REVIEW_WINDOW_START}." >&2
-      _check_setup_message_step5 || {
+      check_quota_message_step5 || _check_setup_message_step5 || {
         echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
         BOT_UNAVAILABLE=true
       }
@@ -646,6 +797,9 @@ if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
 fi
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
+  if [ "${MERGE_WITHOUT_BOT_REASON_KIND}" = "cloud_bot_quota_exhausted" ]; then
+    echo "Cloud bot quota exhaustion confirmed; continuing with merge-without-bot path." >&2
+  else
   echo "" >&2
   echo "ERROR: Cloud bot (${CLOUD_BOT_NAME}) did not produce a current-HEAD review signal within the polling window (${CLOUD_BOT_WAIT_SECONDS}s wait + ${CLOUD_BOT_POLL_MAX_SECONDS}s poll)." >&2
   echo "" >&2
@@ -656,6 +810,7 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "" >&2
   echo "ABORTING: Will not merge without cloud bot confirmation." >&2
   exit 1
+  fi
 fi
 echo "CSA_VAR:BOT_REUSED_REVIEW_ID=${BOT_REUSED_REVIEW_ID}"
 echo "CSA_VAR:BOT_REVIEW_WINDOW_START=$BOT_REVIEW_WINDOW_START"
@@ -664,6 +819,13 @@ echo "CSA_VAR:BOT_NEEDS_SETUP=${BOT_NEEDS_SETUP:-false}"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES_SOURCE=${BOT_HAS_ISSUES_SOURCE}"
+echo "CSA_VAR:CLOUD_BOT_QUOTA_CACHE_FILE=${CLOUD_BOT_QUOTA_CACHE_FILE}"
+echo "CSA_VAR:CLOUD_BOT_QUOTA_EXHAUSTED_AT=${CLOUD_BOT_QUOTA_EXHAUSTED_AT}"
+echo "CSA_VAR:CLOUD_BOT_QUOTA_EXPECTED_RESET_AT=${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT}"
+echo "CSA_VAR:CLOUD_BOT_SKIPPED=${CLOUD_BOT_SKIPPED}"
+echo "CSA_VAR:CLOUD_BOT_SKIP_KIND=${CLOUD_BOT_SKIP_KIND}"
+echo "CSA_VAR:CLOUD_BOT_SKIP_REASON=${CLOUD_BOT_SKIP_REASON}"
+echo "CSA_VAR:MERGE_WITHOUT_BOT_REASON_KIND=${MERGE_WITHOUT_BOT_REASON_KIND}"
 ```
 
 ## IF ${BOT_NEEDS_SETUP}
@@ -1576,9 +1738,11 @@ This step executes in either of these cases:
 - `cloud_bot=true`, `BOT_UNAVAILABLE=true`, and fallback local review is clean
 
 **MANDATORY**: Before merging, leave a PR comment explaining the merge rationale.
-This step has two distinct audit-trail cases:
+This step has three audit-trail cases:
 - `cloud_bot=false`: "cloud_bot=false (disabled in config); merging on local review clean"
 - `cloud_bot=true` and `BOT_UNAVAILABLE=true`: "cloud_bot=true but bot timed out; merging on fallback review clean"
+When `MERGE_WITHOUT_BOT_REASON_KIND=cloud_bot_quota_exhausted`, the audit trail
+must explain the cached quota window and cite the local review session ID.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -1598,16 +1762,38 @@ fi
 git push origin "${WORKFLOW_BRANCH}"
 
 # Audit trail: explain why merging without bot review.
+DIFF_SUMMARY="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" | sed -n '1,20p')"
+if [ -z "${DIFF_SUMMARY}" ]; then
+  DIFF_SUMMARY="No diff stat available."
+fi
 if [ "${CLOUD_BOT}" = "false" ]; then
   MERGE_REASON="cloud_bot=false (disabled in config); merging on local review clean"
+  MERGE_WITHOUT_BOT_REASON_KIND="${MERGE_WITHOUT_BOT_REASON_KIND:-cloud_bot_disabled}"
+  COMMENT_BODY="**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch ${DEFAULT_BRANCH}\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+elif [ "${MERGE_WITHOUT_BOT_REASON_KIND:-}" = "cloud_bot_quota_exhausted" ]; then
+  MERGE_REASON="cloud_bot=true but ${CLOUD_BOT_NAME} quota is exhausted; merging on local review clean"
+  COMMENT_BODY="$(cat <<EOF
+## Merge audit trail — cloud bot skipped (quota exhausted)
+
+Configured cloud bot \`${CLOUD_BOT_NAME}\` is quota-exhausted (detected at \`${CLOUD_BOT_QUOTA_EXHAUSTED_AT:-unknown}\`, expected reset \`${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT:-unknown}\`). Per pr-bot Step 4 auto-skip, routing directly to bot-unavailable + local-review-clean merge path.
+
+**Local pre-merge review verdict**: CLEAN (session \`${LOCAL_REVIEW_SESSION_ID:-unknown}\`)
+
+**Diff scope**:
+\`\`\`
+${DIFF_SUMMARY}
+\`\`\`
+EOF
+)"
 elif [ "${BOT_UNAVAILABLE:-false}" = "true" ]; then
   MERGE_REASON="cloud_bot=true but bot timed out; merging on fallback review clean"
+  MERGE_WITHOUT_BOT_REASON_KIND="${MERGE_WITHOUT_BOT_REASON_KIND:-cloud_bot_timeout}"
+  COMMENT_BODY="**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch ${DEFAULT_BRANCH}\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 else
   echo "ERROR: Step 6a reached without a valid merge-without-bot rationale."
   exit 1
 fi
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: ${MERGE_REASON}. Local \`csa review --branch ${DEFAULT_BRANCH}\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${COMMENT_BODY}"
 
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
