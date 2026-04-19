@@ -1,4 +1,5 @@
 use super::*;
+use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
@@ -622,7 +623,7 @@ fn write_consolidated_artifact_creates_json_file_at_expected_path() {
 
     write_consolidated_artifact(&artifact, temp.path()).expect("artifact should be written");
 
-    let artifact_path = temp.path().join("review-findings-consolidated.json");
+    let artifact_path = temp.path().join(CONSOLIDATED_REVIEW_ARTIFACT_FILE);
     assert!(artifact_path.exists());
     let contents = std::fs::read_to_string(&artifact_path).expect("json file should be readable");
     let parsed: ReviewArtifact =

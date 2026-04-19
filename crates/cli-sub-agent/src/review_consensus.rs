@@ -1,3 +1,4 @@
+use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
 use crate::review_prior_rounds::{PRIOR_ROUNDS_SECTION_HEADING, REVIEW_FINDINGS_TOML_INSTRUCTION};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -512,7 +513,7 @@ pub(crate) fn write_consolidated_artifact(
     artifact: &ReviewArtifact,
     output_dir: &Path,
 ) -> Result<()> {
-    let artifact_path = output_dir.join("review-findings-consolidated.json");
+    let artifact_path = output_dir.join(CONSOLIDATED_REVIEW_ARTIFACT_FILE);
     let payload = serde_json::to_string_pretty(artifact)
         .context("failed to serialize consolidated review artifact")?;
     fs::write(&artifact_path, payload).with_context(|| {

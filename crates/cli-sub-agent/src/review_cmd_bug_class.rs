@@ -6,14 +6,14 @@ use csa_session::review_artifact::ReviewArtifact;
 use tracing::{info, warn};
 
 use crate::bug_class::{
-    SkillExtractor, classify_recurring_bug_classes, load_review_artifacts_for_project,
+    CONSOLIDATED_REVIEW_ARTIFACT_FILE, SkillExtractor, classify_recurring_bug_classes,
+    load_review_artifacts_for_project,
 };
 use crate::review_consensus::build_consolidated_artifact;
 use crate::review_consensus::review_iteration_resolver::{
     load_review_meta, try_max_review_iterations_for_branch,
 };
 
-const REVIEW_CONSOLIDATED_ARTIFACT_FILE: &str = "review-findings-consolidated.json";
 const REVIEW_FINDINGS_ARTIFACT_FILE: &str = "review-findings.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -95,7 +95,7 @@ fn session_has_high_or_critical_review_findings(
 
 fn load_session_review_artifact(session_dir: &Path) -> Result<Option<ReviewArtifact>> {
     for artifact_file in [
-        REVIEW_CONSOLIDATED_ARTIFACT_FILE,
+        CONSOLIDATED_REVIEW_ARTIFACT_FILE,
         REVIEW_FINDINGS_ARTIFACT_FILE,
     ] {
         let artifact_path = session_dir.join(artifact_file);
@@ -220,7 +220,7 @@ fn session_has_consolidated_artifact(project_root: &Path, session_id: &str) -> R
     let session_dir = csa_session::get_session_dir(project_root, session_id)
         .with_context(|| format!("failed to resolve review session dir for {session_id}"))?;
     Ok(session_dir
-        .join(REVIEW_CONSOLIDATED_ARTIFACT_FILE)
+        .join(CONSOLIDATED_REVIEW_ARTIFACT_FILE)
         .is_file())
 }
 

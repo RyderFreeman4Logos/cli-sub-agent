@@ -614,6 +614,7 @@ pub(crate) struct ReviewProjectPromptOptions<'a> {
 #[cfg(test)]
 mod tests {
     use super::write_multi_reviewer_consolidated_artifact;
+    use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
     use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
     use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
     use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
@@ -657,7 +658,7 @@ mod tests {
         write_multi_reviewer_consolidated_artifact(1)
             .expect("consolidated artifact should be produced");
 
-        let consolidated_path = temp.path().join("review-findings-consolidated.json");
+        let consolidated_path = temp.path().join(CONSOLIDATED_REVIEW_ARTIFACT_FILE);
         let consolidated: ReviewArtifact = serde_json::from_str(
             &fs::read_to_string(&consolidated_path).expect("consolidated artifact should exist"),
         )

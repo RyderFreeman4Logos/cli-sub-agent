@@ -1,5 +1,5 @@
 use super::*;
-use crate::bug_class::classify_recurring_bug_classes;
+use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, classify_recurring_bug_classes};
 use crate::review_cmd::bug_class_pipeline::load_bug_class_review_artifacts;
 use crate::review_consensus::write_consolidated_artifact;
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -361,7 +361,7 @@ fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion(
 
     write_review_artifact_file(
         &parent_dir,
-        "review-findings-consolidated.json",
+        CONSOLIDATED_REVIEW_ARTIFACT_FILE,
         &sample_review_artifact(&parent.meta_session_id, Severity::High, "rust/002"),
     );
     write_review_artifact(
@@ -428,7 +428,7 @@ fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists(
 
     write_review_artifact_file(
         &child_dir,
-        "review-findings-consolidated.json",
+        CONSOLIDATED_REVIEW_ARTIFACT_FILE,
         &sample_review_artifact(&child.meta_session_id, Severity::High, "rust/002"),
     );
     write_review_meta(
@@ -492,7 +492,7 @@ fn bug_class_loader_reads_exact_consolidated_path_written_by_consensus_writer() 
     )
     .expect("review meta");
 
-    let writer_path = session_dir.join("review-findings-consolidated.json");
+    let writer_path = session_dir.join(CONSOLIDATED_REVIEW_ARTIFACT_FILE);
     assert!(
         writer_path.is_file(),
         "writer should use consolidated findings path"

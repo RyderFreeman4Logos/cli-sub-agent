@@ -5,6 +5,8 @@ use csa_session::{Finding, ReviewArtifact, ReviewSessionMeta, Severity};
 use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager};
 use tracing::warn;
 
+use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedReviewContextKind {
     TodoMarkdown,
@@ -242,7 +244,7 @@ fn load_whitelisted_findings(
     session_id: &str,
 ) -> Option<Vec<PriorRoundFinding>> {
     let session_dir = csa_session::get_session_dir(project_root, session_id).ok()?;
-    for name in ["review-findings-consolidated.json", "review-findings.json"] {
+    for name in [CONSOLIDATED_REVIEW_ARTIFACT_FILE, "review-findings.json"] {
         let path = session_dir.join(name);
         if !path.is_file() {
             continue;

@@ -8,8 +8,9 @@ use csa_session::{create_session, get_session_dir};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 
 use super::{
-    BugClassCandidate, CaseStudy, SkillExtractor, classify_recurring_bug_classes,
-    load_review_artifacts_for_project, sanitize_code_for_skill, sanitize_text_for_skill,
+    BugClassCandidate, CONSOLIDATED_REVIEW_ARTIFACT_FILE, CaseStudy, SkillExtractor,
+    classify_recurring_bug_classes, load_review_artifacts_for_project, sanitize_code_for_skill,
+    sanitize_text_for_skill,
 };
 
 fn sample_finding(
@@ -213,7 +214,7 @@ fn loader_prefers_consolidated_artifacts_and_skips_sessions_without_reviews() {
     );
     write_review_artifact(
         &consolidated_dir,
-        "review-findings-consolidated.json",
+        CONSOLIDATED_REVIEW_ARTIFACT_FILE,
         &sample_artifact(
             &consolidated_session.meta_session_id,
             vec![sample_finding(
