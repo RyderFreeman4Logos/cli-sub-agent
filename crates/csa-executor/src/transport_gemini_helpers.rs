@@ -261,8 +261,24 @@ pub(super) fn apply_gemini_sandbox_runtime_env_overrides(
 }
 
 pub(crate) fn is_gemini_oauth_prompt_result(execution: &ExecutionResult) -> bool {
-    let normalized_stdout = normalize_gemini_prompt_text(&execution.output);
-    let normalized_stderr = normalize_gemini_prompt_text(&execution.stderr_output);
+    let stdout_has_auth_text =
+        execution.output.contains("authentication") || execution.output.contains("Authentication");
+    let stderr_has_auth_text = execution.stderr_output.contains("authentication")
+        || execution.stderr_output.contains("Authentication");
+    if !stdout_has_auth_text && !stderr_has_auth_text {
+        return false;
+    }
+
+    let normalized_stdout = if stdout_has_auth_text {
+        normalize_gemini_prompt_text(&execution.output)
+    } else {
+        String::new()
+    };
+    let normalized_stderr = if stderr_has_auth_text {
+        normalize_gemini_prompt_text(&execution.stderr_output)
+    } else {
+        String::new()
+    };
     let combined = if normalized_stderr.is_empty() {
         normalized_stdout.clone()
     } else if normalized_stdout.is_empty() {
@@ -300,7 +316,7 @@ pub(crate) fn classify_gemini_oauth_prompt_result(execution: &mut ExecutionResul
     }
 }
 
-fn contains_gemini_oauth_prompt(text: &str) -> bool {
+pub fn contains_gemini_oauth_prompt(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("opening authentication page in your browser")
         || (lower.contains("opening authentication page")
@@ -309,7 +325,7 @@ fn contains_gemini_oauth_prompt(text: &str) -> bool {
             && lower.contains("do you want to continue"))
 }
 
-fn normalize_gemini_prompt_text(text: &str) -> String {
+pub fn normalize_gemini_prompt_text(text: &str) -> String {
     let mut cleaned = String::new();
     let mut in_guard = false;
     for raw_line in strip_ansi_escape_sequences(text).lines() {
@@ -347,7 +363,7 @@ fn normalize_gemini_prompt_text(text: &str) -> String {
     cleaned
 }
 
-fn strip_ansi_escape_sequences(text: &str) -> String {
+pub fn strip_ansi_escape_sequences(text: &str) -> String {
     let mut stripped = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {

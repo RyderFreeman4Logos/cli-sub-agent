@@ -40,6 +40,9 @@ use transport_gemini_helpers::{
     gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
     is_gemini_oauth_prompt_result,
 };
+pub use transport_gemini_helpers::{
+    contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
+};
 #[path = "transport_gemini_acp_runtime.rs"]
 mod transport_gemini_acp_runtime;
 use transport_gemini_acp_runtime::{gemini_runtime_home_from_env, prepare_gemini_acp_runtime};
