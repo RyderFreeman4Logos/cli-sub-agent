@@ -398,6 +398,21 @@ mod tests {
     fn resolve_claude_sub_agent_tool_and_model_short_circuits_auto_select_for_model_spec() {
         let global = GlobalConfig::default();
 
+        let auto_select_error = resolve_claude_tool(
+            None,
+            None,
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect_err("without model-spec, auto-select should fail when no config enables tools");
+        assert!(
+            auto_select_error
+                .to_string()
+                .contains("No suitable tool found for claude-sub-agent"),
+            "{auto_select_error}"
+        );
+
         let (tool_name, model_spec, model) = super::resolve_claude_sub_agent_tool_and_model(
             None,
             Some("codex/openai/gpt-5.4/medium"),

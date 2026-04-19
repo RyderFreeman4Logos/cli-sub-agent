@@ -769,5 +769,9 @@ mod transport_tests;
 mod model_spec_tests;
 
 #[cfg(test)]
+#[path = "run_helpers_override_tests.rs"]
+mod override_tests;
+
+#[cfg(test)]
 #[path = "run_helpers_transport_integration_tests.rs"]
 mod transport_integration_tests;
