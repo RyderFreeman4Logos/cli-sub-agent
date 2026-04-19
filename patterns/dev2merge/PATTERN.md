@@ -59,7 +59,7 @@ path to avoid no-op commit/version-bump steps.
 
 ```bash
 set -euo pipefail
-CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
+CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -vE '\.(md|txt|lock|toml)$' | wc -l | xargs)"
 TOTAL_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | wc -l | xargs)"
 TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
 if [ "${TOTAL_FILES}" -eq 0 ]; then
