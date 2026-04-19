@@ -4,6 +4,9 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use csa_core::types::{ReviewDecision, ToolName};
+use csa_executor::{
+    contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
+};
 use csa_session::output_parser::parse_sections;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{
@@ -578,8 +581,10 @@ pub(super) fn detect_tool_review_failure(
     if tool != ToolName::GeminiCli {
         return None;
     }
-    let normalized_stdout = normalize_gemini_prompt_text(stdout);
-    let normalized_stderr = normalize_gemini_prompt_text(stderr);
+    let normalized_stdout =
+        normalize_gemini_prompt_text(&strip_ansi_escape_sequences(&strip_prompt_guards(stdout)));
+    let normalized_stderr =
+        normalize_gemini_prompt_text(&strip_ansi_escape_sequences(&strip_prompt_guards(stderr)));
     let combined = if normalized_stderr.is_empty() {
         normalized_stdout.clone()
     } else if normalized_stdout.is_empty() {
@@ -667,64 +672,6 @@ fn strip_prompt_guards(text: &str) -> String {
         result.push('\n');
     }
     result
-}
-
-fn contains_gemini_oauth_prompt(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("opening authentication page in your browser")
-        || (lower.contains("opening authentication page")
-            && lower.contains("do you want to continue"))
-        || (lower.contains("authentication page in your browser")
-            && lower.contains("do you want to continue"))
-}
-
-fn normalize_gemini_prompt_text(text: &str) -> String {
-    let stripped = strip_prompt_guards(&strip_ansi_escape_sequences(text));
-    let mut cleaned = String::new();
-    let mut in_sa_guard = false;
-    for raw_line in stripped.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.starts_with("<csa-caller-sa-guard") {
-            in_sa_guard = true;
-            continue;
-        }
-        if trimmed.starts_with("</csa-caller-sa-guard>") {
-            in_sa_guard = false;
-            continue;
-        }
-        if in_sa_guard
-            || trimmed.is_empty()
-            || trimmed.starts_with("WARNING: weave.lock")
-            || trimmed.starts_with("csa run context:")
-            || trimmed.starts_with("Running scope as unit:")
-        {
-            continue;
-        }
-        let stripped = trimmed.strip_prefix("[stdout] ").unwrap_or(trimmed);
-        cleaned.push_str(stripped);
-        cleaned.push('\n');
-    }
-    cleaned
-}
-fn strip_ansi_escape_sequences(text: &str) -> String {
-    let mut stripped = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
-            stripped.push(ch);
-            continue;
-        }
-        if !matches!(chars.peek(), Some('[')) {
-            continue;
-        }
-        let _ = chars.next();
-        for next in chars.by_ref() {
-            if ('@'..='~').contains(&next) {
-                break;
-            }
-        }
-    }
-    stripped
 }
 
 fn contains_verdict_token(haystack: &str, token: &str) -> bool {
