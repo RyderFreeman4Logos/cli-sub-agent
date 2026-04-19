@@ -7,11 +7,13 @@ use csa_process::ExecutionResult;
 use csa_resource::isolation_plan::IsolationPlan;
 
 use super::transport_codex_exec_stall::resolve_initial_response_timeout;
+use crate::executor::Executor;
 use crate::transport_gemini_retry::{gemini_retry_model, gemini_should_use_api_key};
 
 pub(crate) const GEMINI_OAUTH_PROMPT_SUMMARY: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no tool output produced";
 pub(crate) const GEMINI_ACP_INITIAL_STALL_REASON: &str = "gemini_acp_initial_stall";
+pub(crate) const GEMINI_LEGACY_INITIAL_STALL_REASON: &str = "gemini_legacy_initial_stall";
 const DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 180;
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,12 @@ impl GeminiRetryPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GeminiAcpInitialStallClassification {
+    pub(super) code: &'static str,
+    pub(super) timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct GeminiLegacyInitialStallClassification {
     pub(super) code: &'static str,
     pub(super) timeout_seconds: u64,
 }
@@ -79,6 +87,43 @@ pub(super) fn apply_gemini_acp_initial_stall_summary(
 ) {
     let summary = format!(
         "{reason}: no ACP events/stderr within {}s",
+        classification.timeout_seconds,
+        reason = classification.code
+    );
+
+    execution.summary = summary.clone();
+    if !execution.stderr_output.is_empty() && !execution.stderr_output.ends_with('\n') {
+        execution.stderr_output.push('\n');
+    }
+    execution.stderr_output.push_str(&summary);
+    execution.stderr_output.push('\n');
+}
+
+pub(super) fn classify_gemini_legacy_initial_stall(
+    executor: &Executor,
+    execution: &ExecutionResult,
+    timeout_seconds: Option<u64>,
+) -> Option<GeminiLegacyInitialStallClassification> {
+    if !matches!(executor, Executor::GeminiCli { .. })
+        || !execution.output.is_empty()
+        || execution.exit_code != 137
+        || !execution.summary.starts_with("initial_response_timeout:")
+    {
+        return None;
+    }
+
+    Some(GeminiLegacyInitialStallClassification {
+        code: GEMINI_LEGACY_INITIAL_STALL_REASON,
+        timeout_seconds: timeout_seconds.unwrap_or(120),
+    })
+}
+
+pub(super) fn apply_gemini_legacy_initial_stall_summary(
+    execution: &mut ExecutionResult,
+    classification: &GeminiLegacyInitialStallClassification,
+) {
+    let summary = format!(
+        "{reason}: no stdout within {}s",
         classification.timeout_seconds,
         reason = classification.code
     );

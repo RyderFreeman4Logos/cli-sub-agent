@@ -31,8 +31,9 @@ mod transport_gemini_helpers;
 use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
-    apply_gemini_acp_initial_stall_summary, apply_gemini_sandbox_runtime_env_overrides,
-    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
+    apply_gemini_acp_initial_stall_summary, apply_gemini_legacy_initial_stall_summary,
+    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
+    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
     classify_gemini_oauth_prompt_result, classify_join_error,
     ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
@@ -425,13 +426,12 @@ impl LegacyTransport {
                 attempt = attempt.saturating_add(1);
                 continue;
             }
-            if let Some(classification) = classify_codex_exec_initial_stall(
-                &executor,
-                &result.execution,
-                consume_resolved_execute_in_initial_response_timeout_seconds(
-                    initial_response_timeout_seconds,
-                ),
-            ) {
+            let direct_timeout = consume_resolved_execute_in_initial_response_timeout_seconds(
+                initial_response_timeout_seconds,
+            );
+            if let Some(classification) =
+                classify_codex_exec_initial_stall(&executor, &result.execution, direct_timeout)
+            {
                 if let Some(retry_budget) = classification.retry_effort.clone() {
                     let mut downgraded_executor = executor.clone();
                     downgraded_executor.override_thinking_budget(retry_budget.clone());
@@ -455,9 +455,7 @@ impl LegacyTransport {
                     if let Some(retry_classification) = classify_codex_exec_initial_stall(
                         &downgraded_executor,
                         &retry_result.execution,
-                        consume_resolved_execute_in_initial_response_timeout_seconds(
-                            initial_response_timeout_seconds,
-                        ),
+                        direct_timeout,
                     ) {
                         apply_codex_exec_initial_stall_summary(
                             &mut retry_result.execution,
@@ -476,6 +474,13 @@ impl LegacyTransport {
                     false,
                     None,
                 );
+                return Ok(result);
+            }
+            if let Some(classification) =
+                classify_gemini_legacy_initial_stall(&executor, &result.execution, direct_timeout)
+            {
+                let mut result = result;
+                apply_gemini_legacy_initial_stall_summary(&mut result.execution, &classification);
                 return Ok(result);
             }
             return Ok(result);

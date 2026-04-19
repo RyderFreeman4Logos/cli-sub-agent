@@ -150,6 +150,181 @@ fn test_apply_gemini_acp_initial_stall_summary_rewrites_summary() {
     );
 }
 
+#[test]
+fn test_classify_gemini_legacy_initial_stall_detects_first_response_timeout() {
+    let executor = Executor::GeminiCli {
+        model_override: Some("gemini-2.5-pro".to_string()),
+        thinking_budget: None,
+    };
+    let execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        summary: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+
+    let classification = classify_gemini_legacy_initial_stall(&executor, &execution, Some(120))
+        .expect("gemini legacy initial timeout should classify");
+    assert_eq!(classification.code, "gemini_legacy_initial_stall");
+    assert_eq!(classification.timeout_seconds, 120);
+}
+
+#[test]
+fn test_classify_gemini_legacy_initial_stall_is_gemini_only() {
+    let executor = Executor::Codex {
+        model_override: Some("gpt-5-codex".to_string()),
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+    let execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        summary: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+
+    assert!(
+        classify_gemini_legacy_initial_stall(&executor, &execution, Some(120)).is_none(),
+        "codex legacy stall should not classify as gemini legacy stall"
+    );
+}
+
+#[test]
+fn test_classify_gemini_legacy_initial_stall_requires_silent_output() {
+    let executor = Executor::GeminiCli {
+        model_override: Some("gemini-2.5-pro".to_string()),
+        thinking_budget: None,
+    };
+    let execution = csa_process::ExecutionResult {
+        output: "hello".to_string(),
+        stderr_output: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        summary: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+
+    assert!(
+        classify_gemini_legacy_initial_stall(&executor, &execution, Some(120)).is_none(),
+        "non-silent legacy execution should not classify as initial stall"
+    );
+}
+
+#[test]
+fn test_classify_gemini_legacy_initial_stall_requires_exit_137() {
+    let executor = Executor::GeminiCli {
+        model_override: Some("gemini-2.5-pro".to_string()),
+        thinking_budget: None,
+    };
+    let execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        summary: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+    };
+
+    assert!(
+        classify_gemini_legacy_initial_stall(&executor, &execution, Some(120)).is_none(),
+        "successful execution should not classify as initial stall"
+    );
+}
+
+#[test]
+fn test_apply_gemini_legacy_initial_stall_summary_rewrites_summary() {
+    let executor = Executor::GeminiCli {
+        model_override: Some("gemini-2.5-pro".to_string()),
+        thinking_budget: None,
+    };
+    let mut execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        summary: "initial_response_timeout: no stdout output for 120s; process killed immediately"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+    let classification = classify_gemini_legacy_initial_stall(&executor, &execution, Some(120))
+        .expect("gemini legacy initial timeout should classify");
+
+    apply_gemini_legacy_initial_stall_summary(&mut execution, &classification);
+
+    assert_eq!(
+        execution.summary,
+        "gemini_legacy_initial_stall: no stdout within 120s"
+    );
+    assert!(
+        execution
+            .stderr_output
+            .contains("gemini_legacy_initial_stall: no stdout within 120s"),
+        "expected stable classifier in stderr, got: {}",
+        execution.stderr_output
+    );
+}
+
+#[tokio::test]
+async fn test_execute_in_rewrites_gemini_legacy_initial_stall_summary() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script_path = temp.path().join("gemini");
+    std::fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+sleep 2
+"#,
+    )
+    .expect("write fake gemini");
+    let mut perms = std::fs::metadata(&script_path)
+        .expect("metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script_path, perms).expect("chmod +x");
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let env = HashMap::from([(
+        "PATH".to_string(),
+        format!("{}:{old_path}", temp.path().display()),
+    )]);
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let result = transport
+        .execute_in(
+            "test direct-entry gemini legacy initial stall",
+            temp.path(),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+            Some(1),
+        )
+        .await
+        .expect("execute_in should return classified gemini legacy stall");
+
+    assert_eq!(result.execution.exit_code, 137);
+    assert!(
+        result
+            .execution
+            .summary
+            .starts_with("gemini_legacy_initial_stall:"),
+        "expected stable gemini legacy initial stall summary, got: {}",
+        result.execution.summary
+    );
+}
+
 #[tokio::test]
 async fn test_execute_in_classifies_pre_handshake_gemini_failure_with_child_stderr() {
     use std::os::unix::fs::PermissionsExt;
