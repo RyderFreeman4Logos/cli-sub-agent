@@ -7,6 +7,17 @@ SCRIPT_PATH="${ROOT_DIR}/scripts/csa/cumulative-review-batch.sh"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
+state_file_path() {
+  local repo_dir="$1"
+  local feature_branch="$2"
+  local base_branch="$3"
+
+  printf '%s/.csa/state/review/last-cumulative-%s--vs--%s.txt' \
+    "${repo_dir}" \
+    "${feature_branch//\//__}" \
+    "${base_branch//\//__}"
+}
+
 make_repo() {
   local repo_dir="$1"
 
@@ -125,7 +136,7 @@ run_skip_case() {
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
   head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   mkdir -p "$(dirname "${state_file}")"
   printf '%s\n' "${head_sha}" >"${state_file}"
   make_csa_stub "${stub_dir}"
@@ -160,7 +171,7 @@ run_missing_state_runs_review_case() {
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
   head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
   (
@@ -190,7 +201,7 @@ run_override_case() {
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
   head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   mkdir -p "$(dirname "${state_file}")"
   printf '%s\n' "${head_sha}" >"${state_file}"
   make_csa_stub "${stub_dir}"
@@ -224,7 +235,7 @@ run_rewritten_history_runs_review_case() {
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
   stale_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   mkdir -p "$(dirname "${state_file}")"
   printf '%s\n' "${stale_sha}" >"${state_file}"
 
@@ -262,7 +273,7 @@ run_high_severity_verdict_does_not_record_case() {
 
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
   (
@@ -294,7 +305,7 @@ run_uncertain_verdict_does_not_record_case() {
 
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
   (
@@ -326,7 +337,7 @@ run_skip_decision_does_not_record_case() {
 
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
   (
@@ -360,7 +371,7 @@ run_fail_zero_severity_records_case() {
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
   head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
-  state_file="${repo_dir}/.csa/state/review/last-cumulative-feat__review-batch.txt"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
   (
@@ -380,6 +391,55 @@ run_fail_zero_severity_records_case() {
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
+run_base_branch_change_runs_review_case() {
+  local case_dir="${TMP_ROOT}/base-branch-change"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file_main="${case_dir}/output-main.log"
+  local output_file_release="${case_dir}/output-release.log"
+  local main_state_file
+  local release_state_file
+  local head_sha
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
+  main_state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
+  release_state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "release/1.0")"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file_main}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "base branch main review count"
+  assert_equals "${head_sha}" "$(tr -d '\n' < "${main_state_file}")" "base branch main recorded head"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    bash "${SCRIPT_PATH}" --default-branch release/1.0 -- csa review --range release/1.0...HEAD \
+      >"${output_file_release}" 2>&1
+  )
+
+  assert_equals "2" "$(cat "${state_dir}/review-count")" "base branch release review count"
+  assert_equals "${head_sha}" "$(tr -d '\n' < "${release_state_file}")" "base branch release recorded head"
+  if grep -q "csa review: skip - batched" "${output_file_release}"; then
+    echo "changing base branch should not skip review" >&2
+    exit 1
+  fi
+}
+
 run_skip_case
 run_missing_state_runs_review_case
 run_override_case
@@ -388,5 +448,6 @@ run_high_severity_verdict_does_not_record_case
 run_uncertain_verdict_does_not_record_case
 run_skip_decision_does_not_record_case
 run_fail_zero_severity_records_case
+run_base_branch_change_runs_review_case
 
 echo "cumulative-review-batch tests: ok"

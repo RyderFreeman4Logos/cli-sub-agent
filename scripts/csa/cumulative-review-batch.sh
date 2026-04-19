@@ -7,9 +7,9 @@ usage() {
 usage: cumulative-review-batch.sh --default-branch <branch> -- <csa review ...>
 
 Runs a cumulative csa review unless batching says the intermediate review can
-be skipped. Writes `.csa/state/review/last-cumulative-<branch>.txt` only when
-the review session exits 0 and review-verdict.json reports zero HIGH/CRITICAL
-findings.
+be skipped. Writes `.csa/state/review/last-cumulative-<feature>--vs--<base>.txt`
+only when the review session exits 0 and review-verdict.json reports zero
+HIGH/CRITICAL findings.
 EOF
   exit 2
 }
@@ -55,7 +55,10 @@ sanitize_branch() {
 
 state_file_path() {
   local branch_name="$1"
-  printf '.csa/state/review/last-cumulative-%s.txt' "$(sanitize_branch "${branch_name}")"
+  local base_branch="$2"
+  printf '.csa/state/review/last-cumulative-%s--vs--%s.txt' \
+    "$(sanitize_branch "${branch_name}")" \
+    "$(sanitize_branch "${base_branch}")"
 }
 
 resolve_batch_commits() {
@@ -97,7 +100,7 @@ if ! [[ "${batch_commits}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-last_sha_file="$(state_file_path "${current_branch}")"
+last_sha_file="$(state_file_path "${current_branch}" "${default_branch}")"
 if [ "${CSA_REVIEW_NOW:-0}" != "1" ] && [ "${batch_commits}" -ge 2 ] && [ -f "${last_sha_file}" ]; then
   last_sha="$(tr -d '\n' < "${last_sha_file}")"
   if [ -n "${last_sha}" ] && git merge-base --is-ancestor "${last_sha}" HEAD 2>/dev/null; then
