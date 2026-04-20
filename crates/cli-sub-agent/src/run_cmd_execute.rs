@@ -533,6 +533,16 @@ pub(crate) async fn handle_run(
     match output_format {
         OutputFormat::Text => {
             print!("{}", result.output);
+            if result.exit_code != 0
+                && let Some(ref sid) = executed_session_id
+                && let Some(hint) = crate::error_hints::sandbox_fs_denial_hint(
+                    &result.stderr_output,
+                    &result.output,
+                    sid,
+                )
+            {
+                eprintln!("{hint}");
+            }
         }
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&result)?;
