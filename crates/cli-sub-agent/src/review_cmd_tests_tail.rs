@@ -122,9 +122,9 @@ fn test_detect_tool_diagnostic_mcp_issues_in_stdout_returns_diagnostic() {
     let result = detect_tool_diagnostic(stdout, "");
     assert!(result.is_some());
     let msg = result.unwrap();
-    assert!(msg.contains("MCP server connectivity"));
-    assert!(msg.contains("gemini /mcp list"));
-    assert!(msg.contains("--tool claude-code"));
+    assert!(msg.contains("MCP init degraded"));
+    assert!(msg.contains("csa doctor"));
+    assert!(msg.contains("--force-ignore-tier-setting"));
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn test_detect_tool_diagnostic_mcp_issues_in_stderr_returns_diagnostic() {
     let stderr = "Warning: MCP issues detected during startup";
     let result = detect_tool_diagnostic("", stderr);
     assert!(result.is_some());
-    assert!(result.unwrap().contains("MCP server connectivity"));
+    assert!(result.unwrap().contains("MCP init degraded"));
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn test_detect_tool_diagnostic_mcp_list_in_stderr_returns_diagnostic() {
     let stderr = "Run /mcp list to check server status";
     let result = detect_tool_diagnostic("", stderr);
     assert!(result.is_some());
-    assert!(result.unwrap().contains("gemini /mcp list"));
+    assert!(result.unwrap().contains("csa doctor"));
 }
 
 #[test]

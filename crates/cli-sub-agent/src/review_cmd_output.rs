@@ -637,9 +637,9 @@ pub(super) fn detect_tool_diagnostic(stdout: &str, stderr: &str) -> Option<Strin
 
     if has_mcp_issue(stdout) || has_mcp_issue(stderr) {
         return Some(
-            "gemini-cli encountered MCP server connectivity issues. \
-             Run `gemini /mcp list` to diagnose. \
-             Consider using `--tool claude-code` as a fallback."
+            "gemini-cli MCP init degraded. \
+             Retry with `--force-ignore-tier-setting` + a different `--tool`, \
+             or run `csa doctor` to diagnose unhealthy MCP servers."
                 .to_string(),
         );
     }

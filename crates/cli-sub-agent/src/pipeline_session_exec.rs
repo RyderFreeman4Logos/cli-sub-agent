@@ -465,19 +465,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     });
 
-    let mut merged_env =
-        crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
+    let mut merged_env = crate::pipeline_env::build_merged_env(
+        extra_env,
+        config,
+        global_config,
+        executor.tool_name(),
+    );
     crate::pipeline_env::apply_task_target_dir_guards(
         task_type,
         executor.tool_name(),
         project_root,
         &mut merged_env,
     );
-    let merged_env_ref = if merged_env.is_empty() {
-        None
-    } else {
-        Some(&merged_env)
-    };
+    let merged_env_ref = (!merged_env.is_empty()).then_some(&merged_env);
     // Project [hooks] overrides take priority over hooks.toml entries.
     let project_hook_overrides =
         super::session_hooks::build_project_hook_overrides(config, task_type);

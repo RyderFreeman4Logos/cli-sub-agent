@@ -26,6 +26,7 @@ pub(crate) fn resolve_cooldown_seconds(config: Option<&ProjectConfig>) -> u64 {
 pub(crate) fn build_merged_env(
     extra_env: Option<&HashMap<String, String>>,
     config: Option<&ProjectConfig>,
+    global_config: Option<&csa_config::GlobalConfig>,
     tool_name: &str,
 ) -> HashMap<String, String> {
     let suppress = config
@@ -50,6 +51,14 @@ pub(crate) fn build_merged_env(
                 }
             })
             .or_insert(heap_flag);
+    }
+
+    if tool_name == "gemini-cli" {
+        let allow_degraded_mcp = global_config.is_none_or(|gc| gc.allow_degraded_mcp("gemini-cli"));
+        merged_env.insert(
+            "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
+            if allow_degraded_mcp { "1" } else { "0" }.to_string(),
+        );
     }
 
     merged_env.insert("CSA_DEPTH".to_string(), next_depth_value());

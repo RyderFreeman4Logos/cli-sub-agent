@@ -406,3 +406,204 @@ exit 1
         "expected child stderr in error text, got: {error_text}"
     );
 }
+
+fn write_fake_gemini_startup_script(script_path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::write(
+        script_path,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+settings_path="${GEMINI_CLI_HOME:-$HOME/.gemini}/.gemini/settings.json"
+if [ -f "$settings_path" ] && grep -q '"mcpServers"[[:space:]]*:[[:space:]]*{' "$settings_path" && ! grep -q '"mcpServers"[[:space:]]*:[[:space:]]*{}' "$settings_path"; then
+  echo "MCP issues detected. Run /mcp list for status."
+  exit 1
+fi
+echo "hello"
+"#,
+    )
+    .expect("write fake gemini");
+    let mut perms = std::fs::metadata(script_path)
+        .expect("metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(script_path, perms).expect("chmod +x");
+}
+
+fn write_gemini_settings(home: &std::path::Path, command: &str) {
+    let gemini_dir = home.join(".gemini");
+    std::fs::create_dir_all(&gemini_dir).expect("create .gemini");
+    std::fs::write(
+        gemini_dir.join("settings.json"),
+        format!(
+            r#"{{
+  "mcpServers": {{
+    "broken-mcp": {{
+      "command": "{command}",
+      "args": ["--mcp"]
+    }}
+  }}
+}}"#
+        ),
+    )
+    .expect("write gemini settings");
+}
+
+#[tokio::test]
+async fn test_execute_in_retries_with_degraded_mcp_when_allowed() {
+    let _env_lock = GEMINI_INIT_ENV_LOCK
+        .lock()
+        .expect("gemini init env lock poisoned");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script_path = temp.path().join("gemini");
+    write_fake_gemini_startup_script(&script_path);
+
+    let source_home = temp.path().join("source-home");
+    write_gemini_settings(&source_home, "missing-mcp-command");
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let env = HashMap::from([
+        ("HOME".to_string(), source_home.to_string_lossy().into_owned()),
+        (
+            "PATH".to_string(),
+            format!("{}:{old_path}", temp.path().display()),
+        ),
+        (
+            "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
+            "1".to_string(),
+        ),
+    ]);
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let result = transport
+        .execute_in(
+            "print hello",
+            temp.path(),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+            super::ResolvedTimeout(Some(5)),
+        )
+        .await
+        .expect("execute_in should succeed after degraded retry");
+
+    assert_eq!(result.execution.exit_code, 0);
+    assert_eq!(result.execution.output.trim(), "hello");
+    assert!(
+        result.execution.summary.contains("gemini-cli MCP init degraded"),
+        "expected degraded MCP warning in summary, got: {}",
+        result.execution.summary
+    );
+    assert!(
+        result.execution.summary.contains("broken-mcp"),
+        "expected unhealthy server name in summary, got: {}",
+        result.execution.summary
+    );
+}
+
+#[tokio::test]
+async fn test_execute_in_hard_fails_when_degraded_mcp_disabled() {
+    let _env_lock = GEMINI_INIT_ENV_LOCK
+        .lock()
+        .expect("gemini init env lock poisoned");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script_path = temp.path().join("gemini");
+    write_fake_gemini_startup_script(&script_path);
+
+    let source_home = temp.path().join("source-home");
+    write_gemini_settings(&source_home, "missing-mcp-command");
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let env = HashMap::from([
+        ("HOME".to_string(), source_home.to_string_lossy().into_owned()),
+        (
+            "PATH".to_string(),
+            format!("{}:{old_path}", temp.path().display()),
+        ),
+        (
+            "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
+            "0".to_string(),
+        ),
+    ]);
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let result = transport
+        .execute_in(
+            "print hello",
+            temp.path(),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+            super::ResolvedTimeout(Some(5)),
+        )
+        .await
+        .expect("execute_in should return startup failure result");
+
+    assert_eq!(result.execution.exit_code, 1);
+    assert!(
+        result.execution.summary.contains("broken-mcp"),
+        "expected unhealthy server name in summary, got: {}",
+        result.execution.summary
+    );
+    assert!(
+        result.execution.output.contains("MCP issues detected"),
+        "expected original gemini startup failure to remain visible, got: {}",
+        result.execution.output
+    );
+}
+
+#[tokio::test]
+async fn test_execute_in_healthy_mcp_has_no_warning() {
+    let _env_lock = GEMINI_INIT_ENV_LOCK
+        .lock()
+        .expect("gemini init env lock poisoned");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script_path = temp.path().join("gemini");
+    write_fake_gemini_startup_script(&script_path);
+
+    let source_home = temp.path().join("source-home");
+    std::fs::create_dir_all(source_home.join(".gemini")).expect("create .gemini");
+    std::fs::write(source_home.join(".gemini/settings.json"), "{}").expect("write settings");
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let env = HashMap::from([
+        ("HOME".to_string(), source_home.to_string_lossy().into_owned()),
+        (
+            "PATH".to_string(),
+            format!("{}:{old_path}", temp.path().display()),
+        ),
+    ]);
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let result = transport
+        .execute_in(
+            "print hello",
+            temp.path(),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+            super::ResolvedTimeout(Some(5)),
+        )
+        .await
+        .expect("healthy MCP config should succeed");
+
+    assert_eq!(result.execution.exit_code, 0);
+    assert_eq!(result.execution.output.trim(), "hello");
+    assert!(
+        !result.execution.summary.contains("gemini-cli MCP init degraded"),
+        "healthy startup should not inject degraded warning: {}",
+        result.execution.summary
+    );
+}

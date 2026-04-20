@@ -33,12 +33,12 @@ use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
     apply_gemini_acp_initial_stall_summary, apply_gemini_legacy_initial_stall_summary,
-    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
-    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
-    classify_gemini_oauth_prompt_result, classify_join_error,
+    apply_gemini_mcp_warning_summary, apply_gemini_sandbox_runtime_env_overrides,
+    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
+    classify_gemini_legacy_initial_stall, classify_gemini_oauth_prompt_result, classify_join_error,
     ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
-    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
+    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure, is_gemini_mcp_issue_result,
     is_gemini_oauth_prompt_result,
 };
 pub use transport_gemini_helpers::{
@@ -46,7 +46,15 @@ pub use transport_gemini_helpers::{
 };
 #[path = "transport_gemini_acp_runtime.rs"]
 mod transport_gemini_acp_runtime;
-use transport_gemini_acp_runtime::{gemini_runtime_home_from_env, prepare_gemini_acp_runtime};
+use transport_gemini_acp_runtime::{
+    gemini_runtime_home_from_env, prepare_gemini_acp_runtime, prepare_gemini_runtime_env,
+};
+#[path = "transport_gemini_mcp_diagnostic.rs"]
+mod transport_gemini_mcp_diagnostic;
+use transport_gemini_mcp_diagnostic::{
+    diagnose_mcp_init_failure, disable_mcp_servers_in_runtime, format_mcp_init_warning_summary,
+    gemini_allow_degraded_mcp,
+};
 #[path = "transport_acp_crash_retry.rs"]
 mod transport_acp_crash_retry;
 use transport_acp_crash_retry::execute_with_crash_retry;
@@ -346,120 +354,6 @@ impl LegacyTransport {
             events: Vec::new(),
             metadata: Default::default(),
         })
-    }
-
-    /// Execute the legacy direct-entry path.
-    ///
-    /// `initial_response_timeout_seconds` is already resolved by
-    /// `Executor::execute_in_with_transport()`: `None` means disabled, and positive values are
-    /// concrete watchdog durations. This layer must not re-apply executor defaults.
-    pub async fn execute_in(
-        &self,
-        prompt: &str,
-        work_dir: &Path,
-        extra_env: Option<&HashMap<String, String>>,
-        stream_mode: StreamMode,
-        idle_timeout_seconds: u64,
-        initial_response_timeout: ResolvedTimeout,
-    ) -> Result<TransportResult> {
-        // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
-        let has_fallback_key = extra_env
-            .is_some_and(|env| env.contains_key(csa_core::gemini::API_KEY_FALLBACK_ENV_KEY));
-        let auth_mode = gemini_auth_mode(extra_env).unwrap_or("unknown");
-        let max_attempts = gemini_max_attempts(extra_env);
-        tracing::debug!(
-            max_attempts,
-            has_fallback_key,
-            auth_mode,
-            "gemini-cli legacy retry chain initialized"
-        );
-
-        let mut attempt = 1u8;
-        loop {
-            let executor = self.executor_for_attempt(attempt);
-
-            // Phase 2+: inject API key auth if available, otherwise keep original env.
-            let api_key_env = if gemini_should_use_api_key(attempt) {
-                let injected = gemini_inject_api_key_fallback(extra_env);
-                if injected.is_none() {
-                    tracing::warn!(
-                        attempt,
-                        auth_mode,
-                        has_fallback_key,
-                        "gemini-cli legacy: API key fallback unavailable for retry \
-                         (auth_mode must be 'oauth' and _CSA_API_KEY_FALLBACK must be set); \
-                         retrying with original auth"
-                    );
-                }
-                injected
-            } else {
-                None
-            };
-            let attempt_env = api_key_env.as_ref().map_or(extra_env, Some);
-
-            let result = self
-                .execute_in_single_attempt(ExecuteInAttempt {
-                    executor: &executor,
-                    prompt,
-                    work_dir,
-                    extra_env: attempt_env,
-                    stream_mode,
-                    idle_timeout_seconds,
-                    resolved_initial_response_timeout: initial_response_timeout,
-                })
-                .await?;
-            if let Some(backoff) =
-                self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
-            {
-                let phase_desc = match attempt {
-                    1 => "OAuth→APIKey(same model)",
-                    2 => "APIKey(same model)→APIKey(flash)",
-                    _ => "final",
-                };
-                tracing::info!(
-                    attempt,
-                    phase_desc,
-                    "gemini-cli rate limited; advancing phase"
-                );
-                tokio::time::sleep(backoff).await;
-                attempt = attempt.saturating_add(1);
-                continue;
-            }
-            let direct_timeout = consume_resolved_execute_in_initial_response_timeout_seconds(
-                initial_response_timeout,
-            );
-            let retry_executor = executor.clone();
-            let result = apply_and_maybe_retry_codex_exec_initial_stall(
-                &executor,
-                result,
-                direct_timeout,
-                |retry_budget| async move {
-                    let mut downgraded_executor = retry_executor;
-                    downgraded_executor.override_thinking_budget(retry_budget);
-                    let retry_result = self
-                        .execute_in_single_attempt(ExecuteInAttempt {
-                            executor: &downgraded_executor,
-                            prompt,
-                            work_dir,
-                            extra_env: attempt_env,
-                            stream_mode,
-                            idle_timeout_seconds,
-                            resolved_initial_response_timeout: initial_response_timeout,
-                        })
-                        .await?;
-                    Ok((downgraded_executor, retry_result))
-                },
-            )
-            .await?;
-            if let Some(classification) =
-                classify_gemini_legacy_initial_stall(&executor, &result.execution, direct_timeout)
-            {
-                let mut result = result;
-                apply_gemini_legacy_initial_stall_summary(&mut result.execution, &classification);
-                return Ok(result);
-            }
-            return Ok(result);
-        }
     }
 }
 

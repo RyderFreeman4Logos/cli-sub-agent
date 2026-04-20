@@ -460,8 +460,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
 #[test]
 fn build_merged_env_injects_node_options_when_heap_limit_configured() {
     let cfg = test_config_with_node_heap_limit(Some(2048));
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), "claude-code");
-
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code");
     assert_eq!(
         merged.get("NODE_OPTIONS"),
         Some(&"--max-old-space-size=2048".to_string())
@@ -476,9 +475,8 @@ fn build_merged_env_injects_node_options_when_heap_limit_configured() {
 #[test]
 fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
     let cfg = test_config_with_node_heap_limit(None);
-    // Use a lightweight tool (opencode) whose profile does not default node_heap_limit_mb.
-    // Heavyweight tools (claude-code, codex) now default to Some(2048) even without explicit config.
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), "opencode");
+    // Use a lightweight tool (opencode); heavyweight tools default node_heap_limit_mb to Some(2048).
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode");
 
     assert!(
         !merged.contains_key("NODE_OPTIONS"),
@@ -492,7 +490,8 @@ fn build_merged_env_appends_node_options_when_existing_value_present() {
     let mut extra_env = HashMap::new();
     extra_env.insert("NODE_OPTIONS".to_string(), "--trace-warnings".to_string());
 
-    let merged = crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), "claude-code");
+    let merged =
+        crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), None, "claude-code");
 
     assert_eq!(
         merged.get("NODE_OPTIONS"),
