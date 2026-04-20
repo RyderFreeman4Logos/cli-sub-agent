@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 use crate::review_routing::ReviewRoutingMetadata;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_session::state::ReviewSessionMeta;
+use csa_session::{FindingsFile, state::ReviewSessionMeta, write_findings_toml};
 
 use super::CLEAN;
 use super::output::{
@@ -224,8 +224,122 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
 fn persist_fix_final_artifacts(project_root: &Path, review_meta: &ReviewSessionMeta) {
     persist_review_meta(project_root, review_meta);
     persist_review_verdict(project_root, review_meta, &[], Vec::new());
+    match csa_session::get_session_dir(project_root, &review_meta.session_id) {
+        Ok(session_dir) => {
+            if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
+                warn!(
+                    session_id = %review_meta.session_id,
+                    error = %error,
+                    "Failed to write output/findings.toml after CLEAN convergence"
+                );
+            }
+        }
+        Err(error) => {
+            warn!(
+                session_id = %review_meta.session_id,
+                error = %error,
+                "Cannot resolve session dir for final fix artifacts"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
-#[path = "review_cmd_fix_tests.rs"]
-mod tests;
+mod tests {
+    use super::{CLEAN, persist_fix_final_artifacts};
+    use crate::test_env_lock::ScopedTestEnvVar;
+    use csa_core::types::ReviewDecision;
+    use csa_session::state::ReviewSessionMeta;
+    use csa_session::{
+        FindingSeverity, FindingsFile, ReviewFinding, ReviewFindingFileRange, write_findings_toml,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_clean_review_meta(session_id: &str) -> ReviewSessionMeta {
+        ReviewSessionMeta {
+            session_id: session_id.to_string(),
+            head_sha: String::new(),
+            decision: ReviewDecision::Pass.as_str().to_string(),
+            verdict: CLEAN.to_string(),
+            status_reason: None,
+            tool: "codex".to_string(),
+            scope: "diff".to_string(),
+            exit_code: 0,
+            fix_attempted: true,
+            fix_rounds: 1,
+            review_iterations: 1,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
+        }
+    }
+
+    fn temp_project_root(test_name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("csa-{test_name}-{suffix}"));
+        fs::create_dir_all(&path).expect("create temp project root");
+        path
+    }
+
+    fn unique_session_id(prefix: &str) -> String {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        format!("{prefix}-{suffix}")
+    }
+
+    fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
+        let session_dir =
+            csa_session::get_session_dir(project_root, session_id).expect("resolve session dir");
+        fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+        session_dir
+    }
+
+    fn sample_stale_finding() -> ReviewFinding {
+        ReviewFinding {
+            id: "stale-medium".to_string(),
+            severity: FindingSeverity::Medium,
+            file_ranges: vec![ReviewFindingFileRange {
+                path: "src/lib.rs".to_string(),
+                start: 42,
+                end: Some(42),
+            }],
+            is_regression_of_commit: None,
+            suggested_test_scenario: None,
+            description: "Stale finding from a previous fix round.".to_string(),
+        }
+    }
+
+    #[test]
+    fn persist_fix_final_artifacts_rewrites_stale_findings_toml_to_empty_on_clean() {
+        let project_root = temp_project_root("persist-fix-final-artifacts");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXFINALARTIFACTS");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        write_findings_toml(
+            &session_dir,
+            &FindingsFile {
+                findings: vec![sample_stale_finding()],
+            },
+        )
+        .expect("write stale findings.toml");
+
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id));
+
+        let findings_path = session_dir.join("output").join("findings.toml");
+        assert!(
+            findings_path.exists(),
+            "findings.toml should remain present"
+        );
+
+        let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
+        let parsed: FindingsFile = toml::from_str(&actual).expect("parse findings.toml");
+        assert_eq!(parsed, FindingsFile::default());
+    }
+}
