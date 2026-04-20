@@ -360,7 +360,7 @@ if [ -n "${COMMIT_BODY_RAW}" ] && [ "${COMMIT_BODY_RAW}" != '""' ]; then
   fi
 else
   echo "ERROR: Step 17 requires upstream COMMIT_BODY from the AI-generated commit body step." >&2
-  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  echo "See patterns/commit/PATTERN.md step 17/18." >&2
   exit 1
 fi
 
@@ -371,13 +371,13 @@ fi
 
 if [ -z "$(printf '%s' "${COMMIT_BODY_LOCAL}" | tr -d '[:space:]')" ]; then
   echo "ERROR: Step 17 requires non-empty upstream COMMIT_BODY from the AI-generated commit body step." >&2
-  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  echo "See patterns/commit/PATTERN.md step 17/18." >&2
   exit 1
 fi
 
 if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- '### AI Reviewer Metadata'; then
   echo "ERROR: Step 17: commit body missing required '### AI Reviewer Metadata' block" >&2
-  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  echo "See patterns/commit/PATTERN.md step 17/18." >&2
   exit 1
 fi
 
@@ -412,6 +412,16 @@ if ! printf '%s\n' "${timing_guidance}" | grep -Eiq '^(none|n/a|na|not applicabl
     echo "ERROR: Regression Tests Added must list concrete test names when Timing/Race Scenarios is not 'none'." >&2
     exit 1
   fi
+fi
+
+if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | awk '
+  BEGIN { found = 0; has_summary = 0 }
+  /^### AI Reviewer Metadata$/ { found = 1; next }
+  !found && $0 ~ /[^[:space:]]/ { has_summary = 1 }
+  END { exit !(found && has_summary) }
+'; then
+  echo "ERROR: Commit body must include a descriptive summary before the AI Reviewer Metadata block." >&2
+  exit 1
 fi
 
 echo "CSA_VAR:COMMIT_SUBJECT=$COMMIT_SUBJECT_LOCAL"
@@ -514,7 +524,7 @@ fi
 
 trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
 git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
-echo '<!-- CSA:NEXT_STEP cmd="cumulative branch review (Step 18) or publish" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="cumulative branch review (Step 21) or publish" required=true -->'
 ```"""
 on_fail = "abort"
 
@@ -530,7 +540,7 @@ This catches cross-commit issues that per-commit reviews might miss.
 set -euo pipefail
 bash scripts/csa/cumulative-review-batch.sh --default-branch main -- \
   csa review --range main...HEAD
-echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 19)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 22)" required=true -->'
 ```"""
 tier = "tier-2-standard"
 on_fail = "abort"
