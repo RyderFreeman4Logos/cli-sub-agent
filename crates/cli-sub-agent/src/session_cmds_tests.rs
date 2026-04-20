@@ -216,20 +216,6 @@ fn sample_session_state() -> MetaSessionState {
 }
 
 #[test]
-fn session_to_json_includes_branch_and_task_type() {
-    let session = sample_session_state();
-    let value = session_to_json(&session);
-    assert_eq!(
-        value.get("branch").and_then(|v| v.as_str()),
-        Some("feature/x")
-    );
-    assert_eq!(
-        value.get("task_type").and_then(|v| v.as_str()),
-        Some("plan")
-    );
-}
-
-#[test]
 fn session_list_branch_filter_returns_matching_sessions() {
     let td = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&td);
@@ -792,6 +778,8 @@ fn session_to_json_includes_depth_and_parent() {
 
 #[path = "session_cmds_tests_daemon_pid_tail.rs"]
 mod daemon_pid_tail_tests;
+#[path = "session_cmds_tests_list_format.rs"]
+mod list_format_tests;
 #[path = "session_cmds_tests_tail.rs"]
 mod tail_tests;
 #[path = "session_cmds_tests_tail_recovery.rs"]

@@ -79,8 +79,8 @@ pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 pub use manager::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
     RepoWriteAudit, SaveOptions, clear_manager_sidecar, complete_session, compute_repo_write_audit,
-    contract_result_path, create_session, create_session_fresh, delete_session,
-    delete_session_from_root, detect_git_head, find_sessions, get_session_dir,
+    contract_result_path, create_session, create_session_fresh, decode_session_created_at,
+    delete_session, delete_session_from_root, detect_git_head, find_sessions, get_session_dir,
     get_session_dir_global, get_session_root, legacy_user_result_path,
     list_all_project_session_roots, list_all_sessions, list_all_sessions_all_projects,
     list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,

@@ -11,12 +11,19 @@ use std::process::Command;
 
 #[path = "manager_audit.rs"]
 mod manager_audit;
+#[path = "manager_daemon.rs"]
+mod manager_daemon;
+#[path = "manager_legacy.rs"]
+mod manager_legacy;
 #[path = "manager_paths.rs"]
 mod manager_paths;
 #[path = "manager_result.rs"]
 mod manager_result;
 
 pub use manager_audit::{RepoWriteAudit, compute_repo_write_audit, write_audit_warning_artifact};
+pub use manager_daemon::ResumeSessionResolution;
+use manager_daemon::{SessionIdStrategy, preassigned_daemon_session_id};
+pub use manager_legacy::decode_session_created_at;
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;
 pub use manager_paths::{get_session_dir, get_session_root};
@@ -38,30 +45,6 @@ const STATE_FILE_NAME: &str = "state.toml";
 const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionIdStrategy {
-    DaemonAware,
-    Fresh,
-}
-
-fn preassigned_daemon_session_id() -> Option<String> {
-    let session_id = std::env::var(DAEMON_SESSION_ID_ENV)
-        .ok()
-        .filter(|value| !value.is_empty())?;
-    let has_daemon_context = std::env::var_os(DAEMON_SESSION_DIR_ENV).is_some()
-        || std::env::var_os(DAEMON_PROJECT_ROOT_ENV).is_some();
-    has_daemon_context.then_some(session_id)
-}
-
-/// Resolved identifiers for resuming a tool session.
-#[derive(Debug, Clone)]
-pub struct ResumeSessionResolution {
-    /// Fully resolved CSA meta session ID (ULID).
-    pub meta_session_id: String,
-    /// Provider-native session ID for the requested tool, if present in state.
-    pub provider_session_id: Option<String>,
-}
 
 /// Create a new session. If `parent_id` is provided, this session is a child
 /// of that parent with `depth = parent.depth + 1`. If `tool` is provided,
@@ -349,8 +332,18 @@ pub(crate) fn load_session_in(base_dir: &Path, session_id: &str) -> Result<MetaS
     let contents = fs::read_to_string(&state_path)
         .with_context(|| format!("Failed to read state file: {}", state_path.display()))?;
 
-    let state: MetaSessionState = toml::from_str(&contents)
-        .with_context(|| format!("Failed to parse state file: {}", state_path.display()))?;
+    let state: MetaSessionState = match toml::from_str(&contents) {
+        Ok(state) => state,
+        Err(primary_err) => {
+            manager_legacy::load_session_with_created_at_fallback(&contents, session_id)
+                .with_context(|| format!("Failed to parse state file: {}", state_path.display()))
+                .or_else(|_| {
+                    Err(primary_err).with_context(|| {
+                        format!("Failed to parse state file: {}", state_path.display())
+                    })
+                })?
+        }
+    };
 
     Ok(state)
 }
