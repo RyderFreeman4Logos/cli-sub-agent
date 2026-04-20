@@ -457,7 +457,7 @@ fn consolidate_findings_deduplicates_by_fid_and_keeps_highest_severity() {
 #[test]
 fn consolidate_findings_with_no_duplicates_preserves_all_findings() {
     let consolidated = consolidate_findings(vec![
-        finding("FID-1", Severity::Info),
+        finding("FID-1", Severity::Low),
         finding("FID-2", Severity::Low),
         finding("FID-3", Severity::High),
     ]);
@@ -475,7 +475,6 @@ fn consolidate_findings_returns_findings_sorted_by_severity_desc() {
         finding("FID-CRIT", Severity::Critical),
         finding("FID-HIGH", Severity::High),
         finding("FID-MED", Severity::Medium),
-        finding("FID-INFO", Severity::Info),
     ]);
 
     let severities: Vec<Severity> = consolidated.into_iter().map(|item| item.severity).collect();
@@ -486,7 +485,6 @@ fn consolidate_findings_returns_findings_sorted_by_severity_desc() {
             Severity::High,
             Severity::Medium,
             Severity::Low,
-            Severity::Info
         ]
     );
 }
@@ -610,7 +608,6 @@ fn build_consolidated_artifact_merges_findings_from_two_reviewers() {
     assert_eq!(consolidated.severity_summary.high, 1);
     assert_eq!(consolidated.severity_summary.medium, 1);
     assert_eq!(consolidated.severity_summary.low, 0);
-    assert_eq!(consolidated.severity_summary.info, 0);
 }
 
 #[test]

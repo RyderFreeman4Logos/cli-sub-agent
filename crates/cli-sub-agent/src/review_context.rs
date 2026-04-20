@@ -278,7 +278,6 @@ fn severity_label(severity: &Severity) -> &'static str {
         Severity::High => "high",
         Severity::Medium => "medium",
         Severity::Low => "low",
-        Severity::Info => "info",
     }
 }
 

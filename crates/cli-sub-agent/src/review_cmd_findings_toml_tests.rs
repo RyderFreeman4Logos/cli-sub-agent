@@ -2,7 +2,7 @@ use super::{extract_findings_toml_from_text, persist_review_findings_toml};
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
-use csa_session::{FindingSeverity, FindingsFile, ReviewFinding, ReviewFindingFileRange};
+use csa_session::{FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity};
 use serde_json::json;
 use std::fs;
 use std::io::{self, Write};
@@ -78,7 +78,7 @@ fn write_review_full_output(session_dir: &Path, review_text: &str) {
 
 fn sample_finding(
     id: &str,
-    severity: FindingSeverity,
+    severity: Severity,
     path: &str,
     start: u32,
     description: &str,
@@ -170,7 +170,7 @@ end = 80
         FindingsFile {
             findings: vec![ReviewFinding {
                 id: "f1".to_string(),
-                severity: FindingSeverity::High,
+                severity: Severity::High,
                 file_ranges: vec![ReviewFindingFileRange {
                     path: "crates/foo/src/bar.rs".to_string(),
                     start: 73,
@@ -206,7 +206,7 @@ end = 80
         FindingsFile {
             findings: vec![ReviewFinding {
                 id: "f1".to_string(),
-                severity: FindingSeverity::High,
+                severity: Severity::High,
                 file_ranges: vec![ReviewFindingFileRange {
                     path: "crates/foo/src/bar.rs".to_string(),
                     start: 73,
@@ -285,7 +285,7 @@ start = 101
         FindingsFile {
             findings: vec![ReviewFinding {
                 id: "f1".to_string(),
-                severity: FindingSeverity::Medium,
+                severity: Severity::Medium,
                 file_ranges: vec![ReviewFindingFileRange {
                     path: "crates/cli-sub-agent/src/review_cmd_findings_toml.rs".to_string(),
                     start: 101,
@@ -345,7 +345,7 @@ start = 425
         FindingsFile {
             findings: vec![ReviewFinding {
                 id: "f1".to_string(),
-                severity: FindingSeverity::Medium,
+                severity: Severity::Medium,
                 file_ranges: vec![ReviewFindingFileRange {
                     path: "crates/cli-sub-agent/src/review_cmd.rs".to_string(),
                     start: 425,
@@ -413,7 +413,7 @@ start = 88
         FindingsFile {
             findings: vec![sample_finding(
                 "f-output-log",
-                FindingSeverity::High,
+                Severity::High,
                 "crates/cli-sub-agent/src/review_cmd_findings_toml.rs",
                 88,
                 "Findings fence lives outside structured sections."
@@ -570,7 +570,7 @@ start = 31
         FindingsFile {
             findings: vec![sample_finding(
                 "new-f1",
-                FindingSeverity::Medium,
+                Severity::Medium,
                 "crates/cli-sub-agent/src/review_cmd_findings_toml.rs",
                 31,
                 "Replace the empty placeholder artifact.",
@@ -618,7 +618,7 @@ start = 27
     let existing = FindingsFile {
         findings: vec![sample_finding(
             "existing-f1",
-            FindingSeverity::High,
+            Severity::High,
             "crates/cli-sub-agent/src/review_cmd_output.rs",
             173,
             "Old reviewer output should not be preserved.",
@@ -641,7 +641,7 @@ start = 27
         FindingsFile {
             findings: vec![sample_finding(
                 "fresh-f1",
-                FindingSeverity::Medium,
+                Severity::Medium,
                 "crates/cli-sub-agent/src/review_cmd_findings_toml.rs",
                 27,
                 "Fresh reviewer output should replace prior findings.",
@@ -782,7 +782,7 @@ start = 300
         FindingsFile {
             findings: vec![sample_finding(
                 "new-f1",
-                FindingSeverity::Low,
+                Severity::Low,
                 "crates/cli-sub-agent/src/review_cmd_findings_toml_tests.rs",
                 300,
                 "Replace the corrupt artifact.",
