@@ -52,7 +52,7 @@ pub fn resolve_execute_in_initial_response_timeout_seconds(
 pub(crate) fn consume_resolved_initial_response_timeout_seconds(
     resolved_timeout: ResolvedTimeout,
 ) -> Option<u64> {
-    resolved_timeout.as_option().filter(|seconds| *seconds > 0)
+    resolved_timeout.as_option().filter(|&seconds| seconds > 0)
 }
 
 /// Compatibility wrapper for direct `execute_in` callers/tests.
@@ -75,14 +75,16 @@ pub fn classify_codex_exec_initial_stall(
         return None;
     }
 
-    let budget = match executor {
-        Executor::Codex {
-            thinking_budget, ..
-        } => thinking_budget
-            .clone()
-            .unwrap_or(ThinkingBudget::DefaultBudget),
-        _ => ThinkingBudget::DefaultBudget,
+    let Executor::Codex {
+        thinking_budget, ..
+    } = executor
+    else {
+        unreachable!("guarded above");
     };
+
+    let budget = thinking_budget
+        .clone()
+        .unwrap_or(ThinkingBudget::DefaultBudget);
     Some(CodexExecInitialStallClassification {
         effort: budget.codex_effort(),
         timeout_seconds: timeout_seconds.unwrap_or(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS),
