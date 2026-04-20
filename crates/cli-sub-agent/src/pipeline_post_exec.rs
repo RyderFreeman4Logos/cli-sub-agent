@@ -46,6 +46,14 @@ pub(crate) struct PostExecContext<'a> {
     /// File paths changed during tool execution (empty for PreRun or when
     /// git workspace snapshots are unavailable).
     pub changed_paths: Vec<String>,
+    /// Fresh repo baseline captured immediately before the current execution.
+    pub pre_exec_snapshot: Option<PreExecutionSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreExecutionSnapshot {
+    pub head: String,
+    pub porcelain: Option<String>,
 }
 
 /// Process the results of tool execution: update session, persist artifacts, fire hooks.
