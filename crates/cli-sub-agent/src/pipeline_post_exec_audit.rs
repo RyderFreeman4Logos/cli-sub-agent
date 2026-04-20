@@ -7,9 +7,9 @@ pub(crate) fn maybe_record_repo_write_audit(
     ctx: &PostExecContext<'_>,
     session: &MetaSessionState,
     session_result: &mut SessionResult,
-) -> anyhow::Result<()> {
+) {
     if !should_audit_repo_tracked_writes(ctx.task_type, ctx.readonly_project_root, ctx.prompt) {
-        return Ok(());
+        return;
     }
 
     let Some((pre_session_head, pre_session_porcelain)) = pre_session_audit_baseline(session)
@@ -19,16 +19,27 @@ pub(crate) fn maybe_record_repo_write_audit(
             session_dir = %ctx.session_dir.display(),
             "repo-write audit skipped because pre-session HEAD snapshot is unavailable"
         );
-        return Ok(());
+        return;
     };
 
-    let audit = csa_session::compute_repo_write_audit(
+    let audit = match csa_session::compute_repo_write_audit(
         ctx.project_root,
         pre_session_head,
         pre_session_porcelain,
-    )?;
+    ) {
+        Ok(audit) => audit,
+        Err(error) => {
+            tracing::warn!(
+                session = %session.meta_session_id,
+                session_dir = %ctx.session_dir.display(),
+                error = ?error,
+                "repo-write audit failed during compute; ignoring (audit is best-effort)"
+            );
+            return;
+        }
+    };
     if audit.is_empty() {
-        return Ok(());
+        return;
     }
 
     tracing::warn!(
@@ -39,17 +50,40 @@ pub(crate) fn maybe_record_repo_write_audit(
         renamed = ?audit.renamed,
         "repo-tracked files mutated during read-only/recon-style session"
     );
-    apply_repo_write_audit_to_result(session_result, &audit);
-    if let Some(artifact_path) =
-        csa_session::write_audit_warning_artifact(&ctx.session_dir, &audit)?
-        && let Ok(rel_path) = artifact_path.strip_prefix(&ctx.session_dir)
-    {
-        session_result.artifacts.push(SessionArtifact::new(
-            rel_path.to_string_lossy().into_owned(),
-        ));
+    if let Err(error) = apply_repo_write_audit_to_result(session_result, &audit) {
+        tracing::warn!(
+            session = %session.meta_session_id,
+            session_dir = %ctx.session_dir.display(),
+            error = ?error,
+            added = ?audit.added,
+            modified = ?audit.modified,
+            deleted = ?audit.deleted,
+            renamed = ?audit.renamed,
+            "repo-write audit failed during result mutation; ignoring (audit is best-effort)"
+        );
     }
-
-    Ok(())
+    match csa_session::write_audit_warning_artifact(&ctx.session_dir, &audit) {
+        Ok(Some(artifact_path)) => {
+            if let Ok(rel_path) = artifact_path.strip_prefix(&ctx.session_dir) {
+                session_result.artifacts.push(SessionArtifact::new(
+                    rel_path.to_string_lossy().into_owned(),
+                ));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                session = %session.meta_session_id,
+                session_dir = %ctx.session_dir.display(),
+                error = ?error,
+                added = ?audit.added,
+                modified = ?audit.modified,
+                deleted = ?audit.deleted,
+                renamed = ?audit.renamed,
+                "repo-write audit warning artifact failed to persist; ignoring (audit is best-effort)"
+            );
+        }
+    }
 }
 
 fn pre_session_audit_baseline(session: &MetaSessionState) -> Option<(&str, Option<&str>)> {
@@ -62,7 +96,7 @@ fn pre_session_audit_baseline(session: &MetaSessionState) -> Option<(&str, Optio
 fn apply_repo_write_audit_to_result(
     session_result: &mut SessionResult,
     audit: &csa_session::RepoWriteAudit,
-) {
+) -> anyhow::Result<()> {
     let renamed = audit
         .renamed
         .iter()
@@ -97,6 +131,7 @@ fn apply_repo_write_audit_to_result(
         toml::Value::Table(repo_write_audit),
     );
     session_result.manager_fields.artifacts = Some(toml::Value::Table(artifacts_table));
+    Ok(())
 }
 
 fn string_array_value(paths: &[std::path::PathBuf]) -> toml::Value {
@@ -173,11 +208,17 @@ pub(crate) fn should_audit_repo_tracked_writes(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_repo_write_audit_to_result, pre_session_audit_baseline,
-        should_audit_repo_tracked_writes,
+        apply_repo_write_audit_to_result, maybe_record_repo_write_audit,
+        pre_session_audit_baseline, should_audit_repo_tracked_writes,
     };
+    use crate::pipeline_post_exec::PostExecContext;
+    use csa_config::GlobalConfig;
+    use csa_executor::{CodexRuntimeMetadata, Executor};
     use csa_session::{MetaSessionState, RepoWriteAudit, SessionResult};
+    use std::io::Write;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
     fn should_audit_repo_tracked_writes_for_explicit_readonly_run() {
@@ -268,7 +309,7 @@ mod tests {
             renamed: vec![(PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs"))],
         };
 
-        apply_repo_write_audit_to_result(&mut session_result, &audit);
+        apply_repo_write_audit_to_result(&mut session_result, &audit).unwrap();
 
         let repo_write_audit = session_result
             .manager_fields
@@ -376,5 +417,196 @@ mod tests {
             pre_session_audit_baseline(&session),
             Some(("abc123", Some(" M tracked.txt\0")))
         );
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.inner.lock().expect("log buffer poisoned").clone())
+                .expect("log buffer should be valid UTF-8")
+        }
+    }
+
+    struct BufferWriter {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for BufferWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.inner
+                .lock()
+                .expect("log buffer poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = BufferWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            BufferWriter {
+                inner: Arc::clone(&self.inner),
+            }
+        }
+    }
+
+    #[test]
+    fn audit_failure_does_not_fail_execution() {
+        let repo = tempfile::tempdir().unwrap();
+        run_git(repo.path(), &["init"]);
+        run_git(repo.path(), &["config", "user.email", "test@example.com"]);
+        run_git(repo.path(), &["config", "user.name", "Test User"]);
+        std::fs::write(repo.path().join("tracked.txt"), "before\n").unwrap();
+        run_git(repo.path(), &["add", "tracked.txt"]);
+        run_git(repo.path(), &["commit", "-m", "init"]);
+
+        let pre_head = detect_git_head(repo.path()).unwrap();
+        let pre_porcelain = git_status_porcelain(repo.path());
+
+        std::fs::write(repo.path().join("tracked.txt"), "after\n").unwrap();
+
+        let session_dir_file = repo.path().join("not-a-session-dir");
+        std::fs::write(&session_dir_file, "blocking file\n").unwrap();
+
+        let executor = Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+            runtime_metadata: CodexRuntimeMetadata::current(),
+        };
+        let global_config = GlobalConfig::default();
+        let ctx = PostExecContext {
+            executor: &executor,
+            prompt: "Read-only: inspect tracked.txt and summarize changes",
+            effective_prompt: "Read-only: inspect tracked.txt and summarize changes",
+            task_type: Some("run"),
+            readonly_project_root: true,
+            project_root: repo.path(),
+            config: None,
+            global_config: Some(&global_config),
+            session_dir: session_dir_file.clone(),
+            sessions_root: "test-root".to_string(),
+            execution_start_time: chrono::Utc::now(),
+            hooks_config: &csa_hooks::HooksConfig::default(),
+            memory_project_key: None,
+            provider_session_id: None,
+            events_count: 0,
+            transcript_artifacts: vec![],
+            changed_paths: vec![],
+        };
+        let session = MetaSessionState {
+            meta_session_id: "01TESTAUDITFAILURE000000000".to_string(),
+            description: None,
+            project_path: repo.path().display().to_string(),
+            branch: None,
+            created_at: chrono::Utc::now(),
+            last_accessed: chrono::Utc::now(),
+            genealogy: Default::default(),
+            tools: Default::default(),
+            context_status: Default::default(),
+            total_token_usage: None,
+            phase: Default::default(),
+            task_context: Default::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: Some(pre_head),
+            pre_session_porcelain: Some(pre_porcelain),
+            last_return_packet: None,
+            change_id: None,
+            spec_id: None,
+            vcs_identity: None,
+            identity_version: 2,
+            fork_call_timestamps: Vec::new(),
+        };
+        let mut session_result = SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "ok".to_string(),
+            tool: "codex".to_string(),
+            started_at: chrono::Utc::now(),
+            completed_at: chrono::Utc::now(),
+            events_count: 0,
+            artifacts: vec![],
+            peak_memory_mb: None,
+            manager_fields: Default::default(),
+        };
+
+        let buffer = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(buffer.clone())
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            maybe_record_repo_write_audit(&ctx, &session, &mut session_result);
+        });
+
+        assert_eq!(session_result.status, "success");
+        assert!(
+            session_result
+                .manager_fields
+                .artifacts
+                .as_ref()
+                .and_then(|value| value.get("repo_write_audit"))
+                .is_some()
+        );
+        assert!(
+            buffer
+                .contents()
+                .contains("repo-write audit warning artifact failed to persist; ignoring")
+        );
+    }
+
+    fn run_git(repo: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn detect_git_head(repo: &std::path::Path) -> anyhow::Result<String> {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git rev-parse HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
+    fn git_status_porcelain(repo: &std::path::Path) -> String {
+        let output = std::process::Command::new("git")
+            .args(["status", "--porcelain=v1", "-z"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git status failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
     }
 }
