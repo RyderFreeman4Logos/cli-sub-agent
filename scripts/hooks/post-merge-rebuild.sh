@@ -17,6 +17,10 @@ fi
 echo "[post-merge] Rebuilding csa..."
 if just install; then
     echo "[post-merge] csa installed successfully."
+    if [ -e target ]; then
+        echo "[post-merge] Clearing target contents (preserving ./target symlink)..."
+        find target/ -mindepth 1 -delete
+    fi
 else
     echo "[post-merge] WARNING: just install failed (exit $?). csa binary may be stale." >&2
 fi

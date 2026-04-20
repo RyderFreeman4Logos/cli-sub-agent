@@ -105,7 +105,7 @@ pub(super) fn apply_gemini_acp_initial_stall_summary(
     execution.stderr_output.push('\n');
 }
 
-fn strip_acp_timeout_footer(stderr: &str) -> &str {
+pub(crate) fn strip_acp_timeout_footer(stderr: &str) -> &str {
     let trimmed = stderr.strip_suffix('\n').unwrap_or(stderr);
     if let Some((prefix, last_line)) = trimmed.rsplit_once('\n') {
         if is_acp_timeout_footer(last_line) {

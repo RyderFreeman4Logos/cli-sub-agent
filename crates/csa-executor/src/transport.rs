@@ -459,10 +459,16 @@ impl AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
-        let initial_response_timeout_seconds = gemini_acp_initial_response_timeout_seconds(
-            &self.tool_name,
-            options.initial_response_timeout,
-        );
+        let initial_response_timeout_seconds = if self.tool_name == "gemini-cli" {
+            gemini_acp_initial_response_timeout_seconds(
+                &self.tool_name,
+                options.initial_response_timeout,
+            )
+        } else if self.tool_name == "codex" {
+            consume_resolved_initial_response_timeout_seconds(options.initial_response_timeout)
+        } else {
+            None
+        };
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
         let termination_grace_period_seconds = options.termination_grace_period_seconds;
         let session_meta = Self::build_session_meta(

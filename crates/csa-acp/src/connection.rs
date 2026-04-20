@@ -24,7 +24,10 @@ pub(crate) mod connection_fork;
 pub use connection_fork::{CliForkResult, fork_session_via_cli};
 
 use crate::{
-    client::{SessionEvent, SharedActivity, SharedEvents, StreamingMetadata},
+    client::{
+        SessionEvent, SharedActivity, SharedEvents, StreamingMetadata,
+        event_counts_as_initial_response,
+    },
     error::{AcpError, AcpResult},
 };
 
@@ -33,11 +36,7 @@ const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptResult {
-    /// Agent output text (tail-only for large sessions).
-    ///
-    /// For sessions that produce more than ~1 MiB of agent text, this field
-    /// contains only the trailing portion.  The full output is available on
-    /// disk via the output spool file.
+    /// Agent output text (tail-only for large sessions; full output stays in the spool file).
     pub output: String,
     pub events: Vec<SessionEvent>,
     pub exit_reason: Option<String>,
@@ -71,6 +70,7 @@ pub struct AcpConnection {
     child: Rc<RefCell<Child>>,
     events: SharedEvents,
     last_activity: SharedActivity,
+    last_meaningful_activity: SharedActivity,
     stderr_buf: Rc<RefCell<String>>,
     default_working_dir: PathBuf,
     init_timeout: Duration,
@@ -110,6 +110,7 @@ impl AcpConnection {
         child: Child,
         events: SharedEvents,
         last_activity: SharedActivity,
+        last_meaningful_activity: SharedActivity,
         stderr_buf: Rc<RefCell<String>>,
         default_working_dir: PathBuf,
         options: AcpConnectionOptions,
@@ -120,6 +121,7 @@ impl AcpConnection {
             child: Rc::new(RefCell::new(child)),
             events,
             last_activity,
+            last_meaningful_activity,
             stderr_buf,
             default_working_dir,
             init_timeout: options.init_timeout,
@@ -321,21 +323,21 @@ impl AcpConnection {
     ) -> AcpResult<PromptResult> {
         self.ensure_process_running()?;
 
-        // Clear stale events before dispatching this prompt turn.
         self.events.borrow_mut().clear();
-        *self.last_activity.borrow_mut() = Instant::now();
+        let now = Instant::now();
+        *self.last_activity.borrow_mut() = now;
+        *self.last_meaningful_activity.borrow_mut() = now;
         let execution_start = Instant::now();
         let heartbeat_interval = resolve_heartbeat_interval();
         let mut last_heartbeat = execution_start;
+        let mut saw_initial_response_event = false;
         let mut processed_event_count = 0usize;
         let mut output_spool =
             open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
         let mut metadata = StreamingMetadata::default();
-        let mut stdout_line_buf = String::new();
-        let mut thought_line_buf = String::new();
+        let (mut stdout_line_buf, mut thought_line_buf) = (String::new(), String::new());
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
-
         enum PromptOutcome<T> {
             Completed(T),
             IdleTimeout,
@@ -348,7 +350,7 @@ impl AcpConnection {
                 loop {
                     tokio::select! {
                         response = &mut prompt_future => {
-                            stream_new_agent_messages(
+                            let _ = stream_new_agent_messages(
                                 &self.events,
                                 &mut processed_event_count,
                                 io.stream_stdout_to_stderr,
@@ -360,7 +362,7 @@ impl AcpConnection {
                             break PromptOutcome::Completed(response);
                         }
                         _ = tokio::time::sleep(Duration::from_millis(200)) => {
-                            stream_new_agent_messages(
+                            let saw_progress_this_poll = stream_new_agent_messages(
                                 &self.events,
                                 &mut processed_event_count,
                                 io.stream_stdout_to_stderr,
@@ -369,25 +371,33 @@ impl AcpConnection {
                                 &mut stdout_line_buf,
                                 &mut thought_line_buf,
                             );
-                            let (effective_timeout, timeout_phase) =
-                                if processed_event_count == 0 {
+                            if saw_progress_this_poll {
+                                saw_initial_response_event = true;
+                            }
+                            let (effective_timeout, timeout_phase, last_relevant_activity) =
+                                if !saw_initial_response_event {
                                     if let Some(irt) = initial_response_timeout {
-                                        (irt, TimeoutPhase::InitialResponse)
+                                        // Initial-response timeout tracks only stderr or eligible ACP events.
+                                        (
+                                            irt,
+                                            TimeoutPhase::InitialResponse,
+                                            *self.last_meaningful_activity.borrow(),
+                                        )
                                     } else {
-                                        (idle_timeout, TimeoutPhase::Idle)
+                                        (idle_timeout, TimeoutPhase::Idle, *self.last_activity.borrow())
                                     }
                                 } else {
-                                    (idle_timeout, TimeoutPhase::Idle)
+                                    (idle_timeout, TimeoutPhase::Idle, *self.last_activity.borrow())
                                 };
                             maybe_emit_heartbeat(
                                 heartbeat_interval,
                                 execution_start,
-                                *self.last_activity.borrow(),
+                                last_relevant_activity,
                                 &mut last_heartbeat,
                                 effective_timeout,
                                 timeout_phase,
                             );
-                            if self.last_activity.borrow().elapsed() >= effective_timeout {
+                            if last_relevant_activity.elapsed() >= effective_timeout {
                                 break PromptOutcome::IdleTimeout;
                             }
                         }
@@ -396,7 +406,7 @@ impl AcpConnection {
             })
             .await;
 
-        stream_new_agent_messages(
+        let _ = stream_new_agent_messages(
             &self.events,
             &mut processed_event_count,
             io.stream_stdout_to_stderr,
@@ -405,7 +415,6 @@ impl AcpConnection {
             &mut stdout_line_buf,
             &mut thought_line_buf,
         );
-        // Finalize spool: flush + run sanitization (rotate cleanup if keep_rotated=false).
         if let Some(writer) = output_spool.take() {
             match writer.finalize() {
                 Ok(plan) => {
@@ -441,7 +450,7 @@ impl AcpConnection {
             PromptOutcome::IdleTimeout => {
                 let _ = self.kill().await;
                 let exit_reason =
-                    if processed_event_count == 0 && initial_response_timeout.is_some() {
+                    if !saw_initial_response_event && initial_response_timeout.is_some() {
                         "initial_response_timeout"
                     } else {
                         "idle_timeout"
@@ -544,7 +553,7 @@ impl AcpConnection {
     }
 }
 
-/// 64 KiB buffer for spool writes — reduces syscall overhead vs per-chunk flush.
+/// 64 KiB buffer for spool writes to reduce syscall overhead vs per-chunk flush.
 fn open_output_spool_file(
     path: Option<&Path>,
     spool_max_bytes: u64,
@@ -624,13 +633,12 @@ fn maybe_emit_heartbeat(
 /// Maximum bytes buffered before a newline-free chunk is force-flushed.
 pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
 
-/// Flush complete lines; keep incomplete tails unless the buffer exceeds [`LINE_BUF_CAP`].
+/// Flush complete lines and keep incomplete tails unless the buffer exceeds [`LINE_BUF_CAP`].
 fn flush_complete_lines(buf: &mut String, prefix: &str) {
     while let Some(pos) = buf.find('\n') {
         let line: String = buf.drain(..=pos).collect();
         eprint!("{prefix}{line}");
     }
-    // Prevent unbounded growth on long lines without newlines.
     if buf.len() > LINE_BUF_CAP {
         let remainder = std::mem::take(buf);
         eprintln!("{prefix}{remainder}");
@@ -653,12 +661,12 @@ fn stream_new_agent_messages(
     metadata: &mut StreamingMetadata,
     stdout_line_buf: &mut String,
     thought_line_buf: &mut String,
-) {
+) -> bool {
     // Track progress against total seen events because the retained deque can evict old entries.
     let events_ref = events.borrow();
     metadata.sync_from_store(&events_ref);
     if *processed_event_count >= events_ref.total_events_count() {
-        return;
+        return false;
     }
     let retained_start = events_ref.retained_start_index();
     let stream_start = (*processed_event_count).max(retained_start);
@@ -675,8 +683,10 @@ fn stream_new_agent_messages(
         thought_line_buf.clear();
     }
     let skip = stream_start.saturating_sub(retained_start);
+    let mut saw_initial_response_event = false;
 
     for event in events_ref.retained_events().iter().skip(skip) {
+        saw_initial_response_event |= event_counts_as_initial_response(event);
         match event {
             SessionEvent::AgentMessage(chunk) => {
                 if stream_stdout_to_stderr {
@@ -737,20 +747,19 @@ fn stream_new_agent_messages(
         }
     }
 
-    // Flush partial lines once per poll so newline-free output still streams progressively.
     if stream_stdout_to_stderr {
         flush_remaining_buf(stdout_line_buf, "[stdout] ");
         flush_remaining_buf(thought_line_buf, "[thought] ");
     }
 
     *processed_event_count = events_ref.total_events_count();
+    saw_initial_response_event
 }
 
 fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut StreamingMetadata) {
     if let Some(writer) = spool {
         let _ = writer.write(bytes);
         metadata.spool_bytes_written = writer.bytes_written();
-        // Let BufWriter flush on capacity/drop; spool retention is managed by `csa gc`.
     }
 }
 

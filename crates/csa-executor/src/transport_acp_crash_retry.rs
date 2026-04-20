@@ -9,13 +9,19 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use csa_acp::SessionEvent;
 use csa_session::state::{MetaSessionState, ToolState};
 use regex::Regex;
 
-use super::{AcpTransport, TransportOptions, TransportResult};
+use super::{
+    AcpTransport, DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, TransportOptions,
+    TransportResult, consume_resolved_initial_response_timeout_seconds,
+    transport_gemini_helpers::strip_acp_timeout_footer,
+};
 
 /// Delay between crash retry attempts in seconds.
 pub(crate) const ACP_CRASH_RETRY_DELAY_SECS: u64 = 3;
+pub(crate) const CODEX_ACP_INITIAL_STALL_REASON: &str = "codex_acp_initial_stall";
 
 /// OOM-related signals that indicate the process was killed by the kernel
 /// or resource sandbox. Retrying these wastes tokens because the same
@@ -366,6 +372,65 @@ pub(crate) fn format_auth_failure(error: anyhow::Error, tool_name: &str) -> anyh
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CodexAcpInitialStallClassification {
+    pub(crate) timeout_seconds: u64,
+}
+
+fn event_counts_as_codex_acp_initial_response(event: &SessionEvent) -> bool {
+    matches!(
+        event,
+        SessionEvent::AgentMessage(_)
+            | SessionEvent::AgentThought(_)
+            | SessionEvent::PlanUpdate(_)
+            | SessionEvent::ToolCallStarted { .. }
+            | SessionEvent::ToolCallCompleted { .. }
+    )
+}
+
+pub(crate) fn classify_codex_acp_initial_stall(
+    result: &TransportResult,
+    timeout_seconds: Option<u64>,
+) -> Option<CodexAcpInitialStallClassification> {
+    if result.execution.exit_code != 137
+        || !result.execution.output.is_empty()
+        || !result
+            .execution
+            .summary
+            .starts_with("initial response timeout:")
+        || result
+            .events
+            .iter()
+            .any(event_counts_as_codex_acp_initial_response)
+        || !strip_acp_timeout_footer(&result.execution.stderr_output)
+            .trim()
+            .is_empty()
+    {
+        return None;
+    }
+
+    Some(CodexAcpInitialStallClassification {
+        timeout_seconds: timeout_seconds.unwrap_or(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS),
+    })
+}
+
+pub(crate) fn apply_codex_acp_initial_stall_summary(
+    execution: &mut csa_process::ExecutionResult,
+    classification: &CodexAcpInitialStallClassification,
+    retry_attempted: bool,
+) {
+    let summary = format!(
+        "{CODEX_ACP_INITIAL_STALL_REASON}: no AgentMessageChunk/AgentThought/PlanUpdate/ToolCall event within {}s (retry_attempted={retry_attempted})",
+        classification.timeout_seconds
+    );
+    execution.summary = summary.clone();
+    if !execution.stderr_output.is_empty() && !execution.stderr_output.ends_with('\n') {
+        execution.stderr_output.push('\n');
+    }
+    execution.stderr_output.push_str(&summary);
+    execution.stderr_output.push('\n');
+}
+
 /// Execute an ACP prompt with crash retry for non-gemini tools.
 ///
 /// ACP servers (claude-code, codex) can crash with "server shut down
@@ -381,6 +446,11 @@ pub(super) async fn execute_with_crash_retry(
 ) -> Result<TransportResult> {
     let mut attempt = 1u8;
     let max_attempts = options.acp_crash_max_attempts.max(1);
+    let codex_initial_response_timeout_seconds = (transport.tool_name == "codex")
+        .then(|| {
+            consume_resolved_initial_response_timeout_seconds(options.initial_response_timeout)
+        })
+        .flatten();
     loop {
         // Only resume provider session on the first attempt; retries start fresh.
         let resume_id = if attempt == 1 {
@@ -404,7 +474,39 @@ pub(super) async fn execute_with_crash_retry(
             .await;
 
         match result {
-            Ok(tr) => return Ok(tr),
+            Ok(mut tr) => {
+                if transport.tool_name == "codex"
+                    && let Some(classification) = classify_codex_acp_initial_stall(
+                        &tr,
+                        codex_initial_response_timeout_seconds,
+                    )
+                {
+                    tracing::warn!(
+                        classified_reason = CODEX_ACP_INITIAL_STALL_REASON,
+                        elapsed_seconds = classification.timeout_seconds,
+                        attempt,
+                        max_attempts,
+                        "codex ACP initial-response stall detected"
+                    );
+                    if attempt < max_attempts {
+                        tracing::info!(
+                            attempt,
+                            max_attempts,
+                            "retrying codex ACP after initial-response stall"
+                        );
+                        tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
+                        attempt = attempt.saturating_add(1);
+                        continue;
+                    }
+
+                    apply_codex_acp_initial_stall_summary(
+                        &mut tr.execution,
+                        &classification,
+                        attempt > 1,
+                    );
+                }
+                return Ok(tr);
+            }
             Err(error) => {
                 let error_display = format!("{error:#}");
                 let memory_max_mb = options

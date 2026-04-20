@@ -588,7 +588,12 @@ impl AcpConnection {
         let local_set = LocalSet::new();
         let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now()));
-        let client = AcpClient::new(events.clone(), last_activity.clone());
+        let last_meaningful_activity = Rc::new(RefCell::new(Instant::now()));
+        let client = AcpClient::new(
+            events.clone(),
+            last_activity.clone(),
+            last_meaningful_activity.clone(),
+        );
         let stderr_buf = Rc::new(RefCell::new(String::new()));
 
         let connection = local_set
@@ -612,6 +617,7 @@ impl AcpConnection {
 
                 let stderr_buf_clone = stderr_buf.clone();
                 let activity_clone = last_activity.clone();
+                let meaningful_activity_clone = last_meaningful_activity.clone();
                 tokio::task::spawn_local(async move {
                     let mut reader = stderr;
                     let mut buf = vec![0_u8; 4096];
@@ -619,7 +625,9 @@ impl AcpConnection {
                         match reader.read(&mut buf).await {
                             Ok(0) => break,
                             Ok(n) => {
-                                *activity_clone.borrow_mut() = Instant::now();
+                                let now = Instant::now();
+                                *activity_clone.borrow_mut() = now;
+                                *meaningful_activity_clone.borrow_mut() = now;
                                 let text = String::from_utf8_lossy(&buf[..n]);
                                 append_stderr_tail(&mut stderr_buf_clone.borrow_mut(), &text);
                             }
@@ -641,6 +649,7 @@ impl AcpConnection {
             child,
             events,
             last_activity,
+            last_meaningful_activity,
             stderr_buf,
             working_dir.to_path_buf(),
             options,
