@@ -30,6 +30,26 @@ impl Drop for CurrentDirGuard {
     }
 }
 
+#[test]
+fn test_filesystem_sandbox_active_helper() {
+    let active = csa_session::SandboxInfo {
+        mode: "cgroup".to_string(),
+        memory_max_mb: None,
+        filesystem_mode: Some("bwrap".to_string()),
+        readonly_project_root: None,
+    };
+    let inactive = csa_session::SandboxInfo {
+        mode: "cgroup".to_string(),
+        memory_max_mb: None,
+        filesystem_mode: Some("none".to_string()),
+        readonly_project_root: None,
+    };
+
+    assert!(filesystem_sandbox_active(Some(&active)));
+    assert!(!filesystem_sandbox_active(None));
+    assert!(!filesystem_sandbox_active(Some(&inactive)));
+}
+
 /// Heavyweight tools (claude-code) with no project config should get setting_sources=Some(vec![]).
 #[test]
 fn test_none_config_sets_setting_sources_for_heavyweight() {
