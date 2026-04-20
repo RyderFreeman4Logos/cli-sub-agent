@@ -12,6 +12,7 @@ fn make_test_session() -> MetaSessionState {
         branch: None,
         created_at: now,
         last_accessed: now,
+        csa_version: None,
         genealogy: csa_session::state::Genealogy {
             parent_session_id: None,
             depth: 0,

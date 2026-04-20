@@ -14,6 +14,7 @@ fn sample_session_state() -> MetaSessionState {
         branch: None,
         created_at: Utc::now(),
         last_accessed: Utc::now(),
+        csa_version: None,
         genealogy: Genealogy::default(),
         tools: HashMap::new(),
         context_status: ContextStatus::default(),

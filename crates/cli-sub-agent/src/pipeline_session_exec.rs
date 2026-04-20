@@ -22,9 +22,7 @@ use csa_hooks::{
 use csa_lock::acquire_lock;
 use csa_process::ExecutionResult;
 use csa_resource::{ResourceGuard, ResourceLimits};
-use csa_session::{
-    ToolState, compute_cooldown_wait, create_session, create_session_fresh, get_session_dir,
-};
+use csa_session::{compute_cooldown_wait, create_session, create_session_fresh, get_session_dir};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -34,6 +32,9 @@ use tracing::{debug, info, warn};
 mod session_exec_audit;
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
+#[path = "pipeline_session_exec_tool_state.rs"]
+mod session_exec_tool_state;
+use self::session_exec_tool_state::ensure_tool_state_initialized;
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
 pub(crate) async fn execute_with_session(
@@ -425,21 +426,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         None
     };
 
-    let tool_state = session
-        .tools
-        .get(executor.tool_name())
-        .cloned()
-        .or_else(|| {
-            resolved_provider_session_id
-                .as_ref()
-                .map(|provider_session_id| ToolState {
-                    provider_session_id: Some(provider_session_id.clone()),
-                    last_action_summary: String::new(),
-                    last_exit_code: 0,
-                    updated_at: chrono::Utc::now(),
-                    token_usage: None,
-                })
-        });
+    let tool_state =
+        ensure_tool_state_initialized(&mut session, executor, &resolved_provider_session_id)
+            .await?;
 
     let result_file_cleared = clear_expected_result_artifacts_for_prompt(prompt, &session_dir);
     let execution_start_time = chrono::Utc::now();

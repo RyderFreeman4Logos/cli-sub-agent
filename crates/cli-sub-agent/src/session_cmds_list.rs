@@ -192,6 +192,16 @@ pub(super) fn select_sessions_for_list_all_projects(
     Ok(sessions)
 }
 
+pub(super) fn filter_sessions_by_csa_version(
+    mut sessions: Vec<MetaSessionState>,
+    csa_version: Option<&str>,
+) -> Vec<MetaSessionState> {
+    if let Some(filter) = csa_version {
+        sessions.retain(|session| session.csa_version.as_deref() == Some(filter));
+    }
+    sessions
+}
+
 pub(super) fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
     let status = resolve_session_status(session);
     let created_at = session_created_at(session);
@@ -206,6 +216,7 @@ pub(super) fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
         "status": status,
         "phase": format!("{:?}", session.phase),
         "branch": session.branch,
+        "csa_version": session.csa_version,
         "task_type": session.task_context.task_type,
         "total_token_usage": session.total_token_usage,
         "is_fork": session.genealogy.is_fork(),

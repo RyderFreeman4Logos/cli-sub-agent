@@ -324,6 +324,7 @@ mod tests {
             branch: None,
             created_at: chrono::Utc::now(),
             last_accessed: chrono::Utc::now(),
+            csa_version: None,
             genealogy: Default::default(),
             tools: {
                 let mut m = std::collections::HashMap::new();
@@ -333,6 +334,7 @@ mod tests {
                         provider_session_id: None,
                         last_action_summary: String::new(),
                         last_exit_code: 0,
+                        tool_version: None,
                         token_usage: None,
                         updated_at: chrono::Utc::now(),
                     },
@@ -343,6 +345,7 @@ mod tests {
                         provider_session_id: None,
                         last_action_summary: String::new(),
                         last_exit_code: 0,
+                        tool_version: None,
                         token_usage: None,
                         updated_at: chrono::Utc::now(),
                     },
@@ -475,6 +478,7 @@ mod tests {
             branch: None,
             created_at: chrono::Utc::now(),
             last_accessed: chrono::Utc::now(),
+            csa_version: None,
             genealogy: Default::default(),
             tools: {
                 let mut m = std::collections::HashMap::new();
@@ -484,6 +488,7 @@ mod tests {
                         provider_session_id: None,
                         last_action_summary: String::new(),
                         last_exit_code: 0,
+                        tool_version: None,
                         token_usage: None,
                         updated_at: chrono::Utc::now(),
                     },

@@ -16,6 +16,7 @@ fn test_session(
         branch: None,
         created_at: last_accessed,
         last_accessed,
+        csa_version: None,
         genealogy: Genealogy {
             parent_session_id: None,
             depth: 0,

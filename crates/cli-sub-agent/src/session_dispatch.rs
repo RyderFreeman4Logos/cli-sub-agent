@@ -29,6 +29,8 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             limit,
             since,
             status,
+            csa_version,
+            show_version,
         } => {
             session_cmds::handle_session_list(
                 cd,
@@ -40,6 +42,8 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
                     limit,
                     since,
                     status,
+                    csa_version,
+                    show_version,
                 },
                 output_format,
             )?;

@@ -103,6 +103,10 @@ fn test_create_session() {
     assert_eq!(state.description, Some("Test session".to_string()));
     assert_eq!(state.genealogy.depth, 0);
     assert!(state.genealogy.parent_session_id.is_none());
+    assert_eq!(
+        state.csa_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
     let dir = get_session_dir_in(td.path(), &state.meta_session_id);
     assert!(dir.exists());
     assert!(dir.join(STATE_FILE_NAME).exists());
@@ -187,6 +191,7 @@ fn test_list_sessions_with_tool_filter() {
             last_action_summary: "Test".to_string(),
             last_exit_code: 0,
             updated_at: Utc::now(),
+            tool_version: None,
             token_usage: None,
         },
     );
@@ -208,6 +213,7 @@ fn test_resolve_resume_session_with_provider_id() {
             last_action_summary: "resume".to_string(),
             last_exit_code: 0,
             updated_at: Utc::now(),
+            tool_version: None,
             token_usage: None,
         },
     );

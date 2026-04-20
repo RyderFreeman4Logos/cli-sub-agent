@@ -391,6 +391,10 @@ async fn execute_review_retries_gemini_with_api_key_after_oauth_prompt() {
             &fake_gemini,
             format!(
                 "#!/bin/sh\n\
+if [ \"$1\" = \"--version\" ]; then\n\
+  printf 'gemini-cli 1.0.0\\n'\n\
+  exit 0\n\
+fi\n\
 if [ -n \"${{GEMINI_API_KEY:-}}\" ]; then\n\
   printf 'api_key\\n' >> \"{}\"\n\
   printf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS' '<!-- CSA:SECTION:summary:END -->'\n\
@@ -474,7 +478,7 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
     let fake_gemini = bin_dir.join("gemini");
     std::fs::write(
         &fake_gemini,
-        "#!/bin/sh\nprintf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
     )
     .unwrap();
     let mut perms = std::fs::metadata(&fake_gemini).unwrap().permissions();
@@ -552,6 +556,10 @@ async fn execute_review_does_not_retry_gemini_auth_prompt_when_no_failover_is_se
         &fake_gemini,
         format!(
             "#!/bin/sh\n\
+if [ \"$1\" = \"--version\" ]; then\n\
+  printf 'gemini-cli 1.0.0\\n'\n\
+  exit 0\n\
+fi\n\
 printf 'oauth\\n' >> \"{}\"\n\
 printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
             auth_log.display()

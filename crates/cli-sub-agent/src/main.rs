@@ -64,6 +64,7 @@ mod skill_resolver;
 mod tiers_cmd;
 mod todo_cmd;
 mod todo_ref_cmd;
+mod tool_version;
 
 #[cfg(test)]
 mod sa_mode_tests;

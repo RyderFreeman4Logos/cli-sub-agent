@@ -199,6 +199,7 @@ fn create_session_in_with_strategy(
         branch,
         created_at: now,
         last_accessed: now,
+        csa_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         genealogy: crate::state::Genealogy {
             parent_session_id,
             depth,
@@ -488,6 +489,7 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     branch: None,
                     created_at: now,
                     last_accessed: now,
+                    csa_version: None,
                     genealogy: crate::state::Genealogy::default(),
                     tools: HashMap::new(),
                     context_status: Default::default(),
