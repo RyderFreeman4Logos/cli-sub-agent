@@ -13,6 +13,7 @@ use csa_resource::isolation_plan::IsolationPlan;
 use csa_session::state::MetaSessionState;
 
 use super::AcpTransport;
+use crate::lefthook_guard::sanitize_env_map_for_codex;
 
 const SUMMARY_MAX_CHARS: usize = 200;
 const CSA_SESSION_ID_ENV: &str = "CSA_SESSION_ID";
@@ -151,7 +152,9 @@ impl AcpTransport {
         // bash execution.  Legacy tools (gemini-cli, opencode) are text-mode
         // and cannot independently call `gh pr merge`.
         csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
-
+        if self.tool_name == "codex" {
+            sanitize_env_map_for_codex(&mut env);
+        }
         env
     }
 

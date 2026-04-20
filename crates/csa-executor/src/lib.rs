@@ -6,6 +6,7 @@ pub mod context_loader;
 pub mod design_context;
 pub mod executor;
 pub mod install_hints;
+mod lefthook_guard;
 pub mod logging;
 pub mod model_spec;
 pub mod session_id;

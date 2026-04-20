@@ -343,6 +343,66 @@ fn test_build_execute_in_command_strips_claudecode_env() {
 }
 
 #[test]
+fn test_build_command_codex_strips_lefthook_env_reinjected_by_extra_env() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+    let session = make_test_session();
+    let extra_env = HashMap::from([
+        ("LEFTHOOK".to_string(), "0".to_string()),
+        ("LEFTHOOK_SKIP_PRE_COMMIT".to_string(), "1".to_string()),
+        ("SAFE_ENV".to_string(), "ok".to_string()),
+    ]);
+
+    let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra_env));
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert_eq!(env_map.get(std::ffi::OsStr::new("LEFTHOOK")), Some(&None));
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("LEFTHOOK_SKIP_PRE_COMMIT")),
+        Some(&None)
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
+        Some(&Some(std::ffi::OsStr::new("ok")))
+    );
+}
+
+#[test]
+fn test_build_execute_in_command_codex_strips_lefthook_env_reinjected_by_extra_env() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let extra_env = HashMap::from([
+        ("LEFTHOOK".to_string(), "0".to_string()),
+        ("LEFTHOOK_EXCLUDE_PRE_PUSH".to_string(), "1".to_string()),
+        ("SAFE_ENV".to_string(), "ok".to_string()),
+    ]);
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra_env));
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert_eq!(env_map.get(std::ffi::OsStr::new("LEFTHOOK")), Some(&None));
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("LEFTHOOK_EXCLUDE_PRE_PUSH")),
+        Some(&None)
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
+        Some(&Some(std::ffi::OsStr::new("ok")))
+    );
+}
+
+#[test]
 fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
     let executors: Vec<Executor> = vec![
         Executor::GeminiCli {

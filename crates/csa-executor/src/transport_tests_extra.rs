@@ -324,6 +324,41 @@ fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() 
 }
 
 #[test]
+fn test_build_env_codex_strips_lefthook_bypass_env_only_for_codex() {
+    let transport = AcpTransport::new("codex", None);
+    let session = build_ephemeral_meta_session(std::path::Path::new("/tmp/test"));
+    let extra = HashMap::from([
+        ("LEFTHOOK".to_string(), "0".to_string()),
+        ("LEFTHOOK_SKIP_PRE_COMMIT".to_string(), "1".to_string()),
+        ("SAFE_ENV".to_string(), "ok".to_string()),
+    ]);
+
+    let env = transport.build_env(&session, Some(&extra));
+
+    assert!(!env.contains_key("LEFTHOOK"));
+    assert!(!env.contains_key("LEFTHOOK_SKIP_PRE_COMMIT"));
+    assert_eq!(env.get("SAFE_ENV").map(String::as_str), Some("ok"));
+}
+
+#[test]
+fn test_build_env_non_codex_preserves_lefthook_bypass_env() {
+    let transport = AcpTransport::new("claude-code", None);
+    let session = build_ephemeral_meta_session(std::path::Path::new("/tmp/test"));
+    let extra = HashMap::from([
+        ("LEFTHOOK".to_string(), "0".to_string()),
+        ("LEFTHOOK_SKIP_PRE_COMMIT".to_string(), "1".to_string()),
+    ]);
+
+    let env = transport.build_env(&session, Some(&extra));
+
+    assert_eq!(env.get("LEFTHOOK").map(String::as_str), Some("0"));
+    assert_eq!(
+        env.get("LEFTHOOK_SKIP_PRE_COMMIT").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
 fn test_daemon_mode_disables_acp_stderr_streaming_when_output_spool_exists() {
     let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
     let original = std::env::var(DAEMON_SESSION_ID_ENV).ok();

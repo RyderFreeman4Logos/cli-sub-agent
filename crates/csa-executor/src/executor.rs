@@ -7,6 +7,7 @@ use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::Path;
 use tokio::process::Command;
 
@@ -15,6 +16,7 @@ use crate::install_hints::{
     CLAUDE_CODE_ACP_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT,
     OPENCODE_INSTALL_HINT,
 };
+use crate::lefthook_guard::{sanitize_args_for_codex, sanitize_env_for_codex};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
     ResolvedTimeout, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
@@ -318,6 +320,10 @@ impl Executor {
             prompt_transport,
             &gemini_include_directories,
         );
+        if matches!(self, Self::Codex { .. }) {
+            sanitize_env_for_codex(&mut cmd);
+            cmd = Self::sanitize_codex_command_args(cmd);
+        }
         (cmd, stdin_data)
     }
 
@@ -471,7 +477,45 @@ impl Executor {
         } else {
             self.append_prompt_args_with_transport(&mut cmd, prompt, prompt_transport);
         }
+        if matches!(self, Self::Codex { .. }) {
+            sanitize_env_for_codex(&mut cmd);
+            cmd = Self::sanitize_codex_command_args(cmd);
+        }
         (cmd, stdin_data)
+    }
+
+    fn sanitize_codex_command_args(cmd: Command) -> Command {
+        let program = cmd.as_std().get_program().to_os_string();
+        let current_dir = cmd.as_std().get_current_dir().map(|dir| dir.to_path_buf());
+        let envs = cmd
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| (key.to_os_string(), value.map(|v| v.to_os_string())))
+            .collect::<Vec<_>>();
+        let mut args = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        sanitize_args_for_codex(&mut args);
+
+        let mut sanitized = Command::new(program);
+        if let Some(dir) = current_dir {
+            sanitized.current_dir(dir);
+        }
+        for (key, value) in envs {
+            match value {
+                Some(value) => {
+                    sanitized.env(key, value);
+                }
+                None => {
+                    sanitized.env_remove(key);
+                }
+            }
+        }
+        let os_args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+        sanitized.args(os_args);
+        sanitized
     }
 
     /// Environment variables to strip from child processes.
