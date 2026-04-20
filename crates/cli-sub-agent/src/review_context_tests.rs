@@ -1,4 +1,5 @@
 use super::*;
+use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
 use csa_todo::{SpecCriterion, TodoManager};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
@@ -363,6 +364,46 @@ fn prior_round_assumptions_render_when_prior_consolidated_artifact_exists() {
     assert!(rendered.contains("src/review.rs:7"));
     assert!(rendered.contains("no unwrap"));
     assert!(rendered.contains("Second reviewer found a medium-severity assumption"));
+}
+
+#[test]
+fn prior_round_assumptions_render_when_only_single_reviewer_artifact_exists() {
+    use crate::test_session_sandbox::ScopedSessionSandbox;
+    use csa_session::{create_session, get_session_dir, write_review_meta};
+    use std::fs;
+
+    let project = setup_git_repo_with_branch("feat/iter1-single");
+    let _sandbox = ScopedSessionSandbox::new(&project);
+
+    let prior = create_session(project.path(), Some("prior review"), None, Some("codex"))
+        .expect("prior session created");
+    let prior_dir = get_session_dir(project.path(), &prior.meta_session_id).unwrap();
+
+    write_review_meta(
+        &prior_dir,
+        &make_review_meta(&prior.meta_session_id, "fail", 1),
+    )
+    .expect("write review meta");
+
+    fs::write(
+        prior_dir.join(SINGLE_REVIEW_ARTIFACT_FILE),
+        serde_json::to_string(&make_review_artifact("reviewer-1", Severity::High)).unwrap(),
+    )
+    .expect("write single-reviewer findings");
+    assert!(
+        !prior_dir.join(CONSOLIDATED_REVIEW_ARTIFACT_FILE).exists(),
+        "single-reviewer regression test must exercise fallback without consolidated artifact"
+    );
+
+    let result = discover_prior_round_assumptions(project.path(), Some("feat/iter1-single"), None);
+    let rendered = result.expect("iter=1 prior review must inject Prior-Round section");
+
+    assert!(rendered.contains("## Prior-Round Assumptions to Re-verify"));
+    assert!(rendered.contains("iteration 1"));
+    assert!(rendered.contains("decision `fail`"));
+    assert!(rendered.contains("[high]"));
+    assert!(rendered.contains("src/lib.rs:42"));
+    assert!(rendered.contains("no unwrap"));
 }
 
 #[test]

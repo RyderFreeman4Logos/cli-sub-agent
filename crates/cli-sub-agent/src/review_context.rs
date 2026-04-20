@@ -5,7 +5,7 @@ use csa_session::{Finding, ReviewArtifact, ReviewSessionMeta, Severity};
 use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager};
 use tracing::warn;
 
-use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
+use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedReviewContextKind {
@@ -244,10 +244,12 @@ fn load_whitelisted_findings(
     session_id: &str,
 ) -> Option<Vec<PriorRoundFinding>> {
     let session_dir = csa_session::get_session_dir(project_root, session_id).ok()?;
-    let path = session_dir.join(CONSOLIDATED_REVIEW_ARTIFACT_FILE);
-    if !path.is_file() {
-        return None;
-    }
+    let path = [
+        session_dir.join(CONSOLIDATED_REVIEW_ARTIFACT_FILE),
+        session_dir.join(SINGLE_REVIEW_ARTIFACT_FILE),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())?;
     let content = std::fs::read_to_string(&path).ok()?;
     let artifact: ReviewArtifact = serde_json::from_str(&content).ok()?;
     Some(
