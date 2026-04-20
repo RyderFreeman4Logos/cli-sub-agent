@@ -87,6 +87,15 @@ fn get_tools_csa_session_delete_requires_session_id() {
     );
 }
 
+#[test]
+fn direct_entry_resolved_timeout_preserves_pipeline_semantics() {
+    assert_eq!(direct_entry_resolved_timeout(None), ResolvedTimeout(None));
+    assert_eq!(
+        direct_entry_resolved_timeout(Some(90)),
+        ResolvedTimeout(Some(90))
+    );
+}
+
 // --- JSON-RPC protocol structure tests ---
 
 #[test]

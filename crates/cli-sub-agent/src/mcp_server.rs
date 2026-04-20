@@ -7,6 +7,7 @@ use tracing::{debug, error, info};
 
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
+use csa_executor::ResolvedTimeout;
 use csa_session::{delete_session, list_sessions};
 
 /// MCP server implementation
@@ -185,6 +186,10 @@ fn get_tools() -> Vec<McpToolDef> {
             }),
         },
     ]
+}
+
+fn direct_entry_resolved_timeout(initial_response_timeout_seconds: Option<u64>) -> ResolvedTimeout {
+    ResolvedTimeout(initial_response_timeout_seconds)
 }
 
 /// Handle JSON-RPC request
@@ -611,7 +616,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
                 extra_env_ref,
                 csa_process::StreamMode::BufferOnly,
                 idle_timeout_seconds,
-                initial_response_timeout_seconds,
+                direct_entry_resolved_timeout(initial_response_timeout_seconds),
             )
             .await?
     } else {

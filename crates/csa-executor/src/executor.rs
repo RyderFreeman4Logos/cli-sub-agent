@@ -17,8 +17,8 @@ use crate::install_hints::{
 };
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{
-    SandboxTransportConfig, Transport, TransportFactory, TransportOptions, TransportResult,
-    resolve_execute_in_initial_response_timeout_seconds,
+    ResolvedTimeout, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
+    TransportResult,
 };
 #[path = "executor_arg_helpers.rs"]
 mod arg_helpers;
@@ -365,7 +365,7 @@ impl Executor {
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
             acp_crash_max_attempts: options.acp_crash_max_attempts,
-            initial_response_timeout_seconds: options.initial_response_timeout_seconds,
+            initial_response_timeout: ResolvedTimeout(options.initial_response_timeout_seconds),
             liveness_dead_seconds: options.liveness_dead_seconds,
             stdin_write_timeout_seconds: options.stdin_write_timeout_seconds,
             acp_init_timeout_seconds: options.acp_init_timeout_seconds,
@@ -394,7 +394,7 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
-        initial_response_timeout_seconds: Option<u64>,
+        initial_response_timeout: ResolvedTimeout,
     ) -> Result<ExecutionResult> {
         Ok(self
             .execute_in_with_transport(
@@ -403,7 +403,7 @@ impl Executor {
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
-                initial_response_timeout_seconds,
+                initial_response_timeout,
             )
             .await?
             .execution)
@@ -417,13 +417,9 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
-        initial_response_timeout_seconds: Option<u64>,
+        initial_response_timeout: ResolvedTimeout,
     ) -> Result<TransportResult> {
         let transport = self.transport(None)?;
-        let initial_response_timeout_seconds = resolve_execute_in_initial_response_timeout_seconds(
-            self,
-            initial_response_timeout_seconds,
-        );
         let mut result = transport
             .execute_in(
                 prompt,
@@ -431,7 +427,7 @@ impl Executor {
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,
-                initial_response_timeout_seconds,
+                initial_response_timeout,
             )
             .await?;
         result.execution.consolidate_stderr_retries();

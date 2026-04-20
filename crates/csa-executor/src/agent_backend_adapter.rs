@@ -203,6 +203,10 @@ impl ExecutorAgentSession {
             }
         })
     }
+
+    fn resolved_initial_response_timeout(executor: &Executor) -> crate::ResolvedTimeout {
+        crate::transport::resolve_execute_in_initial_response_timeout_seconds(executor, None)
+    }
 }
 
 #[async_trait]
@@ -232,7 +236,7 @@ impl AgentSession for ExecutorAgentSession {
                 extra_env,
                 csa_process::StreamMode::BufferOnly,
                 csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
-                None,
+                Self::resolved_initial_response_timeout(&self.executor),
             )
             .await
         {
@@ -384,5 +388,20 @@ mod tests {
 
         assert!(session.output_receiver().is_some());
         assert!(session.output_receiver().is_none());
+    }
+
+    #[test]
+    fn executor_agent_session_resolves_direct_entry_timeout_per_executor() {
+        assert_eq!(
+            ExecutorAgentSession::resolved_initial_response_timeout(&codex_executor()),
+            crate::ResolvedTimeout(Some(300))
+        );
+        assert_eq!(
+            ExecutorAgentSession::resolved_initial_response_timeout(&Executor::GeminiCli {
+                model_override: None,
+                thinking_budget: None,
+            }),
+            crate::ResolvedTimeout(Some(120))
+        );
     }
 }

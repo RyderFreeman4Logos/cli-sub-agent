@@ -70,7 +70,7 @@ impl Transport for LegacyTransport {
                 continue;
             }
             let codex_timeout = Self::consume_resolved_transport_initial_response_timeout_seconds(
-                options.initial_response_timeout_seconds,
+                options.initial_response_timeout,
             );
             let retry_executor = executor.clone();
             let retry_options = options.clone();
@@ -115,7 +115,7 @@ impl Transport for LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
-        initial_response_timeout_seconds: Option<u64>,
+        initial_response_timeout: super::ResolvedTimeout,
     ) -> Result<TransportResult> {
         LegacyTransport::execute_in(
             self,
@@ -124,7 +124,7 @@ impl Transport for LegacyTransport {
             extra_env,
             stream_mode,
             idle_timeout_seconds,
-            initial_response_timeout_seconds,
+            initial_response_timeout,
         )
         .await
     }

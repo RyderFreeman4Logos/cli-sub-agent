@@ -1,6 +1,8 @@
 use crate::{executor::Executor, model_spec::ThinkingBudget};
 use csa_process::ExecutionResult;
 
+use super::transport_types::ResolvedTimeout;
+
 pub const CODEX_EXEC_INITIAL_STALL_REASON: &str = "codex_exec_initial_stall";
 pub const DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
 const DEFAULT_GENERIC_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 120;
@@ -34,11 +36,11 @@ fn executor_default_initial_response_timeout_seconds(executor: &Executor) -> u64
 pub fn resolve_execute_in_initial_response_timeout_seconds(
     executor: &Executor,
     configured_timeout_seconds: Option<u64>,
-) -> Option<u64> {
-    resolve_initial_response_timeout(
+) -> ResolvedTimeout {
+    ResolvedTimeout(resolve_initial_response_timeout(
         configured_timeout_seconds,
         executor_default_initial_response_timeout_seconds(executor),
-    )
+    ))
 }
 
 /// Consume an already-resolved watchdog setting without re-applying defaults.
@@ -48,16 +50,16 @@ pub fn resolve_execute_in_initial_response_timeout_seconds(
 /// is accepted defensively and treated as disabled so a stray sentinel cannot resurrect the codex
 /// default.
 pub(crate) fn consume_resolved_initial_response_timeout_seconds(
-    resolved_timeout_seconds: Option<u64>,
+    resolved_timeout: ResolvedTimeout,
 ) -> Option<u64> {
-    resolved_timeout_seconds.filter(|seconds| *seconds > 0)
+    resolved_timeout.as_option().filter(|seconds| *seconds > 0)
 }
 
 /// Compatibility wrapper for direct `execute_in` callers/tests.
 pub(crate) fn consume_resolved_execute_in_initial_response_timeout_seconds(
-    resolved_timeout_seconds: Option<u64>,
+    resolved_timeout: ResolvedTimeout,
 ) -> Option<u64> {
-    consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
+    consume_resolved_initial_response_timeout_seconds(resolved_timeout)
 }
 
 pub fn classify_codex_exec_initial_stall(

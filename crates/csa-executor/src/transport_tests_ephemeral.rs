@@ -12,37 +12,37 @@ fn test_execute_in_timeout_resolver_defaults_codex_to_300_seconds() {
 
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, None),
-        Some(300),
+        super::ResolvedTimeout(Some(300)),
         "direct execute_in codex calls should inherit the 300s watchdog by default"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(0)),
-        None,
+        super::ResolvedTimeout(None),
         "explicit 0 should disable the watchdog for direct codex execute_in calls"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(42)),
-        Some(42),
+        super::ResolvedTimeout(Some(42)),
         "explicit execute_in overrides should win over the codex default"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&codex_executor, Some(450)),
-        Some(450),
+        super::ResolvedTimeout(Some(450)),
         "positive execute_in overrides should pass through unchanged for codex"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&gemini_executor, None),
-        Some(120),
+        super::ResolvedTimeout(Some(120)),
         "non-codex direct execute_in calls should inherit the generic 120s watchdog by default"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&gemini_executor, Some(0)),
-        None,
+        super::ResolvedTimeout(None),
         "explicit 0 should disable the watchdog for direct non-codex execute_in calls"
     );
     assert_eq!(
         super::resolve_execute_in_initial_response_timeout_seconds(&gemini_executor, Some(450)),
-        Some(450),
+        super::ResolvedTimeout(Some(450)),
         "positive execute_in overrides should pass through unchanged for non-codex"
     );
 }
@@ -82,7 +82,9 @@ fn test_legacy_execute_in_consumes_resolved_timeout_without_reapplying_defaults(
     );
 
     assert_eq!(
-        super::consume_resolved_execute_in_initial_response_timeout_seconds(Some(0)),
+        super::consume_resolved_execute_in_initial_response_timeout_seconds(
+            super::ResolvedTimeout(Some(0)),
+        ),
         None,
         "legacy consumers should defensively collapse stray Some(0) to disabled"
     );
@@ -153,7 +155,7 @@ echo "ok effort=$effort"
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            Some(1),
+            super::ResolvedTimeout(Some(1)),
         )
         .await
         .expect("execute_in should retry the codex stall and succeed");

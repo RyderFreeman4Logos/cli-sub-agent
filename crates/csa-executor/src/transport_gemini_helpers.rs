@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use csa_process::ExecutionResult;
 use csa_resource::isolation_plan::IsolationPlan;
 
-use super::transport_codex_exec_stall::resolve_initial_response_timeout;
+use super::transport_types::ResolvedTimeout;
 use crate::executor::Executor;
 use crate::transport_gemini_retry::{gemini_retry_model, gemini_should_use_api_key};
 
@@ -51,16 +51,13 @@ pub(super) struct GeminiLegacyInitialStallClassification {
 
 pub(super) fn gemini_acp_initial_response_timeout_seconds(
     tool_name: &str,
-    configured_timeout_seconds: Option<u64>,
+    resolved_timeout: ResolvedTimeout,
 ) -> Option<u64> {
     if tool_name != "gemini-cli" {
         return None;
     }
 
-    resolve_initial_response_timeout(
-        configured_timeout_seconds,
-        DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS,
-    )
+    resolved_timeout.as_option().filter(|seconds| *seconds > 0)
 }
 
 pub(super) fn classify_gemini_acp_initial_stall(
