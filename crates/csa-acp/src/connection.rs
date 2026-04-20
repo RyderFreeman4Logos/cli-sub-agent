@@ -36,11 +36,7 @@ const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptResult {
-    /// Agent output text (tail-only for large sessions).
-    ///
-    /// For sessions that produce more than ~1 MiB of agent text, this field
-    /// contains only the trailing portion.  The full output is available on
-    /// disk via the output spool file.
+    /// Agent output text (tail-only for large sessions; full output stays in the spool file).
     pub output: String,
     pub events: Vec<SessionEvent>,
     pub exit_reason: Option<String>,
@@ -74,6 +70,7 @@ pub struct AcpConnection {
     child: Rc<RefCell<Child>>,
     events: SharedEvents,
     last_activity: SharedActivity,
+    last_meaningful_activity: SharedActivity,
     stderr_buf: Rc<RefCell<String>>,
     default_working_dir: PathBuf,
     init_timeout: Duration,
@@ -113,6 +110,7 @@ impl AcpConnection {
         child: Child,
         events: SharedEvents,
         last_activity: SharedActivity,
+        last_meaningful_activity: SharedActivity,
         stderr_buf: Rc<RefCell<String>>,
         default_working_dir: PathBuf,
         options: AcpConnectionOptions,
@@ -123,6 +121,7 @@ impl AcpConnection {
             child: Rc::new(RefCell::new(child)),
             events,
             last_activity,
+            last_meaningful_activity,
             stderr_buf,
             default_working_dir,
             init_timeout: options.init_timeout,
@@ -325,7 +324,9 @@ impl AcpConnection {
         self.ensure_process_running()?;
 
         self.events.borrow_mut().clear();
-        *self.last_activity.borrow_mut() = Instant::now();
+        let now = Instant::now();
+        *self.last_activity.borrow_mut() = now;
+        *self.last_meaningful_activity.borrow_mut() = now;
         let execution_start = Instant::now();
         let heartbeat_interval = resolve_heartbeat_interval();
         let mut last_heartbeat = execution_start;
@@ -376,11 +377,11 @@ impl AcpConnection {
                             let (effective_timeout, timeout_phase, last_relevant_activity) =
                                 if !saw_initial_response_event {
                                     if let Some(irt) = initial_response_timeout {
-                                        // Any child output keeps the process alive; eligible ACP events remain classification/state-only.
+                                        // Initial-response timeout tracks only stderr or eligible ACP events.
                                         (
                                             irt,
                                             TimeoutPhase::InitialResponse,
-                                            *self.last_activity.borrow(),
+                                            *self.last_meaningful_activity.borrow(),
                                         )
                                     } else {
                                         (idle_timeout, TimeoutPhase::Idle, *self.last_activity.borrow())
@@ -552,7 +553,7 @@ impl AcpConnection {
     }
 }
 
-/// 64 KiB buffer for spool writes — reduces syscall overhead vs per-chunk flush.
+/// 64 KiB buffer for spool writes to reduce syscall overhead vs per-chunk flush.
 fn open_output_spool_file(
     path: Option<&Path>,
     spool_max_bytes: u64,
@@ -632,13 +633,12 @@ fn maybe_emit_heartbeat(
 /// Maximum bytes buffered before a newline-free chunk is force-flushed.
 pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
 
-/// Flush complete lines; keep incomplete tails unless the buffer exceeds [`LINE_BUF_CAP`].
+/// Flush complete lines and keep incomplete tails unless the buffer exceeds [`LINE_BUF_CAP`].
 fn flush_complete_lines(buf: &mut String, prefix: &str) {
     while let Some(pos) = buf.find('\n') {
         let line: String = buf.drain(..=pos).collect();
         eprint!("{prefix}{line}");
     }
-    // Prevent unbounded growth on long lines without newlines.
     if buf.len() > LINE_BUF_CAP {
         let remainder = std::mem::take(buf);
         eprintln!("{prefix}{remainder}");
@@ -760,7 +760,6 @@ fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut St
     if let Some(writer) = spool {
         let _ = writer.write(bytes);
         metadata.spool_bytes_written = writer.bytes_written();
-        // Let BufWriter flush on capacity/drop; spool retention is managed by `csa gc`.
     }
 }
 

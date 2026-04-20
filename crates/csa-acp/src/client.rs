@@ -276,13 +276,19 @@ pub(crate) type SharedActivity = Rc<RefCell<Instant>>;
 pub(crate) struct AcpClient {
     events: SharedEvents,
     last_activity: SharedActivity,
+    last_meaningful_activity: SharedActivity,
 }
 
 impl AcpClient {
-    pub(crate) fn new(events: SharedEvents, last_activity: SharedActivity) -> Self {
+    pub(crate) fn new(
+        events: SharedEvents,
+        last_activity: SharedActivity,
+        last_meaningful_activity: SharedActivity,
+    ) -> Self {
         Self {
             events,
             last_activity,
+            last_meaningful_activity,
         }
     }
 
@@ -375,11 +381,14 @@ impl Client for AcpClient {
         &self,
         args: SessionNotification,
     ) -> agent_client_protocol::Result<()> {
-        // Always refresh activity timestamp so idle-timeout considers
-        // protocol-level traffic as proof of liveness, even when the
-        // event itself is suppressed from collected output.
-        *self.last_activity.borrow_mut() = Instant::now();
+        let now = Instant::now();
+        // Idle-timeout remains broad: any ACP session notification counts
+        // as transport liveness, even when suppressed from collected output.
+        *self.last_activity.borrow_mut() = now;
         if let Some(event) = Self::update_to_event(args.update) {
+            if event_counts_as_initial_response(&event) {
+                *self.last_meaningful_activity.borrow_mut() = now;
+            }
             self.events.borrow_mut().push(event);
         }
         Ok(())
@@ -479,8 +488,15 @@ mod tests {
 
         let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
+        let last_meaningful_activity =
+            Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
         let before = *last_activity.borrow();
-        let client = AcpClient::new(Rc::clone(&events), Rc::clone(&last_activity));
+        let meaningful_before = *last_meaningful_activity.borrow();
+        let client = AcpClient::new(
+            Rc::clone(&events),
+            Rc::clone(&last_activity),
+            Rc::clone(&last_meaningful_activity),
+        );
 
         let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("hello")));
         let notification =
@@ -498,6 +514,10 @@ mod tests {
             *last_activity.borrow() > before,
             "session_notification must refresh last_activity"
         );
+        assert!(
+            *last_meaningful_activity.borrow() > meaningful_before,
+            "content events must refresh last_meaningful_activity"
+        );
     }
 
     #[tokio::test]
@@ -508,8 +528,15 @@ mod tests {
 
         let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
+        let last_meaningful_activity =
+            Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
         let before = *last_activity.borrow();
-        let client = AcpClient::new(Rc::clone(&events), Rc::clone(&last_activity));
+        let meaningful_before = *last_meaningful_activity.borrow();
+        let client = AcpClient::new(
+            Rc::clone(&events),
+            Rc::clone(&last_activity),
+            Rc::clone(&last_meaningful_activity),
+        );
 
         let commands_update =
             AvailableCommandsUpdate::new(vec![AvailableCommand::new("/help", "Get help")]);
@@ -526,6 +553,11 @@ mod tests {
         assert!(
             *last_activity.borrow() > before,
             "session_notification must refresh last_activity even for suppressed events"
+        );
+        assert_eq!(
+            *last_meaningful_activity.borrow(),
+            meaningful_before,
+            "protocol-only notifications must not refresh last_meaningful_activity"
         );
     }
 
