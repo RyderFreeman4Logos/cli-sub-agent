@@ -41,7 +41,10 @@ impl Transport for LegacyTransport {
                     session_dir.as_deref(),
                     &session.meta_session_id,
                 )?;
-                let diagnostic = diagnose_mcp_init_failure(&runtime_home);
+                let diagnostic = diagnose_mcp_init_failure(
+                    &runtime_home,
+                    prepared_attempt_env.get("PATH").map(std::ffi::OsStr::new),
+                );
                 gemini_runtime_home = Some(runtime_home);
                 mcp_diagnostic = Some(diagnostic);
                 gemini_allow_degraded_mcp(&prepared_attempt_env)
@@ -70,7 +73,12 @@ impl Transport for LegacyTransport {
 
                 let diagnostic = mcp_diagnostic
                     .clone()
-                    .unwrap_or_else(|| diagnose_mcp_init_failure(gemini_runtime_home.as_deref().expect("gemini runtime home")));
+                    .unwrap_or_else(|| {
+                        diagnose_mcp_init_failure(
+                            gemini_runtime_home.as_deref().expect("gemini runtime home"),
+                            prepared_attempt_env.get("PATH").map(std::ffi::OsStr::new),
+                        )
+                    });
                 let disable_all = diagnostic.unhealthy_servers.is_empty();
                 if let Some(runtime_home) = gemini_runtime_home.as_deref() {
                     disable_mcp_servers_in_runtime(runtime_home, &diagnostic, disable_all)?;
@@ -268,7 +276,10 @@ impl LegacyTransport {
                     None,
                     &session_id,
                 )?;
-                let diagnostic = diagnose_mcp_init_failure(&runtime_home);
+                let diagnostic = diagnose_mcp_init_failure(
+                    &runtime_home,
+                    prepared_attempt_env.get("PATH").map(std::ffi::OsStr::new),
+                );
                 gemini_runtime_home = Some(runtime_home);
                 mcp_diagnostic = Some(diagnostic);
                 gemini_allow_degraded_mcp(&prepared_attempt_env)
@@ -301,6 +312,7 @@ impl LegacyTransport {
                         gemini_runtime_home
                             .as_deref()
                             .expect("gemini runtime home"),
+                        prepared_attempt_env.get("PATH").map(std::ffi::OsStr::new),
                     )
                 });
                 let disable_all = diagnostic.unhealthy_servers.is_empty();
