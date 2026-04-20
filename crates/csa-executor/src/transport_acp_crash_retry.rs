@@ -16,6 +16,7 @@ use regex::Regex;
 use super::{
     AcpTransport, DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, TransportOptions,
     TransportResult, consume_resolved_initial_response_timeout_seconds,
+    transport_gemini_helpers::strip_acp_timeout_footer,
 };
 
 /// Delay between crash retry attempts in seconds.
@@ -401,6 +402,9 @@ pub(crate) fn classify_codex_acp_initial_stall(
             .events
             .iter()
             .any(event_counts_as_codex_acp_initial_response)
+        || !strip_acp_timeout_footer(&result.execution.stderr_output)
+            .trim()
+            .is_empty()
     {
         return None;
     }

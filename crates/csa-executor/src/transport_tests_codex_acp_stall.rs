@@ -19,6 +19,15 @@ fn codex_acp_stall_result(events: Vec<SessionEvent>) -> super::TransportResult {
     }
 }
 
+fn codex_acp_stall_result_with_stderr(
+    events: Vec<SessionEvent>,
+    stderr_output: impl Into<String>,
+) -> super::TransportResult {
+    let mut result = codex_acp_stall_result(events);
+    result.execution.stderr_output = stderr_output.into();
+    result
+}
+
 #[test]
 fn codex_acp_stall_classifier_detects_no_event_after_init() {
     let result = codex_acp_stall_result(vec![SessionEvent::Other(
@@ -55,6 +64,34 @@ fn codex_acp_stall_classifier_ignores_prompt_events_after_first_chunk() {
             "initial-response classifier must ignore real prompt progress: {events:?}"
         );
     }
+}
+
+#[test]
+fn codex_acp_stall_ignored_when_pre_timeout_stderr_present() {
+    let result = codex_acp_stall_result_with_stderr(
+        vec![SessionEvent::Other("availableCommandsUpdate".to_string())],
+        "codex: auth required\ninitial response timeout: no ACP events/stderr for 300s; process killed",
+    );
+
+    assert!(
+        super::transport_acp_crash_retry::classify_codex_acp_initial_stall(&result, Some(300))
+            .is_none(),
+        "pre-timeout stderr must suppress initial-stall classification"
+    );
+}
+
+#[test]
+fn codex_acp_stall_detected_when_only_timeout_footer_in_stderr() {
+    let result = codex_acp_stall_result_with_stderr(
+        vec![SessionEvent::Other("availableCommandsUpdate".to_string())],
+        "initial response timeout: no ACP events/stderr for 300s; process killed\n",
+    );
+
+    let classification =
+        super::transport_acp_crash_retry::classify_codex_acp_initial_stall(&result, Some(300))
+            .expect("timeout footer-only stderr should still classify as stall");
+
+    assert_eq!(classification.timeout_seconds, 300);
 }
 
 #[test]
