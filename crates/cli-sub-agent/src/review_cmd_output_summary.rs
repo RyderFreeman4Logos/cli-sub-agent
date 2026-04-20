@@ -53,13 +53,27 @@ pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -
         .map_err(|error| anyhow::anyhow!("create {}: {error}", output_dir.display()))?;
     let summary_path = output_dir.join("summary.md");
     let summary = if current_run_has_summary_section(output) {
-        let Some(summary) = fs::read_to_string(&summary_path)
-            .ok()
+        let sanitized = sanitize_review_output(output);
+        let sections = parse_sections(&sanitized);
+        if let Some(summary) = sections
+            .iter()
+            .rev()
+            .find(|section| section.id == "summary")
+            .map(|section| extract_section_content(&sanitized, section))
             .filter(|summary| !summary.trim().is_empty())
-        else {
-            return Ok(());
-        };
-        summary
+        {
+            fs::write(&summary_path, &summary)
+                .map_err(|error| anyhow::anyhow!("write {}: {error}", summary_path.display()))?;
+            summary
+        } else {
+            let Some(summary) = fs::read_to_string(&summary_path)
+                .ok()
+                .filter(|summary| !summary.trim().is_empty())
+            else {
+                return Ok(());
+            };
+            summary
+        }
     } else {
         let Some(summary) = derive_review_result_summary(output) else {
             return Ok(());
