@@ -10,6 +10,8 @@ mod test_session_sandbox;
 
 #[path = "../src/review_consensus.rs"]
 mod review_consensus;
+#[path = "../src/review_design_anchor.rs"]
+mod review_design_anchor;
 #[allow(dead_code)]
 #[path = "../src/review_prior_rounds.rs"]
 mod review_prior_rounds;
@@ -120,9 +122,15 @@ fn review_cli_validation_and_consensus_helpers_remain_compatible() {
         .expect("red-team review args should parse");
     cli_defs::validate_command_args(&cli.command, 1800)
         .expect("red-team review args should validate");
+    let project_dir = tempfile::tempdir().expect("tempdir should be created");
 
-    let instruction =
-        review_consensus::build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex, None);
+    let instruction = review_consensus::build_multi_reviewer_instruction(
+        "Base prompt",
+        2,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+    );
     assert!(instruction.contains("reviewer 2"));
     assert!(instruction.contains("CLEAN"));
     assert!(instruction.contains("HAS_ISSUES"));

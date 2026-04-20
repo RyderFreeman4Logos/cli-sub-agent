@@ -21,8 +21,6 @@ use csa_core::types::ToolName;
 use csa_executor::{CodexRuntimeMetadata, CodexTransport};
 use csa_session::review_artifact::{Finding, ReviewArtifact, SeveritySummary};
 
-#[path = "review_design_anchor.rs"]
-pub(crate) mod review_design_anchor;
 #[path = "review_iteration.rs"]
 pub(crate) mod review_iteration;
 #[path = "review_iteration_resolver.rs"]
@@ -38,14 +36,6 @@ pub(crate) const UNCERTAIN: &str = "UNCERTAIN";
 pub(crate) const RULE_SPEC_DEVIATION: &str = "spec-deviation";
 pub(crate) const RULE_UNVERIFIED_CRITERION: &str = "unverified-criterion";
 pub(crate) const RULE_BOUNDARY_VIOLATION: &str = "boundary-violation";
-
-fn append_design_anchor(prompt: &mut String) {
-    if prompt.contains("## Design preferences vs correctness bugs") {
-        return;
-    }
-    prompt.push_str("\n\n");
-    prompt.push_str(review_design_anchor::REVIEW_DESIGN_PREFERENCE_ANCHOR);
-}
 
 #[cfg(test)]
 fn reviewer_tool_binary_available(_tool_name: &str, _config: Option<&ProjectConfig>) -> bool {
@@ -169,6 +159,7 @@ pub(crate) fn build_multi_reviewer_instruction(
     base_prompt: &str,
     reviewer_index: usize,
     tool: ToolName,
+    project_root: &Path,
     prior_rounds_section: Option<&str>,
 ) -> String {
     let output_dir = reviewer_output_dir(reviewer_index);
@@ -190,18 +181,15 @@ When spec/contract context is provided, use rule_id values: \
 Reviewer tool hint: {}.",
         tool.as_str()
     );
-    append_design_anchor(&mut prompt);
+    crate::review_design_anchor::append_design_anchor(&mut prompt);
     if !prompt.contains("## Review iteration context")
-        && let Ok(project_root) = std::env::current_dir()
+        && let Some(branch) =
+            crate::review_design_anchor::resolve_current_branch_via_vcs(project_root)
+        && let Some(iteration_context) =
+            review_iteration::render_review_iteration_context(project_root, &branch)
     {
-        let backend = csa_session::vcs_backends::create_vcs_backend(&project_root);
-        if let Ok(Some(branch)) = backend.current_branch(&project_root)
-            && let Some(iteration_context) =
-                review_iteration::render_review_iteration_context(&project_root, &branch)
-        {
-            prompt.push_str("\n\n");
-            prompt.push_str(&iteration_context);
-        }
+        prompt.push_str("\n\n");
+        prompt.push_str(&iteration_context);
     }
     if let Some(prior_rounds_section) = prior_rounds_section
         && !base_prompt.contains(PRIOR_ROUNDS_SECTION_HEADING)

@@ -77,6 +77,7 @@ invariant = "lock-losing resume cannot mutate metadata of winning session"
         "Base prompt",
         2,
         ToolName::Codex,
+        project_dir.path(),
         Some(&prior_rounds),
     );
     assert!(prompt.contains("Round 6 (commit 29b6c34c)"));
@@ -159,6 +160,7 @@ fn multi_reviewer_prompt_does_not_duplicate_prior_rounds_section_from_base_promp
         &base_prompt,
         2,
         ToolName::Codex,
+        tempdir().unwrap().path(),
         Some(prior_rounds),
     );
 

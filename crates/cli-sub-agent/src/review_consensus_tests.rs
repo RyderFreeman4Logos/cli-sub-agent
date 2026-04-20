@@ -234,8 +234,15 @@ fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_ex
     let _parent_guard =
         ScopedEnvVarRestore::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
     let _session_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/child-session");
+    let project_dir = tempdir().expect("tempdir should be created");
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex, None);
+    let prompt = build_multi_reviewer_instruction(
+        "Base prompt",
+        2,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+    );
 
     assert!(prompt.contains("/tmp/child-session/reviewer-2/review-findings.json"));
     assert!(
@@ -250,8 +257,15 @@ fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
     let _parent_guard =
         ScopedEnvVarRestore::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
     let _session_guard = ScopedEnvVarRestore::unset(CSA_SESSION_DIR_ENV_KEY);
+    let project_dir = tempdir().expect("tempdir should be created");
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 3, ToolName::Codex, None);
+    let prompt = build_multi_reviewer_instruction(
+        "Base prompt",
+        3,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+    );
 
     assert!(prompt.contains("/tmp/parent-session/reviewer-3/review-findings.json"));
 }
@@ -261,8 +275,15 @@ fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_m
     let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock poisoned");
     let _parent_guard = ScopedEnvVarRestore::unset(CSA_PARENT_SESSION_DIR_ENV_KEY);
     let _session_guard = ScopedEnvVarRestore::unset(CSA_SESSION_DIR_ENV_KEY);
+    let project_dir = tempdir().expect("tempdir should be created");
 
-    let prompt = build_multi_reviewer_instruction("Base prompt", 4, ToolName::Codex, None);
+    let prompt = build_multi_reviewer_instruction(
+        "Base prompt",
+        4,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+    );
 
     assert!(
         prompt.contains(
@@ -274,8 +295,15 @@ fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_m
 #[test]
 fn build_multi_reviewer_instruction_does_not_duplicate_findings_contract_from_base_prompt() {
     let base_prompt = format!("Base prompt\n\n{REVIEW_FINDINGS_TOML_INSTRUCTION}");
+    let project_dir = tempdir().expect("tempdir should be created");
 
-    let prompt = build_multi_reviewer_instruction(&base_prompt, 4, ToolName::Codex, None);
+    let prompt = build_multi_reviewer_instruction(
+        &base_prompt,
+        4,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+    );
 
     assert_eq!(prompt.matches(REVIEW_FINDINGS_TOML_INSTRUCTION).count(), 1);
 }

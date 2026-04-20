@@ -577,6 +577,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &prompt,
             reviewer_index + 1,
             reviewer_tool,
+            &project_root,
             prior_rounds_section.as_deref(),
         );
         let reviewer_model = review_model.clone();

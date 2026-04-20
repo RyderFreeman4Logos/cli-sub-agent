@@ -12,24 +12,6 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
 
-struct CurrentDirGuard {
-    original: std::path::PathBuf,
-}
-
-impl CurrentDirGuard {
-    fn change_to(path: &Path) -> Self {
-        let original = std::env::current_dir().expect("current dir");
-        std::env::set_current_dir(path).expect("set current dir");
-        Self { original }
-    }
-}
-
-impl Drop for CurrentDirGuard {
-    fn drop(&mut self) {
-        let _ = std::env::set_current_dir(&self.original);
-    }
-}
-
 fn run_git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)
@@ -139,10 +121,12 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
 
 #[test]
 fn build_multi_reviewer_instruction_contains_design_preference_anchor() {
+    let project_dir = tempdir().unwrap();
     let prompt = crate::review_consensus::build_multi_reviewer_instruction(
         "Base prompt",
         1,
         ToolName::Codex,
+        project_dir.path(),
         None,
     );
 
@@ -243,11 +227,11 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
         3
     );
 
-    let _cwd = CurrentDirGuard::change_to(project_dir.path());
     let prompt = crate::review_consensus::build_multi_reviewer_instruction(
         "Base prompt",
         2,
         ToolName::Codex,
+        project_dir.path(),
         None,
     );
 
@@ -284,15 +268,44 @@ fn multi_round_escalation_keeps_persistent_correctness_bugs_blocking() {
         3,
     );
 
-    let _cwd = CurrentDirGuard::change_to(project_dir.path());
     let prompt = crate::review_consensus::build_multi_reviewer_instruction(
         "Base prompt",
         2,
         ToolName::Codex,
+        project_dir.path(),
         None,
     );
 
     assert!(prompt.contains("persistent correctness bugs remain blocking"));
+}
+
+#[test]
+fn build_multi_reviewer_instruction_uses_explicit_project_root_outside_cwd() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock");
+    let project_dir = tempdir().unwrap();
+    let unrelated_dir = tempdir().unwrap();
+    init_git_repo_with_branch(project_dir.path(), "feat/iter-explicit-root");
+    create_mock_review_session(
+        project_dir.path(),
+        "01K7ER7A0E0000000000000091",
+        Some("feat/iter-explicit-root"),
+        "fail",
+        1,
+    );
+
+    let current_dir = std::env::current_dir().expect("current dir");
+    assert_ne!(current_dir, project_dir.path());
+    assert_ne!(unrelated_dir.path(), project_dir.path());
+
+    let prompt = crate::review_consensus::build_multi_reviewer_instruction(
+        "Base prompt",
+        2,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+    );
+
+    assert!(prompt.contains("This is review iteration 2 on branch 'feat/iter-explicit-root'."));
 }
 
 #[test]
