@@ -40,6 +40,10 @@ pub struct MetaSessionState {
     /// When this session was last accessed
     pub last_accessed: DateTime<Utc>,
 
+    /// CSA binary version that created this persisted session state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csa_version: Option<String>,
+
     /// Genealogy information (parent, depth)
     #[serde(default)]
     pub genealogy: Genealogy,
@@ -243,6 +247,10 @@ pub struct ToolState {
 
     /// When this tool state was last updated
     pub updated_at: DateTime<Utc>,
+
+    /// Best-effort detected tool binary version recorded at tool initialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
 
     /// Token usage for this tool in this session
     #[serde(default, skip_serializing_if = "Option::is_none")]

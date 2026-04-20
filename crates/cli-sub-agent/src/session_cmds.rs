@@ -28,9 +28,9 @@ mod list;
 #[cfg(test)]
 use list::status_from_phase_and_result;
 use list::{
-    format_elapsed, format_started_at, resolve_session_status, select_sessions_for_list,
-    select_sessions_for_list_all_projects, session_created_at, session_to_json,
-    truncate_with_ellipsis,
+    filter_sessions_by_csa_version, format_elapsed, format_started_at, resolve_session_status,
+    select_sessions_for_list, select_sessions_for_list_all_projects, session_created_at,
+    session_to_json, truncate_with_ellipsis,
 };
 
 #[path = "session_cmds_reconcile.rs"]
@@ -72,6 +72,8 @@ pub(crate) struct SessionListFilters {
     pub limit: Option<usize>,
     pub since: Option<String>,
     pub status: Option<String>,
+    pub csa_version: Option<String>,
+    pub show_version: bool,
 }
 
 pub(crate) fn handle_session_list(
@@ -113,6 +115,8 @@ pub(crate) fn handle_session_list(
             });
         }
 
+        sessions = filter_sessions_by_csa_version(sessions, filters.csa_version.as_deref());
+
         // --limit: keep only the N most recent (list is already sorted newest-first)
         if let Some(n) = filters.limit {
             sessions.truncate(n);
@@ -147,7 +151,22 @@ pub(crate) fn handle_session_list(
             }
             OutputFormat::Text => {
                 // Print table header
-                if all_projects {
+                if all_projects && filters.show_version {
+                    println!(
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {:<12}  TOKENS",
+                        "SESSION",
+                        "STARTED",
+                        "ELAPSED",
+                        "LAST ACCESSED",
+                        "STATUS",
+                        "DESCRIPTION",
+                        "TOOLS",
+                        "BRANCH",
+                        "PROJECT",
+                        "VERSION"
+                    );
+                    println!("{}", "-".repeat(206));
+                } else if all_projects {
                     println!(
                         "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  TOKENS",
                         "SESSION",
@@ -161,6 +180,20 @@ pub(crate) fn handle_session_list(
                         "PROJECT"
                     );
                     println!("{}", "-".repeat(192));
+                } else if filters.show_version {
+                    println!(
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<12}  TOKENS",
+                        "SESSION",
+                        "STARTED",
+                        "ELAPSED",
+                        "LAST ACCESSED",
+                        "STATUS",
+                        "DESCRIPTION",
+                        "TOOLS",
+                        "BRANCH",
+                        "VERSION"
+                    );
+                    println!("{}", "-".repeat(176));
                 } else {
                     println!(
                         "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
@@ -200,6 +233,7 @@ pub(crate) fn handle_session_list(
                             .join(", ")
                     };
                     let branch_str = session.branch.as_deref().unwrap_or("-");
+                    let csa_version_str = session.csa_version.as_deref().unwrap_or("-");
 
                     // Format token usage
                     let tokens_str = if let Some(ref usage) = session.total_token_usage {
@@ -240,7 +274,28 @@ pub(crate) fn handle_session_list(
                         format!("  {id}")
                     };
 
-                    if all_projects {
+                    if all_projects && filters.show_version {
+                        let project_display = truncate_with_ellipsis(&session.project_path, 30);
+                        println!(
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {:<12}  {}{}{}",
+                            short_id,
+                            started_str,
+                            elapsed_str,
+                            session
+                                .last_accessed
+                                .with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M"),
+                            status_str,
+                            desc_display,
+                            tools_str,
+                            branch_str,
+                            project_display,
+                            csa_version_str,
+                            tokens_str,
+                            fork_suffix,
+                            change_suffix,
+                        );
+                    } else if all_projects {
                         let project_display = truncate_with_ellipsis(&session.project_path, 30);
                         println!(
                             "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {}{}{}",
@@ -256,6 +311,25 @@ pub(crate) fn handle_session_list(
                             tools_str,
                             branch_str,
                             project_display,
+                            tokens_str,
+                            fork_suffix,
+                            change_suffix,
+                        );
+                    } else if filters.show_version {
+                        println!(
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<12}  {}{}{}",
+                            short_id,
+                            started_str,
+                            elapsed_str,
+                            session
+                                .last_accessed
+                                .with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M"),
+                            status_str,
+                            desc_display,
+                            tools_str,
+                            branch_str,
+                            csa_version_str,
                             tokens_str,
                             fork_suffix,
                             change_suffix,

@@ -24,6 +24,7 @@ fn make_session(
             last_action_summary: "test".to_string(),
             last_exit_code: 0,
             updated_at: accessed,
+            tool_version: None,
             token_usage: None,
         },
     );
@@ -35,6 +36,7 @@ fn make_session(
         branch: None,
         created_at: accessed,
         last_accessed: accessed,
+        csa_version: None,
         genealogy: Genealogy {
             fork_of_session_id: if is_fork {
                 Some("01PARENT".to_string())

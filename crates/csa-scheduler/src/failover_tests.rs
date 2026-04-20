@@ -67,6 +67,7 @@ fn make_session(tools: Vec<(&str, &str)>, compacted: bool) -> MetaSessionState {
                 last_action_summary: summary.to_string(),
                 last_exit_code: 0,
                 updated_at: Utc::now(),
+                tool_version: None,
                 token_usage: None,
             },
         );
@@ -78,6 +79,7 @@ fn make_session(tools: Vec<(&str, &str)>, compacted: bool) -> MetaSessionState {
         branch: None,
         created_at: Utc::now(),
         last_accessed: Utc::now(),
+        csa_version: None,
         genealogy: Default::default(),
         tools: tool_map,
         context_status: csa_session::ContextStatus {

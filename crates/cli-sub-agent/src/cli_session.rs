@@ -36,6 +36,14 @@ pub enum SessionCommands {
         /// Filter by session status (active, retired, failed, error)
         #[arg(long)]
         status: Option<String>,
+
+        /// Filter by recorded CSA binary version (exact string match)
+        #[arg(long = "csa-version")]
+        csa_version: Option<String>,
+
+        /// Show the recorded CSA binary version column in text output
+        #[arg(long = "show-version")]
+        show_version: bool,
     },
 
     /// Compress session context (gemini-cli: /compress, others: /compact)

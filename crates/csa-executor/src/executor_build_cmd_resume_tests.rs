@@ -13,6 +13,7 @@ fn test_build_command_with_session_resume_codex() {
         last_action_summary: "previous run".to_string(),
         last_exit_code: 0,
         updated_at: chrono::Utc::now(),
+        tool_version: None,
         token_usage: None,
     };
 
@@ -50,6 +51,7 @@ fn test_build_command_with_session_resume_codex_long_prompt_uses_stdin_marker() 
         last_action_summary: "previous run".to_string(),
         last_exit_code: 0,
         updated_at: chrono::Utc::now(),
+        tool_version: None,
         token_usage: None,
     };
     let prompt = "p".repeat(MAX_ARGV_PROMPT_LEN + 1);
@@ -92,6 +94,7 @@ fn test_build_command_with_session_resume_claude() {
         last_action_summary: "previous".to_string(),
         last_exit_code: 0,
         updated_at: chrono::Utc::now(),
+        tool_version: None,
         token_usage: None,
     };
 
@@ -125,6 +128,7 @@ fn test_build_command_with_session_resume_gemini() {
         last_action_summary: "previous".to_string(),
         last_exit_code: 0,
         updated_at: chrono::Utc::now(),
+        tool_version: None,
         token_usage: None,
     };
 
@@ -159,6 +163,7 @@ fn test_build_command_no_resume_without_provider_session_id() {
         last_action_summary: "first run".to_string(),
         last_exit_code: 0,
         updated_at: chrono::Utc::now(),
+        tool_version: None,
         token_usage: None,
     };
 

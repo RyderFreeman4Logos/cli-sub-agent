@@ -551,6 +551,7 @@ fn test_find_sessions_multi_condition_filtering() {
             last_action_summary: "Plan".to_string(),
             last_exit_code: 0,
             updated_at: Utc::now(),
+            tool_version: None,
             token_usage: None,
         },
     );
@@ -568,6 +569,7 @@ fn test_find_sessions_multi_condition_filtering() {
             last_action_summary: "Review".to_string(),
             last_exit_code: 0,
             updated_at: Utc::now(),
+            tool_version: None,
             token_usage: None,
         },
     );
@@ -585,6 +587,7 @@ fn test_find_sessions_multi_condition_filtering() {
             last_action_summary: "Plan".to_string(),
             last_exit_code: 0,
             updated_at: Utc::now(),
+            tool_version: None,
             token_usage: None,
         },
     );

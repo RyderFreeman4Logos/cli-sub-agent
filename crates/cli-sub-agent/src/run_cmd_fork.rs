@@ -310,6 +310,7 @@ pub(crate) fn pre_create_native_fork_session(
             last_action_summary: String::new(),
             last_exit_code: 0,
             updated_at: chrono::Utc::now(),
+            tool_version: None,
             token_usage: None,
         },
     );

@@ -101,6 +101,7 @@ pub(crate) fn build_ephemeral_meta_session(work_dir: &Path) -> MetaSessionState 
         branch: None,
         created_at: now,
         last_accessed: now,
+        csa_version: None,
         genealogy: Genealogy::default(),
         tools: HashMap::new(),
         context_status: ContextStatus::default(),

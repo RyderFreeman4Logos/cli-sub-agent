@@ -526,6 +526,7 @@ fn update_tool_state(
             last_action_summary: result.summary.clone(),
             last_exit_code: result.exit_code,
             updated_at: chrono::Utc::now(),
+            tool_version: None,
             token_usage: token_usage.clone(),
         });
 }

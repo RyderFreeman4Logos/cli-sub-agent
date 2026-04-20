@@ -172,6 +172,10 @@ async fn execute_review_retry_path_still_checks_artifact_contract() {
         &fake_gemini,
         format!(
             "#!/bin/sh\n\
+if [ \"$1\" = \"--version\" ]; then\n\
+  printf 'gemini-cli 1.0.0\\n'\n\
+  exit 0\n\
+fi\n\
 if [ -n \"${{GEMINI_API_KEY:-}}\" ]; then\n\
   printf 'api_key\\n' >> \"{}\"\n\
   mkdir -p output\n\

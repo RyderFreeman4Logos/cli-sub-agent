@@ -69,6 +69,7 @@ fn create_mock_review_session(
         branch: branch.map(str::to_string),
         created_at: Utc::now(),
         last_accessed: Utc::now(),
+        csa_version: None,
         genealogy: Genealogy {
             parent_session_id: None,
             depth: 0,
