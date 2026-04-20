@@ -702,6 +702,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         crate::error_hints::append_sandbox_fs_denial_hint(
             &mut result.stderr_output,
             &result.output,
+            crate::pipeline_sandbox::filesystem_sandbox_active(session.sandbox_info.as_ref()),
             &session.meta_session_id,
         );
     }

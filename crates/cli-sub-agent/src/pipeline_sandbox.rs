@@ -478,6 +478,12 @@ pub(crate) fn record_sandbox_telemetry(
     );
 }
 
+pub(crate) fn filesystem_sandbox_active(sandbox_info: Option<&csa_session::SandboxInfo>) -> bool {
+    sandbox_info
+        .and_then(|info| info.filesystem_mode.as_deref())
+        .is_some_and(|mode| mode != "none")
+}
+
 /// Best-effort diagnostic: if tool stderr contains EACCES / "Permission denied"
 /// and a filesystem sandbox was active, emit a `tracing::warn!` with hints.
 ///
@@ -488,9 +494,7 @@ pub(crate) fn check_sandbox_permission_errors(
     sandbox_info: Option<&csa_session::SandboxInfo>,
 ) {
     let Some(info) = sandbox_info else { return };
-    // Only relevant when filesystem isolation was actually active.
-    let fs_active = info.filesystem_mode.as_deref().is_some_and(|m| m != "none");
-    if !fs_active {
+    if !filesystem_sandbox_active(Some(info)) {
         return;
     }
 

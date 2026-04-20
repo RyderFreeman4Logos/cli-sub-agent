@@ -114,8 +114,13 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
 pub(crate) fn sandbox_fs_denial_hint(
     stderr: &str,
     stdout: &str,
+    fs_sandbox_active: bool,
     session_id: &str,
 ) -> Option<String> {
+    if !fs_sandbox_active {
+        return None;
+    }
+
     let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
     if !SANDBOX_FS_DENIAL_MARKERS
         .iter()
@@ -144,9 +149,11 @@ pub(crate) fn sandbox_fs_denial_hint(
 pub(crate) fn append_sandbox_fs_denial_hint(
     stderr_output: &mut String,
     stdout: &str,
+    fs_sandbox_active: bool,
     session_id: &str,
 ) {
-    let Some(hint) = sandbox_fs_denial_hint(stderr_output, stdout, session_id) else {
+    let Some(hint) = sandbox_fs_denial_hint(stderr_output, stdout, fs_sandbox_active, session_id)
+    else {
         return;
     };
     if stderr_output.contains(&hint) {
@@ -291,7 +298,7 @@ mod tests {
     #[test]
     fn sandbox_fs_denial_hint_fires_on_read_only_error() {
         let stderr = "OSError: [Errno 30] Read-only file system: '/home/obj/.claude-mem/settings.json.tmp.1234'";
-        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123").unwrap();
+        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
         assert!(hint.contains("--fork-from 01KTEST123"), "got: {hint}");
         assert!(
             hint.contains("--extra-writable /home/obj/.claude-mem"),
@@ -303,21 +310,28 @@ mod tests {
     #[test]
     fn sandbox_fs_denial_hint_fires_on_permission_denied() {
         let stderr = "PermissionError: [Errno 13] Permission denied: '/etc/foo'";
-        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123").unwrap();
+        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
         assert!(hint.contains("--extra-writable /etc"), "got: {hint}");
     }
 
     #[test]
-    fn sandbox_fs_denial_hint_is_none_for_unrelated_failure() {
+    fn sandbox_fs_denial_hint_suppressed_when_sandbox_inactive() {
+        let stderr = "open(/etc/foo): Permission denied";
+        let hint = sandbox_fs_denial_hint(stderr, "", false, "01KTEST123");
+        assert!(hint.is_none(), "got: {hint:?}");
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_suppressed_without_denial_text() {
         let stderr = "Error: connection refused";
-        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123");
+        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123");
         assert!(hint.is_none());
     }
 
     #[test]
     fn sandbox_fs_denial_hint_generic_path_fallback_when_no_parse() {
         let stderr = "bash: cannot create file: Read-only file system";
-        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123").unwrap();
+        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
         assert!(
             hint.contains("--extra-writable /path/to/needed/dir"),
             "got: {hint}"
