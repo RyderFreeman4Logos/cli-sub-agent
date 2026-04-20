@@ -220,15 +220,13 @@ artifacts = [1, 2]
 }
 
 #[test]
-fn test_save_result_retain_contract_result_artifact_when_output_result_exists() {
+fn test_save_result_removes_stale_contract_result_artifact_when_output_result_exists() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
     let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
-    std::fs::write(
-        manager_result::contract_result_path(&session_dir),
-        "status = \"success\"\nsummary = \"manager-facing report\"\n",
-    )
-    .unwrap();
+    let sidecar_path = manager_result::contract_result_path(&session_dir);
+    std::fs::write(&sidecar_path, "status = \"success\"\nsummary = \"manager-facing report\"\n")
+        .unwrap();
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
@@ -248,8 +246,10 @@ fn test_save_result_retain_contract_result_artifact_when_output_result_exists() 
     let loaded = load_result_in(td.path(), &state.meta_session_id)
         .unwrap()
         .unwrap();
+    assert!(!sidecar_path.exists());
+    assert!(loaded.manager_fields.is_empty());
     assert!(
-        loaded
+        !loaded
             .artifacts
             .iter()
             .any(|artifact| artifact.path == manager_result::CONTRACT_RESULT_ARTIFACT_PATH)

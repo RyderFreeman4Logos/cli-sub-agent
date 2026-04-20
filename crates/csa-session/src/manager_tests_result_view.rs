@@ -377,6 +377,62 @@ fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
 }
 
 #[test]
+fn test_save_result_with_empty_manager_fields_removes_stale_sidecar() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let now = chrono::Utc::now();
+
+    let populated_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "runtime summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+        peak_memory_mb: None,
+        manager_fields: crate::result::SessionManagerFields {
+            report: Some(
+                toml::toml! {
+                    files_changed = 1
+                    repo_write_audit = "warn"
+                }
+                .into(),
+            ),
+            ..Default::default()
+        },
+    };
+    save_result_in(td.path(), &state.meta_session_id, &populated_result).unwrap();
+    assert!(
+        session_dir
+            .join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH)
+            .exists()
+    );
+
+    let clean_result = crate::result::SessionResult {
+        manager_fields: Default::default(),
+        ..populated_result.clone()
+    };
+    save_result_in(td.path(), &state.meta_session_id, &clean_result).unwrap();
+
+    let sidecar_path = session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH);
+    assert!(!sidecar_path.exists(), "stale sidecar must be removed");
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .expect("result should exist");
+    assert!(loaded.manager_fields.is_empty());
+    assert!(
+        !loaded
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == manager_result::CONTRACT_RESULT_ARTIFACT_PATH)
+    );
+}
+
+#[test]
 fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
     let _tracing_guard = TEST_TRACING_LOCK.lock().expect("tracing lock poisoned");
     let td = tempdir().unwrap();
