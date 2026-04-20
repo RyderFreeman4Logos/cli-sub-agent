@@ -105,17 +105,13 @@ pub(crate) fn save_result_in(
     } else {
         remove_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
     }
-    match manager_sidecar.as_ref() {
-        Some(sidecar) => {
-            // Publish the sidecar before the envelope so the authoritative
-            // envelope never points at a sidecar path that failed to write.
-            write_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH, sidecar)?;
-            ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
-        }
-        None if options.clear_stale_manager_sidecar => {
-            clear_manager_sidecar(&session_dir)?;
-        }
-        None => {}
+    let clear_manager_sidecar_after_publish =
+        manager_sidecar.is_none() && options.clear_stale_manager_sidecar;
+    if let Some(sidecar) = manager_sidecar.as_ref() {
+        // Publish the sidecar before the envelope so the authoritative
+        // envelope never points at a sidecar path that failed to write.
+        write_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH, sidecar)?;
+        ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
     }
 
     let runtime_table = session_result_to_table(&persisted_result)?;
@@ -128,6 +124,18 @@ pub(crate) fn save_result_in(
         .context("Failed to serialize session result")?;
     write_file_atomically(&result_path, &contents)
         .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
+    if clear_manager_sidecar_after_publish {
+        // Mirror round-7's write-path atomicity: on clear, publish the
+        // envelope first so it never points at a sidecar that was deleted
+        // before the new envelope became durable.
+        if let Err(err) = clear_manager_sidecar(&session_dir) {
+            tracing::warn!(
+                path = %contract_result_path(&session_dir).display(),
+                error = %err,
+                "Failed to remove manager sidecar after envelope publication"
+            );
+        }
+    }
     Ok(())
 }
 
