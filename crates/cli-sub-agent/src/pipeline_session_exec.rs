@@ -1,12 +1,3 @@
-//! Session-bound execution pipeline: resolve-or-create session, run tool, post-process results.
-
-use anyhow::{Context, Result};
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use tracing::{debug, info, warn};
-
 use super::prompt_guard::emit_prompt_guard_to_caller;
 use super::result_contract::{
     clear_expected_result_artifacts_for_prompt, enforce_result_toml_path_contract,
@@ -20,6 +11,7 @@ use crate::memory_capture;
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::Executor;
@@ -33,6 +25,13 @@ use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{
     ToolState, compute_cooldown_wait, create_session, create_session_fresh, get_session_dir,
 };
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use tracing::{debug, info, warn};
+#[path = "pipeline_session_exec_audit.rs"]
+mod session_exec_audit;
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
 #[allow(clippy::too_many_arguments)]
@@ -601,6 +600,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         );
     }
 
+    let pre_exec_snapshot = session_exec_audit::capture_pre_execution_snapshot(project_root);
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,
         &effective_prompt,
@@ -710,15 +710,12 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         None
     };
 
-    let snapshot_to_fingerprints = |snap: &crate::run_cmd::GitWorkspaceSnapshot| {
-        crate::pipeline::changed_paths::SnapshotFingerprints {
-            tracked_worktree: snap.tracked_worktree_fingerprint,
-            tracked_index: snap.tracked_index_fingerprint,
-            untracked: snap.untracked_fingerprint,
-        }
-    };
-    let pre_fingerprints = pre_run_workspace.as_ref().map(&snapshot_to_fingerprints);
-    let post_fingerprints = post_run_workspace.as_ref().map(&snapshot_to_fingerprints);
+    let pre_fingerprints = pre_run_workspace
+        .as_ref()
+        .map(session_exec_audit::snapshot_to_fingerprints);
+    let post_fingerprints = post_run_workspace
+        .as_ref()
+        .map(session_exec_audit::snapshot_to_fingerprints);
     let changed_paths = crate::pipeline::changed_paths::compute_changed_paths(
         pre_run_workspace.as_ref().map(|s| s.status.as_str()),
         post_run_workspace.as_ref().map(|s| s.status.as_str()),
@@ -764,6 +761,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         executor,
         prompt,
         effective_prompt: &effective_prompt,
+        task_type,
+        readonly_project_root,
         project_root,
         config,
         global_config,
@@ -776,6 +775,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         events_count,
         transcript_artifacts,
         changed_paths,
+        pre_exec_snapshot,
     };
     if let Err(err) =
         crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &mut result)
@@ -790,7 +790,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         );
         return Err(err).with_context(|| format!("meta_session_id={}", session.meta_session_id));
     }
-
     Ok(SessionExecutionResult {
         execution: result,
         meta_session_id: session.meta_session_id.clone(),

@@ -9,11 +9,14 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+#[path = "manager_audit.rs"]
+mod manager_audit;
 #[path = "manager_paths.rs"]
 mod manager_paths;
 #[path = "manager_result.rs"]
 mod manager_result;
 
+pub use manager_audit::{RepoWriteAudit, compute_repo_write_audit, write_audit_warning_artifact};
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;
 pub use manager_paths::{get_session_dir, get_session_root};
@@ -22,8 +25,9 @@ use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_bas
 use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
-    SessionResultView, contract_result_path, legacy_user_result_path, list_artifacts, load_result,
-    load_result_view, redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
+    SaveOptions, SessionResultView, clear_manager_sidecar, contract_result_path,
+    legacy_user_result_path, list_artifacts, load_result, load_result_view,
+    redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
 };
 #[cfg(test)]
 pub(crate) use manager_result::{
@@ -59,11 +63,9 @@ pub struct ResumeSessionResolution {
     pub provider_session_id: Option<String>,
 }
 
-/// Create a new session
-///
-/// If `parent_id` is provided, this session will be a child of that parent.
-/// Depth is computed from the parent (parent.depth + 1).
-/// If `tool` is provided, metadata.toml is created with tool ownership info.
+/// Create a new session. If `parent_id` is provided, this session is a child
+/// of that parent with `depth = parent.depth + 1`. If `tool` is provided,
+/// metadata.toml is created with tool ownership info.
 pub fn create_session(
     project_path: &Path,
     description: Option<&str>,
@@ -198,6 +200,7 @@ fn create_session_in_with_strategy(
         .as_ref()
         .and_then(|id| id.commit_id.clone())
         .or_else(|| detect_git_head(&normalized_project_path));
+    let pre_session_porcelain = detect_git_status_porcelain(&normalized_project_path);
     let change_id = identity
         .as_ref()
         .and_then(|id| {
@@ -229,6 +232,7 @@ fn create_session_in_with_strategy(
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: git_head,
+        pre_session_porcelain,
         last_return_packet: None,
         change_id,
         spec_id: None,
@@ -242,8 +246,6 @@ fn create_session_in_with_strategy(
 
     Ok(state)
 }
-
-/// Detect the current git HEAD commit hash (full SHA) for seed invalidation.
 pub fn detect_git_head(project_path: &Path) -> Option<String> {
     let output = Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -264,15 +266,26 @@ pub fn detect_git_head(project_path: &Path) -> Option<String> {
     }
 }
 
-/// Detect a VCS change identifier for session-change binding.
-///
-/// Uses VcsBackend to detect the appropriate change ID (jj change-id or git HEAD).
+fn detect_git_status_porcelain(project_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout).ok()
+}
+
+/// Detect a VCS change identifier for session-change binding using the active backend.
 fn detect_change_id(project_path: &Path) -> Option<String> {
     let backend = crate::vcs_backends::create_vcs_backend(project_path);
     backend.head_id(project_path).ok().flatten()
 }
 
-/// Detect the current branch using the appropriate VCS backend.
 fn detect_current_branch(project_path: &Path) -> Option<String> {
     let backend = crate::vcs_backends::create_vcs_backend(project_path);
     backend.current_branch(project_path).ok().flatten()
@@ -494,6 +507,7 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     termination_reason: None,
                     is_seed_candidate: false,
                     git_head_at_creation: None,
+                    pre_session_porcelain: None,
                     last_return_packet: None,
                     change_id: None,
                     spec_id: None,

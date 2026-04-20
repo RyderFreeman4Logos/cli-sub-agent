@@ -254,6 +254,8 @@ Every checkbox item MUST include a mechanically verifiable `DONE WHEN:` line.
 
 Output the COMPLETE TODO plan as text to stdout.
 Do NOT write files to the project directory.
+Do NOT manually create `output/summary.md` or other `output/*` files in the repo.
+CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
 The output is captured as `${STEP_6_OUTPUT}` for subsequent steps.
 
 ## Step 6: Phase 2.25 — Spec Generation
@@ -292,6 +294,8 @@ status = "pending"
 Use `plan_ulid = "__PLAN_ID__"` as a placeholder. Step 11 must replace it with
 the actual plan id returned by `csa todo create` before writing `spec.toml`.
 Do NOT write files to the project directory.
+Do NOT manually create `output/summary.md` or other `output/*` files in the repo.
+CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
 The output is captured as `${STEP_7_OUTPUT}` for subsequent steps.
 
 ## Step 7: Phase 2.5 — Threat Model
@@ -444,6 +448,8 @@ ${STEP_9_OUTPUT}
 Output the COMPLETE revised TODO plan as text to stdout.
 Include threat model findings as [Security] tagged checkbox items.
 Do NOT write files to the project directory.
+Do NOT manually create `output/summary.md` or other `output/*` files in the repo.
+CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
 The output is captured as `${STEP_11_OUTPUT}` for the save step.
 
 ## Step 11: Save TODO

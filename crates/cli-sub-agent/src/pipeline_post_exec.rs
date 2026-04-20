@@ -20,6 +20,8 @@ use csa_session::{
 use crate::memory_capture;
 use crate::pipeline_handoff::write_handoff_artifact;
 use crate::run_helpers::{is_compress_command, parse_token_usage};
+#[path = "pipeline_post_exec_audit.rs"]
+mod audit;
 
 const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
 const OUTPUT_LOG_TAIL_READ_BYTES: u64 = 8 * 1024;
@@ -28,6 +30,8 @@ pub(crate) struct PostExecContext<'a> {
     pub executor: &'a Executor,
     pub prompt: &'a str,
     pub effective_prompt: &'a str,
+    pub task_type: Option<&'a str>,
+    pub readonly_project_root: bool,
     pub project_root: &'a Path,
     pub config: Option<&'a ProjectConfig>,
     pub global_config: Option<&'a GlobalConfig>,
@@ -42,6 +46,14 @@ pub(crate) struct PostExecContext<'a> {
     /// File paths changed during tool execution (empty for PreRun or when
     /// git workspace snapshots are unavailable).
     pub changed_paths: Vec<String>,
+    /// Fresh repo baseline captured immediately before the current execution.
+    pub pre_exec_snapshot: Option<PreExecutionSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreExecutionSnapshot {
+    pub head: String,
+    pub porcelain: Option<String>,
 }
 
 /// Process the results of tool execution: update session, persist artifacts, fire hooks.
@@ -116,7 +128,7 @@ pub(crate) async fn process_execution_result(
         started_at: ctx.execution_start_time,
         completed_at: execution_end_time,
         events_count: ctx.events_count,
-        artifacts: ctx.transcript_artifacts,
+        artifacts: ctx.transcript_artifacts.clone(),
         peak_memory_mb: result.peak_memory_mb,
         manager_fields: Default::default(),
     };
@@ -145,6 +157,7 @@ pub(crate) async fn process_execution_result(
             tool_state.last_action_summary = classified_summary;
         }
     }
+    audit::maybe_record_repo_write_audit(&ctx, session, &mut session_result);
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);
     }

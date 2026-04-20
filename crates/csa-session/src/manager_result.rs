@@ -3,6 +3,7 @@ use crate::validate::validate_session_id;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
@@ -20,6 +21,13 @@ const RUNTIME_RESULT_KEYS: [&str; 8] = [
     "events_count",
     "artifacts",
 ];
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SaveOptions {
+    /// When true, an empty manager_fields save deletes any existing
+    /// manager sidecar. The default preserves previously persisted sidecars.
+    pub clear_stale_manager_sidecar: bool,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionResultView {
@@ -44,13 +52,14 @@ pub fn redact_result_sidecar_value(sidecar: &toml::Value) -> Result<toml::Value>
 /// Write a session result to disk
 pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
     let base_dir = super::resolve_write_base_dir(project_path, session_id)?;
-    save_result_in(&base_dir, session_id, result)
+    save_result_in(&base_dir, session_id, result, SaveOptions::default())
 }
 
 pub(crate) fn save_result_in(
     base_dir: &Path,
     session_id: &str,
     result: &SessionResult,
+    options: SaveOptions,
 ) -> Result<()> {
     validate_session_id(session_id)?;
     let session_dir = super::get_session_dir_in(base_dir, session_id);
@@ -77,13 +86,33 @@ pub(crate) fn save_result_in(
     }
 
     let mut persisted_result = result.clone();
+    let manager_sidecar = persisted_result.manager_fields.as_sidecar();
+    let preserve_existing_manager_sidecar = manager_sidecar.is_some()
+        || (!options.clear_stale_manager_sidecar && manager_sidecar_exists(&session_dir));
     if has_custom_schema {
         let Some(contents) = existing_contents.as_deref() else {
             bail!("Expected existing result content when custom schema was detected");
         };
         preserve_user_result_snapshot(&session_dir, contents)?;
     }
-    retain_sidecar_result_artifacts_if_present(&session_dir, &mut persisted_result)?;
+    retain_sidecar_result_artifacts_if_present(
+        &session_dir,
+        &mut persisted_result,
+        preserve_existing_manager_sidecar,
+    )?;
+    if manager_sidecar.is_none() && preserve_existing_manager_sidecar {
+        ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+    } else {
+        remove_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+    }
+    let clear_manager_sidecar_after_publish =
+        manager_sidecar.is_none() && options.clear_stale_manager_sidecar;
+    if let Some(sidecar) = manager_sidecar.as_ref() {
+        // Publish the sidecar before the envelope so the authoritative
+        // envelope never points at a sidecar path that failed to write.
+        write_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH, sidecar)?;
+        ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+    }
 
     let runtime_table = session_result_to_table(&persisted_result)?;
     let mut merged_table = existing_table.unwrap_or_default();
@@ -93,9 +122,48 @@ pub(crate) fn save_result_in(
     merged_table.extend(runtime_table);
     let contents = toml::to_string_pretty(&toml::Value::Table(merged_table))
         .context("Failed to serialize session result")?;
-    fs::write(&result_path, contents)
+    write_file_atomically(&result_path, &contents)
         .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
+    if clear_manager_sidecar_after_publish {
+        // Mirror round-7's write-path atomicity: on clear, publish the
+        // envelope first so it never points at a sidecar that was deleted
+        // before the new envelope became durable.
+        if let Err(err) = clear_manager_sidecar(&session_dir) {
+            tracing::warn!(
+                path = %contract_result_path(&session_dir).display(),
+                error = %err,
+                "Failed to remove manager sidecar after envelope publication"
+            );
+        }
+    }
     Ok(())
+}
+
+fn manager_sidecar_exists(session_dir: &Path) -> bool {
+    session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH).exists()
+}
+
+pub fn clear_manager_sidecar(session_dir: &Path) -> Result<()> {
+    let manager_sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
+    if !manager_sidecar_path.exists() {
+        return Ok(());
+    }
+    if !manager_sidecar_path.is_file() {
+        bail!(
+            "Manager sidecar path exists but is not a file: {}",
+            manager_sidecar_path.display()
+        );
+    }
+    match fs::remove_file(&manager_sidecar_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to remove manager sidecar: {}",
+                manager_sidecar_path.display()
+            )
+        }),
+    }
 }
 
 fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<()> {
@@ -131,8 +199,11 @@ pub fn legacy_user_result_path(session_dir: &Path) -> PathBuf {
 fn retain_sidecar_result_artifacts_if_present(
     session_dir: &Path,
     result: &mut SessionResult,
+    retain_contract_sidecar: bool,
 ) -> Result<()> {
-    retain_result_artifact_if_present(session_dir, result, CONTRACT_RESULT_ARTIFACT_PATH)?;
+    if retain_contract_sidecar {
+        retain_result_artifact_if_present(session_dir, result, CONTRACT_RESULT_ARTIFACT_PATH)?;
+    }
     retain_result_artifact_if_present(session_dir, result, LEGACY_USER_RESULT_ARTIFACT_PATH)?;
     Ok(())
 }
@@ -165,6 +236,52 @@ fn ensure_result_artifact(result: &mut SessionResult, artifact_path: &str) {
         return;
     }
     result.artifacts.push(SessionArtifact::new(artifact_path));
+}
+
+fn remove_result_artifact(result: &mut SessionResult, artifact_path: &str) {
+    result
+        .artifacts
+        .retain(|artifact| artifact.path != artifact_path);
+}
+
+fn write_result_sidecar(
+    session_dir: &Path,
+    artifact_path: &str,
+    sidecar: &toml::Value,
+) -> Result<()> {
+    let sidecar_path = session_dir.join(artifact_path);
+    let Some(parent_dir) = sidecar_path.parent() else {
+        bail!(
+            "Result sidecar path has no parent: {}",
+            sidecar_path.display()
+        );
+    };
+    fs::create_dir_all(parent_dir)
+        .with_context(|| format!("Failed to create sidecar dir: {}", parent_dir.display()))?;
+    let rendered = toml::to_string_pretty(sidecar).context("Failed to serialize result sidecar")?;
+    write_file_atomically(&sidecar_path, &rendered)
+        .with_context(|| format!("Failed to write result sidecar: {}", sidecar_path.display()))
+}
+
+fn write_file_atomically(path: &Path, contents: &str) -> Result<()> {
+    let Some(parent_dir) = path.parent() else {
+        bail!("Path has no parent for atomic write: {}", path.display());
+    };
+    fs::create_dir_all(parent_dir)
+        .with_context(|| format!("Failed to create parent dir: {}", parent_dir.display()))?;
+    let mut temp_file = tempfile::NamedTempFile::new_in(parent_dir)
+        .with_context(|| format!("Failed to create temp file in {}", parent_dir.display()))?;
+    temp_file
+        .write_all(contents.as_bytes())
+        .with_context(|| format!("Failed to write temp file for {}", path.display()))?;
+    temp_file
+        .flush()
+        .with_context(|| format!("Failed to flush temp file for {}", path.display()))?;
+    temp_file
+        .persist(path)
+        .map_err(|err| err.error)
+        .with_context(|| format!("Failed to atomically replace {}", path.display()))?;
+    Ok(())
 }
 
 fn session_result_to_table(result: &SessionResult) -> Result<toml::Table> {

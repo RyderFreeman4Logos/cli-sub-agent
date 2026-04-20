@@ -21,7 +21,6 @@ use csa_session::{
 };
 use std::collections::HashMap;
 use tempfile::tempdir;
-
 #[test]
 fn truncate_with_ellipsis_preserves_ascii_short_input() {
     let input = "short description";
@@ -34,7 +33,6 @@ fn truncate_with_ellipsis_handles_multibyte_chinese() {
     let expected = "\u{8FD9}\u{662F}\u{4E00}\u{4E2A}\u{7528}\u{4E8E}\u{6D4B}...";
     assert_eq!(truncate_with_ellipsis(input, 10), expected);
 }
-
 #[test]
 fn truncate_with_ellipsis_handles_emoji_without_panic() {
     let input = "session 😀😃😄😁 description";
@@ -207,6 +205,7 @@ fn sample_session_state() -> MetaSessionState {
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        pre_session_porcelain: None,
         last_return_packet: None,
         change_id: None,
         spec_id: None,
@@ -734,6 +733,7 @@ fn sample_fork_session() -> MetaSessionState {
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        pre_session_porcelain: None,
         last_return_packet: None,
         change_id: None,
         spec_id: None,
