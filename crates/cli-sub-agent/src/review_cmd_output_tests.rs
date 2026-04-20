@@ -1,6 +1,7 @@
 use super::{
     PersistedReviewArtifact, ToolReviewFailureKind, derive_decision_from_text,
-    detect_tool_review_failure, ensure_review_summary_artifact, persist_review_verdict,
+    detect_tool_review_failure, ensure_review_summary_artifact, extract_review_text,
+    persist_review_verdict,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_core::types::{ReviewDecision, ToolName};
@@ -119,6 +120,31 @@ fn derive_decision_from_text_clean_phrase_without_skip_stays_pass() {
 }
 
 #[test]
+fn extract_review_text_skips_leading_non_json_preamble() {
+    let transcript = concat!(
+        "warning: provider banner\n",
+        "stdout noise before transcript\n",
+        "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"<!-- CSA:SECTION:summary -->\\nFAIL\\n<!-- CSA:SECTION:summary:END -->\"}}\n"
+    );
+
+    assert_eq!(
+        extract_review_text(transcript).as_deref(),
+        Some("<!-- CSA:SECTION:summary -->\nFAIL\n<!-- CSA:SECTION:summary:END -->")
+    );
+}
+
+#[test]
+fn derive_decision_from_text_high_risk_without_findings_fails() {
+    let decision = derive_decision_from_text(
+        "PASS\nNo blocking issues found in this scope.\nOverall risk: high",
+        &BTreeMap::new(),
+        Some("high"),
+    );
+
+    assert_eq!(decision, ReviewDecision::Fail);
+}
+
+#[test]
 fn detect_tool_review_failure_flags_gemini_oauth_prompt_without_real_turn() {
     let stdout = "Opening authentication page\nDo you want to continue? [Y/n]\n";
     let detected = detect_tool_review_failure(ToolName::GeminiCli, stdout, "");
@@ -227,6 +253,78 @@ fn persist_review_verdict_prefers_structured_findings_summary() {
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&1));
     assert_eq!(artifact.decision, ReviewDecision::Fail);
     assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_verdict_reconciles_high_risk_no_findings_with_text_fallback() {
+    let session_id = "01TESTRISKRECONCILE00000000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-high-risk-no-findings", session_id);
+    let artifact = json!({
+        "findings": [],
+        "severity_summary": SeveritySummary::default(),
+        "schema_version": "1.0",
+        "session_id": session_id,
+        "timestamp": chrono::Utc::now(),
+        "overall_risk": "high"
+    });
+    fs::write(
+        session_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
+    )
+    .expect("write findings artifact");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_verdict_recounts_findings_when_summary_is_zeroed() {
+    let session_id = "01TESTRECOUNT00000000000000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-recount-findings", session_id);
+    let findings = vec![
+        make_finding(Severity::Critical, "critical"),
+        make_finding(Severity::Medium, "medium"),
+        make_finding(Severity::Medium, "medium-2"),
+    ];
+    let artifact = json!({
+        "findings": findings,
+        "severity_summary": SeveritySummary::default(),
+        "schema_version": "1.0",
+        "session_id": session_id,
+        "timestamp": chrono::Utc::now(),
+        "overall_risk": "high"
+    });
+    fs::write(
+        session_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
+    )
+    .expect("write findings artifact");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&2));
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
