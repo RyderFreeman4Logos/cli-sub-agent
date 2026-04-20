@@ -279,6 +279,14 @@ fn commit_reviewer_guidance_schema_requires_regression_tests_for_timing_scenario
         !commit_pattern.contains("Risk Areas:") && !commit_workflow.contains("Risk Areas:"),
         "commit pattern/workflow should no longer require the old Risk Areas reviewer-guidance field"
     );
+}
+
+#[test]
+fn commit_workflow_step17_requires_ai_reviewer_metadata_marker() {
+    let commit_pattern =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/PATTERN.md")).unwrap();
+    let commit_workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/workflow.toml")).unwrap();
 
     for content in [&commit_pattern, &commit_workflow] {
         assert!(
@@ -295,6 +303,43 @@ fn commit_reviewer_guidance_schema_requires_regression_tests_for_timing_scenario
         assert!(
             !content.contains("scripts/gen_commit_msg.sh --body"),
             "commit pattern/workflow step 17 must not synthesize a fallback commit body"
+        );
+        assert!(
+            content.contains("See patterns/commit/PATTERN.md step 17/18."),
+            "commit pattern/workflow step 17 must reference the renumbered PATTERN.md steps"
+        );
+        assert!(
+            content.contains(
+                "Commit body must include a descriptive summary before the AI Reviewer Metadata block."
+            ),
+            "commit pattern/workflow step 17 must require a descriptive summary before metadata"
+        );
+    }
+}
+
+#[test]
+fn commit_workflow_followup_step_hints_match_renumbered_pattern() {
+    let commit_pattern =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/PATTERN.md")).unwrap();
+    let commit_workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/workflow.toml")).unwrap();
+
+    for content in [&commit_pattern, &commit_workflow] {
+        assert!(
+            content.contains("cumulative branch review (Step 21) or publish"),
+            "commit pattern/workflow must point commit follow-up hints at step 21"
+        );
+        assert!(
+            content.contains("push and create PR (Step 22)"),
+            "commit pattern/workflow must point publish follow-up hints at step 22"
+        );
+        assert!(
+            !content.contains("cumulative branch review (Step 18) or publish"),
+            "commit pattern/workflow must not retain the stale step-18 follow-up hint"
+        );
+        assert!(
+            !content.contains("push and create PR (Step 19)"),
+            "commit pattern/workflow must not retain the stale step-19 follow-up hint"
         );
     }
 }

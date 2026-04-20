@@ -277,7 +277,7 @@ Run `review-loop` pattern on staged changes before final commit.
 
 ## ENDIF
 
-## Step 14: Generate Commit Message Parts
+## Step 17: Generate Commit Message Parts
 
 Tool: bash
 OnFail: abort
@@ -300,7 +300,7 @@ if [ -n "${COMMIT_BODY_RAW}" ] && [ "${COMMIT_BODY_RAW}" != '""' ]; then
   fi
 else
   echo "ERROR: Step 17 requires upstream COMMIT_BODY from the AI-generated commit body step." >&2
-  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  echo "See patterns/commit/PATTERN.md step 17/18." >&2
   exit 1
 fi
 
@@ -311,13 +311,13 @@ fi
 
 if [ -z "$(printf '%s' "${COMMIT_BODY_LOCAL}" | tr -d '[:space:]')" ]; then
   echo "ERROR: Step 17 requires non-empty upstream COMMIT_BODY from the AI-generated commit body step." >&2
-  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  echo "See patterns/commit/PATTERN.md step 17/18." >&2
   exit 1
 fi
 
 if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- '### AI Reviewer Metadata'; then
   echo "ERROR: Step 17: commit body missing required '### AI Reviewer Metadata' block" >&2
-  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  echo "See patterns/commit/PATTERN.md step 17/18." >&2
   exit 1
 fi
 
@@ -369,7 +369,7 @@ echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
 ```
 
-## Step 15: Inject Spec Trailers
+## Step 18: Inject Spec Trailers
 
 Tool: bash
 OnFail: abort
@@ -416,7 +416,7 @@ echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_BODY_LOCAL}"
 ```
 
-## Step 16: Write Commit Message File
+## Step 19: Write Commit Message File
 
 Tool: bash
 OnFail: abort
@@ -445,7 +445,7 @@ echo "CSA_VAR:COMMIT_MESSAGE_FILE=$COMMIT_MESSAGE_FILE_LOCAL"
 cat "${COMMIT_MESSAGE_FILE_LOCAL}"
 ```
 
-## Step 17: Commit
+## Step 20: Commit
 
 Tool: bash
 OnFail: abort
@@ -461,12 +461,12 @@ fi
 
 trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
 git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
-echo '<!-- CSA:NEXT_STEP cmd="cumulative branch review (Step 18) or publish" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="cumulative branch review (Step 21) or publish" required=true -->'
 ```
 
 ## IF NOT ${SKIP_PUBLISH} (Auto-Publish — standalone by default)
 
-## Step 18: Cumulative Branch Review
+## Step 21: Cumulative Branch Review
 
 Tool: csa
 Tier: tier-2-standard
@@ -479,7 +479,7 @@ This catches cross-commit issues that per-commit reviews might miss.
 set -euo pipefail
 bash scripts/csa/cumulative-review-batch.sh --default-branch main -- \
   csa review --range main...HEAD
-echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 19)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 22)" required=true -->'
 ```
 
 When global config sets `[review].batch_commits >= 2`, intermediate cumulative
@@ -487,7 +487,7 @@ reviews may be skipped until enough new commits have landed since the last
 passed `main...HEAD` review on this branch. Set `CSA_REVIEW_NOW=1` to force the
 review immediately and refresh the recorded HEAD.
 
-## Step 19: Auto PR Transaction
+## Step 22: Auto PR Transaction
 
 Tool: bash
 OnFail: abort
@@ -534,9 +534,9 @@ echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workfl
 
 ## IF ${HAS_DEFERRED_ISSUES}
 
-## Step 20: Fix Deferred Issues
+## Step 23: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-17).
+Each fix goes through full commit workflow (Steps 1-20).
 
 ## ENDIF
