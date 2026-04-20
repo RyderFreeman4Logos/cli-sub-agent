@@ -93,8 +93,20 @@ Tool: bash
 OnFail: abort
 
 ```bash
-just test
+set -o pipefail
+just test 2>&1
 ```
+
+This is a hard gate. If `just test` exits non-zero, the workflow MUST stop
+immediately and MUST NOT continue to staging or commit creation. The merged
+test stream is preserved in step/session output for auditability.
+
+When `just test` fails:
+1. Abort the commit workflow immediately
+2. Report the exact failing command/output
+3. NEVER retry with a narrower scope
+4. NEVER bypass hooks or continue with `git commit`
+5. NEVER relabel the failure as "pre-existing" and proceed anyway
 
 ## Step 6: Stage Changes
 
