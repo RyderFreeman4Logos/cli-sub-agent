@@ -329,8 +329,7 @@ impl AcpConnection {
         let execution_start = Instant::now();
         let heartbeat_interval = resolve_heartbeat_interval();
         let mut last_heartbeat = execution_start;
-        let (mut last_initial_response_activity, mut saw_initial_response_event) =
-            (execution_start, false);
+        let mut saw_initial_response_event = false;
         let mut processed_event_count = 0usize;
         let mut output_spool =
             open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
@@ -373,15 +372,15 @@ impl AcpConnection {
                             );
                             if saw_progress_this_poll {
                                 saw_initial_response_event = true;
-                                last_initial_response_activity = Instant::now();
                             }
                             let (effective_timeout, timeout_phase, last_relevant_activity) =
                                 if !saw_initial_response_event {
                                     if let Some(irt) = initial_response_timeout {
+                                        // Any child output keeps the process alive; eligible ACP events remain classification/state-only.
                                         (
                                             irt,
                                             TimeoutPhase::InitialResponse,
-                                            last_initial_response_activity,
+                                            *self.last_activity.borrow(),
                                         )
                                     } else {
                                         (idle_timeout, TimeoutPhase::Idle, *self.last_activity.borrow())
