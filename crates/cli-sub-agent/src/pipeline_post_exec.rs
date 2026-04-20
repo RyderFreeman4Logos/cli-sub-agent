@@ -149,7 +149,7 @@ pub(crate) async fn process_execution_result(
             tool_state.last_action_summary = classified_summary;
         }
     }
-    audit::maybe_record_repo_write_audit(&ctx, &mut session_result)?;
+    audit::maybe_record_repo_write_audit(&ctx, session, &mut session_result)?;
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);
     }

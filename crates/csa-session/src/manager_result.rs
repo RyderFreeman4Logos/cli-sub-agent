@@ -77,6 +77,7 @@ pub(crate) fn save_result_in(
     }
 
     let mut persisted_result = result.clone();
+    let manager_sidecar = persisted_result.manager_fields.as_sidecar();
     if has_custom_schema {
         let Some(contents) = existing_contents.as_deref() else {
             bail!("Expected existing result content when custom schema was detected");
@@ -84,6 +85,9 @@ pub(crate) fn save_result_in(
         preserve_user_result_snapshot(&session_dir, contents)?;
     }
     retain_sidecar_result_artifacts_if_present(&session_dir, &mut persisted_result)?;
+    if manager_sidecar.is_some() {
+        ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+    }
 
     let runtime_table = session_result_to_table(&persisted_result)?;
     let mut merged_table = existing_table.unwrap_or_default();
@@ -95,6 +99,9 @@ pub(crate) fn save_result_in(
         .context("Failed to serialize session result")?;
     fs::write(&result_path, contents)
         .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
+    if let Some(sidecar) = manager_sidecar.as_ref() {
+        write_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH, sidecar)?;
+    }
     Ok(())
 }
 
@@ -165,6 +172,25 @@ fn ensure_result_artifact(result: &mut SessionResult, artifact_path: &str) {
         return;
     }
     result.artifacts.push(SessionArtifact::new(artifact_path));
+}
+
+fn write_result_sidecar(
+    session_dir: &Path,
+    artifact_path: &str,
+    sidecar: &toml::Value,
+) -> Result<()> {
+    let sidecar_path = session_dir.join(artifact_path);
+    let Some(parent_dir) = sidecar_path.parent() else {
+        bail!(
+            "Result sidecar path has no parent: {}",
+            sidecar_path.display()
+        );
+    };
+    fs::create_dir_all(parent_dir)
+        .with_context(|| format!("Failed to create sidecar dir: {}", parent_dir.display()))?;
+    let rendered = toml::to_string_pretty(sidecar).context("Failed to serialize result sidecar")?;
+    fs::write(&sidecar_path, rendered)
+        .with_context(|| format!("Failed to write result sidecar: {}", sidecar_path.display()))
 }
 
 fn session_result_to_table(result: &SessionResult) -> Result<toml::Table> {
