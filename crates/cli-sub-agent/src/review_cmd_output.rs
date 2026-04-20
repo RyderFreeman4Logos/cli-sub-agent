@@ -16,8 +16,11 @@ use regex::Regex;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
+#[path = "review_cmd_output_clean.rs"]
+mod clean_detection;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
+use clean_detection::{contains_clean_phrase, review_contains_prose_clean_conclusion};
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
 };
@@ -67,6 +70,14 @@ struct PersistedReviewArtifact {
     severity_summary: SeveritySummary,
     #[serde(default)]
     overall_risk: Option<String>,
+}
+
+impl PersistedReviewArtifact {
+    fn overall_risk_is_severe(&self) -> bool {
+        self.overall_risk.as_deref().is_some_and(|risk| {
+            risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,16 +283,25 @@ fn derive_review_verdict_artifact(
     findings: &[Finding],
 ) -> Result<ReviewVerdictArtifact, anyhow::Error> {
     if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
-        let decision = derive_decision_from_findings(
-            artifact.findings.is_empty(),
-            artifact.overall_risk.as_deref(),
-            ReviewDecision::from_str(&meta.decision).ok(),
-        );
+        let severity_counts = severity_counts_for_artifact(&artifact);
+        let decision = if artifact.findings.is_empty()
+            && severity_counts_are_zero(&severity_counts)
+            && !artifact.overall_risk_is_severe()
+            && review_contains_prose_clean_conclusion(session_dir)?
+        {
+            ReviewDecision::Pass
+        } else {
+            derive_decision_from_findings(
+                artifact.findings.is_empty(),
+                artifact.overall_risk.as_deref(),
+                ReviewDecision::from_str(&meta.decision).ok(),
+            )
+        };
         return Ok(build_review_verdict_artifact(
             meta.session_id.clone(),
             decision,
             legacy_verdict_for_decision(decision, &meta.verdict),
-            severity_counts_for_artifact(&artifact),
+            severity_counts,
             Vec::new(),
         ));
     }
@@ -451,6 +471,10 @@ fn severity_counts_for_artifact(
         return severity_counts_from_findings(&artifact.findings);
     }
     counts
+}
+
+fn severity_counts_are_zero(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
+    counts.values().all(|count| *count == 0)
 }
 
 fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
@@ -728,60 +752,6 @@ fn contains_verdict_token(haystack: &str, token: &str) -> bool {
     haystack
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|part| part.eq_ignore_ascii_case(token))
-}
-
-fn contains_clean_phrase(output: &str) -> bool {
-    let lower = output.to_ascii_lowercase();
-    [
-        "no issues found",
-        "no issues were found",
-        "no blocking issues",
-        "no findings",
-        "\u{672a}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
-        "\u{6ca1}\u{6709}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
-        "\u{65e0}\u{963b}\u{585e}\u{95ee}\u{9898}",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase))
-        || contains_positive_no_issue_clause(&lower)
-}
-
-fn contains_positive_no_issue_clause(lower: &str) -> bool {
-    const NOUNS: &[&str] = &[
-        "issue", "issues", "finding", "findings", "concern", "concerns",
-    ];
-    const TAIL_VERBS: &[&str] = &["found", "identified", "detected", "introduced"];
-    const MAX_TOKENS_BEFORE_NOUN: usize = 6;
-    const MAX_TOKENS_AFTER_NOUN: usize = 4;
-
-    let tokens: Vec<&str> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    for (no_index, token) in tokens.iter().enumerate() {
-        if *token != "no" {
-            continue;
-        }
-
-        let search_end = (no_index + 1 + MAX_TOKENS_BEFORE_NOUN).min(tokens.len());
-        let Some(relative_noun_index) = tokens[no_index + 1..search_end]
-            .iter()
-            .position(|candidate| NOUNS.contains(candidate))
-        else {
-            continue;
-        };
-        let noun_index = no_index + 1 + relative_noun_index;
-        let tail_end = (noun_index + 1 + MAX_TOKENS_AFTER_NOUN).min(tokens.len());
-        if tokens[noun_index + 1..tail_end]
-            .iter()
-            .any(|candidate| TAIL_VERBS.contains(candidate))
-        {
-            return true;
-        }
-    }
-
-    false
 }
 
 fn is_findings_header(line: &str) -> bool {
