@@ -422,6 +422,37 @@ fn ensure_review_summary_artifact_synthesizes_summary_from_details_only_output()
 }
 
 #[test]
+fn ensure_review_summary_artifact_writes_summary_md_when_section_emitted_without_prior_file() {
+    let session_id = "01TESTSUMMARYWRITE0000000000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("review-summary-write-from-output", session_id);
+    let output = "<!-- CSA:SECTION:summary -->\nReview outcome: PASS.\n<!-- CSA:SECTION:summary:END -->\n\
+<!-- CSA:SECTION:details -->\nDetails go here\n<!-- CSA:SECTION:details:END -->\n";
+
+    ensure_review_summary_artifact(&session_dir, output).expect("write summary from output");
+
+    let summary_path = session_dir.join("output").join("summary.md");
+    assert!(summary_path.exists(), "summary.md must be written");
+    let contents = fs::read_to_string(&summary_path).expect("read summary");
+    assert!(
+        contents.contains("Review outcome: PASS."),
+        "got: {contents}"
+    );
+
+    let index = csa_session::load_output_index(&session_dir)
+        .expect("load output index")
+        .expect("index should exist");
+    let summary_entry = index
+        .sections
+        .iter()
+        .find(|section| section.id == "summary")
+        .expect("summary entry should exist");
+    assert_eq!(summary_entry.file_path.as_deref(), Some("summary.md"));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn ensure_review_summary_artifact_preserves_existing_summary_section() {
     let session_id = "01TESTSUMMARYKEEP0000000000";
     let (_env_lock, project_root, session_dir) =
