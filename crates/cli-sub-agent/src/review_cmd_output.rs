@@ -281,7 +281,7 @@ fn derive_review_verdict_artifact(
             meta.session_id.clone(),
             decision,
             legacy_verdict_for_decision(decision, &meta.verdict),
-            severity_counts_from_summary(&artifact.severity_summary),
+            severity_counts_for_artifact(&artifact),
             Vec::new(),
         ));
     }
@@ -350,10 +350,14 @@ pub(super) fn extract_review_text(raw_output: &str) -> Option<String> {
     let mut saw_json_line = false;
 
     for line in raw_output.lines().filter(|line| !line.trim().is_empty()) {
-        let Ok(event) = serde_json::from_str::<TranscriptEvent>(line) else {
-            return Some(raw_output.to_string());
+        let event = match serde_json::from_str::<TranscriptEvent>(line) {
+            Ok(event) => {
+                saw_json_line = true;
+                event
+            }
+            Err(_) if !saw_json_line => continue,
+            Err(_) => return Some(raw_output.to_string()),
         };
-        saw_json_line = true;
         let Some(item) = event.item else {
             continue;
         };
@@ -401,6 +405,27 @@ fn severity_counts_from_summary(
     ]
     .into_iter()
     .collect()
+}
+
+fn severity_counts_from_findings(
+    findings: &[Finding],
+) -> std::collections::BTreeMap<Severity, u32> {
+    let mut counts = zero_severity_counts();
+    for finding in findings {
+        *counts.entry(finding.severity.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn severity_counts_for_artifact(
+    artifact: &PersistedReviewArtifact,
+) -> std::collections::BTreeMap<Severity, u32> {
+    let counts = severity_counts_from_summary(&artifact.severity_summary);
+    let total = counts.values().copied().sum::<u32>();
+    if total == 0 && !artifact.findings.is_empty() {
+        return severity_counts_from_findings(&artifact.findings);
+    }
+    counts
 }
 
 fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
@@ -487,9 +512,6 @@ fn derive_decision_from_text(
     if contains_verdict_token(text, "UNCERTAIN") {
         return ReviewDecision::Uncertain;
     }
-    if counts.values().any(|count| *count > 0) {
-        return ReviewDecision::Fail;
-    }
     if (contains_verdict_token(text, "PASS")
         || contains_verdict_token(text, "CLEAN")
         || contains_clean_phrase(text))
@@ -502,6 +524,9 @@ fn derive_decision_from_text(
         && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
     {
         return ReviewDecision::Pass;
+    }
+    if overall_risk.is_some_and(|risk| !risk.eq_ignore_ascii_case("low")) {
+        return ReviewDecision::Fail;
     }
     ReviewDecision::Uncertain
 }
