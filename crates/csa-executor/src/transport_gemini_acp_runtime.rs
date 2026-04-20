@@ -33,7 +33,6 @@ const GEMINI_MIRROR_FILES: &[&str] = &[
 const GEMINI_MIRROR_DIRS: &[&str] = &["extensions", "antigravity"];
 const GEMINI_SELECTED_TYPE_OAUTH: &str = "oauth-personal";
 const GEMINI_SELECTED_TYPE_API_KEY: &str = "gemini-api-key";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GeminiAcpLaunch {
     pub(crate) command: String,
@@ -131,6 +130,16 @@ pub(crate) fn prepare_gemini_acp_runtime(
         command: "gemini".to_string(),
         args: base_args.to_vec(),
     })
+}
+
+pub(crate) fn prepare_gemini_runtime_env(
+    env: &mut HashMap<String, String>,
+    project_dir: Option<&Path>,
+    session_dir: Option<&Path>,
+    session_id: &str,
+) -> Result<PathBuf> {
+    let _ = prepare_gemini_acp_runtime(env, project_dir, session_dir, session_id, &[])?;
+    gemini_runtime_home_from_env(env).context("gemini runtime home missing after preparation")
 }
 
 pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Option<PathBuf> {

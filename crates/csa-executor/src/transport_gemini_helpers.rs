@@ -12,6 +12,8 @@ use crate::transport_gemini_retry::{gemini_retry_model, gemini_should_use_api_ke
 
 pub(crate) const GEMINI_OAUTH_PROMPT_SUMMARY: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no tool output produced";
+pub(crate) const GEMINI_MCP_ISSUES_DETECTED_SUMMARY: &str =
+    "MCP issues detected. Run /mcp list for status.";
 pub(crate) const GEMINI_ACP_INITIAL_STALL_REASON: &str = "gemini_acp_initial_stall";
 pub(crate) const GEMINI_LEGACY_INITIAL_STALL_REASON: &str = "gemini_legacy_initial_stall";
 const DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 180;
@@ -165,6 +167,37 @@ pub(super) fn apply_gemini_legacy_initial_stall_summary(
         execution.stderr_output.push('\n');
     }
     execution.stderr_output.push_str(&summary);
+    execution.stderr_output.push('\n');
+}
+
+pub(crate) fn is_gemini_mcp_issue_result(execution: &ExecutionResult) -> bool {
+    execution.exit_code != 0
+        && [
+            execution.summary.as_str(),
+            execution.output.as_str(),
+            execution.stderr_output.as_str(),
+        ]
+        .into_iter()
+        .any(|text| {
+            text.contains("MCP issues detected")
+                || text.contains("Run /mcp list")
+                || text.contains(GEMINI_MCP_ISSUES_DETECTED_SUMMARY)
+        })
+}
+
+pub(crate) fn apply_gemini_mcp_warning_summary(
+    execution: &mut ExecutionResult,
+    warning_summary: &str,
+) {
+    execution.summary = if execution.summary.trim().is_empty() {
+        warning_summary.to_string()
+    } else {
+        format!("{warning_summary} | {}", execution.summary.trim())
+    };
+    if !execution.stderr_output.is_empty() && !execution.stderr_output.ends_with('\n') {
+        execution.stderr_output.push('\n');
+    }
+    execution.stderr_output.push_str(warning_summary);
     execution.stderr_output.push('\n');
 }
 

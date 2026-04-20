@@ -508,6 +508,10 @@ pub struct GlobalToolConfig {
     /// NOT injected into env by default — only used as a last resort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Allow gemini-cli to continue after disabling unhealthy MCP servers.
+    /// Defaults to true so startup-time MCP degradation is non-fatal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_degraded_mcp: Option<bool>,
 }
 
 fn default_max_concurrent() -> u32 {

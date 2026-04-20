@@ -182,6 +182,16 @@ impl GlobalConfig {
         self.tools.get(tool).and_then(|t| t.api_key.as_deref())
     }
 
+    /// Whether gemini-cli may retry after stripping unhealthy MCP servers.
+    ///
+    /// Missing config defaults to `true` to keep MCP degradation non-fatal.
+    pub fn allow_degraded_mcp(&self, tool: &str) -> bool {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.allow_degraded_mcp)
+            .unwrap_or(true)
+    }
+
     /// Get the thinking budget lock for a tool from global config.
     pub fn thinking_lock(&self, tool: &str) -> Option<&str> {
         self.tools
