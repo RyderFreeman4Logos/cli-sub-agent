@@ -279,6 +279,24 @@ fn commit_reviewer_guidance_schema_requires_regression_tests_for_timing_scenario
         !commit_pattern.contains("Risk Areas:") && !commit_workflow.contains("Risk Areas:"),
         "commit pattern/workflow should no longer require the old Risk Areas reviewer-guidance field"
     );
+
+    for content in [&commit_pattern, &commit_workflow] {
+        assert!(
+            content.contains(
+                "Step 17 requires upstream COMMIT_BODY from the AI-generated commit body step."
+            ),
+            "commit pattern/workflow step 17 must fail fast when upstream COMMIT_BODY is missing"
+        );
+        assert!(
+            content
+                .contains("Step 17: commit body missing required '### AI Reviewer Metadata' block"),
+            "commit pattern/workflow step 17 must emit the explicit AI Reviewer Metadata error"
+        );
+        assert!(
+            !content.contains("scripts/gen_commit_msg.sh --body"),
+            "commit pattern/workflow step 17 must not synthesize a fallback commit body"
+        );
+    }
 }
 
 #[cfg(unix)]

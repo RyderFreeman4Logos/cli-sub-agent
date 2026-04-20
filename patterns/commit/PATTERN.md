@@ -286,8 +286,8 @@ Generate a Conventional Commits subject/body split from staged files. The body
 MUST contain a short description of what changed followed by the AI Reviewer
 Metadata block. Generate the metadata from the actual staged changes, design
 decisions made during implementation, and reviewer guidance needed for careful
-inspection. Prefer a richer `${COMMIT_BODY}` supplied by an upstream AI step
-when available; otherwise fall back to the helper script.
+inspection. Require `${COMMIT_BODY}` from the upstream AI commit-body step; do
+not synthesize a fallback body here.
 
 ```bash
 set -euo pipefail
@@ -299,7 +299,9 @@ if [ -n "${COMMIT_BODY_RAW}" ] && [ "${COMMIT_BODY_RAW}" != '""' ]; then
     COMMIT_BODY_LOCAL="${COMMIT_BODY_RAW}"
   fi
 else
-  COMMIT_BODY_LOCAL="$(scripts/gen_commit_msg.sh --body "${SCOPE:-}")"
+  echo "ERROR: Step 17 requires upstream COMMIT_BODY from the AI-generated commit body step." >&2
+  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  exit 1
 fi
 
 if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
@@ -308,12 +310,18 @@ if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
 fi
 
 if [ -z "$(printf '%s' "${COMMIT_BODY_LOCAL}" | tr -d '[:space:]')" ]; then
-  echo "ERROR: Commit body is empty. AI-era commit format requires a summary and metadata block." >&2
+  echo "ERROR: Step 17 requires non-empty upstream COMMIT_BODY from the AI-generated commit body step." >&2
+  echo "See patterns/commit/PATTERN.md step 14/15." >&2
+  exit 1
+fi
+
+if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- '### AI Reviewer Metadata'; then
+  echo "ERROR: Step 17: commit body missing required '### AI Reviewer Metadata' block" >&2
+  echo "See patterns/commit/PATTERN.md step 14/15." >&2
   exit 1
 fi
 
 for required_line in \
-  '### AI Reviewer Metadata' \
   '- **Design Intent**:' \
   '- **Key Decisions**:' \
   '- **Reviewer Guidance**:'
