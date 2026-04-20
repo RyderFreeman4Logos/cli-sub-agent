@@ -46,6 +46,13 @@ When `just pre-commit` fails:
 2. Environment/sandbox limitations → report status="needs_clarification" with exact error, do NOT bypass
 3. Pre-existing failures from unrelated crates → report as blocker with exact error, do NOT bypass
 NEVER treat pre-existing failures as justification for LEFTHOOK=0.
+
+When `just test` fails:
+1. Abort the commit workflow immediately
+2. Report the exact failing command/output
+3. NEVER retry with a narrower scope
+4. NEVER bypass hooks or continue with `git commit`
+5. NEVER relabel the failure as "pre-existing" and proceed anyway
 </prompt-guard>
 
 ### Prerequisites

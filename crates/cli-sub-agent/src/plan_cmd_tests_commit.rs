@@ -280,3 +280,77 @@ fn commit_reviewer_guidance_schema_requires_regression_tests_for_timing_scenario
         "commit pattern/workflow should no longer require the old Risk Areas reviewer-guidance field"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn commit_workflow_test_gate_aborts_before_following_steps() {
+    use std::os::unix::fs::PermissionsExt;
+    use weave::compiler::ExecutionPlan;
+
+    let td = tempfile::tempdir().unwrap();
+    let bin_dir = td.path().join("bin");
+    let marker = td.path().join("should-not-exist");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+
+    let just_path = bin_dir.join("just");
+    std::fs::write(
+        &just_path,
+        "#!/bin/sh\nif [ \"$1\" = \"test\" ]; then\n  echo 'failing just test' >&2\n  exit 1\nfi\nexit 0\n",
+    )
+    .unwrap();
+    let mut just_perms = std::fs::metadata(&just_path).unwrap().permissions();
+    just_perms.set_mode(0o755);
+    std::fs::set_permissions(&just_path, just_perms).unwrap();
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+
+    let plan = ExecutionPlan {
+        name: "commit-test-gate".into(),
+        description: "Verify a failing just test aborts the workflow.".into(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "Run Tests".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nset -o pipefail\njust test 2>&1\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "Commit Marker".into(),
+                tool: Some("bash".into()),
+                prompt: format!("```bash\ntouch {}\n```", marker.display()),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+        ],
+    };
+
+    let vars = HashMap::from([("PATH".to_string(), patched_path)]);
+    let results = execute_plan(&plan, &vars, td.path(), None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        results.len(),
+        1,
+        "workflow should stop after failing test gate"
+    );
+    assert_eq!(results[0].title, "Run Tests");
+    assert_ne!(results[0].exit_code, 0, "test gate must report failure");
+    assert!(
+        !marker.exists(),
+        "subsequent steps must not run after a failing just test gate"
+    );
+}

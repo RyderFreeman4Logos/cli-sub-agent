@@ -174,7 +174,8 @@ title = "Run Tests"
 tool = "bash"
 prompt = """
 ```bash
-just test
+set -o pipefail
+just test 2>&1
 ```"""
 on_fail = "abort"
 
