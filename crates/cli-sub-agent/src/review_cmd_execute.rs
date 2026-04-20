@@ -5,6 +5,7 @@ mod artifact_guard;
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -17,7 +18,7 @@ use csa_core::{
     },
     types::{OutputFormat, ToolName},
 };
-use csa_executor::Executor;
+use csa_executor::{Executor, PeakMemoryContext};
 use csa_session::{
     SessionResult, get_session_dir, load_result, load_session, save_result, save_session,
 };
@@ -420,6 +421,10 @@ fn maybe_synthesize_missing_review_result(
         200,
     );
     let completed_at = Utc::now();
+    let peak_memory_mb = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
+        .and_then(|ctx| ctx.0);
     let fallback_result = SessionResult {
         status: status.to_string(),
         exit_code,
@@ -429,7 +434,7 @@ fn maybe_synthesize_missing_review_result(
         completed_at,
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
+        peak_memory_mb,
     };
 
     if let Err(save_err) = save_result(project_root, &session_id, &fallback_result) {
@@ -459,7 +464,7 @@ fn extract_meta_session_id_from_error(error: &anyhow::Error) -> Option<String> {
         let suffix = &message[idx + MARKER.len()..];
         let session_id: String = suffix
             .chars()
-            .take_while(|ch| ch.is_ascii_alphanumeric())
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
             .collect();
         if !session_id.is_empty() {
             return Some(session_id);
@@ -470,7 +475,10 @@ fn extract_meta_session_id_from_error(error: &anyhow::Error) -> Option<String> {
 
 fn read_review_failure_excerpt(session_dir: &Path) -> Option<String> {
     let stderr_path = session_dir.join("stderr.log");
-    let contents = fs::read_to_string(stderr_path).ok()?;
+    let mut buf = Vec::with_capacity(4096);
+    let file = fs::File::open(stderr_path).ok()?;
+    let _ = file.take(4096).read_to_end(&mut buf);
+    let contents = String::from_utf8_lossy(&buf);
     let trimmed = contents.trim();
     if trimmed.is_empty() {
         return None;

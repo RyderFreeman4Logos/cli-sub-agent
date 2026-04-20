@@ -6,6 +6,7 @@ use crate::session_cmds_result::{StructuredOutputOpts, handle_session_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{GlobalConfig, ProjectProfile, ToolRestrictions, global::GlobalToolConfig};
 use csa_core::types::ToolName;
+use csa_executor::PeakMemoryContext;
 use std::path::Path;
 
 #[cfg(unix)]
@@ -325,6 +326,54 @@ fn synthesize_missing_review_result_makes_session_result_readable() {
         StructuredOutputOpts::default(),
     )
     .expect("session result should read the synthetic review failure");
+}
+
+#[test]
+fn read_review_failure_excerpt_ignores_bytes_beyond_4kb() {
+    let td = tempfile::tempdir().unwrap();
+    let session_dir = td.path();
+    std::fs::write(
+        session_dir.join("stderr.log"),
+        format!("{}late failure marker", " ".repeat(4096)),
+    )
+    .unwrap();
+
+    assert_eq!(read_review_failure_excerpt(session_dir), None);
+}
+
+#[test]
+fn synthesize_missing_review_result_propagates_peak_memory_from_error_chain() {
+    let td = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&td);
+    let project_root = td.path();
+
+    let session =
+        csa_session::create_session(project_root, Some("review-failure"), None, Some("codex"))
+            .expect("session creation");
+    let session_id = session.meta_session_id.clone();
+    let session_dir = csa_session::get_session_dir(project_root, &session_id).unwrap();
+    std::fs::write(session_dir.join("stderr.log"), "tool terminated by signal").unwrap();
+
+    let started_at = Utc::now();
+    let err = PeakMemoryContext(Some(512))
+        .into_anyhow("codex process exited")
+        .context(format!("meta_session_id={session_id}"));
+
+    maybe_synthesize_missing_review_result(project_root, ToolName::Codex, started_at, &err);
+
+    let result = csa_session::load_result(project_root, &session.meta_session_id)
+        .unwrap()
+        .expect("synthetic result.toml should exist");
+    assert_eq!(result.peak_memory_mb, Some(512));
+}
+
+#[test]
+fn extract_meta_session_id_from_error_accepts_hyphen_and_underscore() {
+    let err = anyhow::anyhow!("review failed").context("meta_session_id=session-1_abc");
+    assert_eq!(
+        extract_meta_session_id_from_error(&err).as_deref(),
+        Some("session-1_abc")
+    );
 }
 
 #[cfg(unix)]
