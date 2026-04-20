@@ -39,7 +39,7 @@ pub(crate) fn should_audit_repo_tracked_writes(
     readonly_project_root: bool,
     prompt: &str,
 ) -> bool {
-    if !matches!(task_type, Some("run")) {
+    if !matches!(task_type, Some("run" | "plan" | "plan-step")) {
         return false;
     }
     if readonly_project_root {
@@ -124,6 +124,47 @@ mod tests {
             Some("run"),
             false,
             "Implement the fix in src/main.rs and update tests"
+        ));
+    }
+
+    #[test]
+    fn should_audit_repo_tracked_writes_for_plan_task_type() {
+        assert!(should_audit_repo_tracked_writes(
+            Some("plan"),
+            false,
+            "Analyze the workflow and summarize where files are written"
+        ));
+    }
+
+    #[test]
+    fn should_audit_repo_tracked_writes_for_plan_step_task_type() {
+        assert!(should_audit_repo_tracked_writes(
+            Some("plan-step"),
+            false,
+            "Read-only: inspect the task step and summarize the result"
+        ));
+    }
+
+    #[test]
+    fn should_not_audit_repo_tracked_writes_for_review_or_debate() {
+        assert!(!should_audit_repo_tracked_writes(
+            Some("review"),
+            true,
+            "Analyze the diff and summarize findings"
+        ));
+        assert!(!should_audit_repo_tracked_writes(
+            Some("debate"),
+            true,
+            "Analyze the proposal and summarize tradeoffs"
+        ));
+    }
+
+    #[test]
+    fn should_not_audit_repo_tracked_writes_for_unknown_task_type() {
+        assert!(!should_audit_repo_tracked_writes(
+            None,
+            true,
+            "Analyze the module and summarize the control flow"
         ));
     }
 }
