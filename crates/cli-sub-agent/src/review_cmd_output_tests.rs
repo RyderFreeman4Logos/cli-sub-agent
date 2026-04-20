@@ -637,6 +637,9 @@ fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+#[path = "review_cmd_output_prose_clean_tests.rs"]
+mod prose_clean_tests;
+
 #[test]
 fn persist_review_verdict_json_transcript_without_review_message_emits_uncertain_verdict() {
     let session_id = "01TESTJSONNOREVIEWMESSAGE00";
