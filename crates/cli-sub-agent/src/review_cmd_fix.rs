@@ -251,7 +251,7 @@ mod tests {
     use csa_core::types::ReviewDecision;
     use csa_session::state::ReviewSessionMeta;
     use csa_session::{
-        FindingSeverity, FindingsFile, ReviewFinding, ReviewFindingFileRange, write_findings_toml,
+        FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity, write_findings_toml,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -303,7 +303,7 @@ mod tests {
     fn sample_stale_finding() -> ReviewFinding {
         ReviewFinding {
             id: "stale-medium".to_string(),
-            severity: FindingSeverity::Medium,
+            severity: Severity::Medium,
             file_ranges: vec![ReviewFindingFileRange {
                 path: "src/lib.rs".to_string(),
                 start: 42,

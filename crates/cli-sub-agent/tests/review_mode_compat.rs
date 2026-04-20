@@ -55,7 +55,13 @@ fn review_artifact_keeps_legacy_payloads_backward_compatible() {
     let json = r#"
     {
         "findings": [],
-        "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+        "severity_summary": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0
+        },
         "schema_version": "1.0",
         "session_id": "session-legacy",
         "timestamp": "2026-02-24T00:00:00Z"

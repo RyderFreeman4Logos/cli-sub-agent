@@ -11,14 +11,11 @@ fn default_schema_version() -> String {
 pub const REVIEW_VERDICT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FindingSeverity {
-    #[serde(rename = "critical")]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
     Critical = 4,
-    #[serde(rename = "high")]
     High = 3,
-    #[serde(rename = "medium")]
     Medium = 2,
-    #[serde(rename = "low")]
     Low = 1,
 }
 
@@ -33,7 +30,7 @@ pub struct ReviewFindingFileRange {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ReviewFinding {
     pub id: String,
-    pub severity: FindingSeverity,
+    pub severity: Severity,
     #[serde(default)]
     pub file_ranges: Vec<ReviewFindingFileRange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,20 +44,6 @@ pub struct ReviewFinding {
 pub struct FindingsFile {
     #[serde(default)]
     pub findings: Vec<ReviewFinding>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Severity {
-    #[serde(rename = "critical")]
-    Critical = 5,
-    #[serde(rename = "high")]
-    High = 4,
-    #[serde(rename = "medium")]
-    Medium = 3,
-    #[serde(rename = "low")]
-    Low = 2,
-    #[serde(rename = "info")]
-    Info = 1,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -85,8 +68,6 @@ pub struct SeveritySummary {
     pub medium: u32,
     #[serde(default)]
     pub low: u32,
-    #[serde(default)]
-    pub info: u32,
 }
 
 impl SeveritySummary {
@@ -98,7 +79,6 @@ impl SeveritySummary {
                 Severity::High => summary.high += 1,
                 Severity::Medium => summary.medium += 1,
                 Severity::Low => summary.low += 1,
-                Severity::Info => summary.info += 1,
             }
         }
         summary
@@ -145,7 +125,6 @@ impl ReviewVerdictArtifact {
             Severity::High,
             Severity::Medium,
             Severity::Low,
-            Severity::Info,
         ] {
             severity_counts.insert(severity, 0);
         }
@@ -188,8 +167,8 @@ pub fn write_findings_toml(session_dir: &Path, artifact: &FindingsFile) -> std::
 #[cfg(test)]
 mod tests {
     use super::{
-        Finding, FindingSeverity, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact,
-        ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,
+        Finding, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewFinding,
+        ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,
     };
     use chrono::Utc;
     use csa_core::types::ReviewDecision;
@@ -232,15 +211,6 @@ mod tests {
                 summary: "low summary".to_string(),
                 engine: "reviewer".to_string(),
             },
-            Finding {
-                severity: Severity::Info,
-                fid: "FIDINFO".to_string(),
-                file: "src/e.rs".to_string(),
-                line: None,
-                rule_id: "rule.info".to_string(),
-                summary: "info summary".to_string(),
-                engine: "reviewer".to_string(),
-            },
         ]
     }
 
@@ -249,7 +219,28 @@ mod tests {
         assert!(Severity::Critical > Severity::High);
         assert!(Severity::High > Severity::Medium);
         assert!(Severity::Medium > Severity::Low);
-        assert!(Severity::Low > Severity::Info);
+    }
+
+    #[test]
+    fn severity_serde_roundtrip_covers_all_four_variants() {
+        let variants = [
+            (Severity::Critical, "\"critical\""),
+            (Severity::High, "\"high\""),
+            (Severity::Medium, "\"medium\""),
+            (Severity::Low, "\"low\""),
+        ];
+
+        for (severity, encoded) in variants {
+            let json = serde_json::to_string(&severity).expect("severity serialize should succeed");
+            assert_eq!(json, encoded);
+            let decoded: Severity =
+                serde_json::from_str(encoded).expect("severity deserialize should succeed");
+            assert_eq!(decoded, severity);
+        }
+
+        let err = serde_json::from_str::<Severity>("\"info\"")
+            .expect_err("info should no longer deserialize as a finding severity");
+        assert!(err.is_data());
     }
 
     #[test]
@@ -319,7 +310,6 @@ mod tests {
         assert_eq!(summary.high, 1);
         assert_eq!(summary.medium, 1);
         assert_eq!(summary.low, 1);
-        assert_eq!(summary.info, 1);
     }
 
     #[test]
@@ -327,7 +317,13 @@ mod tests {
         let json = r#"
         {
             "findings": [],
-            "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+            "severity_summary": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "info": 0
+            },
             "session_id": "01JABCDEF0123456789ABCDEFG",
             "timestamp": "2026-02-24T00:00:00Z"
         }
@@ -344,7 +340,13 @@ mod tests {
         let json = r#"
         {
             "findings": [],
-            "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+            "severity_summary": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "info": 0
+            },
             "session_id": "01JABCDEF0123456789ABCDEFG",
             "timestamp": "2026-02-24T00:00:00Z"
         }
@@ -365,7 +367,6 @@ mod tests {
         assert_eq!(summary.high, 0);
         assert_eq!(summary.medium, 0);
         assert_eq!(summary.low, 0);
-        assert_eq!(summary.info, 0);
     }
 
     #[test]
@@ -391,7 +392,7 @@ end = 80
             FindingsFile {
                 findings: vec![ReviewFinding {
                     id: "f1".to_string(),
-                    severity: FindingSeverity::High,
+                    severity: Severity::High,
                     file_ranges: vec![ReviewFindingFileRange {
                         path: "crates/foo/src/bar.rs".to_string(),
                         start: 73,

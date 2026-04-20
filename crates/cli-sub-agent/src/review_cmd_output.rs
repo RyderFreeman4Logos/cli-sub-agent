@@ -401,7 +401,6 @@ fn severity_counts_from_summary(
         (Severity::High, summary.high),
         (Severity::Medium, summary.medium),
         (Severity::Low, summary.low),
-        (Severity::Info, summary.info),
     ]
     .into_iter()
     .collect()
@@ -443,7 +442,7 @@ fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity,
             Some(level) if level == "high" => Severity::High,
             Some(level) if level == "medium" => Severity::Medium,
             Some(level) if level == "low" => Severity::Low,
-            Some(level) if level == "info" => Severity::Info,
+            Some(level) if level == "info" => Severity::Low,
             Some(level) if level == "p0" => Severity::Critical,
             Some(level) if level == "p1" => Severity::High,
             Some(level) if level == "p2" => Severity::Medium,

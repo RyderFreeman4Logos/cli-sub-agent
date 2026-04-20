@@ -324,7 +324,6 @@ fn persist_review_verdict_recounts_findings_when_summary_is_zeroed() {
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&2));
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
-    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
@@ -360,8 +359,7 @@ fn persist_review_verdict_falls_back_to_full_output_transcript_counts() {
     assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&2));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
-    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&1));
-    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
@@ -396,8 +394,7 @@ fn persist_review_verdict_falls_back_to_priority_markers_in_full_output() {
     assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
-    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&2));
-    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&3));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
@@ -564,7 +561,6 @@ fn persist_review_verdict_plain_text_full_output_without_review_message_emits_un
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
-    assert_eq!(artifact.severity_counts.get(&Severity::Info), Some(&0));
     assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
@@ -612,7 +608,13 @@ fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
     let findings_path = session_dir.join("review-findings.json");
     let artifact = json!({
         "findings": [],
-        "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+        "severity_summary": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0
+        },
         "overall_risk": "low"
     });
     fs::write(
@@ -679,7 +681,13 @@ fn persist_review_verdict_json_transcript_without_review_message_emits_uncertain
 fn persisted_review_artifact_deserializes_optional_overall_risk() {
     let artifact: PersistedReviewArtifact = serde_json::from_value(json!({
         "findings": [],
-        "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+        "severity_summary": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0
+        },
         "overall_risk": "low"
     }))
     .expect("deserialize persisted review artifact");
