@@ -164,7 +164,8 @@ window in `${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_b
 Subsequent PR runs skip Step 4 bot triggering/polling during that window and go
 straight to the existing merge-without-bot path after confirming the local
 review state. When the window elapses, the cached section is cleared
-automatically and normal bot triggering resumes.
+automatically and normal bot triggering resumes. The same cache write happens if
+the quota warning only appears during the later Step 5 post-verification check.
 
 **Manual override / reset**:
 - `CSA_PR_BOT_FORCE=1` bypasses the quota cache for a single invocation.
