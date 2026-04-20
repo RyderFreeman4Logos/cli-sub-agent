@@ -86,7 +86,6 @@ pub(crate) async fn execute_with_session(
         extra_readable,
     )
     .await?;
-
     Ok(execution.execution)
 }
 #[allow(clippy::too_many_arguments)]
@@ -182,14 +181,12 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
     let memory_project_key = resolve_memory_project_key(project_root);
-
     let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
     let depth = crate::pipeline_env::current_csa_depth();
     if let Some(wait) = compute_cooldown_wait(project_root, cd, &session_arg, &parent, depth) {
         info!("Cooldown: sleeping {wait:?} before new session");
         tokio::time::sleep(wait).await;
     }
-
     let mut resolved_provider_session_id: Option<String> = None;
     let mut session = if let Some(ref session_id) = session_arg {
         let resolution =
@@ -247,7 +244,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         new_session
     };
-
     if session_arg.is_some() && session.phase == csa_session::SessionPhase::Available {
         if let Err(e) = session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
             warn!(session = %session.meta_session_id, error = %e, "Skipping phase transition on resume");
@@ -262,7 +258,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {
@@ -703,13 +698,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         result.exit_code = 1;
     }
+    if result.exit_code != 0 {
+        crate::error_hints::append_sandbox_fs_denial_hint(
+            &mut result.stderr_output,
+            &result.output,
+            &session.meta_session_id,
+        );
+    }
     // Post-run git snapshot for commit guard + changed_paths hook vars.
     let post_run_workspace = if is_git {
         crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
     } else {
         None
     };
-
     let pre_fingerprints = pre_run_workspace
         .as_ref()
         .map(session_exec_audit::snapshot_to_fingerprints);

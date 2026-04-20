@@ -3,6 +3,8 @@
 //! Inspired by xurl's `user_facing_error()` pattern: match on error type/message
 //! and return actionable fix suggestions with concrete commands.
 
+use std::path::Path;
+
 use anyhow::Error;
 use csa_core::error::AppError;
 
@@ -20,6 +22,15 @@ const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa se
 const HINT_CONFIG_ERROR: &str =
     "hint: validate config with 'csa config validate' or reinitialize with 'csa init'";
 const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; current builds pin TMPDIR to a writable sandbox temp dir (private /tmp in bwrap, session tmp elsewhere) and seed under CSA session state, but older builds may still need re-run with TMPDIR=/tmp";
+const SANDBOX_FS_DENIAL_MARKERS: [&str; 7] = [
+    "read-only file system",
+    "permission denied",
+    "operation not permitted",
+    "eacces",
+    "eperm",
+    "errno 13",
+    "errno 30",
+];
 
 pub fn suggest_fix(err: &Error) -> Option<String> {
     for cause in err.chain() {
@@ -98,6 +109,82 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
     }
 
     None
+}
+
+pub(crate) fn sandbox_fs_denial_hint(
+    stderr: &str,
+    stdout: &str,
+    session_id: &str,
+) -> Option<String> {
+    let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
+    if !SANDBOX_FS_DENIAL_MARKERS
+        .iter()
+        .any(|marker| combined_lower.contains(marker))
+    {
+        return None;
+    }
+
+    let path_hint = extract_denied_path(stderr)
+        .or_else(|| extract_denied_path(stdout))
+        .map(|path| {
+            let suggested = Path::new(&path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| parent.display().to_string())
+                .unwrap_or(path);
+            format!("--extra-writable {suggested}")
+        })
+        .unwrap_or_else(|| "--extra-writable /path/to/needed/dir".to_string());
+
+    Some(format!(
+        "hint: sandbox filesystem write denied. To continue from this session's partial work rather than re-running from scratch, run:\n  csa run --fork-from {session_id} {path_hint} --prompt-file <continuation prompt>"
+    ))
+}
+
+pub(crate) fn append_sandbox_fs_denial_hint(
+    stderr_output: &mut String,
+    stdout: &str,
+    session_id: &str,
+) {
+    let Some(hint) = sandbox_fs_denial_hint(stderr_output, stdout, session_id) else {
+        return;
+    };
+    if stderr_output.contains(&hint) {
+        return;
+    }
+    if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+        stderr_output.push('\n');
+    }
+    stderr_output.push_str(&hint);
+    stderr_output.push('\n');
+}
+
+fn extract_denied_path(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        if !SANDBOX_FS_DENIAL_MARKERS
+            .iter()
+            .take(3)
+            .any(|marker| lower.contains(marker))
+        {
+            continue;
+        }
+
+        if let Some(path) = extract_quoted_path(line, ": '", '\'') {
+            return Some(path);
+        }
+        if let Some(path) = extract_quoted_path(line, ": \"", '"') {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn extract_quoted_path(line: &str, marker: &str, quote: char) -> Option<String> {
+    let start = line.rfind(marker)?;
+    let rest = &line[start + marker.len()..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
 }
 
 fn tool_install_hint(tool_name: &str) -> Option<&'static str> {
@@ -199,5 +286,41 @@ mod tests {
     fn test_no_hint_for_generic_error() {
         let err = anyhow::anyhow!("something failed");
         assert_eq!(suggest_fix(&err), None);
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_fires_on_read_only_error() {
+        let stderr = "OSError: [Errno 30] Read-only file system: '/home/obj/.claude-mem/settings.json.tmp.1234'";
+        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123").unwrap();
+        assert!(hint.contains("--fork-from 01KTEST123"), "got: {hint}");
+        assert!(
+            hint.contains("--extra-writable /home/obj/.claude-mem"),
+            "got: {hint}"
+        );
+        assert!(hint.contains("--prompt-file"), "got: {hint}");
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_fires_on_permission_denied() {
+        let stderr = "PermissionError: [Errno 13] Permission denied: '/etc/foo'";
+        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123").unwrap();
+        assert!(hint.contains("--extra-writable /etc"), "got: {hint}");
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_is_none_for_unrelated_failure() {
+        let stderr = "Error: connection refused";
+        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123");
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_generic_path_fallback_when_no_parse() {
+        let stderr = "bash: cannot create file: Read-only file system";
+        let hint = sandbox_fs_denial_hint(stderr, "", "01KTEST123").unwrap();
+        assert!(
+            hint.contains("--extra-writable /path/to/needed/dir"),
+            "got: {hint}"
+        );
     }
 }
