@@ -285,6 +285,9 @@ name = "POST_REBASE_TIMEOUT"
 name = "PR_BODY"
 
 [[workflow.variables]]
+name = "PR_BOT_QUOTA_CACHE_SCRIPT"
+
+[[workflow.variables]]
 name = "PR_BOT_WAIT_SCRIPT"
 
 [[workflow.variables]]
@@ -433,6 +436,12 @@ name = "owner_matches"
 
 [[workflow.variables]]
 name = "quota_body"
+
+[[workflow.variables]]
+name = "quota_expected_reset_at"
+
+[[workflow.variables]]
+name = "quota_now_utc"
 
 [[workflow.variables]]
 name = "quota_section_header"
@@ -957,6 +966,8 @@ configured bot is gemini-code-assist) and includes them with a quota warning.
 If a bot issue comment contains `daily quota limit` (case-insensitive), record
 the 24h quota window in the cache file, mark the bot unavailable, and continue
 through the Step 6a merge-without-bot path instead of spending another wait cycle.
+This applies both to the polling helper path and to the later Step 5
+post-verification quota-comment check.
 
 ```bash
 set -euo pipefail
@@ -1055,9 +1066,13 @@ query_current_window_current_head_review_ts() {
 # --- Launch self-contained poller once; main workflow only checks the result file ---
 if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
   PR_BOT_WAIT_SCRIPT="${CSA_WORKFLOW_DIR}/scripts/pr-bot-wait.sh"
+  PR_BOT_QUOTA_CACHE_SCRIPT="${CSA_WORKFLOW_DIR}/scripts/pr-bot-quota-cache.sh"
 else
   PR_BOT_WAIT_SCRIPT="patterns/pr-bot/scripts/pr-bot-wait.sh"
+  PR_BOT_QUOTA_CACHE_SCRIPT="patterns/pr-bot/scripts/pr-bot-quota-cache.sh"
 fi
+# shellcheck source=patterns/pr-bot/scripts/pr-bot-quota-cache.sh
+. "${PR_BOT_QUOTA_CACHE_SCRIPT}"
 OUTPUT_FILE="$(mktemp -t pr-bot-wait-${PR_NUM}-XXXXXX.json)"
 INTERVAL="$(csa config get pr_review.cloud_bot_poll_interval_seconds --default 30)"
 WAIT_LONG_POLL_SECS="$(csa config get kv_cache.long_poll_seconds --default 240)"
@@ -1188,6 +1203,8 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   check_quota_message_step5() {
     set +e
     local quota_body
+    local quota_now_utc
+    local quota_expected_reset_at
     quota_body="$(
       gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
         | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body // "") | test("daily quota limit"; "i"))] | .[0].body // ""' \
@@ -1196,6 +1213,12 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     set -e
     if [ -n "${quota_body}" ]; then
       echo "Quota exhaustion detected from cloud bot comment during post-poll verification." >&2
+      quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      quota_expected_reset_at="$(compute_quota_expected_reset_at)"
+      QUOTA_CACHE_FILE="${CLOUD_BOT_QUOTA_CACHE_FILE}" \
+      BOT_NAME="${CLOUD_BOT_NAME}" \
+      PR_NUMBER="${PR_NUM}" \
+      write_quota_cache "${quota_now_utc}" "${quota_expected_reset_at}" "cloud_bot_quota_exhausted" "${quota_body}"
       CLOUD_BOT_SKIPPED=true
       CLOUD_BOT_SKIP_KIND="quota_exhausted"
       CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"

@@ -32,6 +32,7 @@ SCRIPT_START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 WINDOW_START="${CSA_PR_BOT_WINDOW_START:-${SCRIPT_START_TIME}}"
 QUOTA_CACHE_FILE="${CSA_PR_BOT_QUOTA_CACHE:-${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml}"
 BOT_NAME="${CSA_PR_BOT_NAME:-}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -130,60 +131,15 @@ if [ -z "${BOT_NAME}" ]; then
   fi
 fi
 
+# shellcheck source=patterns/pr-bot/scripts/pr-bot-quota-cache.sh
+. "${SCRIPT_DIR}/pr-bot-quota-cache.sh"
+
 write_output() {
   local json="$1"
   local tmp_file="${OUTPUT_FILE}.tmp"
   mkdir -p "$(dirname "${OUTPUT_FILE}")"
   printf '%s\n' "${json}" >"${tmp_file}"
   mv "${tmp_file}" "${OUTPUT_FILE}"
-}
-
-preview_body() {
-  printf '%s' "$1" | tr '\r\n\t' '   ' | head -c 200
-}
-
-write_quota_cache() {
-  local comment_body="$1"
-  local quota_section_header="[cloud_bot_quota.${BOT_NAME}]"
-  local quota_write_tmp="${QUOTA_CACHE_FILE}.tmp"
-  local quota_body_tmp="${QUOTA_CACHE_FILE}.body.tmp"
-  local quota_now_utc
-  local quota_expected_reset_at
-  local quota_short_message
-  local quota_short_message_escaped
-
-  quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  quota_expected_reset_at="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+24H +%Y-%m-%dT%H:%M:%SZ)"
-  quota_short_message="$(preview_body "${comment_body}")"
-  quota_short_message_escaped="$(printf '%s' "${quota_short_message}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-
-  mkdir -p "$(dirname "${QUOTA_CACHE_FILE}")"
-  if [ -f "${QUOTA_CACHE_FILE}" ]; then
-    awk -v target="${quota_section_header}" '
-      $0 == target { skip = 1; next }
-      skip && /^\[/ { skip = 0 }
-      !skip { print }
-    ' "${QUOTA_CACHE_FILE}" >"${quota_body_tmp}"
-  else
-    : >"${quota_body_tmp}"
-  fi
-
-  {
-    cat "${quota_body_tmp}"
-    if [ -s "${quota_body_tmp}" ]; then
-      printf '\n'
-    fi
-    printf '%s\n' "${quota_section_header}"
-    printf 'exhausted_at = "%s"\n' "${quota_now_utc}"
-    printf 'expected_reset_at = "%s"\n' "${quota_expected_reset_at}"
-    printf 'last_pr_seen = %s\n' "${PR_NUMBER}"
-    printf 'last_quota_message = "%s"\n' "${quota_short_message_escaped}"
-  } >"${quota_write_tmp}"
-  rm -f "${quota_body_tmp}"
-  mv "${quota_write_tmp}" "${QUOTA_CACHE_FILE}"
-
-  QUOTA_EXHAUSTED_AT="${quota_now_utc}"
-  QUOTA_EXPECTED_RESET_AT="${quota_expected_reset_at}"
 }
 
 review_filter() {
@@ -261,9 +217,11 @@ while [ "${elapsed}" -le "${TIMEOUT_SEC}" ]; do
   )"
   if [ -n "${quota_comment_json}" ]; then
     quota_body="$(printf '%s\n' "${quota_comment_json}" | jq -r '.body // ""')"
-    quota_preview="$(preview_body "${quota_body}")"
+    quota_preview="$(quota_cache_preview_body "${quota_body}")"
     quota_created_at="$(printf '%s\n' "${quota_comment_json}" | jq -r '.created_at // ""')"
-    write_quota_cache "${quota_body}"
+    quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    quota_expected_reset_at="$(compute_quota_expected_reset_at)"
+    write_quota_cache "${quota_now_utc}" "${quota_expected_reset_at}" "cloud_bot_quota_exhausted" "${quota_body}"
     result_json="$(
       jq -n \
         --argjson pr "${PR_NUMBER}" \
