@@ -351,6 +351,7 @@ fn retire_if_dead_with_result_leaves_state_unchanged_on_save_failure() {
         &session_id,
         "session list",
         &session_dir,
+        reconcile_liveness_decision(&session_dir),
         &persist_fail,
     )
     .unwrap_err();

@@ -27,6 +27,7 @@ struct ReconcileLivenessSnapshot {
 struct ReconcileDecisionInputs {
     snapshot: Option<ReconcileObservedSnapshot>,
     spool_bytes_written: Option<u64>,
+    output_log_size: Option<u64>,
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
     output_log_mtime_within_grace: bool,
@@ -68,6 +69,9 @@ pub(crate) fn reconcile_liveness_decision(session_dir: &Path) -> ReconcileLivene
 fn has_reconcile_progress_signal(session_dir: &Path) -> bool {
     let now = SystemTime::now();
     let snapshot = load_runtime_liveness_snapshot(session_dir);
+    let output_log_size = fs::metadata(session_dir.join(OUTPUT_LOG_FILE))
+        .ok()
+        .map(|meta| meta.len());
     let acp_size = fs::metadata(session_dir.join(ACP_EVENTS_LOG_FILE))
         .ok()
         .map(|meta| meta.len());
@@ -77,6 +81,7 @@ fn has_reconcile_progress_signal(session_dir: &Path) -> bool {
     let decision_inputs = ReconcileDecisionInputs {
         snapshot: snapshot.prior_observation(),
         spool_bytes_written: snapshot.spool_bytes_written,
+        output_log_size,
         acp_events_size: acp_size,
         stderr_log_size: stderr_size,
         output_log_mtime_within_grace: file_modified_recently(
@@ -115,7 +120,7 @@ fn has_reconcile_progress_signal_from_inputs(decision_inputs: &ReconcileDecision
         }
     }
 
-    if decision_inputs.spool_bytes_written.unwrap_or(0) > 0
+    if decision_inputs.output_log_size.unwrap_or(0) > 0
         && decision_inputs.output_log_mtime_within_grace
     {
         return true;

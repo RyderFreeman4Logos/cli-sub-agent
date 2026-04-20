@@ -238,7 +238,7 @@ fn dead_active_session_needs_terminal_result(
     }
     let liveness = reconcile_liveness_decision(session_dir);
     if liveness.blocks_synthesis {
-        info!(
+        debug!(
             session_id = %session_id,
             trigger = %trigger,
             reconciliation_reason = %liveness.reason,
@@ -246,7 +246,7 @@ fn dead_active_session_needs_terminal_result(
         );
         return Ok(false);
     }
-    info!(
+    debug!(
         session_id = %session_id,
         trigger = %trigger,
         reconciliation_reason = %liveness.reason,
@@ -293,7 +293,7 @@ where
     }
     let liveness = reconcile_liveness_decision(session_dir);
     if liveness.blocks_synthesis {
-        info!(
+        debug!(
             session_id = %session_id,
             trigger = %trigger,
             reconciliation_reason = %liveness.reason,
@@ -301,7 +301,7 @@ where
         );
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
-    info!(
+    debug!(
         session_id = %session_id,
         trigger = %trigger,
         reconciliation_reason = %liveness.reason,
@@ -383,6 +383,7 @@ where
                 session_id,
                 trigger,
                 session_dir,
+                liveness,
                 persist_session,
             )?;
             info!(
@@ -471,15 +472,18 @@ pub(crate) fn retire_if_dead_with_result(
     trigger: &str,
 ) -> Result<bool> {
     let session_dir = get_session_dir(project_root, session_id)?;
-    if !dead_session_with_result_needs_retire(project_root, session_id, &session_dir)? {
+    let Some(liveness) =
+        dead_session_with_result_needs_retire(project_root, session_id, &session_dir)?
+    else {
         return Ok(false);
-    }
+    };
     with_reconcile_lock(&session_dir, || {
         retire_if_dead_with_result_impl(
             project_root,
             session_id,
             trigger,
             &session_dir,
+            liveness,
             &persist_session_state_atomically,
         )
     })
@@ -490,10 +494,10 @@ fn dead_session_with_result_needs_retire(
     project_root: &Path,
     session_id: &str,
     session_dir: &Path,
-) -> Result<bool> {
+) -> Result<Option<reconcile_liveness::ReconcileLivenessDecision>> {
     let session = load_session(project_root, session_id)?;
     if !matches!(session.phase, SessionPhase::Active) {
-        return Ok(false);
+        return Ok(None);
     }
     let liveness = reconcile_liveness_decision(session_dir);
     if liveness.blocks_synthesis {
@@ -502,9 +506,12 @@ fn dead_session_with_result_needs_retire(
             reason = %liveness.reason,
             "Dead-session retirement deferred: progress/liveness still detected"
         );
-        return Ok(false);
+        return Ok(None);
     }
-    Ok(load_result(project_root, session_id)?.is_some())
+    if load_result(project_root, session_id)?.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(liveness))
 }
 
 fn retire_if_dead_with_result_impl(
@@ -512,13 +519,13 @@ fn retire_if_dead_with_result_impl(
     session_id: &str,
     trigger: &str,
     session_dir: &Path,
+    liveness: reconcile_liveness::ReconcileLivenessDecision,
     persist_session: &PersistSessionFn<'_>,
 ) -> Result<bool> {
     let mut session = load_session(project_root, session_id)?;
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    let liveness = reconcile_liveness_decision(session_dir);
     if liveness.blocks_synthesis {
         debug!(
             session_id = %session_id,
