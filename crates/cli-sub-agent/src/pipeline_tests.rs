@@ -9,8 +9,6 @@ use csa_hooks::{FailPolicy, HookConfig, HookEvent, HooksConfig, Waiver};
 use std::collections::HashMap;
 use std::fs;
 
-/// RAII guard for additional env var manipulation within a ScopedSessionSandbox.
-/// Used by tail tests that need extra env var overrides beyond the sandbox defaults.
 struct ScopedEnvVarRestore {
     key: &'static str,
     original: Option<String>,
@@ -41,6 +39,24 @@ impl Drop for ScopedEnvVarRestore {
     }
 }
 
+fn sandbox_pipeline_config_env(
+    tmp: &tempfile::TempDir,
+) -> (
+    ScopedSessionSandbox,
+    ScopedEnvVarRestore,
+    ScopedEnvVarRestore,
+) {
+    let mut sandbox = ScopedSessionSandbox::new(tmp);
+    sandbox.track_env("HOME");
+    sandbox.track_env("XDG_CONFIG_HOME");
+    let home = ScopedEnvVarRestore::set("HOME", tmp.path().to_str().unwrap());
+    let xdg_config_home = ScopedEnvVarRestore::set(
+        "XDG_CONFIG_HOME",
+        tmp.path().join("xdg-config").to_str().unwrap(),
+    );
+    (sandbox, home, xdg_config_home)
+}
+
 #[test]
 fn determine_project_root_none_returns_cwd() {
     let result = determine_project_root(None).unwrap();
@@ -64,7 +80,7 @@ fn determine_project_root_nonexistent_path_errors() {
 #[test]
 fn load_and_validate_exceeds_depth_returns_none() {
     let tmp = tempfile::tempdir().unwrap();
-    // With no config, max_depth defaults to 5
+    let _sandbox = sandbox_pipeline_config_env(&tmp);
     let result = load_and_validate(tmp.path(), 100).unwrap();
     assert!(
         result.is_none(),
@@ -75,6 +91,7 @@ fn load_and_validate_exceeds_depth_returns_none() {
 #[test]
 fn load_and_validate_within_depth_returns_some() {
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = sandbox_pipeline_config_env(&tmp);
     let result = load_and_validate(tmp.path(), 0).unwrap();
     assert!(
         result.is_some(),
@@ -86,6 +103,7 @@ fn load_and_validate_within_depth_returns_some() {
 #[test]
 fn load_and_validate_rejects_invalid_codex_transport_override() {
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = sandbox_pipeline_config_env(&tmp);
     let config_dir = tmp.path().join(".csa");
     fs::create_dir_all(&config_dir).unwrap();
     fs::write(
@@ -144,22 +162,15 @@ fn resolve_idle_timeout_prefers_cli_override() {
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), Some(42)), 42);
 }
 
-/// Verify that a new session without `--description` gets an auto-generated
-/// description derived from `truncate_prompt(prompt, 80)`.
 #[test]
 fn auto_description_from_prompt_when_none_provided() {
     use crate::run_helpers::truncate_prompt;
-
     let tmp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
-
     let prompt = "Analyze the authentication module and fix the login bug";
     let description: Option<String> = None;
-
-    // Replicate the pipeline logic: when description is None, derive from prompt
     let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
-
     assert!(
         effective_description.is_some(),
         "auto-generated description must be Some"
@@ -169,8 +180,6 @@ fn auto_description_from_prompt_when_none_provided() {
         prompt,
         "short prompt should be used as-is (no truncation needed)"
     );
-
-    // Verify the session is persisted with the auto-generated description
     let session = csa_session::create_session(
         project_root,
         effective_description.as_deref(),
@@ -183,8 +192,6 @@ fn auto_description_from_prompt_when_none_provided() {
         Some(prompt),
         "session state must carry the auto-generated description"
     );
-
-    // Reload from disk and confirm persistence
     let reloaded = csa_session::load_session(project_root, &session.meta_session_id).unwrap();
     assert_eq!(
         reloaded.description.as_deref(),
@@ -193,21 +200,16 @@ fn auto_description_from_prompt_when_none_provided() {
     );
 }
 
-/// Verify that a long prompt is truncated to 80 chars for auto-description.
 #[test]
 fn auto_description_truncates_long_prompt() {
     use crate::run_helpers::truncate_prompt;
-
     let tmp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
-
     let long_prompt = "Please analyze the entire authentication module including OAuth2 flows, JWT token validation, session management, RBAC permissions, and the password reset workflow to identify all security vulnerabilities";
     let description: Option<String> = None;
-
     let effective_description = description.or_else(|| Some(truncate_prompt(long_prompt, 80)));
     let desc = effective_description.as_deref().unwrap();
-
     assert!(
         desc.chars().count() <= 80,
         "auto-generated description must be at most 80 chars, got {}",
@@ -217,25 +219,19 @@ fn auto_description_truncates_long_prompt() {
         desc.ends_with("..."),
         "truncated description must end with '...'"
     );
-
-    // Verify it persists correctly in the session
     let session =
         csa_session::create_session(project_root, Some(desc), None, Some("codex")).unwrap();
     assert_eq!(session.description.as_deref(), Some(desc));
 }
-
-/// Verify that resumed sessions preserve their existing description.
 #[test]
 fn resumed_session_keeps_existing_description() {
     let tmp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
-
     let original_desc = "original task description";
     let session =
         csa_session::create_session(project_root, Some(original_desc), None, Some("codex"))
             .unwrap();
-
     let loaded = csa_session::load_session(project_root, &session.meta_session_id).unwrap();
     assert_eq!(
         loaded.description.as_deref(),

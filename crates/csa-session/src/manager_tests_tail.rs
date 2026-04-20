@@ -525,9 +525,45 @@ fn test_create_session_records_branch_in_git_repo() {
     run_git(td.path(), &["add", "README.md"]);
     run_git(td.path(), &["commit", "-m", "init"]);
     run_git(td.path(), &["checkout", "-b", "feat/session-discovery"]);
-
     let state = create_session_in(td.path(), td.path(), Some("git"), None, None).unwrap();
     assert_eq!(state.branch.as_deref(), Some("feat/session-discovery"));
+}
+
+#[test]
+fn test_audit_repo_tracked_writes_detects_recent_tracked_mutation() {
+    let td = tempdir().unwrap();
+    run_git(td.path(), &["init"]);
+    run_git(td.path(), &["config", "user.email", "test@example.com"]);
+    run_git(td.path(), &["config", "user.name", "Test User"]);
+    std::fs::write(td.path().join("tracked.txt"), "baseline\n").unwrap();
+    run_git(td.path(), &["add", "tracked.txt"]);
+    run_git(td.path(), &["commit", "-m", "init"]);
+    let session_start = std::time::SystemTime::now();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(td.path().join("tracked.txt"), "mutated\n").unwrap();
+    let mutated = audit_repo_tracked_writes(td.path(), session_start).unwrap();
+    assert_eq!(mutated, vec![std::path::PathBuf::from("tracked.txt")]);
+}
+
+#[test]
+fn test_write_audit_warning_artifact_persists_session_local_warning() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let artifact = write_audit_warning_artifact(
+        &session_dir,
+        &[
+            std::path::PathBuf::from("output/summary.md"),
+            std::path::PathBuf::from("src/lib.rs"),
+        ],
+    )
+    .unwrap()
+    .expect("artifact path");
+
+    assert_eq!(artifact, session_dir.join("output/audit-warnings.md"));
+    let contents = std::fs::read_to_string(&artifact).unwrap();
+    assert!(contents.contains("output/summary.md"));
+    assert!(contents.contains("src/lib.rs"));
 }
 
 #[test]

@@ -260,6 +260,8 @@ fn try_load_file(
 const STRUCTURED_OUTPUT_INSTRUCTIONS: &str = "\
 \n\n<csa-output-format>\n\
 Wrap your output in section markers for structured parsing:\n\
+Do NOT manually create `output/summary.md`, `output/details.md`, `output/full.md`, or `output/index.toml` in the repository.\n\
+Emit the final content to stdout only; CSA will persist those sections under `$CSA_SESSION_DIR/output/` automatically.\n\
 <!-- CSA:SECTION:summary -->\n\
 Brief summary of result\n\
 <!-- CSA:SECTION:summary:END -->\n\
@@ -273,6 +275,8 @@ Full analysis, code, or explanation\n\
 const FORK_CALL_STRUCTURED_OUTPUT_INSTRUCTIONS: &str = "\
 \n\n<csa-output-format>\n\
 Wrap your output in section markers for structured parsing:\n\
+Do NOT manually create `output/summary.md`, `output/details.md`, `output/full.md`, or `output/index.toml` in the repository.\n\
+Emit the final content to stdout only; CSA will persist those sections under `$CSA_SESSION_DIR/output/` automatically.\n\
 <!-- CSA:SECTION:summary -->\n\
 Brief summary of result\n\
 <!-- CSA:SECTION:summary:END -->\n\
@@ -654,6 +658,8 @@ mod tests {
         assert!(instructions.contains("CSA:SECTION:summary:END"));
         assert!(instructions.contains("CSA:SECTION:details:END"));
         assert!(instructions.contains("<csa-output-format>"));
+        assert!(instructions.contains("$CSA_SESSION_DIR/output/"));
+        assert!(instructions.contains("Do NOT manually create `output/summary.md`"));
     }
 
     #[test]
@@ -680,6 +686,7 @@ mod tests {
         assert!(instructions.contains("CSA:SECTION:return-packet"));
         assert!(instructions.contains("status = \"Success\""));
         assert!(instructions.contains("changed_files = [{ path ="));
+        assert!(instructions.contains("$CSA_SESSION_DIR/output/"));
     }
 
     #[test]

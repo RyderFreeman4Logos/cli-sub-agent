@@ -9,11 +9,14 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+#[path = "manager_audit.rs"]
+mod manager_audit;
 #[path = "manager_paths.rs"]
 mod manager_paths;
 #[path = "manager_result.rs"]
 mod manager_result;
 
+pub use manager_audit::{audit_repo_tracked_writes, write_audit_warning_artifact};
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;
 pub use manager_paths::{get_session_dir, get_session_root};

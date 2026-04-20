@@ -1,5 +1,3 @@
-//! Session-bound execution pipeline: resolve-or-create session, run tool, post-process results.
-
 use anyhow::{Context, Result};
 use std::{
     path::{Path, PathBuf},
@@ -764,6 +762,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         executor,
         prompt,
         effective_prompt: &effective_prompt,
+        task_type,
+        readonly_project_root,
         project_root,
         config,
         global_config,
