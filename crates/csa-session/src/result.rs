@@ -82,6 +82,14 @@ pub struct SessionManagerFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<TomlValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TomlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<TomlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<TomlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clarification: Option<TomlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<TomlValue>,
 }
 
@@ -90,12 +98,22 @@ impl SessionManagerFields {
         Self {
             result: sidecar.get("result").cloned(),
             report: sidecar.get("report").cloned(),
+            timing: sidecar.get("timing").cloned(),
+            tool: sidecar.get("tool").cloned(),
+            review: sidecar.get("review").cloned(),
+            clarification: sidecar.get("clarification").cloned(),
             artifacts: sidecar.get("artifacts").cloned(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.result.is_none() && self.report.is_none() && self.artifacts.is_none()
+        self.result.is_none()
+            && self.report.is_none()
+            && self.timing.is_none()
+            && self.tool.is_none()
+            && self.review.is_none()
+            && self.clarification.is_none()
+            && self.artifacts.is_none()
     }
 
     pub fn as_sidecar(&self) -> Option<TomlValue> {
@@ -109,6 +127,18 @@ impl SessionManagerFields {
         }
         if let Some(report) = self.report.as_ref() {
             table.insert("report".to_string(), report.clone());
+        }
+        if let Some(timing) = self.timing.as_ref() {
+            table.insert("timing".to_string(), timing.clone());
+        }
+        if let Some(tool) = self.tool.as_ref() {
+            table.insert("tool".to_string(), tool.clone());
+        }
+        if let Some(review) = self.review.as_ref() {
+            table.insert("review".to_string(), review.clone());
+        }
+        if let Some(clarification) = self.clarification.as_ref() {
+            table.insert("clarification".to_string(), clarification.clone());
         }
         if let Some(artifacts) = self.artifacts.as_ref() {
             table.insert("artifacts".to_string(), artifacts.clone());

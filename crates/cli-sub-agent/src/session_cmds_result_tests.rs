@@ -454,6 +454,30 @@ fn sidecar_from_manager_fields_rehydrates_manager_sections() {
             }
             .into(),
         ),
+        timing: Some(
+            toml::toml! {
+                started_at = "2026-02-11T10:00:00Z"
+            }
+            .into(),
+        ),
+        tool: Some(
+            toml::toml! {
+                name = "claude-code"
+            }
+            .into(),
+        ),
+        review: Some(
+            toml::toml! {
+                reviewer_tool = "codex"
+            }
+            .into(),
+        ),
+        clarification: Some(
+            toml::toml! {
+                blocking_reason = "Need answer"
+            }
+            .into(),
+        ),
         artifacts: Some(
             toml::toml! {
                 count = 2
@@ -468,6 +492,22 @@ fn sidecar_from_manager_fields_rehydrates_manager_sections() {
     assert_eq!(
         sidecar["report"]["summary"],
         toml::Value::String("manager-visible".to_string())
+    );
+    assert_eq!(
+        sidecar["timing"]["started_at"],
+        toml::Value::String("2026-02-11T10:00:00Z".to_string())
+    );
+    assert_eq!(
+        sidecar["tool"]["name"],
+        toml::Value::String("claude-code".to_string())
+    );
+    assert_eq!(
+        sidecar["review"]["reviewer_tool"],
+        toml::Value::String("codex".to_string())
+    );
+    assert_eq!(
+        sidecar["clarification"]["blocking_reason"],
+        toml::Value::String("Need answer".to_string())
     );
     assert_eq!(sidecar["artifacts"]["count"], toml::Value::Integer(2));
 }
