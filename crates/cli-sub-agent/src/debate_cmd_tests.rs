@@ -629,6 +629,7 @@ fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
             events_count: 0,
             artifacts: Vec::new(),
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         },
     )
     .unwrap();

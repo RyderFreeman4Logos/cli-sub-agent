@@ -315,6 +315,7 @@ fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() 
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        manager_fields: Default::default(),
     };
     let toml = toml::to_string_pretty(&result).expect("serialize session result");
 

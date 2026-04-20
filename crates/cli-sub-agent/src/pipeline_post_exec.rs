@@ -118,6 +118,7 @@ pub(crate) async fn process_execution_result(
         events_count: ctx.events_count,
         artifacts: ctx.transcript_artifacts,
         peak_memory_mb: result.peak_memory_mb,
+        manager_fields: Default::default(),
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
         ctx.project_root,
@@ -383,6 +384,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         events_count: 0,
         artifacts,
         peak_memory_mb: None,
+        manager_fields: Default::default(),
     };
 
     if let Err(save_err) = save_result(project_root, &session.meta_session_id, &fallback_result) {
@@ -643,6 +645,7 @@ mod tests {
             events_count: 1,
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         };
         save_result(project_root, &session.meta_session_id, &existing)
             .expect("write existing result");
@@ -735,6 +738,7 @@ mod tests {
             events_count: 0,
             artifacts: Vec::new(),
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         };
 
         if is_codex_exec_initial_stall_summary(&result.tool, result.exit_code, &result.summary) {

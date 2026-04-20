@@ -395,6 +395,7 @@ mod tests {
             events_count: 0,
             artifacts: vec![],
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         };
         std::fs::write(
             tmp.path().join(RESULT_FILE_NAME),

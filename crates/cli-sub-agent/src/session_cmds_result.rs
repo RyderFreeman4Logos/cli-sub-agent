@@ -168,7 +168,7 @@ pub(crate) fn handle_session_result(
                 Ok(Some(view)) => view,
                 Ok(None) => SessionResultView {
                     envelope: result.clone(),
-                    manager_sidecar: None,
+                    manager_sidecar: result.manager_fields.as_sidecar(),
                     legacy_sidecar: None,
                 },
                 Err(err) => {
@@ -179,7 +179,7 @@ pub(crate) fn handle_session_result(
                     );
                     SessionResultView {
                         envelope: result.clone(),
-                        manager_sidecar: None,
+                        manager_sidecar: result.manager_fields.as_sidecar(),
                         legacy_sidecar: None,
                     }
                 }

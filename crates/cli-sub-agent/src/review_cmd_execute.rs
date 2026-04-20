@@ -435,6 +435,7 @@ fn maybe_synthesize_missing_review_result(
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb,
+        manager_fields: Default::default(),
     };
 
     if let Err(save_err) = save_result(project_root, &session_id, &fallback_result) {
