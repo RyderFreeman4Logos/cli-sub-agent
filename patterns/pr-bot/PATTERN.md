@@ -42,6 +42,36 @@ This pattern follows a 3-layer dispatcher architecture:
 
 Each step below is annotated with its execution layer.
 
+## Assumed Fork Convention
+
+pr-bot assumes the GitHub-common fork convention:
+
+- `origin` = your personal fork (push target and PR source)
+- a separate remote such as `upstream` = canonical repository
+
+Under this convention, the default remote resolution order
+`branch.<branch>.pushRemote -> remote.pushDefault -> origin -> branch.<branch>.remote -> checkout.defaultRemote -> single remote`
+pushes to your fork and opens PRs against the canonical repository.
+
+If you use the alternate convention where `origin` points at the canonical
+repository and a separate remote points at your fork, you must configure the
+push remote explicitly before running pr-bot:
+
+```bash
+git config branch.<your-branch>.pushRemote <fork-remote-name>
+```
+
+Or set a global default:
+
+```bash
+git config remote.pushDefault <fork-remote-name>
+```
+
+When multiple remotes exist, `origin` does not reference the authenticated
+GitHub login, and no explicit push remote is configured, pr-bot fails closed
+with an actionable error instead of guessing and risking a push to the
+canonical repository.
+
 ## Step 1: Commit Changes
 
 > **Layer**: 0 (Orchestrator) -- lightweight shell command, no code reading.
@@ -55,35 +85,10 @@ Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, `REPO_SLUG`,
 # Force weave to pick up workflow variables used across steps.
 : "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${REPO_SLUG}" "${DEFAULT_BRANCH}"
 
+ROOT_DIR="$(git rev-parse --show-toplevel)"
 WORKFLOW_BRANCH="$(git branch --show-current)"
 CURRENT_BRANCH="${WORKFLOW_BRANCH:-$(git branch --show-current)}"
-# Resolve the push target using push-side precedence, then fork-safe origin, then fetch-side fallbacks.
-REMOTE_NAME=$(git config --get "branch.${CURRENT_BRANCH}.pushRemote" 2>/dev/null || true)
-if [ -z "$REMOTE_NAME" ]; then
-  REMOTE_NAME=$(git config --get remote.pushDefault 2>/dev/null || true)
-fi
-if [ -z "$REMOTE_NAME" ] && git remote | grep -qx origin; then
-  REMOTE_NAME=origin
-fi
-if [ -z "$REMOTE_NAME" ]; then
-  REMOTE_NAME=$(git config --get "branch.${CURRENT_BRANCH}.remote" 2>/dev/null || true)
-fi
-if [ -z "$REMOTE_NAME" ]; then
-  REMOTE_NAME=$(git config --get checkout.defaultRemote 2>/dev/null || true)
-fi
-if [ -z "$REMOTE_NAME" ]; then
-  REMOTE_COUNT=$(git remote | wc -l | tr -d ' ')
-  if [ "$REMOTE_COUNT" = "1" ]; then
-    REMOTE_NAME=$(git remote | head -1)
-  fi
-fi
-if [ -z "$REMOTE_NAME" ]; then
-  echo "ERROR: cannot determine target remote. Multiple remotes exist and neither" >&2
-  echo "  'branch.${CURRENT_BRANCH}.pushRemote', 'remote.pushDefault'," >&2
-  echo "  'branch.${CURRENT_BRANCH}.remote', 'checkout.defaultRemote', nor 'origin' is set." >&2
-  echo "  Configure one with: git config --local branch.${CURRENT_BRANCH}.pushRemote <name>" >&2
-  exit 1
-fi
+REMOTE_NAME="$("${ROOT_DIR}/patterns/pr-bot/scripts/resolve-push-remote.sh" "${CURRENT_BRANCH}")"
 REMOTE_URL=$(git remote get-url --push "$REMOTE_NAME" 2>/dev/null)
 if [ -z "$REMOTE_URL" ]; then
   echo "ERROR: git remote '$REMOTE_NAME' has no push URL" >&2

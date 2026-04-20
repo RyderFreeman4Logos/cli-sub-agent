@@ -171,6 +171,36 @@ automatically and normal bot triggering resumes.
 - Manual cache clear: `rm "${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml"`
 - There is currently no dedicated CLI flag wiring for `--force-cloud-bot` in this skill entrypoint.
 
+### Assumed Fork Convention
+
+pr-bot assumes the GitHub-common fork convention:
+
+- `origin` = your personal fork (where PR pushes come from)
+- a separate remote such as `upstream` = canonical repository
+
+Under this convention, the default remote resolution order
+`branch.<branch>.pushRemote -> remote.pushDefault -> origin -> branch.<branch>.remote -> checkout.defaultRemote -> single remote`
+pushes to your fork and opens PRs against the canonical repository.
+
+If you use the alternate convention where `origin` points at the canonical
+repository and your fork lives on another remote, configure the push remote
+explicitly before running pr-bot:
+
+```bash
+git config branch.<your-branch>.pushRemote <fork-remote-name>
+```
+
+Or set a global default:
+
+```bash
+git config remote.pushDefault <fork-remote-name>
+```
+
+When multiple remotes exist, `origin` does not reference the authenticated
+GitHub login, and no explicit push remote is configured, pr-bot fails closed
+with an actionable error instead of guessing and risking a push to the
+canonical repository.
+
 When `cloud_bot = false`:
 - Steps 4-9 (cloud bot trigger, delegated wait gate, classify, arbitrate, fix) are **skipped entirely**
 - A SHA-verified fast-path check is applied before supplementary local review
@@ -195,7 +225,7 @@ breaks prompt-guard propagation.
 
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
 2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA from `review_meta.json`). If matched, skip review; if mismatched/missing, run full `csa review --branch main --fix --max-rounds 3` (the `--fix` flag resumes the same reviewer session to fix issues, preserving full review context). This is the foundation -- without it, bot unavailability cannot safely merge. Sets `REVIEW_COMPLETED=true` on success.
-3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): Detect if branch was already pushed (early-push warning). Push with `--force-with-lease`, derive `source_owner` from `origin` remote URL, then resolve PR strictly by owner-aware lookup (`base=main + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
+3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): Detect if branch was already pushed (early-push warning). Resolve the push remote using the documented fork-convention guard; if `origin` looks canonical and no explicit push remote is configured, fail closed with a fix command instead of guessing. Then push with `--force-with-lease`, derive `source_owner` from `origin` remote URL, and resolve PR strictly by owner-aware lookup (`base=main + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
     If `false` → skip Steps 4-9. Apply the same SHA-verified fast-path before
     supplementary review. If SHA matches, skip review; if SHA mismatches/missing
