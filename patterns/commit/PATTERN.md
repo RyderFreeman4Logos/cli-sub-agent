@@ -537,6 +537,6 @@ echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workfl
 ## Step 23: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-17).
+Each fix goes through full commit workflow (Steps 1-20).
 
 ## ENDIF
