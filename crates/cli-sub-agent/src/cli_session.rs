@@ -17,7 +17,7 @@ pub enum SessionCommands {
         #[arg(long)]
         tool: Option<String>,
 
-        /// Show tree structure
+        /// Show tree structure (incompatible with --limit/--since/--status)
         #[arg(long)]
         tree: bool,
 

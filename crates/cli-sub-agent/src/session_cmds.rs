@@ -85,6 +85,10 @@ pub(crate) fn handle_session_list(
     filters: SessionListFilters,
     format: OutputFormat,
 ) -> Result<()> {
+    if tree && (filters.limit.is_some() || filters.since.is_some() || filters.status.is_some()) {
+        anyhow::bail!("--tree is incompatible with --limit/--since/--status (not yet supported)");
+    }
+
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
 

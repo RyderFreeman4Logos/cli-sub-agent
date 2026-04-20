@@ -215,6 +215,42 @@ fn test_write_todo_md() {
 }
 
 #[test]
+fn test_update_title_syncs_todo_md_heading() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Old Title", None).unwrap();
+    manager
+        .write_todo_md(&plan.timestamp, "# Old Title\n\nBody line\n")
+        .unwrap();
+
+    let updated = manager.update_title(&plan.timestamp, "New Title").unwrap();
+    assert_eq!(updated.metadata.title, "New Title");
+
+    let reloaded = manager.load(&plan.timestamp).unwrap();
+    assert_eq!(reloaded.metadata.title, "New Title");
+
+    let todo_content = std::fs::read_to_string(plan.todo_md_path()).unwrap();
+    assert_eq!(todo_content, "# New Title\n\nBody line\n");
+}
+
+#[test]
+fn test_update_title_inserts_heading_when_missing() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Old Title", None).unwrap();
+    manager
+        .write_todo_md(&plan.timestamp, "Body without heading\n")
+        .unwrap();
+
+    manager.update_title(&plan.timestamp, "New Title").unwrap();
+
+    let todo_content = std::fs::read_to_string(plan.todo_md_path()).unwrap();
+    assert_eq!(todo_content, "# New Title\n\nBody without heading\n");
+}
+
+#[test]
 fn test_metadata_serialization() {
     let metadata = TodoMetadata {
         branch: Some("feat/test".to_string()),
