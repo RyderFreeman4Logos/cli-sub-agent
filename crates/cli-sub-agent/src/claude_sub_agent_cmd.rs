@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::path::Path;
 use tracing::info;
 
@@ -129,15 +129,14 @@ fn resolve_claude_sub_agent_tool_and_model(
     parent_tool: Option<&str>,
     project_root: &Path,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
-    let user_explicit_tool = matches!(
-        arg_tool.as_ref(),
-        Some(ToolArg::Specific(_) | ToolArg::Alias(_))
-    );
+    let resolved_arg_tool =
+        resolve_tool_arg_alias(arg_tool, project_config, global_config).map_err(|e| anyhow!(e))?;
+    let user_explicit_tool = matches!(resolved_arg_tool, Some(ToolArg::Specific(_)));
     let resolved_tool = if model_spec.is_some() && !user_explicit_tool {
         None
     } else {
         Some(resolve_claude_tool(
-            arg_tool,
+            resolved_arg_tool,
             project_config,
             global_config,
             parent_tool,
@@ -158,6 +157,21 @@ fn resolve_claude_sub_agent_tool_and_model(
         false,               // claude-sub-agent does not support --force-ignore-tier-setting
         !user_explicit_tool, // treat auto/implicit selection as non-explicit
     )
+}
+
+fn resolve_tool_arg_alias(
+    arg_tool: Option<ToolArg>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> std::result::Result<Option<ToolArg>, String> {
+    let mut merged_aliases = global_config.tool_aliases.clone();
+    if let Some(c) = project_config {
+        merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
+    arg_tool
+        .map(|tool_arg| tool_arg.resolve_alias(&merged_aliases))
+        .transpose()
 }
 
 /// Maximum SKILL.md file size (256 KB) to prevent excessive memory/token usage
@@ -184,14 +198,9 @@ fn resolve_claude_tool(
 ) -> Result<ToolName> {
     // CLI override is highest priority
     if let Some(tool_arg) = arg_tool {
-        // Merge global + project aliases (project takes priority)
-        let mut merged_aliases = global_config.tool_aliases.clone();
-        if let Some(c) = project_config {
-            merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-        let resolved = tool_arg
-            .resolve_alias(&merged_aliases)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let resolved = resolve_tool_arg_alias(Some(tool_arg), project_config, global_config)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .expect("Some(tool_arg) should remain Some after alias resolution");
         return match resolved {
             ToolArg::Specific(t) => Ok(t),
             ToolArg::Auto => resolve_auto_tool(parent_tool, project_config, project_root),
@@ -448,6 +457,63 @@ mod tests {
         assert!(message.contains("--tool gemini-cli"));
         assert!(message.contains("--model-spec codex/openai/gpt-5.4/medium"));
         assert!(message.contains("tool codex"));
+    }
+
+    #[test]
+    fn alias_to_auto_with_model_spec_resolves_via_spec() {
+        let mut global = GlobalConfig::default();
+        global
+            .tool_aliases
+            .insert("router".to_string(), "auto".to_string());
+
+        let (tool_name, model_spec, model) = super::resolve_claude_sub_agent_tool_and_model(
+            Some(ToolArg::Alias("router".to_string())),
+            Some("codex/openai/gpt-5.4/medium"),
+            None,
+            None,
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect("alias to auto should let model-spec choose the tool");
+
+        assert_eq!(tool_name, ToolName::Codex);
+        assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/medium"));
+        assert!(model.is_none());
+    }
+
+    #[test]
+    fn alias_to_any_available_matches_direct_any_available() {
+        let _tool_availability = assume_tier_tools_available();
+        let mut global = GlobalConfig::default();
+        global
+            .tool_aliases
+            .insert("router".to_string(), "any-available".to_string());
+        let cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
+
+        let aliased = super::resolve_claude_sub_agent_tool_and_model(
+            Some(ToolArg::Alias("router".to_string())),
+            Some("codex/openai/gpt-5.4/medium"),
+            None,
+            Some(&cfg),
+            &global,
+            Some("gemini-cli"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect("alias to any-available should behave like direct any-available");
+
+        let direct = super::resolve_claude_sub_agent_tool_and_model(
+            Some(ToolArg::AnyAvailable),
+            Some("codex/openai/gpt-5.4/medium"),
+            None,
+            Some(&cfg),
+            &global,
+            Some("gemini-cli"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .expect("direct any-available should resolve");
+
+        assert_eq!(aliased, direct);
     }
 
     #[test]
