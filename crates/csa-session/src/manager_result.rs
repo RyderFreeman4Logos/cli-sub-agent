@@ -333,6 +333,7 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
     validate_session_id(session_id)?;
     let session_dir = super::get_session_dir_in(base_dir, session_id);
     let result_path = session_dir.join(RESULT_FILE_NAME);
+    let manager_sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
     if !result_path.exists() {
         return Ok(None);
     }
@@ -340,9 +341,17 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
         .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
     let mut result: SessionResult = toml::from_str(&contents)
         .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
-    if let Some(sidecar) =
-        load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)?
-    {
+    let manager_sidecar = load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "csa-session.load_result",
+                path = %manager_sidecar_path.display(),
+                error = %error,
+                "sidecar present but unreadable/malformed; ignoring (runtime envelope still loaded)"
+            );
+            None
+        });
+    if let Some(sidecar) = manager_sidecar {
         result.manager_fields = crate::result::SessionManagerFields::from_sidecar(&sidecar);
     }
     Ok(Some(result))

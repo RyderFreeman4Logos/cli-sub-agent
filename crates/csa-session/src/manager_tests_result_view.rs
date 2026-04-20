@@ -1,3 +1,49 @@
+use std::io;
+use std::sync::{Arc, LazyLock, Mutex};
+use tracing_subscriber::fmt::MakeWriter;
+
+static TEST_TRACING_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer {
+    inner: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SharedLogBuffer {
+    fn contents(&self) -> String {
+        String::from_utf8(self.inner.lock().expect("log buffer poisoned").clone())
+            .expect("log buffer should be valid UTF-8")
+    }
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = SharedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriter {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+struct SharedLogWriter {
+    inner: Arc<Mutex<Vec<u8>>>,
+}
+
+impl io::Write for SharedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner
+            .lock()
+            .expect("log buffer poisoned")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 #[test]
 fn test_load_result_view_surfaces_manager_and_legacy_sidecars() {
     let td = tempdir().unwrap();
@@ -139,6 +185,54 @@ fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
         .unwrap()
         .expect("result should exist");
     assert!(loaded.manager_fields.is_empty());
+}
+
+#[test]
+fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
+    let _tracing_guard = TEST_TRACING_LOCK.lock().expect("tracing lock poisoned");
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+
+    let now = chrono::Utc::now();
+    let runtime_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "runtime summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+        peak_memory_mb: None,
+        manager_fields: Default::default(),
+    };
+    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+
+    std::fs::write(
+        session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
+        "not = [valid toml",
+    )
+    .unwrap();
+
+    let buffer = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(buffer.clone())
+        .without_time()
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .expect("result should exist");
+
+    assert_eq!(loaded.summary, "runtime summary");
+    assert!(loaded.manager_fields.is_empty());
+    assert!(buffer.contents().contains(
+        "sidecar present but unreadable/malformed; ignoring (runtime envelope still loaded)"
+    ));
 }
 
 #[test]
