@@ -4,8 +4,8 @@ use super::{
     display_log_files, ensure_terminal_result_for_dead_active_session,
     ensure_terminal_result_for_dead_active_session_with_before_write,
     filter_sessions_by_csa_version, handle_session_is_alive, handle_session_kill,
-    handle_session_wait, print_content_with_tail, select_sessions_for_list, session_to_json,
-    status_from_phase_and_result, truncate_with_ellipsis,
+    handle_session_list, handle_session_wait, print_content_with_tail, select_sessions_for_list,
+    session_to_json, status_from_phase_and_result, truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};
 use crate::session_cmds_daemon::{
@@ -14,7 +14,7 @@ use crate::session_cmds_daemon::{
 use crate::test_env_lock::TEST_ENV_LOCK;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use chrono::Utc;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use csa_session::{
     ContextStatus, Genealogy, MetaSessionState, SessionPhase, SessionResult, TaskContext,
     TokenUsage, create_session, delete_session, get_session_dir, get_session_root, load_result,
@@ -292,6 +292,70 @@ fn session_list_cli_parses_csa_version_filter() {
         }
         _ => panic!("expected session list command"),
     }
+}
+
+#[test]
+fn session_list_cli_help_mentions_tree_filter_incompatibility() {
+    let mut list_cmd = Cli::command()
+        .find_subcommand("session")
+        .expect("session command")
+        .find_subcommand("list")
+        .expect("session list command")
+        .clone();
+    let help = list_cmd.render_long_help().to_string();
+
+    assert!(help.contains("incompatible with --limit/--since/--status"));
+}
+
+#[test]
+fn session_list_tree_rejects_limit_flag() {
+    let td = tempdir().unwrap();
+    let err = handle_session_list(
+        Some(td.path().display().to_string()),
+        None,
+        None,
+        true,
+        false,
+        super::SessionListFilters {
+            limit: Some(10),
+            since: None,
+            status: None,
+            csa_version: None,
+            show_version: false,
+        },
+        csa_core::types::OutputFormat::Text,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("--tree is incompatible"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn session_list_tree_accepts_no_filters() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path();
+    let _session = create_session(project, Some("Tree session"), None, None).unwrap();
+
+    handle_session_list(
+        Some(project.display().to_string()),
+        None,
+        None,
+        true,
+        false,
+        super::SessionListFilters {
+            limit: None,
+            since: None,
+            status: None,
+            csa_version: None,
+            show_version: false,
+        },
+        csa_core::types::OutputFormat::Text,
+    )
+    .expect("tree listing without filters should succeed");
 }
 
 #[test]

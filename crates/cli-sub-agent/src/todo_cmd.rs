@@ -455,10 +455,13 @@ pub(crate) fn handle_update(
     let mut changed_fields: Vec<&str> = Vec::new();
     let mut changed_files: Vec<String> = Vec::new();
 
-    if let Some(ref new_title) = title {
+    if let Some(ref new_title) = title
+        && plan.metadata.title != *new_title
+    {
         manager.update_title(&timestamp, new_title)?;
         changed_fields.push("title");
         changed_files.push(format!("{timestamp}/metadata.toml"));
+        changed_files.push(format!("{timestamp}/TODO.md"));
     }
 
     if let Some(new_status) = parsed_status

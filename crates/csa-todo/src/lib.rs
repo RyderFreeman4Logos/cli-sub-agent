@@ -210,8 +210,21 @@ impl TodoManager {
     pub fn update_title(&self, timestamp: &str, title: &str) -> Result<TodoPlan> {
         self.with_write_lock(|| {
             let mut plan = self.load_inner(timestamp)?;
+            if plan.metadata.title == title {
+                return Ok(plan);
+            }
+
+            let todo_path = plan.todo_md_path();
+            let content = std::fs::read_to_string(&todo_path).with_context(|| {
+                format!("Failed to read TODO markdown: {}", todo_path.display())
+            })?;
+            let updated_content = sync_todo_heading(&content, title);
+
             plan.metadata.title = title.to_string();
             plan.metadata.updated_at = Utc::now();
+            if updated_content != content {
+                atomic_write(&todo_path, updated_content.as_bytes())?;
+            }
             self.write_metadata(&plan)?;
             Ok(plan)
         })
@@ -480,6 +493,36 @@ fn atomic_write(target: &Path, data: &[u8]) -> Result<()> {
         .with_context(|| format!("Failed to persist to {}", target.display()))?;
 
     Ok(())
+}
+
+fn sync_todo_heading(content: &str, title: &str) -> String {
+    let replacement = format!("# {title}");
+    let mut updated = String::with_capacity(content.len().max(replacement.len()) + 2);
+    let mut replaced = false;
+
+    for segment in content.split_inclusive('\n') {
+        let line = segment.strip_suffix('\n').unwrap_or(segment);
+        if !replaced && (line.starts_with("# ") || line.starts_with("## ")) {
+            updated.push_str(&replacement);
+            if segment.ends_with('\n') {
+                updated.push('\n');
+            }
+            replaced = true;
+            continue;
+        }
+
+        updated.push_str(segment);
+    }
+
+    if replaced {
+        return updated;
+    }
+
+    if content.is_empty() {
+        format!("{replacement}\n")
+    } else {
+        format!("{replacement}\n\n{content}")
+    }
 }
 
 pub mod dag;
