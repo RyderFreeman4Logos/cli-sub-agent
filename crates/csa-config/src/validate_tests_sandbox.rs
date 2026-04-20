@@ -28,6 +28,7 @@ fn test_validate_liveness_dead_seconds_zero_rejected() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -72,6 +73,7 @@ fn test_validate_memory_max_mb_too_low() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -116,6 +118,7 @@ fn test_validate_memory_max_mb_at_minimum() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -154,6 +157,7 @@ fn test_validate_pids_max_too_low() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -198,6 +202,7 @@ fn test_validate_pids_max_at_minimum() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -236,6 +241,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -286,6 +292,7 @@ fn test_validate_per_tool_required_enforcement_without_memory_fails() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -339,6 +346,7 @@ fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -386,6 +394,7 @@ fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -433,6 +442,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -477,6 +487,7 @@ fn test_validate_soft_limit_percent_zero_rejected() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -521,6 +532,7 @@ fn test_validate_soft_limit_percent_over_100_rejected() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -565,6 +577,7 @@ fn test_validate_soft_limit_percent_valid() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -603,6 +616,7 @@ fn test_validate_memory_monitor_interval_zero_rejected() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };
@@ -647,6 +661,7 @@ fn test_validate_memory_monitor_interval_valid() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
     };

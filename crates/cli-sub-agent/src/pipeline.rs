@@ -496,3 +496,7 @@ mod thinking_tests;
 #[cfg(test)]
 #[path = "pipeline_tests_prompt_guard.rs"]
 mod prompt_guard_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_preflight.rs"]
+mod preflight_tests;

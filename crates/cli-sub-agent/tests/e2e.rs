@@ -74,6 +74,7 @@ fn write_project_config_with_tier(project_root: &Path) {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

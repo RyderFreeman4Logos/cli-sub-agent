@@ -51,6 +51,7 @@ fn resolve_tool_by_strategy_model_spec_disables_default_tier_and_runtime_fallbac
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

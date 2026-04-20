@@ -36,9 +36,10 @@ pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
 pub use global::{
-    DEFAULT_KV_CACHE_FREQUENT_POLL_SECS, DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions,
-    GateMode, GateStep, GlobalConfig, GlobalMcpConfig, KvCacheConfig, KvCacheValueSource,
-    LEGACY_SESSION_WAIT_FALLBACK_SECS, ResolvedKvCacheValue, ReviewConfig, ToolSelection,
+    AiConfigSymlinkCheckConfig, DEFAULT_KV_CACHE_FREQUENT_POLL_SECS,
+    DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions, GateMode, GateStep, GlobalConfig,
+    GlobalMcpConfig, KvCacheConfig, KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS,
+    PreflightConfig, ResolvedKvCacheValue, ReviewConfig, ToolSelection,
 };
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};

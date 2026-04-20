@@ -43,6 +43,7 @@ fn run_config_with_tier(
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

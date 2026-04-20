@@ -25,6 +25,7 @@ fn project_config_with_codex_tool(tool_config: ToolConfig) -> ProjectConfig {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }

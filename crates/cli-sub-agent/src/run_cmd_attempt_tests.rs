@@ -52,6 +52,7 @@ fn make_named_failover_config(tier_name: &str, models: &[&str]) -> ProjectConfig
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }

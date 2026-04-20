@@ -161,6 +161,7 @@ fn anti_recursion_guard_honors_custom_max_recursion_depth() {
             memory: Default::default(),
             hooks: Default::default(),
             execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
         }

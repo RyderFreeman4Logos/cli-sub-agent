@@ -36,6 +36,7 @@ fn test_resolve_initial_response_timeout_cli_override_over_config() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -77,6 +78,7 @@ fn test_resolve_initial_response_timeout_config_zero_disables() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -118,6 +120,7 @@ fn test_resolve_initial_response_timeout_uses_config_value() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -163,6 +166,7 @@ fn test_resolve_initial_response_timeout_for_tool_disabled_when_idle_timeout_exp
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -196,6 +200,7 @@ fn test_resolve_initial_response_timeout_for_tool_kept_when_both_explicit() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -229,6 +234,7 @@ fn test_resolve_initial_response_timeout_for_tool_falls_through_without_idle_tim
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -261,6 +267,7 @@ fn test_resolve_initial_response_timeout_for_codex_defaults_to_300_without_overr
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -293,6 +300,7 @@ fn test_resolve_initial_response_timeout_for_gemini_cli_default() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -322,6 +330,7 @@ fn test_resolve_initial_response_timeout_for_non_codex_cli_zero_disables_watchdo
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -360,6 +369,7 @@ fn test_resolve_initial_response_timeout_gemini_cli_honors_override() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -397,6 +407,7 @@ fn test_resolve_initial_response_timeout_gemini_cli_disable() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -429,6 +440,7 @@ fn test_resolve_initial_response_timeout_for_unknown_tool_uses_global_default() 
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -458,6 +470,7 @@ fn test_resolve_initial_response_timeout_for_non_codex_positive_override_passes_
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -490,6 +503,7 @@ fn test_resolve_initial_response_timeout_for_codex_uses_explicit_resource_timeou
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -527,6 +541,7 @@ fn test_resolve_initial_response_timeout_for_codex_uses_tool_override() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -567,6 +582,7 @@ fn test_resolve_initial_response_timeout_for_codex_tool_override_beats_resource_
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -596,6 +612,7 @@ fn test_resolve_initial_response_timeout_for_codex_cli_zero_disables_watchdog() 
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -634,6 +651,7 @@ fn test_resolve_initial_response_timeout_for_codex_tool_zero_disables() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -667,6 +685,7 @@ fn test_resolve_initial_response_timeout_for_codex_global_zero_disables() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -697,6 +716,7 @@ fn test_resolve_initial_response_timeout_for_codex_respects_explicit_idle_overri
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

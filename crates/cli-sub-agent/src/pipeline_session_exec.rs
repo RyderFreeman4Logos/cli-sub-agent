@@ -181,6 +181,17 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     {
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
+    if session_arg.is_none() {
+        let preflight_check_config = config
+            .map(|cfg| &cfg.preflight.ai_config_symlink_check)
+            .or_else(|| global_config.map(|cfg| &cfg.preflight.ai_config_symlink_check));
+        if let Some(preflight_check_config) = preflight_check_config {
+            crate::preflight_symlink::run_ai_config_symlink_check(
+                project_root,
+                preflight_check_config,
+            )?;
+        }
+    }
     let memory_project_key = resolve_memory_project_key(project_root);
     let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
     let depth = crate::pipeline_env::current_csa_depth();

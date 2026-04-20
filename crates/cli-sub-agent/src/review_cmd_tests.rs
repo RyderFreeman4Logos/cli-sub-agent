@@ -62,6 +62,7 @@ pub(super) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
