@@ -21,6 +21,13 @@ const RUNTIME_RESULT_KEYS: [&str; 8] = [
     "artifacts",
 ];
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SaveOptions {
+    /// When true, an empty manager_fields save deletes any existing
+    /// manager sidecar. The default preserves previously persisted sidecars.
+    pub clear_stale_manager_sidecar: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionResultView {
     pub envelope: SessionResult,
@@ -44,13 +51,14 @@ pub fn redact_result_sidecar_value(sidecar: &toml::Value) -> Result<toml::Value>
 /// Write a session result to disk
 pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
     let base_dir = super::resolve_write_base_dir(project_path, session_id)?;
-    save_result_in(&base_dir, session_id, result)
+    save_result_in(&base_dir, session_id, result, SaveOptions::default())
 }
 
 pub(crate) fn save_result_in(
     base_dir: &Path,
     session_id: &str,
     result: &SessionResult,
+    options: SaveOptions,
 ) -> Result<()> {
     validate_session_id(session_id)?;
     let session_dir = super::get_session_dir_in(base_dir, session_id);
@@ -78,7 +86,8 @@ pub(crate) fn save_result_in(
 
     let mut persisted_result = result.clone();
     let manager_sidecar = persisted_result.manager_fields.as_sidecar();
-    let manager_sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
+    let preserve_existing_manager_sidecar = manager_sidecar.is_some()
+        || (!options.clear_stale_manager_sidecar && manager_sidecar_exists(&session_dir));
     if has_custom_schema {
         let Some(contents) = existing_contents.as_deref() else {
             bail!("Expected existing result content when custom schema was detected");
@@ -88,9 +97,9 @@ pub(crate) fn save_result_in(
     retain_sidecar_result_artifacts_if_present(
         &session_dir,
         &mut persisted_result,
-        manager_sidecar.is_some(),
+        preserve_existing_manager_sidecar,
     )?;
-    if manager_sidecar.is_some() {
+    if preserve_existing_manager_sidecar {
         ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
     } else {
         remove_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
@@ -110,17 +119,35 @@ pub(crate) fn save_result_in(
         Some(sidecar) => {
             write_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH, sidecar)?;
         }
-        None if manager_sidecar_path.exists() => {
-            fs::remove_file(&manager_sidecar_path).with_context(|| {
-                format!(
-                    "Failed to remove stale manager sidecar: {}",
-                    manager_sidecar_path.display()
-                )
-            })?;
+        None if options.clear_stale_manager_sidecar => {
+            clear_manager_sidecar(&session_dir)?;
         }
         None => {}
     }
     Ok(())
+}
+
+fn manager_sidecar_exists(session_dir: &Path) -> bool {
+    session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH).exists()
+}
+
+pub fn clear_manager_sidecar(session_dir: &Path) -> Result<()> {
+    let manager_sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
+    if !manager_sidecar_path.exists() {
+        return Ok(());
+    }
+    if !manager_sidecar_path.is_file() {
+        bail!(
+            "Manager sidecar path exists but is not a file: {}",
+            manager_sidecar_path.display()
+        );
+    }
+    fs::remove_file(&manager_sidecar_path).with_context(|| {
+        format!(
+            "Failed to remove manager sidecar: {}",
+            manager_sidecar_path.display()
+        )
+    })
 }
 
 fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<()> {

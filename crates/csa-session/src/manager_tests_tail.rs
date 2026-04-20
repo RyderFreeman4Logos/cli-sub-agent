@@ -42,7 +42,8 @@ fn test_save_and_load_result() {
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &result).unwrap();
+    save_result_in(td.path(), &state.meta_session_id, &result, crate::SaveOptions::default())
+        .unwrap();
     let loaded = load_result_in(td.path(), &state.meta_session_id)
         .unwrap()
         .unwrap();
@@ -145,7 +146,13 @@ name = "gemini-cli"
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &runtime_result,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
 
     let persisted = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
     assert!(persisted.contains("status = \"success\""));
@@ -201,7 +208,13 @@ artifacts = [1, 2]
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &runtime_result,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
 
     let sidecar_path = session_dir.join("output/user-result.toml");
     assert!(sidecar_path.is_file());
@@ -216,43 +229,6 @@ artifacts = [1, 2]
             .artifacts
             .iter()
             .any(|artifact| artifact.path == "output/user-result.toml")
-    );
-}
-
-#[test]
-fn test_save_result_removes_stale_contract_result_artifact_when_output_result_exists() {
-    let td = tempdir().unwrap();
-    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
-    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
-    let sidecar_path = manager_result::contract_result_path(&session_dir);
-    std::fs::write(&sidecar_path, "status = \"success\"\nsummary = \"manager-facing report\"\n")
-        .unwrap();
-
-    let now = chrono::Utc::now();
-    let runtime_result = crate::result::SessionResult {
-        status: "success".to_string(),
-        exit_code: 0,
-        summary: "runtime summary".to_string(),
-        tool: "codex".to_string(),
-        started_at: now,
-        completed_at: now,
-        events_count: 1,
-        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-            manager_fields: Default::default(),
-    };
-    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
-
-    let loaded = load_result_in(td.path(), &state.meta_session_id)
-        .unwrap()
-        .unwrap();
-    assert!(!sidecar_path.exists());
-    assert!(loaded.manager_fields.is_empty());
-    assert!(
-        !loaded
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path == manager_result::CONTRACT_RESULT_ARTIFACT_PATH)
     );
 }
 
@@ -289,7 +265,13 @@ name = "gemini-cli"
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &first_runtime).unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &first_runtime,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
 
     let second_runtime = crate::result::SessionResult {
         status: "success".to_string(),
@@ -303,7 +285,13 @@ name = "gemini-cli"
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &second_runtime).unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &second_runtime,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
 
     let sidecar = std::fs::read_to_string(session_dir.join("output/user-result.toml")).unwrap();
     assert!(sidecar.contains("[tool]"));
@@ -353,7 +341,13 @@ done = false
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    let err = save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap_err();
+    let err = save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &runtime_result,
+        crate::SaveOptions::default(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("not a file"));
 }
 
@@ -375,7 +369,13 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &old_result).unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &old_result,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
 
     let new_result = crate::result::SessionResult {
         status: "failure".to_string(),
@@ -389,7 +389,13 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         peak_memory_mb: None,
             manager_fields: Default::default(),
     };
-    save_result_in(td.path(), &state.meta_session_id, &new_result).unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &new_result,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
 
     let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
     let persisted = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();

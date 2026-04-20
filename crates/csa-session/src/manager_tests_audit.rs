@@ -24,7 +24,8 @@ fn test_save_result_persists_manager_fields_sidecar() {
         },
     };
 
-    save_result_in(td.path(), &state.meta_session_id, &result).unwrap();
+    save_result_in(td.path(), &state.meta_session_id, &result, crate::SaveOptions::default())
+        .unwrap();
 
     let loaded = load_result_in(td.path(), &state.meta_session_id)
         .unwrap()
