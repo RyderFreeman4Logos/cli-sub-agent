@@ -15,6 +15,7 @@ fn test_load_result_view_surfaces_manager_and_legacy_sidecars() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
 
@@ -49,6 +50,95 @@ fn test_load_result_view_surfaces_manager_and_legacy_sidecars() {
                 .collect()
         ))
     );
+}
+
+#[test]
+fn test_load_result_merges_manager_sidecar_sections_into_runtime_result() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+
+    let now = chrono::Utc::now();
+    let runtime_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "runtime summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+        peak_memory_mb: None,
+        manager_fields: Default::default(),
+    };
+    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+
+    std::fs::write(
+        session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
+        r#"
+[result]
+done = true
+
+[report]
+summary = "manager-visible"
+
+[artifacts]
+count = 2
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .expect("result should exist");
+
+    assert_eq!(loaded.summary, "runtime summary");
+    assert_eq!(
+        loaded.manager_fields.result.as_ref().and_then(|value| value.get("done")),
+        Some(&toml::Value::Boolean(true))
+    );
+    assert_eq!(
+        loaded
+            .manager_fields
+            .report
+            .as_ref()
+            .and_then(|value| value.get("summary")),
+        Some(&toml::Value::String("manager-visible".to_string()))
+    );
+    assert_eq!(
+        loaded
+            .manager_fields
+            .artifacts
+            .as_ref()
+            .and_then(|value| value.get("count")),
+        Some(&toml::Value::Integer(2))
+    );
+}
+
+#[test]
+fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+
+    let now = chrono::Utc::now();
+    let runtime_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "runtime summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+        peak_memory_mb: None,
+        manager_fields: Default::default(),
+    };
+    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .expect("result should exist");
+    assert!(loaded.manager_fields.is_empty());
 }
 
 #[test]

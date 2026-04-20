@@ -335,6 +335,7 @@ fn build_result_json_payload_includes_review_iterations() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        manager_fields: Default::default(),
     };
     let review_meta = ReviewSessionMeta {
         session_id: "01JTESTPAYLOAD00000000000001".to_string(),
@@ -380,6 +381,7 @@ fn build_result_json_payload_includes_result_sidecars() {
             events_count: 0,
             artifacts: Vec::new(),
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         },
         manager_sidecar: Some(
             toml::toml! {
@@ -419,6 +421,7 @@ fn build_result_json_payload_redacts_result_sidecars() {
             events_count: 0,
             artifacts: Vec::new(),
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         },
         manager_sidecar: Some(
             toml::toml! {
@@ -434,6 +437,48 @@ fn build_result_json_payload_redacts_result_sidecars() {
     let rendered = serde_json::to_string(&payload).unwrap();
     assert!(!rendered.contains("hunter2"));
     assert!(rendered.contains("[REDACTED]"));
+}
+
+#[test]
+fn sidecar_from_manager_fields_rehydrates_manager_sections() {
+    let sidecar = csa_session::SessionManagerFields {
+        result: Some(
+            toml::toml! {
+                done = true
+            }
+            .into(),
+        ),
+        report: Some(
+            toml::toml! {
+                summary = "manager-visible"
+            }
+            .into(),
+        ),
+        artifacts: Some(
+            toml::toml! {
+                count = 2
+            }
+            .into(),
+        ),
+    }
+    .as_sidecar()
+    .expect("sidecar should be rehydrated");
+
+    assert_eq!(sidecar["result"]["done"], toml::Value::Boolean(true));
+    assert_eq!(
+        sidecar["report"]["summary"],
+        toml::Value::String("manager-visible".to_string())
+    );
+    assert_eq!(sidecar["artifacts"]["count"], toml::Value::Integer(2));
+}
+
+#[test]
+fn sidecar_from_manager_fields_skips_empty_manager_sections() {
+    assert!(
+        csa_session::SessionManagerFields::default()
+            .as_sidecar()
+            .is_none()
+    );
 }
 
 #[test]

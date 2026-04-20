@@ -338,8 +338,13 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
     }
     let contents = fs::read_to_string(&result_path)
         .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
-    let result: SessionResult = toml::from_str(&contents)
+    let mut result: SessionResult = toml::from_str(&contents)
         .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
+    if let Some(sidecar) =
+        load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)?
+    {
+        result.manager_fields = crate::result::SessionManagerFields::from_sidecar(&sidecar);
+    }
     Ok(Some(result))
 }
 

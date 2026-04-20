@@ -364,6 +364,7 @@ where
         events_count: 0,
         artifacts,
         peak_memory_mb: None,
+        manager_fields: Default::default(),
     };
     #[rustfmt::skip]
     let result_contents = toml::to_string_pretty(&fallback).map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;

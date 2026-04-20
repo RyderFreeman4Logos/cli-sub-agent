@@ -40,6 +40,7 @@ fn test_save_and_load_result() {
         events_count: 0,
         artifacts: vec![crate::result::SessionArtifact::new("output/result.txt")],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &result).unwrap();
     let loaded = load_result_in(td.path(), &state.meta_session_id)
@@ -85,6 +86,7 @@ fn test_save_session_and_result_preserve_legacy_symlink_root() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     let canonical_project = project.canonicalize().unwrap();
     let mut loaded = load_session(&canonical_project, &state.meta_session_id).unwrap();
@@ -141,6 +143,7 @@ name = "gemini-cli"
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
 
@@ -196,6 +199,7 @@ artifacts = [1, 2]
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
 
@@ -237,6 +241,7 @@ fn test_save_result_retain_contract_result_artifact_when_output_result_exists() 
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
 
@@ -282,6 +287,7 @@ name = "gemini-cli"
         events_count: 1,
         artifacts: vec![],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &first_runtime).unwrap();
 
@@ -295,6 +301,7 @@ name = "gemini-cli"
         events_count: 2,
         artifacts: vec![],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &second_runtime).unwrap();
 
@@ -344,6 +351,7 @@ done = false
         events_count: 0,
         artifacts: vec![],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     let err = save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap_err();
     assert!(err.to_string().contains("not a file"));
@@ -365,6 +373,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         events_count: 7,
         artifacts: vec![crate::result::SessionArtifact::new("output/old-artifact.txt")],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &old_result).unwrap();
 
@@ -378,6 +387,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         events_count: 0,
         artifacts: vec![],
         peak_memory_mb: None,
+            manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &new_result).unwrap();
 

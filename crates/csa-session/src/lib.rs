@@ -66,7 +66,7 @@ pub use output_section::{
     RETURN_PACKET_SECTION_ID, ReturnPacket, ReturnPacketRef, ReturnStatus,
 };
 pub use redact::{redact_event, redact_text_content};
-pub use result::{SessionArtifact, SessionResult};
+pub use result::{SessionArtifact, SessionManagerFields, SessionResult};
 pub use review_artifact::{
     Finding, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewFinding,
     ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary, write_findings_toml,

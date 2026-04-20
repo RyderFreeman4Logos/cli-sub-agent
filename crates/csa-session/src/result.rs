@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use toml::Value as TomlValue;
 
 pub const RESULT_FILE_NAME: &str = "result.toml";
 
@@ -74,6 +75,48 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SessionManagerFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<TomlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<TomlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<TomlValue>,
+}
+
+impl SessionManagerFields {
+    pub fn from_sidecar(sidecar: &TomlValue) -> Self {
+        Self {
+            result: sidecar.get("result").cloned(),
+            report: sidecar.get("report").cloned(),
+            artifacts: sidecar.get("artifacts").cloned(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.result.is_none() && self.report.is_none() && self.artifacts.is_none()
+    }
+
+    pub fn as_sidecar(&self) -> Option<TomlValue> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut table = toml::map::Map::<String, TomlValue>::new();
+        if let Some(result) = self.result.as_ref() {
+            table.insert("result".to_string(), result.clone());
+        }
+        if let Some(report) = self.report.as_ref() {
+            table.insert("report".to_string(), report.clone());
+        }
+        if let Some(artifacts) = self.artifacts.as_ref() {
+            table.insert("artifacts".to_string(), artifacts.clone());
+        }
+        Some(TomlValue::Table(table))
+    }
+}
+
 /// Structured result of a session execution.
 /// Written to `sessions/{id}/result.toml` after each tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +147,11 @@ pub struct SessionResult {
     /// `None` when cgroup monitoring is unavailable or the scope was already removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_mb: Option<u64>,
+    /// Manager-facing data loaded from `output/result.toml` sidecars at read time.
+    /// This is intentionally read-only metadata and is never serialized back into
+    /// the runtime `result.toml` envelope.
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub manager_fields: SessionManagerFields,
 }
 
 impl SessionResult {
@@ -137,6 +185,7 @@ mod tests {
             events_count: 4,
             artifacts: vec![SessionArtifact::new("output/diff.patch")],
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         };
 
         let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
@@ -164,6 +213,7 @@ mod tests {
             events_count: 0,
             artifacts: vec![],
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         };
 
         let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
@@ -245,6 +295,7 @@ artifacts = ["output/a.txt", "output/b.txt"]
                 SessionArtifact::with_stats("output/acp-events.jsonl", 10, 256),
             ],
             peak_memory_mb: None,
+            manager_fields: Default::default(),
         };
 
         let contents = toml::to_string_pretty(&result).unwrap();
