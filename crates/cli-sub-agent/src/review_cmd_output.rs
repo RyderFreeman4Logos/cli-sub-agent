@@ -290,6 +290,17 @@ fn derive_review_verdict_artifact(
         return Ok(artifact);
     }
 
+    if !full_output_is_effectively_empty(session_dir)? {
+        let decision = ReviewDecision::Fail;
+        return Ok(ReviewVerdictArtifact::from_parts(
+            meta.session_id.clone(),
+            decision,
+            legacy_verdict_for_decision(decision, &meta.verdict),
+            findings,
+            Vec::new(),
+        ));
+    }
+
     Ok(ReviewVerdictArtifact::from_parts(
         meta.session_id.clone(),
         ReviewDecision::Uncertain,
@@ -343,6 +354,21 @@ fn infer_review_verdict_from_full_output(
         counts,
         Vec::new(),
     )))
+}
+
+fn full_output_is_effectively_empty(session_dir: &Path) -> Result<bool, anyhow::Error> {
+    let full_output_path = session_dir.join("output").join("full.md");
+    if !full_output_path.exists() {
+        return Ok(true);
+    }
+
+    let raw_output = fs::read_to_string(&full_output_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
+    Ok(raw_output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .all(|line| line.starts_with('{')))
 }
 
 pub(super) fn extract_review_text(raw_output: &str) -> Option<String> {
