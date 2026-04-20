@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::executor::Executor;
+use crate::lefthook_guard::sanitize_args_for_codex;
 use crate::transport_gemini_retry::{
     gemini_auth_mode, gemini_inject_api_key_fallback, gemini_max_attempts,
     gemini_rate_limit_backoff, gemini_retry_model, gemini_should_use_api_key,
@@ -532,6 +533,9 @@ impl AcpTransport {
             acp_command = launch.command;
             acp_args = launch.args;
             gemini_runtime_home = gemini_runtime_home_from_env(&env);
+        }
+        if self.tool_name == "codex" {
+            sanitize_args_for_codex(&mut acp_args);
         }
         let gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
