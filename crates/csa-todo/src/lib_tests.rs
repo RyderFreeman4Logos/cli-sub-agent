@@ -235,6 +235,27 @@ fn test_update_title_syncs_todo_md_heading() {
 }
 
 #[test]
+fn test_update_title_syncs_todo_md_heading_preserving_crlf() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Old Title", None).unwrap();
+    std::fs::write(plan.todo_md_path(), "# Old Title\r\n\r\nBody line\r\n").unwrap();
+
+    let updated = manager.update_title(&plan.timestamp, "New Title").unwrap();
+    assert_eq!(updated.metadata.title, "New Title");
+
+    let todo_content = std::fs::read_to_string(plan.todo_md_path()).unwrap();
+    assert_eq!(todo_content, "# New Title\r\n\r\nBody line\r\n");
+}
+
+#[test]
+fn test_sync_todo_heading_preserves_lf_line_endings() {
+    let updated = sync_todo_heading("# Old Title\n\nbody\n", "New Title");
+    assert_eq!(updated, "# New Title\n\nbody\n");
+}
+
+#[test]
 fn test_update_title_inserts_heading_when_missing() {
     let dir = tempdir().unwrap();
     let manager = TodoManager::with_base_dir(dir.path().to_path_buf());

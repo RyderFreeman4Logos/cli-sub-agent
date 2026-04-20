@@ -504,6 +504,9 @@ fn sync_todo_heading(content: &str, title: &str) -> String {
         let line = segment.strip_suffix('\n').unwrap_or(segment);
         if !replaced && (line.starts_with("# ") || line.starts_with("## ")) {
             updated.push_str(&replacement);
+            if line.ends_with('\r') {
+                updated.push('\r');
+            }
             if segment.ends_with('\n') {
                 updated.push('\n');
             }
