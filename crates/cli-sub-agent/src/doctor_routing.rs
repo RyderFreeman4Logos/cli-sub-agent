@@ -6,7 +6,9 @@
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig, TierStrategy};
 use csa_core::types::OutputFormat;
-use std::env;
+use std::{env, fmt::Write as _, path::Path};
+
+const BUILTIN_TOOLS: &[&str] = &["gemini-cli", "opencode", "codex", "claude-code"];
 
 /// Map tool name (from model spec) to its executable binary name.
 fn tool_exe_name(tool: &str, config: &ProjectConfig) -> String {
@@ -65,6 +67,27 @@ struct OperationRouting {
     strategy: TierStrategy,
     entries: Vec<RoutingEntry>,
     source: String,
+}
+
+#[derive(Debug)]
+struct RoutingDiagnostic {
+    key: &'static str,
+    message: String,
+}
+
+#[derive(Debug)]
+struct RoutingContext {
+    built_in_tools: Vec<String>,
+    global_config_source: &'static str,
+    vcs_backend: Option<String>,
+}
+
+#[derive(Debug)]
+struct RoutingReport {
+    diagnostics: Vec<RoutingDiagnostic>,
+    context: RoutingContext,
+    tables: Vec<OperationRouting>,
+    project_hint: Option<String>,
 }
 
 /// Build routing info for an operation from its tier configuration.
@@ -164,6 +187,90 @@ fn collect_routing_tables(config: &ProjectConfig, global: &GlobalConfig) -> Vec<
     tables
 }
 
+fn detect_vcs_backend(project_root: &Path) -> Option<String> {
+    csa_core::vcs::detect_vcs_kind(project_root).map(|kind| kind.to_string())
+}
+
+fn build_routing_report(
+    project_root: &Path,
+    operation_filter: Option<String>,
+    tier_filter: Option<String>,
+) -> Result<RoutingReport> {
+    if let Some(ref op) = operation_filter
+        && !matches!(op.as_str(), "run" | "review" | "debate")
+    {
+        anyhow::bail!(
+            "Unknown operation '{}'. Valid operations: run, review, debate",
+            op
+        );
+    }
+
+    let (global, global_config_source) = match GlobalConfig::load() {
+        Ok(cfg) => (cfg, "loaded"),
+        Err(_) => (
+            GlobalConfig::default(),
+            "defaults (global config unavailable)",
+        ),
+    };
+    let context = RoutingContext {
+        built_in_tools: BUILTIN_TOOLS
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .collect(),
+        global_config_source,
+        vcs_backend: detect_vcs_backend(project_root),
+    };
+
+    let config = match ProjectConfig::load(project_root) {
+        Ok(Some(config)) => Some(config),
+        Ok(None) => None,
+        Err(error) => {
+            return Ok(RoutingReport {
+                diagnostics: vec![RoutingDiagnostic {
+                    key: "effective-config",
+                    message: format!("failed to load project config: {error:#}"),
+                }],
+                context,
+                tables: Vec::new(),
+                project_hint: Some(
+                    "unable to render project-specific routing; see effective-config diagnostic"
+                        .to_string(),
+                ),
+            });
+        }
+    };
+
+    let Some(config) = config else {
+        anyhow::bail!("No configuration found. Run 'csa init' first.");
+    };
+
+    let mut tables = collect_routing_tables(&config, &global);
+
+    if let Some(ref op) = operation_filter {
+        tables.retain(|table| table.operation == *op);
+    }
+
+    if let Some(ref tier) = tier_filter {
+        let resolved = config
+            .resolve_tier_selector(tier)
+            .unwrap_or_else(|| tier.clone());
+        tables.retain(|table| table.tier_name.as_deref() == Some(resolved.as_str()));
+    }
+
+    let project_hint = if config.tiers.is_empty() {
+        Some("no tiers configured; routing diagnostic requires tier configuration".to_string())
+    } else {
+        None
+    };
+
+    Ok(RoutingReport {
+        diagnostics: Vec::new(),
+        context,
+        tables,
+        project_hint,
+    })
+}
+
 /// Run routing diagnostic.
 pub async fn run_doctor_routing(
     format: OutputFormat,
@@ -171,53 +278,70 @@ pub async fn run_doctor_routing(
     tier_filter: Option<String>,
 ) -> Result<()> {
     let cwd = env::current_dir()?;
-    let config = ProjectConfig::load(&cwd)?
-        .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
-    let global = GlobalConfig::load().unwrap_or_default();
-
-    if config.tiers.is_empty() {
-        match format {
-            OutputFormat::Json => println!(r#"{{"routing":[]}}"#),
-            OutputFormat::Text => {
-                eprintln!("No tiers configured. Routing diagnostic requires tier configuration.");
-            }
-        }
-        return Ok(());
-    }
-
-    let mut tables = collect_routing_tables(&config, &global);
-
-    // Apply operation filter
-    if let Some(ref op) = operation_filter {
-        tables.retain(|t| t.operation == *op);
-        if tables.is_empty() {
-            anyhow::bail!(
-                "Unknown operation '{}'. Valid operations: run, review, debate",
-                op
-            );
-        }
-    }
-
-    // Apply tier filter
-    if let Some(ref tier) = tier_filter {
-        let resolved = config
-            .resolve_tier_selector(tier)
-            .unwrap_or_else(|| tier.clone());
-        tables.retain(|t| t.tier_name.as_deref() == Some(resolved.as_str()));
-    }
+    let report = build_routing_report(&cwd, operation_filter, tier_filter)?;
 
     match format {
-        OutputFormat::Text => print_routing_text(&tables),
-        OutputFormat::Json => print_routing_json(&tables)?,
+        OutputFormat::Text => print!("{}", render_routing_text(&report)),
+        OutputFormat::Json => print!("{}", render_routing_json(&report)?),
     }
 
     Ok(())
 }
 
 /// Render routing tables as human-readable text.
-fn print_routing_text(tables: &[OperationRouting]) {
-    for table in tables {
-        println!("=== Routing: {} ===", table.operation);
+fn render_routing_text(report: &RoutingReport) -> String {
+    let mut output = String::new();
+
+    if !report.diagnostics.is_empty() {
+        writeln!(&mut output, "=== Diagnostics ===").expect("write diagnostics header");
+        for diagnostic in &report.diagnostics {
+            writeln!(
+                &mut output,
+                "[error] {}: {}",
+                diagnostic.key, diagnostic.message
+            )
+            .expect("write diagnostic");
+        }
+        writeln!(&mut output).expect("write diagnostics spacer");
+    }
+
+    writeln!(&mut output, "=== Routing Context ===").expect("write routing context header");
+    writeln!(
+        &mut output,
+        "Built-in tools: {}",
+        report.context.built_in_tools.join(", ")
+    )
+    .expect("write built-in tools");
+    writeln!(
+        &mut output,
+        "Global config: {}",
+        report.context.global_config_source
+    )
+    .expect("write global config source");
+    writeln!(
+        &mut output,
+        "VCS backend: {}",
+        report
+            .context
+            .vcs_backend
+            .as_deref()
+            .unwrap_or("not detected")
+    )
+    .expect("write vcs backend");
+    writeln!(&mut output).expect("write routing context spacer");
+
+    if let Some(hint) = &report.project_hint {
+        writeln!(&mut output, "=== Project Routing ===").expect("write project routing header");
+        writeln!(&mut output, "{hint}").expect("write project routing hint");
+        if report.tables.is_empty() {
+            return output;
+        }
+        writeln!(&mut output).expect("write project routing spacer");
+    }
+
+    for table in &report.tables {
+        writeln!(&mut output, "=== Routing: {} ===", table.operation)
+            .expect("write routing table header");
 
         match (&table.tier_name, &table.tier_description) {
             (Some(name), Some(desc)) => {
@@ -225,32 +349,35 @@ fn print_routing_text(tables: &[OperationRouting]) {
                     TierStrategy::Priority => "priority",
                     TierStrategy::RoundRobin => "round-robin",
                 };
-                println!("Tier: {name} ({desc})");
-                println!("Strategy: {strategy_label}");
-                println!("Source: {}", table.source);
+                writeln!(&mut output, "Tier: {name} ({desc})").expect("write tier");
+                writeln!(&mut output, "Strategy: {strategy_label}").expect("write strategy");
+                writeln!(&mut output, "Source: {}", table.source).expect("write source");
             }
             (Some(name), None) => {
-                println!("Tier: {name} (NOT FOUND)");
-                println!("Source: {}", table.source);
+                writeln!(&mut output, "Tier: {name} (NOT FOUND)").expect("write missing tier");
+                writeln!(&mut output, "Source: {}", table.source).expect("write source");
             }
             (None, _) => {
-                println!("Tier: (none) — {}", table.source);
+                writeln!(&mut output, "Tier: (none) — {}", table.source).expect("write no tier");
             }
         }
 
         if table.entries.is_empty() {
-            println!();
+            writeln!(&mut output).expect("write empty entries spacer");
             continue;
         }
 
-        println!();
-        println!(
+        writeln!(&mut output).expect("write table spacer");
+        writeln!(
+            &mut output,
             "  {:<3} {:<13} {:<11} {:<25} {:<10} Status",
             "#", "Tool", "Provider", "Model", "Thinking"
-        );
+        )
+        .expect("write table heading");
 
         for entry in &table.entries {
-            println!(
+            writeln!(
+                &mut output,
                 "  {:<3} {:<13} {:<11} {:<25} {:<10} {}",
                 entry.rank,
                 entry.tool,
@@ -258,7 +385,8 @@ fn print_routing_text(tables: &[OperationRouting]) {
                 entry.model,
                 entry.thinking,
                 entry.status_symbol(),
-            );
+            )
+            .expect("write routing entry");
         }
 
         // Failover order (only enabled + available tools)
@@ -269,17 +397,21 @@ fn print_routing_text(tables: &[OperationRouting]) {
             .map(|e| e.tool.as_str())
             .collect();
         if !failover.is_empty() {
-            println!();
-            println!("Failover order: {}", failover.join(" → "));
+            writeln!(&mut output).expect("write failover spacer");
+            writeln!(&mut output, "Failover order: {}", failover.join(" → "))
+                .expect("write failover order");
         }
 
-        println!();
+        writeln!(&mut output).expect("write table trailer");
     }
+
+    output
 }
 
 /// Render routing tables as JSON.
-fn print_routing_json(tables: &[OperationRouting]) -> Result<()> {
-    let routing: Vec<serde_json::Value> = tables
+fn render_routing_json(report: &RoutingReport) -> Result<String> {
+    let routing: Vec<serde_json::Value> = report
+        .tables
         .iter()
         .map(|table| {
             let entries: Vec<serde_json::Value> = table
@@ -323,14 +455,68 @@ fn print_routing_json(tables: &[OperationRouting]) -> Result<()> {
         })
         .collect();
 
-    let output = serde_json::json!({ "routing": routing });
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    let diagnostics: Vec<serde_json::Value> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            serde_json::json!({
+                "severity": "error",
+                "key": diagnostic.key,
+                "message": diagnostic.message,
+            })
+        })
+        .collect();
+
+    let output = serde_json::json!({
+        "diagnostics": diagnostics,
+        "context": {
+            "built_in_tools": report.context.built_in_tools,
+            "global_config": report.context.global_config_source,
+            "vcs_backend": report.context.vcs_backend,
+        },
+        "project_hint": report.project_hint,
+        "routing": routing,
+    });
+    Ok(format!("{}\n", serde_json::to_string_pretty(&output)?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::TEST_ENV_LOCK;
+    use std::{ffi::OsString, path::Path};
+
+    fn write_project_config(project_root: &Path, contents: &str) {
+        let config_dir = project_root.join(".csa");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::write(config_dir.join("config.toml"), contents).expect("write config");
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: restoration of test-scoped env mutation guarded by a process-wide mutex.
+            unsafe {
+                match self.original.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_parse_model_spec_full() {
@@ -495,5 +681,102 @@ mod tests {
 
         let routing = build_operation_routing(&config, "run", Some("tier-rr"), "test");
         assert_eq!(routing.strategy, TierStrategy::RoundRobin);
+    }
+
+    #[test]
+    fn doctor_routing_reports_invalid_effective_config_and_renders_partial_context() {
+        let _env_lock = TEST_ENV_LOCK
+            .lock()
+            .expect("doctor routing env lock poisoned");
+        let td = tempfile::tempdir().expect("tempdir");
+        let config_root = td.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        std::fs::create_dir(td.path().join(".git")).expect("create .git");
+        let _home_guard = EnvVarGuard::set("HOME", td.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
+            .expect("create user config dir");
+        std::fs::write(
+            &user_config_path,
+            r#"
+[tools.claude-code]
+transport = "cli"
+"#,
+        )
+        .expect("write invalid user config");
+
+        write_project_config(
+            td.path(),
+            r#"
+[tools.codex]
+transport = "cli"
+
+[tiers.tier-1]
+description = "Test"
+models = ["codex/openai/gpt-5.4/high"]
+
+[tier_mapping]
+default = "tier-1"
+"#,
+        );
+
+        let report = build_routing_report(td.path(), None, None)
+            .expect("doctor routing should keep running when effective config is invalid");
+        let rendered = render_routing_text(&report);
+        let json: serde_json::Value = serde_json::from_str(
+            render_routing_json(&report)
+                .expect("render routing json")
+                .trim(),
+        )
+        .expect("parse routing json");
+
+        assert_eq!(report.tables.len(), 0);
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].key, "effective-config");
+        assert!(
+            report.diagnostics[0]
+                .message
+                .contains("[tools.claude-code].transport"),
+            "diagnostic should surface the merged-config key: {:?}",
+            report.diagnostics[0]
+        );
+        assert!(
+            rendered.contains("[error] effective-config: failed to load project config"),
+            "text output should surface the effective-config diagnostic: {rendered}"
+        );
+        assert!(
+            rendered.contains("Built-in tools: gemini-cli, opencode, codex, claude-code"),
+            "text output should keep best-effort routing context: {rendered}"
+        );
+        assert!(
+            rendered.contains("VCS backend: git"),
+            "text output should render VCS detection without valid effective config: {rendered}"
+        );
+        assert!(
+            rendered.contains("unable to render project-specific routing"),
+            "text output should explain why project routing is partial: {rendered}"
+        );
+
+        assert_eq!(json["routing"], serde_json::json!([]));
+        assert_eq!(
+            json["diagnostics"][0]["key"],
+            serde_json::json!("effective-config")
+        );
+        assert!(
+            json["diagnostics"][0]["message"]
+                .as_str()
+                .expect("routing json diagnostic message")
+                .contains("[tools.claude-code].transport"),
+            "json output should surface the merged-config key: {json}"
+        );
+        assert_eq!(json["context"]["vcs_backend"], serde_json::json!("git"));
+        assert_eq!(
+            json["project_hint"],
+            serde_json::json!(
+                "unable to render project-specific routing; see effective-config diagnostic"
+            )
+        );
     }
 }
