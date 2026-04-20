@@ -26,17 +26,23 @@ pub(super) fn runtime_binary_indicates_codex_acp_file_name(file_name: &str) -> b
     file_name.contains("codex-acp")
 }
 
-pub(super) fn runtime_binary_indicates_codex_acp(runtime_binary: &str) -> bool {
-    runtime_binary_file_name(runtime_binary)
-        .is_some_and(runtime_binary_indicates_codex_acp_file_name)
+fn tool_uses_codex_runtime_binary_hint(tool: &str) -> bool {
+    matches!(tool, "codex")
 }
 
-fn routes_session_output_to_output_log(metadata: &csa_session::metadata::SessionMetadata) -> bool {
-    if metadata.tool == "codex" {
+fn routes_session_output_to_output_log(
+    metadata: &csa_session::metadata::SessionMetadata,
+    output_log_exists: bool,
+) -> bool {
+    if metadata.runtime_binary.is_none() {
+        return output_log_exists;
+    }
+    if tool_uses_codex_runtime_binary_hint(&metadata.tool) {
         return metadata
             .runtime_binary
             .as_deref()
-            .is_some_and(runtime_binary_indicates_codex_acp);
+            .and_then(runtime_binary_file_name)
+            .is_some_and(runtime_binary_indicates_codex_acp_file_name);
     }
     matches!(
         TransportFactory::mode_for_tool(&metadata.tool),
@@ -48,20 +54,9 @@ fn routes_session_output_to_output_log(metadata: &csa_session::metadata::Session
 pub(super) fn attach_primary_output_from_metadata(
     metadata: &csa_session::metadata::SessionMetadata,
     output_log_exists: bool,
-    session_active: bool,
+    _session_active: bool,
 ) -> AttachPrimaryOutput {
-    if metadata.tool == "codex" && metadata.runtime_binary.is_none() {
-        return if !session_active {
-            if output_log_exists {
-                AttachPrimaryOutput::OutputLog
-            } else {
-                AttachPrimaryOutput::StdoutLog
-            }
-        } else {
-            AttachPrimaryOutput::OutputLog
-        };
-    }
-    if routes_session_output_to_output_log(metadata) {
+    if routes_session_output_to_output_log(metadata, output_log_exists) {
         AttachPrimaryOutput::OutputLog
     } else {
         AttachPrimaryOutput::StdoutLog
