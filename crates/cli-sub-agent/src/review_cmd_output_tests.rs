@@ -538,7 +538,7 @@ fn persist_review_verdict_marks_clean_transcript_as_pass() {
 }
 
 #[test]
-fn persist_review_verdict_plain_text_full_output_without_review_message_emits_uncertain_verdict() {
+fn persist_review_verdict_plain_text_full_output_without_review_message_emits_fail_verdict() {
     let session_id = "01TESTMETAFALLBACK000000000";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("persist-review-verdict-meta-fallback", session_id);
@@ -556,8 +556,8 @@ fn persist_review_verdict_plain_text_full_output_without_review_message_emits_un
     let artifact: ReviewVerdictArtifact =
         serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
             .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
-    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&0));
@@ -662,6 +662,38 @@ fn persist_review_verdict_json_transcript_without_review_message_emits_uncertain
     .join("\n");
     fs::write(session_dir.join("output").join("full.md"), full_output)
         .expect("write tool-only full output transcript");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
+    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn persist_review_verdict_json_noise_only_full_output_emits_uncertain_verdict() {
+    let session_id = "01TESTJSONNOISEONLY00000000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-json-noise-only", session_id);
+    let full_output = [
+        String::new(),
+        "   ".to_string(),
+        serde_json::to_string(&json!({"type":"thread.started","thread_id":"thread-1"}))
+            .expect("serialize thread.started"),
+        serde_json::to_string(&json!({"type":"thread.completed","thread_id":"thread-1"}))
+            .expect("serialize thread.completed"),
+        "\t".to_string(),
+    ]
+    .join("\n");
+    fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write json-noise full output transcript");
 
     let meta = make_review_meta(session_id);
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
