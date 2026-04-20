@@ -147,6 +147,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
     let result = loop {
         attempts += 1;
+        let mut fresh_spawn_preflight_override = false;
 
         let executor = pipeline::build_and_validate_executor(
             &current_tool,
@@ -320,6 +321,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             )?;
             if pre_id.is_some() {
                 pre_created_fork_session_id = pre_id;
+                fresh_spawn_preflight_override = true;
             }
             effective_session_arg = new_eff;
         }
@@ -421,6 +423,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     &request.memory_injection,
                     request.global_config,
                     fork_resolution.as_ref(),
+                    fresh_spawn_preflight_override,
                     &mut executed_session_id,
                     &mut pre_created_fork_session_id,
                     request.no_fs_sandbox,
@@ -461,6 +464,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 &request.memory_injection,
                 request.global_config,
                 fork_resolution.as_ref(),
+                fresh_spawn_preflight_override,
                 &mut executed_session_id,
                 &mut pre_created_fork_session_id,
                 request.no_fs_sandbox,

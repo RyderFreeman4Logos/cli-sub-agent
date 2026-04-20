@@ -35,6 +35,7 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         "resume prompt",
         csa_core::types::OutputFormat::Json,
         Some(session.meta_session_id.clone()),
+        false,
         None,
         None,
         project_root,

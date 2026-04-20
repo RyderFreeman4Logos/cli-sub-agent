@@ -626,6 +626,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             &resolved_tool,
             prompt,
             session_arg.clone(),
+            false,
             None, // description
             None, // parent
             &project_root,

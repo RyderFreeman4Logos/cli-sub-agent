@@ -42,6 +42,7 @@ pub(crate) async fn execute_with_session(
     tool: &ToolName,
     prompt: &str,
     session_arg: Option<String>,
+    fresh_spawn_preflight_override: bool,
     description: Option<String>,
     parent: Option<String>,
     project_root: &Path,
@@ -67,6 +68,7 @@ pub(crate) async fn execute_with_session(
         prompt,
         OutputFormat::Json,
         session_arg,
+        fresh_spawn_preflight_override,
         description,
         parent,
         project_root,
@@ -97,6 +99,7 @@ pub(crate) async fn execute_with_session_and_meta(
     prompt: &str,
     output_format: OutputFormat,
     session_arg: Option<String>,
+    fresh_spawn_preflight_override: bool,
     description: Option<String>,
     parent: Option<String>,
     project_root: &Path,
@@ -122,6 +125,7 @@ pub(crate) async fn execute_with_session_and_meta(
         prompt,
         output_format,
         session_arg,
+        fresh_spawn_preflight_override,
         description,
         parent,
         project_root,
@@ -153,6 +157,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     prompt: &str,
     output_format: OutputFormat,
     session_arg: Option<String>,
+    fresh_spawn_preflight_override: bool,
     description: Option<String>,
     parent: Option<String>,
     project_root: &Path,
@@ -181,7 +186,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     {
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
-    if session_arg.is_none() {
+    if session_arg.is_none() || fresh_spawn_preflight_override {
         let preflight_check_config = config
             .map(|cfg| &cfg.preflight.ai_config_symlink_check)
             .or_else(|| global_config.map(|cfg| &cfg.preflight.ai_config_symlink_check));
@@ -286,7 +291,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             return Err(err);
         }
     };
-
     let lock_reason = truncate_prompt(prompt, 80);
     let _lock = match acquire_lock(&session_dir, executor.tool_name(), &lock_reason) {
         Ok(lock) => lock,
@@ -307,13 +311,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             return Err(err);
         }
     };
-
     let mut resource_guard = config.map(|cfg| {
         ResourceGuard::new(ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
         })
     });
-
     if let Some(ref mut guard) = resource_guard
         && let Err(e) = guard.check_availability(executor.tool_name())
     {
@@ -363,7 +365,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             );
         }
     }
-
     info!("Executing in session: {}", session.meta_session_id);
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
@@ -436,11 +437,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-
     let tool_state =
         ensure_tool_state_initialized(&mut session, executor, &resolved_provider_session_id)
             .await?;
-
     let result_file_cleared = clear_expected_result_artifacts_for_prompt(prompt, &session_dir);
     let execution_start_time = chrono::Utc::now();
     let session_config = global_config.map(|gc| {
