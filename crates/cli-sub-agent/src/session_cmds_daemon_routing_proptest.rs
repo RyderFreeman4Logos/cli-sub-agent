@@ -14,14 +14,6 @@ fn attach_primary_output_for_session_routes_expected_primary_log() {
                         true,
                     );
 
-                    if codex_routes_to_output_log(tool, runtime_binary) {
-                        assert_eq!(
-                            route,
-                            AttachPrimaryOutput::OutputLog,
-                            "codex ACP sessions must route to output.log: tool={tool} runtime_binary={runtime_binary:?} output_log_exists={output_log_exists} stdout_log_exists={stdout_log_exists}"
-                        );
-                    }
-
                     if routes_to_output_log_independent_of_files(tool, runtime_binary) {
                         assert_eq!(
                             route,
@@ -42,7 +34,17 @@ fn attach_primary_output_for_session_routes_expected_primary_log() {
                         );
                     }
 
-                    if matches!(tool, "gemini-cli" | "opencode") {
+                    if runtime_binary.is_none() {
+                        let expected = if output_log_exists {
+                            AttachPrimaryOutput::OutputLog
+                        } else {
+                            AttachPrimaryOutput::StdoutLog
+                        };
+                        assert_eq!(
+                            route, expected,
+                            "runtime_binary=None must follow output.log presence: tool={tool} output_log_exists={output_log_exists} stdout_log_exists={stdout_log_exists}"
+                        );
+                    } else if matches!(tool, "gemini-cli" | "opencode") {
                         assert_eq!(
                             route,
                             AttachPrimaryOutput::StdoutLog,
@@ -114,10 +116,7 @@ fn attach_tool_cases() -> [&'static str; 4] {
     ["codex", "claude-code", "gemini-cli", "opencode"]
 }
 
-fn codex_routes_to_output_log(tool: &str, runtime_binary: Option<&str>) -> bool {
-    tool == "codex" && runtime_binary.is_none_or(super::attach::runtime_binary_indicates_codex_acp)
-}
-
 fn routes_to_output_log_independent_of_files(tool: &str, runtime_binary: Option<&str>) -> bool {
-    tool == "claude-code" || codex_routes_to_output_log(tool, runtime_binary)
+    (tool == "claude-code" && runtime_binary.is_some())
+        || (tool == "codex" && runtime_binary == Some("/opt/csa/bin/codex-acp"))
 }

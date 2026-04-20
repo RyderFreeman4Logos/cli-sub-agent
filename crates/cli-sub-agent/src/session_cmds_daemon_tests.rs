@@ -54,7 +54,7 @@ fn set_file_mtime_seconds_ago(path: &std::path::Path, seconds_ago: u64) {
 }
 
 #[test]
-fn attach_primary_output_prefers_output_log_for_acp_tools() {
+fn attach_primary_output_uses_stdout_for_runtime_binary_missing_without_output_log() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {
         tool: "claude-code".to_string(),
@@ -70,7 +70,7 @@ fn attach_primary_output_prefers_output_log_for_acp_tools() {
 
     assert_eq!(
         attach_primary_output_for_session(td.path()),
-        AttachPrimaryOutput::OutputLog
+        AttachPrimaryOutput::StdoutLog
     );
 }
 
@@ -120,10 +120,10 @@ fn attach_primary_output_preserves_legacy_codex_output_log_when_runtime_binary_m
 }
 
 #[test]
-fn attach_primary_output_preserves_output_log_for_unresolved_live_codex_session() {
+fn attach_primary_output_prefers_existing_output_log_for_legacy_gemini_cli_sessions() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {
-        tool: "codex".to_string(),
+        tool: "gemini-cli".to_string(),
         tool_locked: true,
         runtime_binary: None,
     };
@@ -133,13 +133,8 @@ fn attach_primary_output_preserves_output_log_for_unresolved_live_codex_session(
         metadata_toml,
     )
     .expect("write metadata");
+    std::fs::write(td.path().join("output.log"), "gemini output\n").expect("write output log");
     std::fs::write(td.path().join("stdout.log"), "").expect("write stdout log");
-    std::fs::create_dir_all(td.path().join("locks")).expect("create locks dir");
-    std::fs::write(
-        td.path().join("locks").join("codex.lock"),
-        format!("{{\"pid\":{}}}", std::process::id()),
-    )
-    .expect("write codex lock");
 
     assert_eq!(
         attach_primary_output_for_session(td.path()),
@@ -148,10 +143,10 @@ fn attach_primary_output_preserves_output_log_for_unresolved_live_codex_session(
 }
 
 #[test]
-fn attach_primary_output_keeps_stdout_for_non_codex_sessions_with_output_log() {
+fn attach_primary_output_uses_stdout_for_legacy_gemini_cli_sessions_without_output_log() {
     let td = tempfile::tempdir().expect("tempdir");
     let metadata = csa_session::metadata::SessionMetadata {
-        tool: "opencode".to_string(),
+        tool: "gemini-cli".to_string(),
         tool_locked: true,
         runtime_binary: None,
     };
@@ -161,7 +156,6 @@ fn attach_primary_output_keeps_stdout_for_non_codex_sessions_with_output_log() {
         metadata_toml,
     )
     .expect("write metadata");
-    std::fs::write(td.path().join("output.log"), "").expect("write output log");
     std::fs::write(td.path().join("stdout.log"), "").expect("write stdout log");
 
     assert_eq!(
@@ -639,25 +633,31 @@ proptest::proptest! {
         session_active in proptest::prelude::any::<bool>(),
     ) {
         let result = attach_route_for("claude-code", runtime_binary, output_log_exists, session_active);
-        proptest::prop_assert_eq!(
-            result,
-            AttachPrimaryOutput::OutputLog,
-            "claude-code uses ACP transport, so output must route to output.log"
-        );
+        let expected = if runtime_binary.is_none() {
+            if output_log_exists {
+                AttachPrimaryOutput::OutputLog
+            } else {
+                AttachPrimaryOutput::StdoutLog
+            }
+        } else {
+            AttachPrimaryOutput::OutputLog
+        };
+        proptest::prop_assert_eq!(result, expected);
     }
 
     #[test]
     fn prop_attach_routing_codex_legacy_active_session_output_log(
         output_log_exists in proptest::prelude::any::<bool>(),
     ) {
-        // tool=codex + runtime_binary=None + session_active ⇒ OutputLog,
-        // regardless of output.log presence (live codex writes there).
+        // Pre-upgrade sessions without a persisted runtime binary should route
+        // by on-disk transcript presence, regardless of liveness.
         let result = attach_route_for("codex", None, output_log_exists, true);
-        proptest::prop_assert_eq!(
-            result,
-            AttachPrimaryOutput::OutputLog,
-            "active codex legacy session must prefer output.log"
-        );
+        let expected = if output_log_exists {
+            AttachPrimaryOutput::OutputLog
+        } else {
+            AttachPrimaryOutput::StdoutLog
+        };
+        proptest::prop_assert_eq!(result, expected);
     }
 
     #[test]
@@ -680,28 +680,33 @@ proptest::proptest! {
     }
 
     #[test]
-    fn prop_attach_routing_gemini_opencode_legacy_stdout_log(
+    fn prop_attach_routing_legacy_runtime_binary_missing_follows_output_log_presence(
+        tool in proptest::sample::select(vec!["codex", "gemini-cli", "opencode"]),
         output_log_exists in proptest::prelude::any::<bool>(),
         session_active in proptest::prelude::any::<bool>(),
     ) {
-        // Legacy gemini-cli / opencode (no ACP-flavored runtime hint) must
-        // route to stdout.log — matches current TransportMode::Legacy.
-        // #783 tracks whether gemini-cli with an existing output.log should
-        // migrate to OutputLog; this property intentionally locks in the
-        // current behavior so any future routing change must also update
-        // the proptest.
-        for tool in ["gemini-cli", "opencode"] {
-            for runtime_binary in [None, Some("gemini")] {
-                let result = attach_route_for(tool, runtime_binary, output_log_exists, session_active);
-                proptest::prop_assert_eq!(
-                    result,
-                    AttachPrimaryOutput::StdoutLog,
-                    "legacy {}/{:?} must route to stdout.log",
-                    tool,
-                    runtime_binary
-                );
-            }
-        }
+        let result = attach_route_for(tool, None, output_log_exists, session_active);
+        let expected = if output_log_exists {
+            AttachPrimaryOutput::OutputLog
+        } else {
+            AttachPrimaryOutput::StdoutLog
+        };
+        proptest::prop_assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn prop_attach_routing_legacy_runtime_binary_present_uses_transport_defaults(
+        tool in proptest::sample::select(vec!["gemini-cli", "opencode"]),
+        output_log_exists in proptest::prelude::any::<bool>(),
+        session_active in proptest::prelude::any::<bool>(),
+    ) {
+        let runtime_binary = if tool == "gemini-cli" {
+            Some("gemini")
+        } else {
+            Some("opencode")
+        };
+        let result = attach_route_for(tool, runtime_binary, output_log_exists, session_active);
+        proptest::prop_assert_eq!(result, AttachPrimaryOutput::StdoutLog);
     }
 
     #[test]
