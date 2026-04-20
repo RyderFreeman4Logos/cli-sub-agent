@@ -85,22 +85,34 @@ fn test_classify_gemini_acp_init_failure_defaults_to_handshake_timeout() {
 #[test]
 fn test_gemini_acp_initial_response_timeout_resolver_is_gemini_only() {
     assert_eq!(
-        gemini_acp_initial_response_timeout_seconds("gemini-cli", None),
-        Some(180)
-    );
-    assert_eq!(
-        gemini_acp_initial_response_timeout_seconds("gemini-cli", Some(0)),
+        gemini_acp_initial_response_timeout_seconds("gemini-cli", super::ResolvedTimeout(None)),
         None
     );
     assert_eq!(
-        gemini_acp_initial_response_timeout_seconds("gemini-cli", Some(45)),
+        gemini_acp_initial_response_timeout_seconds(
+            "gemini-cli",
+            super::ResolvedTimeout(Some(0)),
+        ),
+        None
+    );
+    assert_eq!(
+        gemini_acp_initial_response_timeout_seconds(
+            "gemini-cli",
+            super::ResolvedTimeout(Some(45)),
+        ),
         Some(45)
     );
     assert_eq!(
-        gemini_acp_initial_response_timeout_seconds("claude-code", None),
+        gemini_acp_initial_response_timeout_seconds(
+            "claude-code",
+            super::ResolvedTimeout(None),
+        ),
         None
     );
-    assert_eq!(gemini_acp_initial_response_timeout_seconds("codex", None), None);
+    assert_eq!(
+        gemini_acp_initial_response_timeout_seconds("codex", super::ResolvedTimeout(None)),
+        None
+    );
 }
 
 #[test]
@@ -309,7 +321,7 @@ sleep 2
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            Some(1),
+            super::ResolvedTimeout(Some(1)),
         )
         .await
         .expect("execute_in should return classified gemini legacy stall");
@@ -360,7 +372,7 @@ exit 1
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            None,
+            super::ResolvedTimeout(None),
         )
         .await
         .expect_err("fake gemini should fail before ACP handshake");

@@ -174,7 +174,7 @@ impl Transport for AcpTransport {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
-        initial_response_timeout_seconds: Option<u64>,
+        initial_response_timeout: super::ResolvedTimeout,
     ) -> Result<TransportResult> {
         let session = build_ephemeral_meta_session(work_dir);
         self.execute(
@@ -186,7 +186,7 @@ impl Transport for AcpTransport {
                 stream_mode,
                 idle_timeout_seconds,
                 acp_crash_max_attempts: 2,
-                initial_response_timeout_seconds,
+                initial_response_timeout,
                 liveness_dead_seconds: csa_process::DEFAULT_LIVENESS_DEAD_SECS,
                 stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
                 acp_init_timeout_seconds: 120,

@@ -10,7 +10,7 @@ use tracing::info;
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::Executor;
+use csa_executor::{Executor, ResolvedTimeout};
 
 use crate::pipeline;
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
@@ -31,6 +31,10 @@ pub(super) struct EphemeralRunRequest<'a> {
     pub(super) initial_response_timeout_seconds: Option<u64>,
 }
 
+fn direct_entry_resolved_timeout(initial_response_timeout_seconds: Option<u64>) -> ResolvedTimeout {
+    ResolvedTimeout(initial_response_timeout_seconds)
+}
+
 pub(super) async fn run_ephemeral_with_timeout(
     request: EphemeralRunRequest<'_>,
     timeout_duration: std::time::Duration,
@@ -49,7 +53,7 @@ pub(super) async fn run_ephemeral_with_timeout(
             request.extra_env,
             request.stream_mode,
             request.idle_timeout_seconds,
-            request.initial_response_timeout_seconds,
+            direct_entry_resolved_timeout(request.initial_response_timeout_seconds),
         ),
     )
     .await
@@ -78,10 +82,24 @@ pub(super) async fn run_ephemeral_without_timeout(
                 request.extra_env,
                 request.stream_mode,
                 request.idle_timeout_seconds,
-                request.initial_response_timeout_seconds,
+                direct_entry_resolved_timeout(request.initial_response_timeout_seconds),
             )
             .await,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_entry_resolved_timeout_preserves_pipeline_resolved_semantics() {
+        assert_eq!(direct_entry_resolved_timeout(None), ResolvedTimeout(None));
+        assert_eq!(
+            direct_entry_resolved_timeout(Some(45)),
+            ResolvedTimeout(Some(45))
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

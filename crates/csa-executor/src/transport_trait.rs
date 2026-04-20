@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use csa_session::state::{MetaSessionState, ToolState};
 
-use super::{TransportMode, TransportOptions, TransportResult};
+use super::{ResolvedTimeout, TransportMode, TransportOptions, TransportResult};
 
 #[async_trait]
 pub trait Transport: Send + Sync {
@@ -27,7 +27,7 @@ pub trait Transport: Send + Sync {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
-        initial_response_timeout_seconds: Option<u64>,
+        initial_response_timeout: ResolvedTimeout,
     ) -> Result<TransportResult>;
 
     #[cfg(test)]

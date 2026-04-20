@@ -189,21 +189,23 @@ fn test_classify_codex_exec_initial_stall_ignores_first_byte_before_deadline() {
 #[test]
 fn test_legacy_transport_consumes_resolved_timeout_without_reapplying_defaults() {
     assert_eq!(
-        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(None),
+        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(
+            super::ResolvedTimeout(None),
+        ),
         None,
         "resolved None must stay disabled on the persistent legacy path"
     );
     assert_eq!(
-        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(Some(
-            0
-        )),
+        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(
+            super::ResolvedTimeout(Some(0)),
+        ),
         None,
         "stray Some(0) must not resurrect the codex default on the persistent legacy path"
     );
     assert_eq!(
-        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(Some(
-            450
-        )),
+        super::LegacyTransport::consume_resolved_transport_initial_response_timeout_seconds(
+            super::ResolvedTimeout(Some(450)),
+        ),
         Some(450),
         "positive resolved values must pass through unchanged on the persistent legacy path"
     );
@@ -256,7 +258,9 @@ echo "ok persistent"
                     stream_mode: StreamMode::BufferOnly,
                     idle_timeout_seconds: 10,
                     acp_crash_max_attempts: 1,
-                    initial_response_timeout_seconds,
+                    initial_response_timeout: super::ResolvedTimeout(
+                        initial_response_timeout_seconds,
+                    ),
                     liveness_dead_seconds: 15,
                     stdin_write_timeout_seconds: 5,
                     acp_init_timeout_seconds: 5,
@@ -505,7 +509,7 @@ async fn test_gemini_3phase_oauth_fails_apikey_same_model_succeeds() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            None,
+            super::ResolvedTimeout(None),
         )
         .await
         .expect("execute_in should succeed on attempt 2 (API key, same model)");
@@ -555,7 +559,7 @@ async fn test_gemini_3phase_all_oauth_and_apikey_same_fail_flash_succeeds() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            None,
+            super::ResolvedTimeout(None),
         )
         .await
         .expect("execute_in should succeed on attempt 3 (API key, flash model)");
@@ -612,7 +616,7 @@ async fn test_gemini_3phase_all_fail_returns_last_error() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            None,
+            super::ResolvedTimeout(None),
         )
         .await
         .expect("execute_in should return final failed attempt result");

@@ -3,6 +3,28 @@ use std::path::Path;
 use csa_acp::SessionEvent;
 use csa_process::{ExecutionResult, StreamMode};
 use csa_resource::isolation_plan::IsolationPlan;
+use serde::{Deserialize, Serialize};
+
+/// Signals that the initial-response timeout has already passed through a resolver.
+///
+/// `None` means the watchdog is disabled; `Some(seconds)` is the concrete deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ResolvedTimeout(pub Option<u64>);
+
+impl ResolvedTimeout {
+    pub const fn disabled() -> Self {
+        Self(None)
+    }
+
+    pub const fn of(secs: u64) -> Self {
+        Self(Some(secs))
+    }
+
+    pub const fn as_option(&self) -> Option<u64> {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
@@ -23,7 +45,7 @@ pub struct TransportOptions<'a> {
     /// - `None` disables the watchdog
     /// - `Some(seconds > 0)` arms the watchdog for that duration
     /// - `Some(0)` is tolerated defensively and treated as disabled by transport consumers
-    pub initial_response_timeout_seconds: Option<u64>,
+    pub initial_response_timeout: ResolvedTimeout,
     pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,

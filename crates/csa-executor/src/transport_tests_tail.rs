@@ -595,7 +595,7 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
             Some(&env),
             StreamMode::BufferOnly,
             30,
-            None,
+            super::ResolvedTimeout(None),
         )
         .await
         .expect("execute_in should succeed on attempt 3");
@@ -630,7 +630,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         stream_mode: StreamMode::BufferOnly,
         idle_timeout_seconds: 30,
         acp_crash_max_attempts: 2,
-        initial_response_timeout_seconds: None,
+        initial_response_timeout: super::ResolvedTimeout(None),
         liveness_dead_seconds: 30,
         stdin_write_timeout_seconds: 30,
         acp_init_timeout_seconds: 30,

@@ -79,7 +79,9 @@ use transport_legacy_codex_exec_stall::{
 #[path = "transport_types.rs"]
 mod transport_types;
 use transport_types::should_stream_acp_stdout_to_stderr;
-pub use transport_types::{SandboxTransportConfig, TransportOptions, TransportResult};
+pub use transport_types::{
+    ResolvedTimeout, SandboxTransportConfig, TransportOptions, TransportResult,
+};
 
 pub(crate) fn build_ephemeral_meta_session(work_dir: &Path) -> MetaSessionState {
     let now = Utc::now();
@@ -133,7 +135,7 @@ struct ExecuteInAttempt<'a> {
     /// - `None` disables the watchdog
     /// - `Some(seconds > 0)` arms the watchdog for that duration
     /// - `Some(0)` should not reach this layer, but is treated as disabled
-    resolved_initial_response_timeout_seconds: Option<u64>,
+    resolved_initial_response_timeout: ResolvedTimeout,
 }
 
 impl LegacyTransport {
@@ -194,7 +196,7 @@ impl LegacyTransport {
         };
         let initial_response_timeout_seconds =
             consume_resolved_execute_in_initial_response_timeout_seconds(
-                request.resolved_initial_response_timeout_seconds,
+                request.resolved_initial_response_timeout,
             );
         let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
         let child_pid = child.id();
@@ -225,9 +227,9 @@ impl LegacyTransport {
     }
 
     fn consume_resolved_transport_initial_response_timeout_seconds(
-        resolved_timeout_seconds: Option<u64>,
+        resolved_timeout: ResolvedTimeout,
     ) -> Option<u64> {
-        consume_resolved_initial_response_timeout_seconds(resolved_timeout_seconds)
+        consume_resolved_initial_response_timeout_seconds(resolved_timeout)
     }
 
     async fn execute_single_attempt(
@@ -258,7 +260,7 @@ impl LegacyTransport {
         };
         let initial_response_timeout_seconds =
             Self::consume_resolved_transport_initial_response_timeout_seconds(
-                options.initial_response_timeout_seconds,
+                options.initial_response_timeout,
             );
         let (child, sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
@@ -357,7 +359,7 @@ impl LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
-        initial_response_timeout_seconds: Option<u64>,
+        initial_response_timeout: ResolvedTimeout,
     ) -> Result<TransportResult> {
         // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let has_fallback_key = extra_env
@@ -402,7 +404,7 @@ impl LegacyTransport {
                     extra_env: attempt_env,
                     stream_mode,
                     idle_timeout_seconds,
-                    resolved_initial_response_timeout_seconds: initial_response_timeout_seconds,
+                    resolved_initial_response_timeout: initial_response_timeout,
                 })
                 .await?;
             if let Some(backoff) =
@@ -423,7 +425,7 @@ impl LegacyTransport {
                 continue;
             }
             let direct_timeout = consume_resolved_execute_in_initial_response_timeout_seconds(
-                initial_response_timeout_seconds,
+                initial_response_timeout,
             );
             let retry_executor = executor.clone();
             let result = apply_and_maybe_retry_codex_exec_initial_stall(
@@ -441,8 +443,7 @@ impl LegacyTransport {
                             extra_env: attempt_env,
                             stream_mode,
                             idle_timeout_seconds,
-                            resolved_initial_response_timeout_seconds:
-                                initial_response_timeout_seconds,
+                            resolved_initial_response_timeout: initial_response_timeout,
                         })
                         .await?;
                     Ok((downgraded_executor, retry_result))
@@ -561,7 +562,7 @@ impl AcpTransport {
         let idle_timeout_seconds = options.idle_timeout_seconds;
         let initial_response_timeout_seconds = gemini_acp_initial_response_timeout_seconds(
             &self.tool_name,
-            options.initial_response_timeout_seconds,
+            options.initial_response_timeout,
         );
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
         let termination_grace_period_seconds = options.termination_grace_period_seconds;
