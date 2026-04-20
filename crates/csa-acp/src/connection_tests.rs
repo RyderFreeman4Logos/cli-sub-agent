@@ -43,6 +43,8 @@ fn restore_env_var(key: &str, original: Option<String>) {
     }
 }
 
+include!("connection_initial_response_tests.rs");
+
 #[test]
 fn stripped_env_vars_contains_claudecode() {
     assert!(

@@ -9,3 +9,4 @@ include!("transport_tests_gemini_fallback.rs");
 include!("transport_tests_gemini_init_classification.rs");
 include!("transport_tests_gemini_oauth_prompt.rs");
 include!("transport_tests_extra.rs");
+include!("transport_tests_codex_acp_stall.rs");

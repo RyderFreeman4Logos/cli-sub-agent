@@ -125,6 +125,17 @@ pub enum SessionEvent {
     Other(String),
 }
 
+pub(crate) fn event_counts_as_initial_response(event: &SessionEvent) -> bool {
+    matches!(
+        event,
+        SessionEvent::AgentMessage(_)
+            | SessionEvent::AgentThought(_)
+            | SessionEvent::PlanUpdate(_)
+            | SessionEvent::ToolCallStarted { .. }
+            | SessionEvent::ToolCallCompleted { .. }
+    )
+}
+
 /// Bounded in-memory ACP event retention with incremental metadata extraction.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionEventStore {
