@@ -106,7 +106,7 @@ OnFail: retry 3
 Dispatch sub-agent to fix issues found in review.
 Preserve original code intent. Do NOT delete code to silence warnings.
 
-## Step 6: Re-stage Fixed Files
+## Step 7: Re-stage Fixed Files
 
 Tool: bash
 
@@ -114,14 +114,31 @@ Tool: bash
 git add ${FIXED_FILES}
 ```
 
-## Step 7: Round Cap Check
+## ENDIF
+
+## Step 8: Re-review
 
 Tool: bash
+Condition: ${REVIEW_HAS_ISSUES}
 
-Enforce the 3-round hard cap before triggering the next review attempt inside this single-pass workflow.
-If round 3 still has non-false-positive P0/P1 findings, stop and require user direction.
-Continue without asking only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
-`${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`.
+Run the next review after the latest fix is staged.
+This is still a single-pass workflow step, not a native weave loop.
+
+```bash
+SID=$(csa review --diff --allow-fallback)
+bash scripts/csa/session-wait-until-done.sh "$SID"
+```
+
+## Step 9: Round Cap Check
+
+Tool: bash
+Condition: ${REVIEW_HAS_ISSUES}
+
+Enforce the 3-round hard cap only after the latest re-review completes.
+If the round-3 re-review still has non-false-positive P0/P1 findings, stop and require user direction.
+If the re-review passes, proceed without interruption.
+Continue into another fix-and-review round only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
+`${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`, or when the current round is still below the hard cap.
 
 ```bash
 REVIEW_ROUND="${REVIEW_ROUND:-1}"
@@ -142,22 +159,7 @@ echo "CSA_VAR:USER_DECISION_REQUIRED=false"
 echo "CSA_VAR:REVIEW_ROUND=$((REVIEW_ROUND + 1))"
 ```
 
-## ENDIF
-
-## Step 8: Re-review
-
-Tool: bash
-Condition: ${REVIEW_HAS_ISSUES} && !(${USER_DECISION_REQUIRED})
-
-Run the next review only if the hard-cap check allowed it.
-This is still a single-pass workflow step, not a native weave loop.
-
-```bash
-SID=$(csa review --diff --allow-fallback)
-bash scripts/csa/session-wait-until-done.sh "$SID"
-```
-
-## Step 9: AGENTS.md Compliance Check
+## Step 10: AGENTS.md Compliance Check
 Condition: !(${USER_DECISION_REQUIRED})
 
 The review MUST include AGENTS.md compliance checklist:
@@ -171,7 +173,7 @@ The review MUST include AGENTS.md compliance checklist:
 - Zero unchecked items before proceeding to commit
 - Skip this and all later post-review steps when `${USER_DECISION_REQUIRED}` is `"true"` so the workflow halts cleanly instead of committing past the cap
 
-## Step 10: Generate Commit Message
+## Step 11: Generate Commit Message
 
 Tool: csa
 Tier: tier-1-quick
@@ -181,7 +183,7 @@ OnFail: abort
 Run 'git diff --staged' and generate a Conventional Commits message.
 Output ONLY the commit message, nothing else.
 
-## Step 11: Commit
+## Step 12: Commit
 
 Tool: bash
 OnFail: abort

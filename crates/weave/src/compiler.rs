@@ -117,7 +117,7 @@ static ONFAIL_HINT_RE: LazyLock<Regex> =
 
 /// Matches a `Condition: <expr>` line at the start of a step body.
 static CONDITION_HINT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^Condition:\s*(.+)\s*$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"(?i)^Condition:\s*(.*)\s*$").expect("valid regex"));
 
 /// Matches a `Session: <id|template>` line at the start of a step body.
 static SESSION_HINT_RE: LazyLock<Regex> =
@@ -289,7 +289,8 @@ fn extract_hints(body: &str) -> StepHints {
                 continue;
             }
             if let Some(caps) = CONDITION_HINT_RE.captures(line) {
-                condition = Some(caps[1].trim().to_string());
+                let trimmed = caps[1].trim();
+                condition = (!trimmed.is_empty()).then(|| trimmed.to_string());
                 continue;
             }
             if let Some(caps) = SESSION_HINT_RE.captures(line) {
@@ -584,3 +585,7 @@ mod tests;
 #[cfg(test)]
 #[path = "compiler_literal_tests.rs"]
 mod literal_tests;
+
+#[cfg(test)]
+#[path = "compiler_condition_tests.rs"]
+mod condition_tests;

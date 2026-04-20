@@ -130,13 +130,29 @@ condition = "${REVIEW_HAS_ISSUES}"
 
 [[workflow.steps]]
 id = 8
+title = "Re-review"
+tool = "bash"
+prompt = '''
+Run the next review after the latest fix is staged.
+This is still a single-pass workflow step, not a native weave loop.
+
+```bash
+SID=$(csa review --diff --allow-fallback)
+bash scripts/csa/session-wait-until-done.sh "$SID"
+```'''
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[[workflow.steps]]
+id = 9
 title = "Round Cap Check"
 tool = "bash"
 prompt = '''
-Enforce the 3-round hard cap before triggering the next review attempt inside this single-pass workflow.
-If round 3 still has non-false-positive P0/P1 findings, stop and require user direction.
-Continue without asking only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
-`${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`.
+Enforce the 3-round hard cap only after the latest re-review completes.
+If the round-3 re-review still has non-false-positive P0/P1 findings, stop and require user direction.
+If the re-review passes, proceed without interruption.
+Continue into another fix-and-review round only when `${UNBOUNDED_LOOP_AUTHORIZED}` is `"true"` or
+`${ROUND_3_FALSE_POSITIVES_ONLY}` is `"true"`, or when the current round is still below the hard cap.
 
 ```bash
 REVIEW_ROUND="${REVIEW_ROUND:-1}"
@@ -158,21 +174,6 @@ echo "CSA_VAR:REVIEW_ROUND=$((REVIEW_ROUND + 1))"
 ```'''
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
-
-[[workflow.steps]]
-id = 9
-title = "Re-review"
-tool = "bash"
-prompt = '''
-Run the next review only if the hard-cap check allowed it.
-This is still a single-pass workflow step, not a native weave loop.
-
-```bash
-SID=$(csa review --diff --allow-fallback)
-bash scripts/csa/session-wait-until-done.sh "$SID"
-```'''
-on_fail = "abort"
-condition = "${REVIEW_HAS_ISSUES} && !(${USER_DECISION_REQUIRED})"
 
 [[workflow.steps]]
 id = 10
