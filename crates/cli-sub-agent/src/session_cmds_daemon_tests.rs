@@ -420,7 +420,7 @@ fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packe
     use std::time::Duration;
 
     let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -497,7 +497,7 @@ fn handle_session_attach_treats_stale_daemon_pid_as_dead() {
     use std::time::Duration;
 
     let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -554,7 +554,7 @@ fn handle_session_attach_treats_stale_daemon_pid_as_dead() {
 #[test]
 fn handle_session_kill_accepts_legacy_stderr_pid() {
     let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());

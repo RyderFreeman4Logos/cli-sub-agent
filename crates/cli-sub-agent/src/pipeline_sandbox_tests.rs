@@ -340,9 +340,7 @@ enforcement_mode = "best-effort"
 
 #[test]
 fn test_cross_repo_cd_uses_explicit_project_root_for_sandbox_plan() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("pipeline sandbox env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let invocation_cwd = tempfile::tempdir().expect("invocation cwd tempdir");
     let target_project = tempfile::tempdir().expect("target project tempdir");
     let _cwd_guard = CurrentDirGuard::change_to(invocation_cwd.path());

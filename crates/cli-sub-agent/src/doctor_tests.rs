@@ -282,7 +282,7 @@ transport = "stdio"
 
 #[test]
 fn doctor_project_config_display_ignores_invalid_user_global_config() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let td = tempfile::tempdir().expect("tempdir");
     let config_root = td.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).expect("create config root");
@@ -330,7 +330,7 @@ transport = "cli"
 
 #[test]
 fn doctor_text_reports_invalid_effective_config() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let td = tempfile::tempdir().expect("tempdir");
     let config_root = td.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).expect("create config root");
@@ -391,7 +391,7 @@ transport = "cli"
 
 #[test]
 fn doctor_json_reports_invalid_effective_config() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("doctor env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let td = tempfile::tempdir().expect("tempdir");
     let config_root = td.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).expect("create config root");

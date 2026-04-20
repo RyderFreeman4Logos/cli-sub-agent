@@ -41,7 +41,7 @@ fn write_review_artifact_file(session_dir: &Path, file_name: &str, artifact: &Re
 #[test]
 fn recurring_bug_class_skill_extraction_runs_for_high_severity_review_completion() {
     let temp = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
     let config_home = temp.path().join("config");
     std::fs::create_dir_all(&config_home).unwrap();
     let _config_guard = ScopedEnvVarRestore::set("XDG_CONFIG_HOME", config_home.to_str().unwrap());
@@ -93,7 +93,7 @@ fn recurring_bug_class_skill_extraction_runs_for_high_severity_review_completion
 #[test]
 fn review_iterations_increment_from_prior_review_meta_on_same_branch() {
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
 
     let previous = create_session(
         project_dir.path(),
@@ -139,7 +139,7 @@ fn review_iterations_increment_from_prior_review_meta_on_same_branch() {
 #[test]
 fn review_iterations_do_not_undercount_after_more_than_ten_prior_reviews() {
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
 
     for iteration in 1..=11 {
         let session = create_session(
@@ -188,7 +188,7 @@ fn review_iterations_do_not_undercount_after_more_than_ten_prior_reviews() {
 #[test]
 fn review_iterations_use_max_prior_value_instead_of_most_recent_session() {
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
 
     let older_high = create_session(
         project_dir.path(),
@@ -262,7 +262,7 @@ fn review_iterations_use_max_prior_value_instead_of_most_recent_session() {
 #[test]
 fn bug_class_loader_collapses_multi_reviewer_sessions_into_one_logical_review() {
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
 
     let reviewer_one = create_session(
         project_dir.path(),
@@ -329,7 +329,7 @@ fn bug_class_loader_collapses_multi_reviewer_sessions_into_one_logical_review() 
 #[test]
 fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion() {
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
 
     let parent = create_session(
         project_dir.path(),
@@ -415,7 +415,7 @@ fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion(
 #[test]
 fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists() {
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
 
     let child = create_session(
         project_dir.path(),
@@ -461,7 +461,7 @@ fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists(
 #[test]
 fn bug_class_loader_reads_exact_consolidated_path_written_by_consensus_writer() {
     let temp = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
     let project_root = temp.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
 

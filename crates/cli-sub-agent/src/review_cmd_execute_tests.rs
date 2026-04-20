@@ -15,7 +15,7 @@ async fn execute_review_reclassifies_complete_review_after_edit_restriction() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
@@ -114,7 +114,7 @@ async fn execute_review_preserves_codex_default_target_when_project_target_exist
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let target_mount = project_dir.path().join("ssd-target");
     std::fs::create_dir_all(&target_mount).unwrap();
     symlink(&target_mount, project_dir.path().join("target")).unwrap();
@@ -203,7 +203,7 @@ async fn execute_review_model_spec_bypasses_tier_enforcement_without_active_tier
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
@@ -288,7 +288,7 @@ printf '%s\\n' \
 #[test]
 fn synthesize_missing_review_result_makes_session_result_readable() {
     let td = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let project_root = td.path();
 
     let session =
@@ -344,7 +344,7 @@ fn read_review_failure_excerpt_ignores_bytes_beyond_4kb() {
 #[test]
 fn synthesize_missing_review_result_propagates_peak_memory_from_error_chain() {
     let td = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let project_root = td.path();
 
     let session =
@@ -382,7 +382,7 @@ async fn execute_review_retries_gemini_with_api_key_after_oauth_prompt() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_gemini = bin_dir.join("gemini");
@@ -468,7 +468,7 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_gemini = bin_dir.join("gemini");
@@ -543,7 +543,7 @@ async fn execute_review_does_not_retry_gemini_auth_prompt_when_no_failover_is_se
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_gemini = bin_dir.join("gemini");

@@ -7,7 +7,7 @@
 /// Internally acquires [`TEST_ENV_LOCK`] to serialise all env-mutating tests
 /// across the process. Callers do NOT need to acquire any additional lock.
 use std::ffi::OsString;
-use std::sync::MutexGuard;
+use tokio::sync::OwnedMutexGuard;
 
 use crate::test_env_lock::TEST_ENV_LOCK;
 
@@ -18,13 +18,21 @@ use crate::test_env_lock::TEST_ENV_LOCK;
 pub(crate) struct ScopedSessionSandbox {
     originals: Vec<(&'static str, Option<OsString>)>,
     // Guard is held alive until drop (ordering: restored env *then* lock released).
-    _lock: MutexGuard<'static, ()>,
+    _lock: OwnedMutexGuard<()>,
 }
 
 impl ScopedSessionSandbox {
-    pub(crate) fn new(tmp: &tempfile::TempDir) -> Self {
-        let lock = TEST_ENV_LOCK.lock().expect("TEST_ENV_LOCK poisoned");
+    pub(crate) async fn new(tmp: &tempfile::TempDir) -> Self {
+        let lock = TEST_ENV_LOCK.clone().lock_owned().await;
+        Self::from_guard(tmp, lock)
+    }
 
+    pub(crate) fn new_blocking(tmp: &tempfile::TempDir) -> Self {
+        let lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        Self::from_guard(tmp, lock)
+    }
+
+    fn from_guard(tmp: &tempfile::TempDir, lock: OwnedMutexGuard<()>) -> Self {
         let keys: &[&'static str] = &[
             "XDG_STATE_HOME",
             "CSA_DAEMON_SESSION_ID",
@@ -85,7 +93,7 @@ mod tests {
         unsafe { std::env::remove_var(KEY) };
 
         {
-            let mut sandbox = ScopedSessionSandbox::new(&td);
+            let mut sandbox = ScopedSessionSandbox::new_blocking(&td);
             sandbox.track_env(KEY);
 
             // SAFETY: test-scoped env mutation while ScopedSessionSandbox holds TEST_ENV_LOCK.
@@ -98,5 +106,14 @@ mod tests {
             Err(std::env::VarError::NotPresent),
             "tracked env var should be removed when it did not exist before sandboxing"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sandbox_lock_can_span_await_without_deadlocking() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let _sandbox = ScopedSessionSandbox::new(&td).await;
+
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }

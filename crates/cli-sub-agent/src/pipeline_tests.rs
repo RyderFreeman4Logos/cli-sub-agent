@@ -46,7 +46,7 @@ fn sandbox_pipeline_config_env(
     ScopedEnvVarRestore,
     ScopedEnvVarRestore,
 ) {
-    let mut sandbox = ScopedSessionSandbox::new(tmp);
+    let mut sandbox = ScopedSessionSandbox::new_blocking(tmp);
     sandbox.track_env("HOME");
     sandbox.track_env("XDG_CONFIG_HOME");
     let home = ScopedEnvVarRestore::set("HOME", tmp.path().to_str().unwrap());
@@ -166,7 +166,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
 fn auto_description_from_prompt_when_none_provided() {
     use crate::run_helpers::truncate_prompt;
     let tmp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&tmp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let project_root = tmp.path();
     let prompt = "Analyze the authentication module and fix the login bug";
     let description: Option<String> = None;
@@ -204,7 +204,7 @@ fn auto_description_from_prompt_when_none_provided() {
 fn auto_description_truncates_long_prompt() {
     use crate::run_helpers::truncate_prompt;
     let tmp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&tmp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let project_root = tmp.path();
     let long_prompt = "Please analyze the entire authentication module including OAuth2 flows, JWT token validation, session management, RBAC permissions, and the password reset workflow to identify all security vulnerabilities";
     let description: Option<String> = None;
@@ -226,7 +226,7 @@ fn auto_description_truncates_long_prompt() {
 #[test]
 fn resumed_session_keeps_existing_description() {
     let tmp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&tmp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let project_root = tmp.path();
     let original_desc = "original task description";
     let session =
@@ -543,7 +543,7 @@ fn cleanup_guard_preserves_dir_when_defused() {
 #[test]
 fn pre_exec_failure_preserves_session_with_error_result() {
     let tmp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&tmp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let project_root = tmp.path();
 
     let session = csa_session::create_session(project_root, Some("test"), None, Some("codex"))
@@ -577,7 +577,7 @@ fn pre_exec_failure_preserves_session_with_error_result() {
 #[test]
 fn pre_exec_error_writes_failure_result() {
     let tmp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&tmp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let project_root = tmp.path();
 
     let session = csa_session::create_session(project_root, Some("test"), None, Some("codex"))

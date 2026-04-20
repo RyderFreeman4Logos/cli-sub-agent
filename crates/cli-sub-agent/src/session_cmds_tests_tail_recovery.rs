@@ -32,7 +32,7 @@ impl Drop for EnvVarGuard {
 #[test]
 fn synthesized_wait_next_step_returns_directive_for_unpushed_commit_recovery() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());

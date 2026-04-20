@@ -105,7 +105,7 @@ fn resolve_debate_tool_prefers_cli_override() {
 
 #[test]
 fn resolve_debate_tool_auto_maps_heterogeneous() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
@@ -128,7 +128,7 @@ fn resolve_debate_tool_auto_maps_heterogeneous() {
 
 #[test]
 fn resolve_debate_tool_auto_maps_reverse() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
@@ -153,7 +153,7 @@ fn resolve_debate_tool_auto_maps_reverse() {
 fn resolve_debate_tool_same_model_fallback_when_no_parent() {
     // With same_model_fallback enabled (default), no parent context should fall
     // back to same-model adversarial using any explicitly available tool.
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
@@ -200,7 +200,7 @@ fn resolve_debate_tool_same_model_fallback_disabled_errors_without_parent() {
 #[test]
 fn resolve_debate_tool_same_model_fallback_uses_parent_tool() {
     // When only the parent tool family is available, fallback uses the parent tool.
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
@@ -271,7 +271,7 @@ fn resolve_debate_tool_prefers_project_override() {
 
 #[test]
 fn resolve_debate_tool_project_auto_maps_heterogeneous() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let global = GlobalConfig::default();
@@ -299,7 +299,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
 
 #[test]
 fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut global = GlobalConfig::default();
@@ -329,7 +329,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
 
 #[test]
 fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut global = GlobalConfig::default();
@@ -607,7 +607,7 @@ fn persist_debate_output_artifacts_includes_mode_for_same_model() {
 #[test]
 fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
     let temp = tempfile::TempDir::new().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = temp.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", temp.path());

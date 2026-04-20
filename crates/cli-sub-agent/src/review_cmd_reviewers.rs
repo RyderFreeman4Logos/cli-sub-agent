@@ -190,6 +190,7 @@ mod tests {
     };
     use csa_core::types::ToolName;
     use std::collections::HashMap;
+    use tokio::sync::OwnedMutexGuard;
 
     struct ScopedEnvVarRestore {
         key: &'static str,
@@ -217,10 +218,9 @@ mod tests {
         }
     }
 
-    fn assume_review_tools_available() -> (std::sync::MutexGuard<'static, ()>, ScopedEnvVarRestore)
-    {
+    fn assume_review_tools_available() -> (OwnedMutexGuard<()>, ScopedEnvVarRestore) {
         (
-            TEST_ENV_LOCK.lock().expect("review env lock poisoned"),
+            TEST_ENV_LOCK.clone().blocking_lock_owned(),
             ScopedEnvVarRestore::set(TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1"),
         )
     }

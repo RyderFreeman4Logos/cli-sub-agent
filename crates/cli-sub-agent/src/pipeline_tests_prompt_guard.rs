@@ -13,9 +13,7 @@ fn restore_env_var(key: &str, original: Option<String>) {
 
 #[test]
 fn prompt_guard_caller_injection_defaults_to_enabled() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_guard = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
@@ -31,9 +29,7 @@ fn prompt_guard_caller_injection_defaults_to_enabled() {
 
 #[test]
 fn prompt_guard_caller_injection_honors_disable_values() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_guard = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
@@ -54,9 +50,7 @@ fn prompt_guard_caller_injection_honors_disable_values() {
 
 #[test]
 fn prompt_guard_caller_injection_disabled_for_recursive_depth() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_guard = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
     let original_depth = std::env::var("CSA_DEPTH").ok();
 
@@ -77,9 +71,7 @@ fn prompt_guard_caller_injection_disabled_for_recursive_depth() {
 
 #[test]
 fn anti_recursion_guard_none_at_depth_zero() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::remove_var("CSA_DEPTH") };
@@ -93,9 +85,7 @@ fn anti_recursion_guard_none_for_legitimate_fractal_depths() {
     // Layer 1 → Layer 2 (depth 1 → 2) and Layer 2 → Layer 3 (depth 2 → 3) are
     // documented fractal-recursion cases; the guard must not discourage them.
     for depth in ["1", "2", "3"] {
-        let _env_lock = TEST_ENV_LOCK
-            .lock()
-            .expect("prompt guard env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let original_depth = std::env::var("CSA_DEPTH").ok();
         // SAFETY: test-scoped env mutation, restored immediately.
         unsafe { std::env::set_var("CSA_DEPTH", depth) };
@@ -110,9 +100,7 @@ fn anti_recursion_guard_none_for_legitimate_fractal_depths() {
 
 #[test]
 fn anti_recursion_guard_warns_near_default_ceiling() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::set_var("CSA_DEPTH", "4") };
@@ -130,9 +118,7 @@ fn anti_recursion_guard_warns_near_default_ceiling() {
 
 #[test]
 fn anti_recursion_guard_warns_at_default_ceiling() {
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::set_var("CSA_DEPTH", "5") };
@@ -185,9 +171,7 @@ fn anti_recursion_guard_honors_custom_max_recursion_depth() {
     // rendered text so LLMs don't see a stale "max=5" number.
     let cfg_low = project_config_with_max_depth(3);
 
-    let _env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("prompt guard env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original_depth = std::env::var("CSA_DEPTH").ok();
 
     // SAFETY: test-scoped env mutation, restored immediately.

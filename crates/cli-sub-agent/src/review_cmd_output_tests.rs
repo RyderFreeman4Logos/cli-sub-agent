@@ -11,8 +11,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::MutexGuard;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::OwnedMutexGuard;
 
 fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
     ReviewSessionMeta {
@@ -74,13 +74,8 @@ fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
     session_dir
 }
 
-fn lock_test_session(
-    test_name: &str,
-    session_id: &str,
-) -> (MutexGuard<'static, ()>, PathBuf, PathBuf) {
-    let env_lock = TEST_ENV_LOCK
-        .lock()
-        .expect("review_cmd_output env lock poisoned");
+fn lock_test_session(test_name: &str, session_id: &str) -> (OwnedMutexGuard<()>, PathBuf, PathBuf) {
+    let env_lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
     let project_root = temp_project_root(test_name);
     let session_dir = create_session_dir(&project_root, session_id);
     (env_lock, project_root, session_dir)

@@ -51,7 +51,7 @@ fn write_global_config(contents: &str) -> std::path::PathBuf {
 
 #[test]
 fn build_config_get_lookup_global_kv_cache_returns_not_found_when_key_is_absent() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -76,7 +76,7 @@ tool = "auto"
 
 #[test]
 fn resolve_lookup_sources_global_raw_match_survives_invalid_unrelated_global_field() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -103,7 +103,7 @@ max_concurrent = "oops"
 
 #[test]
 fn resolve_lookup_sources_warns_when_raw_global_fallback_follows_effective_project_parse_error() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();

@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn resolve_daemon_wait_timeout_uses_global_kv_cache_long_poll_seconds() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
@@ -293,7 +293,7 @@ long_poll_seconds = 3000
 
     #[test]
     fn resolve_daemon_wait_timeout_uses_documented_default_without_kv_cache_section() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
@@ -312,7 +312,7 @@ tool = "auto"
 
     #[test]
     fn resolve_daemon_wait_timeout_prefers_global_kv_cache_over_legacy_session_key() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
@@ -346,7 +346,7 @@ daemon_wait_seconds = 600
 
     #[test]
     fn resolve_daemon_wait_timeout_treats_explicit_default_as_higher_priority_than_legacy_key() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
@@ -381,7 +381,7 @@ daemon_wait_seconds = 600
     #[test]
     fn resolve_daemon_wait_timeout_treats_kv_cache_section_default_as_higher_priority_than_legacy_key()
      {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
@@ -415,7 +415,7 @@ daemon_wait_seconds = 600
 
     #[test]
     fn resolve_daemon_wait_timeout_honors_legacy_project_session_override_with_warning_path() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
@@ -442,7 +442,7 @@ daemon_wait_seconds = 600
 
     #[test]
     fn resolve_daemon_wait_timeout_honors_legacy_user_session_override_when_project_missing() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();

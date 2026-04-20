@@ -12,7 +12,7 @@ async fn execute_review_fails_when_repo_root_output_artifact_is_created() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
@@ -93,7 +93,7 @@ async fn execute_review_error_path_still_checks_artifact_contract() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
@@ -163,7 +163,7 @@ async fn execute_review_retry_path_still_checks_artifact_contract() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_gemini = bin_dir.join("gemini");
@@ -256,7 +256,7 @@ async fn execute_review_fails_when_repo_root_findings_artifact_is_created() {
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");

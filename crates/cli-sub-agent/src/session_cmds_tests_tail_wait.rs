@@ -33,7 +33,7 @@ impl Drop for EnvVarGuard {
 #[test]
 fn handle_session_wait_retires_active_session_after_dead_failure_completion_packet() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -80,7 +80,7 @@ fn handle_session_wait_retires_active_session_after_dead_failure_completion_pack
 #[test]
 fn handle_session_wait_prefers_synthetic_failure_status_and_exit_code_over_completion_packet() {
     let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -129,7 +129,7 @@ fn handle_session_wait_prefers_synthetic_failure_status_and_exit_code_over_compl
 #[test]
 fn handle_session_wait_prefers_late_real_result_status_and_exit_code_over_completion_packet() {
     let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -185,7 +185,7 @@ fn handle_session_wait_prefers_late_real_result_status_and_exit_code_over_comple
 #[test]
 fn handle_session_wait_prefers_refreshed_real_result_status_and_exit_code_over_completion_packet() {
     let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -246,7 +246,7 @@ fn handle_session_wait_prefers_refreshed_real_result_status_and_exit_code_over_c
 #[test]
 fn handle_session_wait_prefers_refreshed_real_result_on_equal_mtime_with_completion_packet() {
     let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -327,7 +327,7 @@ fn handle_session_wait_prefers_refreshed_real_result_on_equal_mtime_with_complet
 #[test]
 fn handle_session_wait_errors_when_refresh_branch_cannot_persist_retired_phase() {
     let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", td.path());

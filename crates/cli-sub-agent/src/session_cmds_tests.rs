@@ -232,7 +232,7 @@ fn session_to_json_includes_branch_and_task_type() {
 #[test]
 fn session_list_branch_filter_returns_matching_sessions() {
     let td = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let project = td.path();
 
     let s1 = create_session(project, Some("S1"), None, None).unwrap();
@@ -257,7 +257,7 @@ fn session_list_branch_filter_returns_matching_sessions() {
 #[test]
 fn session_list_selection_not_truncated_to_ten() {
     let td = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let project = td.path();
 
     for _ in 0..12 {

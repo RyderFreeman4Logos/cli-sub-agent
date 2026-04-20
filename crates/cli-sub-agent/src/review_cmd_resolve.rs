@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn write_multi_reviewer_consolidated_artifact_reads_current_session_reviewer_dir() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("test env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let temp = tempdir().expect("tempdir should be created");
         let session_dir = temp.path().display().to_string();
         let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);

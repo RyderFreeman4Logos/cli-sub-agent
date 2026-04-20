@@ -31,7 +31,7 @@ fn handle_session_wait_ignores_completion_packet_while_raw_daemon_pid_is_alive()
     use std::process::Command;
 
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -83,7 +83,7 @@ fn handle_session_kill_rejects_daemon_pid_start_time_mismatch() {
     use std::process::Command;
 
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());

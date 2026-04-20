@@ -226,7 +226,7 @@ fn resolve_debate_tool_auto_skips_counterpart_without_configured_binary() {
     use std::os::unix::fs::PermissionsExt;
 
     let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
 
@@ -286,7 +286,7 @@ fn resolve_debate_tool_same_model_fallback_skips_unavailable_configured_binary()
     use std::os::unix::fs::PermissionsExt;
 
     let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
 
@@ -340,7 +340,7 @@ fn resolve_debate_tool_same_model_fallback_skips_unavailable_parent_binary() {
     use std::os::unix::fs::PermissionsExt;
 
     let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
 
@@ -402,7 +402,7 @@ fn verify_debate_skill_no_fallback_without_skill() {
 #[tokio::test]
 async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     config.tiers.insert(
         "default".to_string(),

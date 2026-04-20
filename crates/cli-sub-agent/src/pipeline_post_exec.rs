@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn ensure_terminal_result_on_post_exec_error_writes_missing_result() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let _sandbox = ScopedSessionSandbox::new(&tmp);
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
         let project_root = tmp.path();
         let mut session = create_session(project_root, Some("test"), None, Some("codex"))
             .expect("create session");
@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let _sandbox = ScopedSessionSandbox::new(&tmp);
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
         let project_root = tmp.path();
         let mut session = create_session(project_root, Some("test"), None, Some("codex"))
             .expect("create session");
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn ensure_terminal_result_for_session_on_post_exec_error_persists_output_tail_for_fork() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let _sandbox = ScopedSessionSandbox::new(&tmp);
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
         let project_root = tmp.path();
         let parent = create_session(project_root, Some("parent"), None, Some("codex"))
             .expect("create parent session");
