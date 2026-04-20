@@ -80,6 +80,7 @@ pub(crate) async fn handle_claude_sub_agent(
         &tool_name,
         &prompt,
         args.session,
+        false,
         description,
         None, // parent
         &project_root,

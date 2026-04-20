@@ -608,6 +608,7 @@ async fn execute_task(
         &tool_name,
         &task.prompt,
         None,                                  // session_arg: None (ephemeral)
+        false,                                 // fresh_spawn_preflight_override
         Some(format!("batch: {}", task.name)), // description
         std::env::var("CSA_SESSION_ID").ok(),  // parent
         project_root,

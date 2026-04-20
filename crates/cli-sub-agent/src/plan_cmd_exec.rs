@@ -232,6 +232,7 @@ pub(super) async fn execute_csa_step(
             prompt,
             OutputFormat::Json,
             session_arg,
+            false,
             Some("plan-step".to_string()),
             parent_session_id.clone(),
             project_root,

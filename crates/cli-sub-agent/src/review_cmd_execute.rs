@@ -264,6 +264,7 @@ async fn execute_review_once(
         effective_prompt,
         OutputFormat::Json,
         session,
+        false,
         Some(description),
         None,
         project_root,

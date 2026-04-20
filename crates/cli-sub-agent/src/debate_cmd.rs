@@ -328,6 +328,7 @@ pub(crate) async fn handle_debate(
             &prompt,
             output_format,
             resume_session.clone(),
+            false,
             Some(debate_description.clone()),
             None,
             &project_root,
