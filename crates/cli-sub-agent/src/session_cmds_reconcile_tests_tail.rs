@@ -275,6 +275,7 @@ fn retire_if_dead_with_result_removes_session_target_dir() {
         &session_id,
         "session list",
         &session_dir,
+        reconcile_liveness_decision(&session_dir),
         &persist_session_state_atomically,
     )
     .unwrap();
@@ -570,6 +571,7 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
         &session_id,
         "session wait",
         &session_dir,
+        reconcile_liveness_decision(&session_dir),
         &persist_session_state_atomically,
     )
     .unwrap();
