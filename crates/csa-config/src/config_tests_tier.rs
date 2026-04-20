@@ -46,6 +46,7 @@ fn test_resolve_tier_default_selection() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -96,6 +97,7 @@ fn test_resolve_tier_fallback_to_tier3() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -162,6 +164,7 @@ fn test_resolve_tier_skips_disabled_tools() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -206,6 +209,7 @@ fn test_resolve_alias() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -264,6 +268,7 @@ fn enabled_tier_models_returns_all_when_no_tools_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -319,6 +324,7 @@ fn enabled_tier_models_excludes_disabled_tool() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -349,6 +355,7 @@ fn enabled_tier_models_returns_empty_for_unknown_tier() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -407,6 +414,7 @@ fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -467,6 +475,7 @@ fn filtered_skips_restricted_tool_when_needs_edit() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -531,6 +540,7 @@ fn filtered_returns_none_when_all_restricted_and_needs_edit() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

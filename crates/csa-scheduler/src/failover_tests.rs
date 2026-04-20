@@ -52,6 +52,7 @@ fn make_config(models: Vec<&str>, disabled: Vec<&str>) -> ProjectConfig {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
@@ -168,6 +169,7 @@ fn make_multi_tier_config(
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }

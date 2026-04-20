@@ -195,6 +195,7 @@ fn mutating_skill_contract_routes_default_tier_away_from_restricted_tool() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -353,6 +354,7 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -391,6 +393,7 @@ fn build_executor_ignores_project_tool_defaults_when_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -435,6 +438,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -678,6 +682,7 @@ fn build_executor_model_spec_overrides_both() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

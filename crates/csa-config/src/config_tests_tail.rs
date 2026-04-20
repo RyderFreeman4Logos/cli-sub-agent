@@ -22,6 +22,7 @@ fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -48,6 +49,7 @@ fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -83,6 +85,7 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

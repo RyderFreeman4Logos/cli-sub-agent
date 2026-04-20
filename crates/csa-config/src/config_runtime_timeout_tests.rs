@@ -25,6 +25,7 @@ fn empty_config() -> ProjectConfig {
         preferences: None,
         hooks: HooksSection::default(),
         execution: ExecutionConfig::default(),
+        preflight: Default::default(),
         vcs: VcsConfig::default(),
         filesystem_sandbox: FilesystemSandboxConfig::default(),
     }

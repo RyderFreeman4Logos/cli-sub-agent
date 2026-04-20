@@ -21,6 +21,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

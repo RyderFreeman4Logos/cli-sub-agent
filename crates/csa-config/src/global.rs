@@ -50,6 +50,9 @@ pub struct GlobalConfig {
     /// KV cache-aware polling defaults used by orchestration workflows.
     #[serde(default)]
     pub kv_cache: KvCacheConfig,
+    /// Pre-flight repository integrity checks before session spawn.
+    #[serde(default)]
+    pub preflight: PreflightConfig,
     /// ACP transport overrides; project-level `[acp]` takes precedence.
     #[serde(default, skip_serializing_if = "crate::AcpConfig::is_default")]
     pub acp: crate::AcpConfig,
@@ -59,6 +62,47 @@ pub struct GlobalConfig {
         skip_serializing_if = "crate::config_filesystem_sandbox::FilesystemSandboxConfig::is_default"
     )]
     pub filesystem_sandbox: crate::config_filesystem_sandbox::FilesystemSandboxConfig,
+}
+
+/// Pre-flight checks that run before session creation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreflightConfig {
+    #[serde(
+        default,
+        skip_serializing_if = "AiConfigSymlinkCheckConfig::is_default"
+    )]
+    pub ai_config_symlink_check: AiConfigSymlinkCheckConfig,
+}
+
+/// Configuration for AI-config symlink integrity validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfigSymlinkCheckConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
+    #[serde(default = "default_broken_as_error")]
+    pub treat_broken_symlink_as_error: bool,
+}
+
+const fn default_broken_as_error() -> bool {
+    true
+}
+
+impl Default for AiConfigSymlinkCheckConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            paths: None,
+            treat_broken_symlink_as_error: default_broken_as_error(),
+        }
+    }
+}
+
+impl AiConfigSymlinkCheckConfig {
+    pub fn is_default(&self) -> bool {
+        !self.enabled && self.paths.is_none() && self.treat_broken_symlink_as_error
+    }
 }
 
 /// User preferences for tool selection and routing.

@@ -33,6 +33,7 @@ fn test_resolve_tier_selector_direct_tier() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -77,6 +78,7 @@ fn test_resolve_tier_selector_alias() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -133,6 +135,7 @@ fn test_resolve_tier_selector_direct_wins_on_collision() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -163,6 +166,7 @@ fn test_resolve_tier_selector_nonexistent() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -192,6 +196,7 @@ fn test_resolve_tier_selector_alias_to_nonexistent_tier() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -241,6 +246,7 @@ fn test_resolve_tier_selector_prefix_unique() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -295,6 +301,7 @@ fn test_resolve_tier_selector_prefix_ambiguous() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -337,6 +344,7 @@ fn test_resolve_tier_selector_exact_wins_over_prefix() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -385,6 +393,7 @@ fn test_suggest_tier_prefix() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -432,6 +441,7 @@ fn test_suggest_tier_substring() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -469,6 +479,7 @@ fn test_suggest_tier_no_match() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -511,6 +522,7 @@ fn test_resolve_tier_selector_empty_string_rejected() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

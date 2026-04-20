@@ -11,7 +11,7 @@ use crate::config_merge::{
     warn_deprecated_keys,
 };
 pub use crate::config_resources::ResourcesConfig;
-use crate::global::{PreferencesConfig, ReviewConfig};
+use crate::global::{PreferencesConfig, PreflightConfig, ReviewConfig};
 use crate::memory::MemoryConfig;
 use crate::paths;
 
@@ -142,10 +142,16 @@ pub struct ProjectConfig {
     /// Execution tuning knobs (timeout floors, etc.).
     #[serde(default, skip_serializing_if = "ExecutionConfig::is_default")]
     pub execution: ExecutionConfig,
+    #[serde(default, skip_serializing_if = "preflight_is_default")]
+    pub preflight: PreflightConfig,
     #[serde(default, skip_serializing_if = "VcsConfig::is_default")]
     pub vcs: VcsConfig,
     #[serde(default, skip_serializing_if = "FilesystemSandboxConfig::is_default")]
     pub filesystem_sandbox: FilesystemSandboxConfig,
+}
+
+fn preflight_is_default(config: &PreflightConfig) -> bool {
+    config.ai_config_symlink_check.is_default()
 }
 
 fn default_schema_version() -> u32 {
@@ -653,6 +659,9 @@ mod merge_tests;
 #[cfg(test)]
 #[path = "config_merge_tests_tail.rs"]
 mod merge_tests_tail;
+#[cfg(test)]
+#[path = "config_tests_preflight.rs"]
+mod preflight_tests;
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;

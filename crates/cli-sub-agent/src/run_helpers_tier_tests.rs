@@ -40,6 +40,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -93,6 +94,7 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -146,6 +148,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
@@ -215,6 +218,7 @@ fn config_with_tier(tier_name: &str, models: Vec<&str>, enabled_tools: &[&str]) 
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
@@ -486,6 +490,7 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

@@ -98,6 +98,7 @@ fn make_config_with_strategy(
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
@@ -154,6 +155,7 @@ fn make_config_with_restrictions(models: Vec<&str>, restricted_tools: Vec<&str>)
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
@@ -374,6 +376,7 @@ fn test_resolve_tier_name_missing_tier_returns_none() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };

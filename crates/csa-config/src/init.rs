@@ -244,6 +244,7 @@ pub fn init_project(
             preferences: None,
             hooks: Default::default(),
             execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
         }
@@ -273,6 +274,7 @@ pub fn init_project(
             preferences: None,
             hooks: Default::default(),
             execution: Default::default(),
+            preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
         }
