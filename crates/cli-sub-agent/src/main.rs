@@ -41,6 +41,7 @@ mod process_tree;
 mod review_cmd;
 mod review_consensus;
 mod review_context;
+mod review_design_anchor;
 mod review_findings;
 mod review_prior_rounds;
 mod review_routing;

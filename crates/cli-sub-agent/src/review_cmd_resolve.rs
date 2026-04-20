@@ -539,7 +539,7 @@ pub(crate) fn build_review_instruction(
             instruction.push_str(&render_spec_review_context(spec));
         }
     }
-    append_design_anchor(&mut instruction);
+    crate::review_design_anchor::append_design_anchor(&mut instruction);
     instruction
 }
 
@@ -569,7 +569,7 @@ pub(crate) fn build_review_instruction_for_project(
 
     // Inject prior-round assumptions when a previous review session exists on
     // the same branch (#764). Skipped on first-round reviews.
-    let branch = current_git_branch_for_review(project_root);
+    let branch = crate::review_design_anchor::resolve_current_branch_via_vcs(project_root);
     if let Some(branch) = branch.as_deref()
         && let Some(iteration_context) =
             crate::review_consensus::review_iteration::render_review_iteration_context(
@@ -591,19 +591,6 @@ pub(crate) fn build_review_instruction_for_project(
     instruction.push_str(REVIEW_FINDINGS_TOML_INSTRUCTION);
 
     (instruction, review_routing)
-}
-
-fn current_git_branch_for_review(project_root: &Path) -> Option<String> {
-    let backend = csa_session::vcs_backends::create_vcs_backend(project_root);
-    backend.current_branch(project_root).ok().flatten()
-}
-
-fn append_design_anchor(prompt: &mut String) {
-    if prompt.contains("## Design preferences vs correctness bugs") {
-        return;
-    }
-    prompt.push_str("\n\n");
-    prompt.push_str(crate::review_consensus::review_design_anchor::REVIEW_DESIGN_PREFERENCE_ANCHOR);
 }
 
 pub(crate) struct ReviewProjectPromptOptions<'a> {

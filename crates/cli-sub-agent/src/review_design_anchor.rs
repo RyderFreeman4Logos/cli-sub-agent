@@ -12,3 +12,18 @@ Design preferences may have multiple valid answers. If the current choice works,
 
 Rationale: review ping-pong on design preferences wastes iterations and does NOT converge to better code quality. A reviewer that flip-flops on the same design point across rounds is a stronger signal of design residual than of real bugs.
 "#;
+
+use std::path::Path;
+
+pub(crate) fn append_design_anchor(prompt: &mut String) {
+    if prompt.contains("## Design preferences vs correctness bugs") {
+        return;
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(REVIEW_DESIGN_PREFERENCE_ANCHOR);
+}
+
+pub(crate) fn resolve_current_branch_via_vcs(project_root: &Path) -> Option<String> {
+    let backend = csa_session::vcs_backends::create_vcs_backend(project_root);
+    backend.current_branch(project_root).ok().flatten()
+}
