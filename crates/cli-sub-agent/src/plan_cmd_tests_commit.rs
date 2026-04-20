@@ -78,7 +78,7 @@ fn commit_workflow_csa_dispatch_steps_have_non_empty_prompts() {
 #[tokio::test]
 async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
     let tmp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&tmp);
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
 
     let bin_dir = project_root.join("bin");

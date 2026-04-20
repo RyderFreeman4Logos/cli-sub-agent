@@ -73,7 +73,7 @@ fn run_config_without_routable_tools() -> ProjectConfig {
 #[tokio::test]
 async fn handle_run_persists_result_for_model_spec_tier_conflict() {
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let config = run_config_with_tier(
         "default",
         vec!["gemini-cli/google/default/xhigh"],
@@ -158,7 +158,7 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
 #[tokio::test]
 async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let config = run_config_without_routable_tools();
     write_project_config(project_dir.path(), &config);
 

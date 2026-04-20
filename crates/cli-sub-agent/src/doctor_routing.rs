@@ -685,9 +685,7 @@ mod tests {
 
     #[test]
     fn doctor_routing_reports_invalid_effective_config_and_renders_partial_context() {
-        let _env_lock = TEST_ENV_LOCK
-            .lock()
-            .expect("doctor routing env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let td = tempfile::tempdir().expect("tempdir");
         let config_root = td.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).expect("create config root");

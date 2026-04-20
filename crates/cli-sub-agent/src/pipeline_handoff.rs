@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn write_handoff_artifact_creates_file_in_session_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let _sandbox = ScopedSessionSandbox::new(&tmp);
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
         let project_root = tmp.path();
         let session =
             csa_session::create_session(project_root, Some("handoff test"), None, Some("codex"))
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn write_handoff_artifact_skips_when_session_dir_missing() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let _sandbox = ScopedSessionSandbox::new(&tmp);
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
         let project_root = tmp.path();
         let missing_dir = project_root.join("nonexistent");
 

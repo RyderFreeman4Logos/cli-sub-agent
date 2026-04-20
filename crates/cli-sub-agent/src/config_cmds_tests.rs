@@ -141,7 +141,7 @@ fn build_project_display_json_keeps_effective_execution_defaults_visible() {
 
 #[test]
 fn resolve_effective_execution_key_uses_compile_default_when_no_config_exists() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -182,7 +182,7 @@ auto_weave_upgrade = true
 
 #[test]
 fn resolve_effective_execution_key_uses_global_fallback_when_project_missing() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -211,7 +211,7 @@ auto_weave_upgrade = true
 
 #[test]
 fn build_config_get_lookup_resolves_effective_project_nested_resource_keys() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -251,7 +251,7 @@ memory_max_mb = 1024
 
 #[test]
 fn resolve_effective_global_key_uses_kv_cache_defaults_when_global_config_missing() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -271,7 +271,7 @@ fn resolve_effective_global_key_uses_kv_cache_defaults_when_global_config_missin
 
 #[test]
 fn resolve_effective_global_key_uses_configured_kv_cache_values() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -299,7 +299,7 @@ long_poll_seconds = 3000
 
 #[test]
 fn resolve_effective_global_key_sanitizes_zero_kv_cache_values() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -327,7 +327,7 @@ long_poll_seconds = 0
 
 #[test]
 fn resolve_effective_key_ignores_project_kv_cache_override() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -366,7 +366,7 @@ long_poll_seconds = 9999
 
 #[test]
 fn build_config_get_lookup_preserves_unknown_raw_project_sections() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -426,7 +426,7 @@ delete_branch = false
 
 #[test]
 fn build_config_get_lookup_prefers_effective_values_for_known_sections() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -463,7 +463,7 @@ enabled = true
 
 #[test]
 fn resolve_effective_key_redacts_global_memory_api_keys_in_project_scoped_lookups() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -507,7 +507,7 @@ inject = true
 
 #[test]
 fn build_config_get_lookup_project_only_uses_effective_project_defaults() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -541,7 +541,7 @@ memory_max_mb = 1024
 
 #[test]
 fn resolve_lookup_sources_falls_back_to_raw_project_for_known_sections_when_global_is_invalid() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -573,7 +573,7 @@ memory_max_mb = 1024
 
 #[test]
 fn resolve_lookup_sources_returns_project_raw_match_before_global_parse() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -606,7 +606,7 @@ cloud_bot_name = "gemini-code-assist"
 
 #[test]
 fn resolve_lookup_sources_invalid_project_raw_still_errors_before_global_match() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");
     std::fs::create_dir_all(&config_root).unwrap();
@@ -696,7 +696,7 @@ fn parse_editor_command_rejects_whitespace_only_value() {
 #[cfg(unix)]
 #[test]
 fn handle_config_edit_supports_quoted_editor_path_with_embedded_args() {
-    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&config_dir).unwrap();

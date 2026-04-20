@@ -189,7 +189,7 @@ fn aggregation_skips_findings_without_rule_id() {
 #[test]
 fn loader_prefers_consolidated_artifacts_and_skips_sessions_without_reviews() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
     let project_root = temp.path().join("project");
     fs::create_dir_all(&project_root).expect("project root");
 

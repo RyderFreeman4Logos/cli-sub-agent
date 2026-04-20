@@ -5,7 +5,7 @@ use std::fs;
 #[tokio::test]
 async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock_is_held() {
     let temp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path();
 
     let session =

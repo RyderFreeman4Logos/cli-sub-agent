@@ -6,6 +6,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use tempfile::tempdir;
+use tokio::sync::OwnedMutexGuard;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -34,14 +35,14 @@ impl Drop for EnvVarGuard {
 }
 
 struct SessionTestEnv {
-    _env_lock: std::sync::MutexGuard<'static, ()>,
+    _env_lock: OwnedMutexGuard<()>,
     _home_guard: EnvVarGuard,
     _state_guard: EnvVarGuard,
 }
 
 impl SessionTestEnv {
     fn new(td: &tempfile::TempDir) -> Self {
-        let env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+        let env_lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
         let state_home = td.path().join("xdg-state");
         fs::create_dir_all(&state_home).expect("create state home");
         let home_guard = EnvVarGuard::set("HOME", td.path());

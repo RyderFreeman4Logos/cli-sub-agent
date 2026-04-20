@@ -268,7 +268,7 @@ fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
 #[test]
 fn handle_session_result_reconciles_orphaned_active_session() {
     let tmp = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = tmp.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", tmp.path());
@@ -298,7 +298,7 @@ fn handle_session_result_reconciles_orphaned_active_session() {
 #[test]
 fn handle_session_artifacts_reconciles_orphaned_active_session() {
     let tmp = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = tmp.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", tmp.path());

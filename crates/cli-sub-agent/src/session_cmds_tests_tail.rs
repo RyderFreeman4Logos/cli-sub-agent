@@ -24,7 +24,7 @@ fn wait_for_spawned_daemon_visibility(
 #[test]
 fn resolve_session_prefix_with_global_fallback_accepts_initializing_exact_session_dir() {
     let td = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let project = td.path();
     let session_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -43,7 +43,7 @@ fn resolve_session_prefix_with_global_fallback_accepts_initializing_exact_sessio
 #[test]
 fn ensure_terminal_result_for_dead_active_session_is_noop_when_result_exists() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -75,7 +75,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_result_exists() {
 #[test]
 fn session_to_json_reconciles_orphaned_active_session_status() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -104,7 +104,7 @@ fn session_to_json_reconciles_orphaned_active_session_status() {
 #[test]
 fn ensure_terminal_result_for_dead_active_session_is_noop_for_non_active_phase() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -133,7 +133,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_for_non_active_phase()
 #[rustfmt::skip]
 fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -164,7 +164,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
 #[test]
 fn ensure_terminal_result_for_dead_active_session_persists_into_legacy_session_dir() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -205,7 +205,7 @@ fn ensure_terminal_result_for_dead_active_session_persists_into_legacy_session_d
 #[test]
 fn handle_session_is_alive_reconciles_orphaned_active_session() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -235,7 +235,7 @@ fn handle_session_is_alive_reconciles_orphaned_active_session() {
 #[test]
 fn handle_session_is_alive_accepts_symlinked_project_path() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -270,7 +270,7 @@ fn handle_session_is_alive_accepts_symlinked_project_path() {
 #[test]
 fn handle_session_wait_reconciles_dead_lock_only_active_session() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -316,7 +316,7 @@ fn handle_session_wait_reconciles_dead_lock_only_active_session() {
 #[test]
 fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -371,7 +371,7 @@ fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
 #[test]
 fn ensure_terminal_result_for_dead_active_session_preserves_late_real_result() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -415,7 +415,7 @@ fn ensure_terminal_result_for_dead_active_session_preserves_late_real_result() {
 #[test]
 fn ensure_terminal_result_for_dead_active_session_preserves_session_with_recent_output() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -455,7 +455,7 @@ fn handle_session_wait_waits_for_daemon_exit_before_returning_success() {
     use std::time::{Duration, Instant};
 
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -516,7 +516,7 @@ fn handle_session_wait_waits_for_daemon_exit_before_returning_success() {
 #[test]
 fn handle_session_wait_ignores_incomplete_result_while_daemon_alive() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -572,7 +572,7 @@ fn handle_session_wait_ignores_incomplete_result_while_daemon_alive() {
 #[test]
 fn handle_session_wait_prefers_daemon_completion_exit_code() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -606,7 +606,7 @@ fn handle_session_wait_ignores_completion_packet_while_daemon_alive() {
     use std::process::Command;
 
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -655,7 +655,7 @@ fn handle_session_wait_ignores_completion_packet_while_daemon_alive() {
 #[test]
 fn handle_session_wait_returns_pre_exec_failure_without_timeout_packet() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -683,7 +683,7 @@ fn handle_session_wait_returns_pre_exec_failure_without_timeout_packet() {
 #[test]
 fn persist_daemon_completion_from_env_writes_packet_for_seeded_session() {
     let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
     std::fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
@@ -706,7 +706,7 @@ fn persist_daemon_completion_from_env_writes_packet_for_seeded_session() {
 #[cfg(unix)]
 #[test]
 fn synthesized_wait_next_step_returns_directive_for_clean_cumulative_review() {
-    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned"); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.blocking_lock(); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
     std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
   "head_sha": "deadbeef",
@@ -726,7 +726,7 @@ fn synthesized_wait_next_step_returns_directive_for_clean_cumulative_review() {
 #[cfg(unix)]
 #[test]
 fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
-    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned"); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-skip"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.blocking_lock(); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-skip"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
     std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
   "head_sha": "deadbeef",
@@ -759,7 +759,7 @@ fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
 #[cfg(unix)]
 #[test]
 fn synthesized_wait_next_step_ignores_malformed_unpushed_commit_sidecar() {
-    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned"); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-malformed-sidecar"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.blocking_lock(); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-malformed-sidecar"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
     std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
   "head_sha": "deadbeef",

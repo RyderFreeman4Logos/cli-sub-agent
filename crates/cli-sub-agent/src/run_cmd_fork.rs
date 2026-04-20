@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn pre_created_native_fork_session_ignores_daemon_parent_session_id() {
         let td = tempfile::tempdir().expect("tempdir");
-        let mut sandbox = ScopedSessionSandbox::new(&td);
+        let mut sandbox = ScopedSessionSandbox::new_blocking(&td);
         sandbox.track_env("CSA_DAEMON_SESSION_ID");
         sandbox.track_env("CSA_DAEMON_PROJECT_ROOT");
         sandbox.track_env("CSA_DAEMON_SESSION_DIR");

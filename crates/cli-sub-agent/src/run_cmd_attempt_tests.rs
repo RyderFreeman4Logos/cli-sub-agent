@@ -86,7 +86,7 @@ fn assert_no_rate_limit(action: RateLimitAction) {
 #[test]
 fn persist_fork_timeout_result_if_missing_skips_non_fork_sessions() {
     let td = tempfile::tempdir().expect("tempdir");
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let session =
         create_session(td.path(), Some("regular"), None, Some("codex")).expect("create session");
 
@@ -110,7 +110,7 @@ fn persist_fork_timeout_result_if_missing_skips_non_fork_sessions() {
 #[test]
 fn persist_fork_timeout_result_if_missing_writes_fork_failure() {
     let td = tempfile::tempdir().expect("tempdir");
-    let _sandbox = ScopedSessionSandbox::new(&td);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
     let parent = create_session(td.path(), Some("parent"), None, Some("codex")).expect("parent");
     let child = create_session(
         td.path(),

@@ -596,7 +596,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let _csa_session_id_guard = ScopedEnvVarRestore::unset("CSA_SESSION_ID");
 
     let project_root = temp.path();
@@ -676,7 +676,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&temp);
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let _csa_session_id_guard =
         ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
 

@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn handle_review_persists_result_for_prior_rounds_summary_parse_failure() {
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     write_review_project_config(
         project_dir.path(),
         &project_config_with_enabled_tools(&["codex"]),

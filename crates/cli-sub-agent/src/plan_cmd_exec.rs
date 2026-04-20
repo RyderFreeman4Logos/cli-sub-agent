@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn next_csa_depth_increments_or_defaults() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("plan env lock poisoned");
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let original_depth = std::env::var("CSA_DEPTH").ok();
 
         // SAFETY: test-scoped env mutation.

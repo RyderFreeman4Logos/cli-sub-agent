@@ -1,8 +1,10 @@
 use std::ffi::OsString;
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 #[allow(dead_code)]
-pub(crate) static TEST_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+pub(crate) static TEST_ENV_LOCK: LazyLock<Arc<Mutex<()>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(())));
 
 fn restore_env_snapshot(key: &'static str, previous: Option<OsString>) {
     // SAFETY: all tests in this crate that mutate process env must hold TEST_ENV_LOCK
@@ -52,13 +54,13 @@ impl Drop for ScopedEnvVarRestore {
 pub(crate) struct ScopedTestEnvVar {
     key: &'static str,
     original: Option<OsString>,
-    _lock: MutexGuard<'static, ()>,
+    _lock: OwnedMutexGuard<()>,
 }
 
 impl ScopedTestEnvVar {
     #[allow(dead_code)]
     pub(crate) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let lock = TEST_ENV_LOCK.lock().unwrap();
+        let lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
         let original = std::env::var_os(key);
         // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
         unsafe { std::env::set_var(key, value) };

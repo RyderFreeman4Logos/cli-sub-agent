@@ -10,12 +10,13 @@ use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::{collections::HashMap, process::Command};
 use tempfile::TempDir;
+use tokio::sync::OwnedMutexGuard;
 
 pub(crate) use crate::test_env_lock::ScopedEnvVarRestore;
 
-fn assume_review_tools_available() -> (std::sync::MutexGuard<'static, ()>, ScopedEnvVarRestore) {
+fn assume_review_tools_available() -> (OwnedMutexGuard<()>, ScopedEnvVarRestore) {
     (
-        TEST_ENV_LOCK.lock().expect("review env lock poisoned"),
+        TEST_ENV_LOCK.clone().blocking_lock_owned(),
         ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1"),
     )
 }

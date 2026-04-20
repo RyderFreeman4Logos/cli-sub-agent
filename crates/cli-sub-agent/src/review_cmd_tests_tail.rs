@@ -607,7 +607,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let _session_guard = ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -675,7 +675,7 @@ fn install_pattern(project_root: &Path, name: &str) {
 #[tokio::test]
 async fn handle_review_persists_result_for_direct_tool_tier_rejection() {
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     config.tiers.insert(
         "default".to_string(),

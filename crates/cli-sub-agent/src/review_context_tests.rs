@@ -292,7 +292,7 @@ fn prior_round_assumptions_none_when_no_prior_session() {
     use crate::test_session_sandbox::ScopedSessionSandbox;
 
     let project = setup_git_repo_with_branch("feat/iter1");
-    let _sandbox = ScopedSessionSandbox::new(&project);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project);
 
     let result = discover_prior_round_assumptions(project.path(), Some("feat/iter1"), None);
     assert!(
@@ -308,7 +308,7 @@ fn prior_round_assumptions_render_when_prior_consolidated_artifact_exists() {
     use std::fs;
 
     let project = setup_git_repo_with_branch("feat/iter2");
-    let _sandbox = ScopedSessionSandbox::new(&project);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project);
 
     let prior = create_session(project.path(), Some("prior review"), None, Some("codex"))
         .expect("prior session created");
@@ -373,7 +373,7 @@ fn prior_round_assumptions_render_when_only_single_reviewer_artifact_exists() {
     use std::fs;
 
     let project = setup_git_repo_with_branch("feat/iter1-single");
-    let _sandbox = ScopedSessionSandbox::new(&project);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project);
 
     let prior = create_session(project.path(), Some("prior review"), None, Some("codex"))
         .expect("prior session created");
@@ -412,7 +412,7 @@ fn find_latest_branch_review_meta_breaks_timestamp_ties_by_session_id() {
     use csa_session::{create_session, get_session_dir, write_review_meta};
 
     let project = setup_git_repo_with_branch("feat/tie-break");
-    let _sandbox = ScopedSessionSandbox::new(&project);
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project);
     let shared_timestamp = chrono::Utc::now();
 
     let session_a = create_session(project.path(), Some("review-a"), None, Some("codex"))
