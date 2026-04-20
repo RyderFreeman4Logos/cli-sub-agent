@@ -72,6 +72,14 @@ struct PersistedReviewArtifact {
     overall_risk: Option<String>,
 }
 
+impl PersistedReviewArtifact {
+    fn overall_risk_is_severe(&self) -> bool {
+        self.overall_risk.as_deref().is_some_and(|risk| {
+            risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct TranscriptEvent {
     #[serde(rename = "type")]
@@ -278,6 +286,7 @@ fn derive_review_verdict_artifact(
         let severity_counts = severity_counts_for_artifact(&artifact);
         let decision = if artifact.findings.is_empty()
             && severity_counts_are_zero(&severity_counts)
+            && !artifact.overall_risk_is_severe()
             && review_contains_prose_clean_conclusion(session_dir)?
         {
             ReviewDecision::Pass
