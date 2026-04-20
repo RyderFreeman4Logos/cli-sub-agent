@@ -500,6 +500,12 @@ pub(crate) async fn handle_run(
     let current_tool = loop_outcome.current_tool;
     let executed_session_id = loop_outcome.executed_session_id;
     let fork_resolution = loop_outcome.fork_resolution;
+    let fs_sandbox_active = executed_session_id
+        .as_deref()
+        .and_then(|sid| csa_session::load_session(&project_root, sid).ok())
+        .and_then(|session| session.sandbox_info)
+        .and_then(|info| info.filesystem_mode)
+        .is_some_and(|mode| mode != "none");
 
     if fork_call {
         let parent_session_id = fork_call_parent_session_id
@@ -538,6 +544,7 @@ pub(crate) async fn handle_run(
                 && let Some(hint) = crate::error_hints::sandbox_fs_denial_hint(
                     &result.stderr_output,
                     &result.output,
+                    fs_sandbox_active,
                     sid,
                 )
             {
