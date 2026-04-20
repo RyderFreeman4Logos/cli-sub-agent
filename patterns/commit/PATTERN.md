@@ -24,7 +24,7 @@ Initialize and declare workflow variables.
 - `${COMMIT_SUBJECT}`: Generated or provided commit subject
 - `${COMMIT_BODY}`: Generated or provided commit body
 - `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
-- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish). Workflow auto-activates this when `CSA_SKIP_PUBLISH=true` or in executor mode (`CSA_DEPTH` set and non-zero plus `CSA_INTERNAL_INVOCATION=1`) to keep employee sessions orchestration-pure — the Layer 0 orchestrator owns publish/pr-bot (#752 Bug 4, #782).
+- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish). Workflow auto-activates this when `CSA_SKIP_PUBLISH=true` or in executor mode (`CSA_DEPTH>0` plus `CSA_INTERNAL_INVOCATION=1`) to keep employee sessions orchestration-pure — the Layer 0 orchestrator owns publish/pr-bot (#752 Bug 4, #782).
 - `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
 - `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
 - `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
@@ -44,8 +44,7 @@ Initialize and declare workflow variables.
 # guard or leak grandchild processes if the chain fails mid-flight (see #752 Bug 4).
 if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
   SKIP_PUBLISH=true
-elif [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
-     { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+elif [ "${CSA_DEPTH:-0}" -gt 0 ] && [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ]; then
   SKIP_PUBLISH=true
 else
   : "${SKIP_PUBLISH:=false}"
@@ -477,13 +476,12 @@ Push, create or reuse the PR, then synchronously run the post-create helper.
 This makes PR creation + pr-bot a single shell-enforced transaction.
 Runs by default when standalone. Skipped when parent workflow sets
 `CSA_SKIP_PUBLISH=true`, or automatically in executor mode
-(`CSA_DEPTH` set and non-zero plus `CSA_INTERNAL_INVOCATION=1`) — the Layer 0
+(`CSA_DEPTH>0` plus `CSA_INTERNAL_INVOCATION=1`) — the Layer 0
 orchestrator owns the publish/pr-bot transaction in that case.
 
 ```bash
 set -euo pipefail
-if [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
-   { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+if [ "${CSA_DEPTH:-0}" -gt 0 ] && [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ]; then
   echo "INFO: Executor mode detected; skipping push/PR transaction."
   exit 0
 fi

@@ -682,3 +682,56 @@ fn inspect_unpushed_commits_uses_session_branch_not_checked_out_head() {
             .any(|entry| entry["subject"] == "fix: second progress")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn inspect_unpushed_commits_falls_back_to_init_default_branch() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+
+    run_git(&project, &["init", "--initial-branch", "trunk"]);
+    run_git(&project, &["config", "init.defaultBranch", "trunk"]);
+    run_git(&project, &["config", "user.email", "test@example.com"]);
+    run_git(&project, &["config", "user.name", "Test User"]);
+    fs::write(project.join("README.md"), "base\n").unwrap();
+    run_git(&project, &["add", "README.md"]);
+    run_git(&project, &["commit", "-m", "init"]);
+
+    run_git(&project, &["checkout", "-b", "fix/session-progress"]);
+    fs::write(project.join("progress.txt"), "first\n").unwrap();
+    run_git(&project, &["add", "progress.txt"]);
+    run_git(&project, &["commit", "-m", "feat: trunk fallback progress"]);
+
+    let session = create_session(&project, Some("unpushed-progress"), None, Some("codex")).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&project, &session_id).unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    run_git(&project, &["checkout", "trunk"]);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(&project, &session_id, "session wait")
+            .unwrap();
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure
+    );
+
+    let sidecar_path = session_dir.join("output").join("unpushed_commits.json");
+    let sidecar: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+    assert_eq!(sidecar["branch"], "fix/session-progress");
+    assert_eq!(sidecar["remote_ref"], serde_json::Value::Null);
+    assert_eq!(sidecar["commits_ahead"], 1);
+    assert_eq!(
+        sidecar["recovery_command"],
+        "git push -u origin fix/session-progress"
+    );
+    assert_eq!(sidecar["commits"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        sidecar["commits"][0]["subject"],
+        "feat: trunk fallback progress"
+    );
+}

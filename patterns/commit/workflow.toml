@@ -116,8 +116,7 @@ Initialize and declare workflow variables.
 # guard or leak grandchild processes if the chain fails mid-flight (see #752 Bug 4).
 if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
   echo "CSA_VAR:SKIP_PUBLISH=true"
-elif [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
-     { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+elif [ "${CSA_DEPTH:-0}" -gt 0 ] && [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ]; then
   echo "CSA_VAR:SKIP_PUBLISH=true"
   echo "INFO: Detected executor mode (CSA_DEPTH=${CSA_DEPTH}, CSA_INTERNAL_INVOCATION=${CSA_INTERNAL_INVOCATION:-0}); auto-skipping push/PR to keep employee sessions orchestration-pure."
 else
@@ -541,8 +540,7 @@ Runs by default when commit is standalone. Skipped when parent workflow
 
 ```bash
 set -euo pipefail
-if [ "${CSA_DEPTH:-0}" != "0" ] && [ -n "${CSA_DEPTH:-}" ] && \
-   { [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ] || [ "${CSA_INTERNAL_INVOCATION:-}" = "true" ]; }; then
+if [ "${CSA_DEPTH:-0}" -gt 0 ] && [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ]; then
   echo "INFO: Executor mode detected; skipping push/PR transaction."
   exit 0
 fi
