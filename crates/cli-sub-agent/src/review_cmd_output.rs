@@ -3,6 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::Result;
+use csa_core::gemini::RATE_LIMIT_PATTERNS;
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_executor::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
@@ -632,8 +633,23 @@ pub(super) fn is_worktree_submodule(project_root: &Path) -> bool {
 /// Checks both stdout and stderr for known failure patterns.
 /// Returns a human-readable diagnostic summary when a known pattern is found.
 pub(super) fn detect_tool_diagnostic(stdout: &str, stderr: &str) -> Option<String> {
+    let has_quota_issue = |text: &str| {
+        let text_lower = text.to_ascii_lowercase();
+        RATE_LIMIT_PATTERNS
+            .iter()
+            .copied()
+            .any(|marker| text_lower.contains(marker))
+            || text_lower.contains("quota will reset")
+    };
     let has_mcp_issue =
         |text: &str| text.contains("MCP issues detected") || text.contains("Run /mcp list");
+
+    if has_quota_issue(stdout) || has_quota_issue(stderr) {
+        return Some(
+            "gemini-cli OAuth quota exhausted. Either (a) configure GEMINI_API_KEY in ~/.config/cli-sub-agent/config.toml under [tools.gemini-cli] api_key for automatic retry, or (b) wait for quota reset."
+                .to_string(),
+        );
+    }
 
     if has_mcp_issue(stdout) || has_mcp_issue(stderr) {
         return Some(

@@ -144,6 +144,38 @@ fn test_detect_tool_diagnostic_mcp_list_in_stderr_returns_diagnostic() {
 }
 
 #[test]
+fn detect_tool_diagnostic_returns_quota_message_for_gemini_429() {
+    let stderr = r#"{"code": 429, "reason": "QUOTA_EXHAUSTED", "message": "You have exhausted your capacity on this model. Your quota will reset after 16h8m32s."}"#;
+    let result = detect_tool_diagnostic("", stderr);
+    assert!(result.is_some());
+    let msg = result.unwrap();
+    assert!(msg.contains("OAuth quota exhausted"), "got: {msg}");
+    assert!(msg.contains("GEMINI_API_KEY"), "got: {msg}");
+}
+
+#[test]
+fn detect_tool_diagnostic_prefers_quota_over_mcp_when_both_present() {
+    let stderr = "MCP issues detected. Run /mcp list for status.\ncause: {code: 429, reason: 'QUOTA_EXHAUSTED'}";
+    let result = detect_tool_diagnostic("", stderr);
+    assert!(result.is_some());
+    let msg = result.unwrap();
+    assert!(msg.contains("OAuth quota exhausted"), "got: {msg}");
+    assert!(
+        !msg.contains("Run `csa doctor`"),
+        "should not emit MCP guidance when quota is root cause; got: {msg}"
+    );
+}
+
+#[test]
+fn detect_tool_diagnostic_still_returns_mcp_when_only_mcp_markers() {
+    let stderr = "MCP issues detected. Run /mcp list for status.";
+    let result = detect_tool_diagnostic("", stderr);
+    assert!(result.is_some());
+    let msg = result.unwrap();
+    assert!(msg.contains("MCP init degraded"), "got: {msg}");
+}
+
+#[test]
 fn test_detect_tool_diagnostic_unrelated_mcp_text_returns_none() {
     let stdout = "MCP servers loaded successfully";
     let stderr = "Connected to 2 MCP backends";
