@@ -1,6 +1,9 @@
 use anyhow::Result;
+use chrono::{DateTime, Duration, Local, Utc};
 use std::path::Path;
 
+#[cfg(test)]
+use csa_session::decode_session_created_at;
 use csa_session::{MetaSessionState, SessionPhase, SessionResult, list_sessions, load_result};
 
 use super::{ensure_terminal_result_for_dead_active_session, retire_if_dead_with_result};
@@ -22,6 +25,65 @@ pub(super) fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
         .unwrap_or(input.len());
 
     format!("{}...", &input[..end])
+}
+
+pub(super) fn session_created_at(session: &MetaSessionState) -> DateTime<Utc> {
+    session
+        .created_at
+        .with_timezone(&Utc)
+        .min(session.last_accessed)
+}
+
+pub(super) fn format_started_at(created_at: DateTime<Utc>) -> String {
+    created_at
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
+pub(super) fn format_compact_duration(duration: Duration) -> String {
+    let secs = duration.num_seconds().max(0);
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let minutes = (secs % 3_600) / 60;
+    let seconds = secs % 60;
+
+    if days > 0 {
+        if hours > 0 {
+            format!("{days}d{hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours > 0 {
+        if minutes > 0 {
+            format!("{hours}h{minutes}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+pub(super) fn format_elapsed(
+    session: &MetaSessionState,
+    resolved_status: &str,
+    now: DateTime<Utc>,
+) -> String {
+    let created_at = session_created_at(session);
+    let end = if resolved_status == "Active" {
+        now
+    } else {
+        session.last_accessed.max(created_at)
+    };
+    format_compact_duration(end - created_at)
+}
+
+#[cfg(test)]
+pub(super) fn decode_ulid_created_at(session_id: &str) -> Result<DateTime<Utc>> {
+    decode_session_created_at(session_id)
 }
 
 pub(super) fn phase_label(phase: &SessionPhase) -> &'static str {
@@ -131,12 +193,17 @@ pub(super) fn select_sessions_for_list_all_projects(
 }
 
 pub(super) fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
+    let status = resolve_session_status(session);
+    let created_at = session_created_at(session);
+    let now = Utc::now();
     let mut value = serde_json::json!({
         "session_id": session.meta_session_id,
+        "started_at": created_at,
         "last_accessed": session.last_accessed,
+        "elapsed": format_elapsed(session, &status, now),
         "description": session.description.as_deref().unwrap_or(""),
         "tools": session.tools.keys().collect::<Vec<_>>(),
-        "status": resolve_session_status(session),
+        "status": status,
         "phase": format!("{:?}", session.phase),
         "branch": session.branch,
         "task_type": session.task_context.task_type,

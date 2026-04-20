@@ -28,8 +28,9 @@ mod list;
 #[cfg(test)]
 use list::status_from_phase_and_result;
 use list::{
-    resolve_session_status, select_sessions_for_list, select_sessions_for_list_all_projects,
-    session_to_json, truncate_with_ellipsis,
+    format_elapsed, format_started_at, resolve_session_status, select_sessions_for_list,
+    select_sessions_for_list_all_projects, session_created_at, session_to_json,
+    truncate_with_ellipsis,
 };
 
 #[path = "session_cmds_reconcile.rs"]
@@ -148,8 +149,10 @@ pub(crate) fn handle_session_list(
                 // Print table header
                 if all_projects {
                     println!(
-                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  TOKENS",
                         "SESSION",
+                        "STARTED",
+                        "ELAPSED",
                         "LAST ACCESSED",
                         "STATUS",
                         "DESCRIPTION",
@@ -157,19 +160,28 @@ pub(crate) fn handle_session_list(
                         "BRANCH",
                         "PROJECT"
                     );
-                    println!("{}", "-".repeat(160));
+                    println!("{}", "-".repeat(192));
                 } else {
                     println!(
-                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
-                        "SESSION", "LAST ACCESSED", "STATUS", "DESCRIPTION", "TOOLS", "BRANCH"
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
+                        "SESSION",
+                        "STARTED",
+                        "ELAPSED",
+                        "LAST ACCESSED",
+                        "STATUS",
+                        "DESCRIPTION",
+                        "TOOLS",
+                        "BRANCH"
                     );
-                    println!("{}", "-".repeat(130));
+                    println!("{}", "-".repeat(162));
                 }
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
                     let short_id =
                         &session.meta_session_id[..11.min(session.meta_session_id.len())];
                     let status_str = resolve_session_status(&session);
+                    let started_str = format_started_at(session_created_at(&session));
+                    let elapsed_str = format_elapsed(&session, &status_str, chrono::Utc::now());
                     let desc = session
                         .description
                         .as_deref()
@@ -231,8 +243,10 @@ pub(crate) fn handle_session_list(
                     if all_projects {
                         let project_display = truncate_with_ellipsis(&session.project_path, 30);
                         println!(
-                            "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {}{}{}",
                             short_id,
+                            started_str,
+                            elapsed_str,
                             session
                                 .last_accessed
                                 .with_timezone(&chrono::Local)
@@ -248,8 +262,10 @@ pub(crate) fn handle_session_list(
                         );
                     } else {
                         println!(
-                            "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}{}",
                             short_id,
+                            started_str,
+                            elapsed_str,
                             session
                                 .last_accessed
                                 .with_timezone(&chrono::Local)

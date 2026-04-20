@@ -120,6 +120,27 @@ fn test_load_session() {
 }
 
 #[test]
+fn test_load_session_falls_back_to_ulid_when_created_at_missing() {
+    let td = tempdir().unwrap();
+    let created = create_session_in(td.path(), td.path(), Some("Legacy"), None, None).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &created.meta_session_id);
+    let state_path = session_dir.join(STATE_FILE_NAME);
+    let original = std::fs::read_to_string(&state_path).unwrap();
+    let filtered = original
+        .lines()
+        .filter(|line| !line.starts_with("created_at = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&state_path, format!("{filtered}\n")).unwrap();
+
+    let loaded = load_session_in(td.path(), &created.meta_session_id).unwrap();
+    let decoded = decode_session_created_at(&created.meta_session_id).unwrap();
+
+    assert_eq!(loaded.meta_session_id, created.meta_session_id);
+    assert_eq!(loaded.created_at, decoded);
+}
+
+#[test]
 fn test_delete_session() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
