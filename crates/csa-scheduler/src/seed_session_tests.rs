@@ -54,6 +54,7 @@ fn make_session(
         termination_reason: None,
         is_seed_candidate: is_seed,
         git_head_at_creation: git_head.map(|s| s.to_string()),
+        pre_session_porcelain: None,
         last_return_packet: None,
         change_id: None,
         spec_id: None,

@@ -12,7 +12,8 @@ pub(crate) fn maybe_record_repo_write_audit(
         return Ok(());
     }
 
-    let Some(pre_session_head) = pre_session_head_for_repo_write_audit(session) else {
+    let Some((pre_session_head, pre_session_porcelain)) = pre_session_audit_baseline(session)
+    else {
         tracing::warn!(
             session = %session.meta_session_id,
             session_dir = %ctx.session_dir.display(),
@@ -21,7 +22,11 @@ pub(crate) fn maybe_record_repo_write_audit(
         return Ok(());
     };
 
-    let audit = csa_session::compute_repo_write_audit(ctx.project_root, pre_session_head)?;
+    let audit = csa_session::compute_repo_write_audit(
+        ctx.project_root,
+        pre_session_head,
+        pre_session_porcelain,
+    )?;
     if audit.is_empty() {
         return Ok(());
     }
@@ -47,8 +52,11 @@ pub(crate) fn maybe_record_repo_write_audit(
     Ok(())
 }
 
-fn pre_session_head_for_repo_write_audit(session: &MetaSessionState) -> Option<&str> {
-    session.git_head_at_creation.as_deref()
+fn pre_session_audit_baseline(session: &MetaSessionState) -> Option<(&str, Option<&str>)> {
+    session
+        .git_head_at_creation
+        .as_deref()
+        .map(|head| (head, session.pre_session_porcelain.as_deref()))
 }
 
 fn apply_repo_write_audit_to_result(
@@ -165,7 +173,7 @@ pub(crate) fn should_audit_repo_tracked_writes(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_repo_write_audit_to_result, pre_session_head_for_repo_write_audit,
+        apply_repo_write_audit_to_result, pre_session_audit_baseline,
         should_audit_repo_tracked_writes,
     };
     use csa_session::{MetaSessionState, RepoWriteAudit, SessionResult};
@@ -302,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_session_head_for_repo_write_audit_returns_none_for_legacy_sessions() {
+    fn pre_session_audit_baseline_returns_none_for_legacy_sessions() {
         let session = MetaSessionState {
             meta_session_id: "01TESTLEGACYAUDIT0000000000".to_string(),
             description: None,
@@ -322,6 +330,7 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            pre_session_porcelain: None,
             last_return_packet: None,
             change_id: None,
             spec_id: None,
@@ -330,6 +339,42 @@ mod tests {
             fork_call_timestamps: Vec::new(),
         };
 
-        assert_eq!(pre_session_head_for_repo_write_audit(&session), None);
+        assert_eq!(pre_session_audit_baseline(&session), None);
+    }
+
+    #[test]
+    fn pre_session_audit_baseline_returns_head_and_optional_porcelain() {
+        let session = MetaSessionState {
+            meta_session_id: "01TESTAUDITBASELINE000000000".to_string(),
+            description: None,
+            project_path: "/tmp/project".to_string(),
+            branch: None,
+            created_at: chrono::Utc::now(),
+            last_accessed: chrono::Utc::now(),
+            genealogy: Default::default(),
+            tools: Default::default(),
+            context_status: Default::default(),
+            total_token_usage: None,
+            phase: Default::default(),
+            task_context: Default::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: Some("abc123".to_string()),
+            pre_session_porcelain: Some(" M tracked.txt\0".to_string()),
+            last_return_packet: None,
+            change_id: None,
+            spec_id: None,
+            vcs_identity: None,
+            identity_version: 2,
+            fork_call_timestamps: Vec::new(),
+        };
+
+        assert_eq!(
+            pre_session_audit_baseline(&session),
+            Some(("abc123", Some(" M tracked.txt\0")))
+        );
     }
 }

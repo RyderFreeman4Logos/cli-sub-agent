@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,10 +43,11 @@ impl RepoWriteAuditSets {
 pub fn compute_repo_write_audit(
     project_root: &Path,
     pre_session_head: &str,
+    pre_session_porcelain: Option<&str>,
 ) -> Result<RepoWriteAudit> {
     let mut audit = RepoWriteAuditSets::default();
     collect_committed_changes(project_root, pre_session_head, &mut audit)?;
-    collect_uncommitted_changes(project_root, &mut audit)?;
+    collect_uncommitted_changes(project_root, pre_session_porcelain, &mut audit)?;
     Ok(audit.finish())
 }
 
@@ -117,7 +118,11 @@ fn collect_committed_changes(
     Ok(())
 }
 
-fn collect_uncommitted_changes(project_root: &Path, audit: &mut RepoWriteAuditSets) -> Result<()> {
+fn collect_uncommitted_changes(
+    project_root: &Path,
+    pre_session_porcelain: Option<&str>,
+    audit: &mut RepoWriteAuditSets,
+) -> Result<()> {
     let output = Command::new("git")
         .args(["status", "--porcelain=v1", "-z"])
         .current_dir(project_root)
@@ -133,7 +138,55 @@ fn collect_uncommitted_changes(project_root: &Path, audit: &mut RepoWriteAuditSe
         return Ok(());
     }
 
-    let mut fields = output.stdout.split(|byte| *byte == 0).peekable();
+    let post_entries = parse_porcelain_entries(&output.stdout)?;
+    let Some(pre_snapshot) = pre_session_porcelain else {
+        tracing::warn!(
+            project_root = %project_root.display(),
+            "repo-write audit missing pre-session porcelain snapshot; falling back to commits-only attribution for uncommitted changes"
+        );
+        return Ok(());
+    };
+
+    let pre_entries = parse_porcelain_entries(pre_snapshot.as_bytes())?;
+    let new_entries = diff_porcelain_entries(&pre_entries, &post_entries);
+    if has_same_status_overlap(&pre_entries, &post_entries) {
+        tracing::info!(
+            project_root = %project_root.display(),
+            "repo-write audit conservatively ignores files dirty before and after the session when porcelain status is unchanged"
+        );
+    }
+
+    for entry in new_entries.values() {
+        apply_porcelain_entry(entry, audit);
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PorcelainStatus {
+    x: char,
+    y: char,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PorcelainEntry {
+    status: PorcelainStatus,
+    path: PathBuf,
+    source_path: Option<PathBuf>,
+}
+
+impl PorcelainEntry {
+    fn key(&self) -> (PathBuf, PorcelainStatus) {
+        (self.path.clone(), self.status)
+    }
+}
+
+fn parse_porcelain_entries(
+    raw: &[u8],
+) -> Result<BTreeMap<(PathBuf, PorcelainStatus), PorcelainEntry>> {
+    let mut entries = BTreeMap::new();
+    let mut fields = raw.split(|byte| *byte == 0).peekable();
     while let Some(entry) = next_non_empty_field(&mut fields) {
         if entry.len() < 4 {
             continue;
@@ -145,34 +198,62 @@ fn collect_uncommitted_changes(project_root: &Path, audit: &mut RepoWriteAuditSe
         }
 
         let path = bytes_to_path(&entry[3..])?;
-        if matches!(x, 'R' | 'C') || matches!(y, 'R' | 'C') {
-            let Some(source_path) = next_non_empty_path(&mut fields)? else {
-                continue;
-            };
-            if x == 'R' || y == 'R' {
-                audit.renamed.insert((source_path, path.clone()));
-            } else {
-                audit.added.insert(path.clone());
-            }
+        let source_path = if matches!(x, 'R' | 'C') || matches!(y, 'R' | 'C') {
+            next_non_empty_path(&mut fields)?
+        } else {
+            None
+        };
+        let parsed = PorcelainEntry {
+            status: PorcelainStatus { x, y },
+            path,
+            source_path,
+        };
+        entries.insert(parsed.key(), parsed);
+    }
+    Ok(entries)
+}
 
-            if path_is_modified(x, y) {
-                audit.modified.insert(path);
-            }
-            continue;
-        }
+fn diff_porcelain_entries(
+    pre_entries: &BTreeMap<(PathBuf, PorcelainStatus), PorcelainEntry>,
+    post_entries: &BTreeMap<(PathBuf, PorcelainStatus), PorcelainEntry>,
+) -> BTreeMap<(PathBuf, PorcelainStatus), PorcelainEntry> {
+    post_entries
+        .iter()
+        .filter(|(key, _)| !pre_entries.contains_key(*key))
+        .map(|(key, entry)| (key.clone(), entry.clone()))
+        .collect()
+}
 
-        if x == 'A' || y == 'A' {
-            audit.added.insert(path.clone());
-        }
-        if x == 'D' || y == 'D' {
-            audit.deleted.insert(path.clone());
-        }
-        if path_is_modified(x, y) {
-            audit.modified.insert(path);
+fn has_same_status_overlap(
+    pre_entries: &BTreeMap<(PathBuf, PorcelainStatus), PorcelainEntry>,
+    post_entries: &BTreeMap<(PathBuf, PorcelainStatus), PorcelainEntry>,
+) -> bool {
+    post_entries.keys().any(|key| pre_entries.contains_key(key))
+}
+
+fn apply_porcelain_entry(entry: &PorcelainEntry, audit: &mut RepoWriteAuditSets) {
+    let x = entry.status.x;
+    let y = entry.status.y;
+
+    if let Some(source_path) = entry.source_path.as_ref() {
+        if x == 'R' || y == 'R' {
+            audit
+                .renamed
+                .insert((source_path.clone(), entry.path.clone()));
+        } else {
+            audit.added.insert(entry.path.clone());
         }
     }
 
-    Ok(())
+    if x == 'A' || y == 'A' {
+        audit.added.insert(entry.path.clone());
+    }
+    if x == 'D' || y == 'D' {
+        audit.deleted.insert(entry.path.clone());
+    }
+    if path_is_modified(x, y) {
+        audit.modified.insert(entry.path.clone());
+    }
 }
 
 fn path_is_modified(x: char, y: char) -> bool {

@@ -89,6 +89,11 @@ pub struct MetaSessionState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_head_at_creation: Option<String>,
 
+    /// Git porcelain snapshot at session creation time.
+    /// Used to subtract pre-existing dirty tracked files from repo-write audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_session_porcelain: Option<String>,
+
     /// Reference to the latest child return packet captured via fork-call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_return_packet: Option<ReturnPacketRef>,

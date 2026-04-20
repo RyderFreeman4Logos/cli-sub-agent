@@ -62,11 +62,9 @@ pub struct ResumeSessionResolution {
     pub provider_session_id: Option<String>,
 }
 
-/// Create a new session
-///
-/// If `parent_id` is provided, this session will be a child of that parent.
-/// Depth is computed from the parent (parent.depth + 1).
-/// If `tool` is provided, metadata.toml is created with tool ownership info.
+/// Create a new session. If `parent_id` is provided, this session is a child
+/// of that parent with `depth = parent.depth + 1`. If `tool` is provided,
+/// metadata.toml is created with tool ownership info.
 pub fn create_session(
     project_path: &Path,
     description: Option<&str>,
@@ -201,6 +199,7 @@ fn create_session_in_with_strategy(
         .as_ref()
         .and_then(|id| id.commit_id.clone())
         .or_else(|| detect_git_head(&normalized_project_path));
+    let pre_session_porcelain = detect_git_status_porcelain(&normalized_project_path);
     let change_id = identity
         .as_ref()
         .and_then(|id| {
@@ -232,6 +231,7 @@ fn create_session_in_with_strategy(
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: git_head,
+        pre_session_porcelain,
         last_return_packet: None,
         change_id,
         spec_id: None,
@@ -245,8 +245,6 @@ fn create_session_in_with_strategy(
 
     Ok(state)
 }
-
-/// Detect the current git HEAD commit hash (full SHA) for seed invalidation.
 pub fn detect_git_head(project_path: &Path) -> Option<String> {
     let output = Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -267,15 +265,26 @@ pub fn detect_git_head(project_path: &Path) -> Option<String> {
     }
 }
 
-/// Detect a VCS change identifier for session-change binding.
-///
-/// Uses VcsBackend to detect the appropriate change ID (jj change-id or git HEAD).
+fn detect_git_status_porcelain(project_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout).ok()
+}
+
+/// Detect a VCS change identifier for session-change binding using the active backend.
 fn detect_change_id(project_path: &Path) -> Option<String> {
     let backend = crate::vcs_backends::create_vcs_backend(project_path);
     backend.head_id(project_path).ok().flatten()
 }
 
-/// Detect the current branch using the appropriate VCS backend.
 fn detect_current_branch(project_path: &Path) -> Option<String> {
     let backend = crate::vcs_backends::create_vcs_backend(project_path);
     backend.current_branch(project_path).ok().flatten()
@@ -497,6 +506,7 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     termination_reason: None,
                     is_seed_candidate: false,
                     git_head_at_creation: None,
+                    pre_session_porcelain: None,
                     last_return_packet: None,
                     change_id: None,
                     spec_id: None,

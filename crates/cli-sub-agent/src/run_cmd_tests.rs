@@ -1,5 +1,10 @@
 use super::resume::DEFAULT_PR_BOT_TIMEOUT_SECS;
 use super::*;
+use crate::cli::{Cli, ReturnTarget, parse_return_to};
+use crate::run_cmd_tool_selection::{
+    resolve_heterogeneous_candidates, resolve_last_session_selection,
+    take_next_runtime_fallback_tool,
+};
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 use csa_acp::SessionEvent;
@@ -7,12 +12,6 @@ use csa_core::types::{OutputFormat, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};
 use std::collections::HashMap;
-
-use crate::cli::{Cli, ReturnTarget, parse_return_to};
-use crate::run_cmd_tool_selection::{
-    resolve_heterogeneous_candidates, resolve_last_session_selection,
-    take_next_runtime_fallback_tool,
-};
 fn test_session(
     meta_session_id: &str,
     last_accessed: chrono::DateTime<Utc>,
@@ -41,6 +40,7 @@ fn test_session(
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        pre_session_porcelain: None,
         last_return_packet: None,
         change_id: None,
         spec_id: None,

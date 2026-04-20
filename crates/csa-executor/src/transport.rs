@@ -113,6 +113,7 @@ pub(crate) fn build_ephemeral_meta_session(work_dir: &Path) -> MetaSessionState 
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        pre_session_porcelain: None,
         last_return_packet: None,
         change_id: None,
         spec_id: None,

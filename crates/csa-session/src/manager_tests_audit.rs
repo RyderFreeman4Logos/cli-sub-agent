@@ -77,7 +77,14 @@ fn test_compute_repo_write_audit_detects_committed_and_uncommitted_changes() {
 
     std::fs::write(td.path().join("tracked.txt"), "uncommitted mutation\n").unwrap();
 
-    let audit = compute_repo_write_audit(td.path(), &pre_head).unwrap();
+    let pre_porcelain = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
+
+    let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
     assert_eq!(audit.added, vec![std::path::PathBuf::from("new.txt")]);
     assert_eq!(audit.modified, vec![std::path::PathBuf::from("tracked.txt")]);
     assert_eq!(audit.deleted, vec![std::path::PathBuf::from("deleted.txt")]);
@@ -101,7 +108,89 @@ fn test_compute_repo_write_audit_clean_session_is_empty() {
     run_git(td.path(), &["commit", "-m", "init"]);
 
     let pre_head = detect_git_head(td.path()).unwrap();
-    let audit = compute_repo_write_audit(td.path(), &pre_head).unwrap();
+    let pre_porcelain = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
+
+    let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
+    assert!(audit.is_empty());
+}
+
+#[test]
+fn test_pre_existing_dirty_file_not_attributed_to_session() {
+    let td = tempdir().unwrap();
+    run_git(td.path(), &["init"]);
+    run_git(td.path(), &["config", "user.email", "test@example.com"]);
+    run_git(td.path(), &["config", "user.name", "Test User"]);
+    std::fs::write(td.path().join("src.txt"), "baseline\n").unwrap();
+    run_git(td.path(), &["add", "src.txt"]);
+    run_git(td.path(), &["commit", "-m", "init"]);
+
+    let pre_head = detect_git_head(td.path()).unwrap();
+    std::fs::write(td.path().join("src.txt"), "dirty before session\n").unwrap();
+    let pre_porcelain = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
+
+    let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
+    assert!(audit.is_empty());
+}
+
+#[test]
+fn test_pre_existing_dirty_plus_session_add() {
+    let td = tempdir().unwrap();
+    run_git(td.path(), &["init"]);
+    run_git(td.path(), &["config", "user.email", "test@example.com"]);
+    run_git(td.path(), &["config", "user.name", "Test User"]);
+    std::fs::write(td.path().join("src.txt"), "baseline\n").unwrap();
+    run_git(td.path(), &["add", "src.txt"]);
+    run_git(td.path(), &["commit", "-m", "init"]);
+
+    let pre_head = detect_git_head(td.path()).unwrap();
+    std::fs::write(td.path().join("src.txt"), "dirty before session\n").unwrap();
+    let pre_porcelain = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
+
+    std::fs::write(td.path().join("output-new.md"), "created during session\n").unwrap();
+    run_git(td.path(), &["add", "output-new.md"]);
+    let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
+    assert_eq!(audit.added, vec![std::path::PathBuf::from("output-new.md")]);
+    assert!(audit.modified.is_empty());
+    assert!(audit.deleted.is_empty());
+    assert!(audit.renamed.is_empty());
+}
+
+#[test]
+fn test_session_further_modifies_pre_existing_dirty_file_is_conservatively_ignored() {
+    let td = tempdir().unwrap();
+    run_git(td.path(), &["init"]);
+    run_git(td.path(), &["config", "user.email", "test@example.com"]);
+    run_git(td.path(), &["config", "user.name", "Test User"]);
+    std::fs::write(td.path().join("src.txt"), "baseline\n").unwrap();
+    run_git(td.path(), &["add", "src.txt"]);
+    run_git(td.path(), &["commit", "-m", "init"]);
+
+    let pre_head = detect_git_head(td.path()).unwrap();
+    std::fs::write(td.path().join("src.txt"), "dirty before session\n").unwrap();
+    let pre_porcelain = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
+
+    std::fs::write(td.path().join("src.txt"), "dirty and changed again\n").unwrap();
+    let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
     assert!(audit.is_empty());
 }
 
