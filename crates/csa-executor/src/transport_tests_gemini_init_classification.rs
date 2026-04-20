@@ -134,6 +134,25 @@ fn test_classify_gemini_acp_initial_stall_detects_first_response_timeout() {
 }
 
 #[test]
+fn test_classify_gemini_acp_initial_stall_preserves_specific_stderr() {
+    let execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: concat!(
+            "gemini: GEMINI_API_KEY not set\n",
+            "initial response timeout: no ACP events/stderr for 180s; process killed\n"
+        )
+        .to_string(),
+        summary: "initial response timeout: no ACP events/stderr for 180s; process killed"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+
+    let classification = classify_gemini_acp_initial_stall(&execution, Some(180));
+    assert_eq!(classification, None);
+}
+
+#[test]
 fn test_apply_gemini_acp_initial_stall_summary_rewrites_summary() {
     let mut execution = csa_process::ExecutionResult {
         output: String::new(),

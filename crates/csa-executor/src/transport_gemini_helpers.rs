@@ -15,6 +15,7 @@ pub(crate) const GEMINI_OAUTH_PROMPT_SUMMARY: &str =
 pub(crate) const GEMINI_ACP_INITIAL_STALL_REASON: &str = "gemini_acp_initial_stall";
 pub(crate) const GEMINI_LEGACY_INITIAL_STALL_REASON: &str = "gemini_legacy_initial_stall";
 const DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 180;
+const ACP_TIMEOUT_FOOTER_SUFFIX: &str = "s; process killed";
 
 #[derive(Debug, Clone)]
 pub(super) struct GeminiRetryPhase {
@@ -70,6 +71,12 @@ pub(super) fn classify_gemini_acp_initial_stall(
     {
         return None;
     }
+    if !strip_acp_timeout_footer(&execution.stderr_output)
+        .trim()
+        .is_empty()
+    {
+        return None;
+    }
 
     Some(GeminiAcpInitialStallClassification {
         code: GEMINI_ACP_INITIAL_STALL_REASON,
@@ -94,6 +101,34 @@ pub(super) fn apply_gemini_acp_initial_stall_summary(
     }
     execution.stderr_output.push_str(&summary);
     execution.stderr_output.push('\n');
+}
+
+fn strip_acp_timeout_footer(stderr: &str) -> &str {
+    let trimmed = stderr.strip_suffix('\n').unwrap_or(stderr);
+    if let Some((prefix, last_line)) = trimmed.rsplit_once('\n') {
+        if is_acp_timeout_footer(last_line) {
+            return prefix;
+        }
+    } else if is_acp_timeout_footer(trimmed) {
+        return "";
+    }
+
+    stderr
+}
+
+fn is_acp_timeout_footer(line: &str) -> bool {
+    [
+        "initial response timeout: no ACP events/stderr for ",
+        "idle timeout: no ACP events/stderr for ",
+    ]
+    .iter()
+    .any(|prefix| {
+        line.strip_prefix(prefix)
+            .and_then(|suffix| suffix.strip_suffix(ACP_TIMEOUT_FOOTER_SUFFIX))
+            .is_some_and(|seconds| {
+                !seconds.is_empty() && seconds.bytes().all(|b| b.is_ascii_digit())
+            })
+    })
 }
 
 pub(super) fn classify_gemini_legacy_initial_stall(
