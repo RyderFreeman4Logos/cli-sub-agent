@@ -17,12 +17,18 @@ use regex::Regex;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
+#[path = "review_cmd_output_artifacts.rs"]
+mod artifacts;
 #[path = "review_cmd_output_clean.rs"]
 mod clean_detection;
 #[path = "review_cmd_output_diagnostics.rs"]
 mod diagnostics;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
+use artifacts::{
+    load_findings_toml_from_output, load_review_artifact_from_output, severity_counts_for_artifact,
+    severity_counts_for_findings_toml,
+};
 use clean_detection::{contains_clean_phrase, review_contains_prose_clean_conclusion};
 pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use summary_artifact::{
@@ -64,24 +70,6 @@ pub(super) struct ReviewerOutcome {
     pub verdict: &'static str,
     /// Tool-level diagnostic when the review failed due to tool issues (e.g. MCP).
     pub diagnostic: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PersistedReviewArtifact {
-    #[serde(default)]
-    findings: Vec<Finding>,
-    #[serde(default)]
-    severity_summary: SeveritySummary,
-    #[serde(default)]
-    overall_risk: Option<String>,
-}
-
-impl PersistedReviewArtifact {
-    fn overall_risk_is_severe(&self) -> bool {
-        self.overall_risk.as_deref().is_some_and(|risk| {
-            risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
-        })
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -221,15 +209,6 @@ pub(super) fn persist_review_verdict(
 ) {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
-            let verdict_path = session_dir.join("output").join("review-verdict.json");
-            if verdict_path.exists() {
-                debug!(
-                    session_id = %meta.session_id,
-                    path = %verdict_path.display(),
-                    "Skipping output/review-verdict.json persistence because AI artifact already exists"
-                );
-                return;
-            }
             let mut artifact = if meta.status_reason.is_some() {
                 let mut artifact = ReviewVerdictArtifact::from_parts(
                     meta.session_id.clone(),
@@ -288,13 +267,50 @@ pub(super) fn persist_review_verdict(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn persist_review_verdict_for_tests(
+    project_root: &Path,
+    meta: &ReviewSessionMeta,
+    findings: &[Finding],
+    prior_round_refs: Vec<String>,
+) {
+    persist_review_verdict(project_root, meta, findings, prior_round_refs);
+}
+
 fn derive_review_verdict_artifact(
     session_dir: &Path,
     meta: &ReviewSessionMeta,
     findings: &[Finding],
 ) -> Result<ReviewVerdictArtifact, anyhow::Error> {
+    if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
+        let severity_counts =
+            severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
+        let decision = if findings_file.findings.is_empty()
+            && severity_counts_are_zero(&severity_counts)
+            && review_contains_prose_clean_conclusion(session_dir)?
+        {
+            ReviewDecision::Pass
+        } else {
+            derive_decision_from_findings(
+                findings_file.findings.is_empty(),
+                None,
+                ReviewDecision::from_str(&meta.decision).ok(),
+            )
+        };
+        return Ok(build_review_verdict_artifact(
+            meta.session_id.clone(),
+            decision,
+            legacy_verdict_for_decision(decision, &meta.verdict),
+            severity_counts,
+            meta.routed_to.clone(),
+            meta.primary_failure.clone(),
+            meta.failure_reason.clone(),
+            Vec::new(),
+        ));
+    }
+
     if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
-        let severity_counts = severity_counts_for_artifact(&artifact);
+        let severity_counts = severity_counts_for_artifact(&artifact, zero_severity_counts);
         let decision = if artifact.findings.is_empty()
             && severity_counts_are_zero(&severity_counts)
             && !artifact.overall_risk_is_severe()
@@ -342,21 +358,6 @@ fn derive_review_verdict_artifact(
         findings,
         Vec::new(),
     ))
-}
-
-fn load_review_artifact_from_output(
-    session_dir: &Path,
-) -> Result<Option<PersistedReviewArtifact>, anyhow::Error> {
-    let findings_path = session_dir.join("review-findings.json");
-    if !findings_path.exists() {
-        return Ok(None);
-    }
-
-    let contents = fs::read_to_string(&findings_path)
-        .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
-    let artifact = serde_json::from_str::<PersistedReviewArtifact>(&contents)
-        .map_err(|error| anyhow::anyhow!("parse {}: {error}", findings_path.display()))?;
-    Ok(Some(artifact))
 }
 
 fn infer_review_verdict_from_full_output(
@@ -468,27 +469,6 @@ fn severity_counts_from_summary(
     ]
     .into_iter()
     .collect()
-}
-
-fn severity_counts_from_findings(
-    findings: &[Finding],
-) -> std::collections::BTreeMap<Severity, u32> {
-    let mut counts = zero_severity_counts();
-    for finding in findings {
-        *counts.entry(finding.severity.clone()).or_insert(0) += 1;
-    }
-    counts
-}
-
-fn severity_counts_for_artifact(
-    artifact: &PersistedReviewArtifact,
-) -> std::collections::BTreeMap<Severity, u32> {
-    let counts = severity_counts_from_summary(&artifact.severity_summary);
-    let total = counts.values().copied().sum::<u32>();
-    if total == 0 && !artifact.findings.is_empty() {
-        return severity_counts_from_findings(&artifact.findings);
-    }
-    counts
 }
 
 fn severity_counts_are_zero(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
@@ -771,6 +751,9 @@ fn is_findings_header(line: &str) -> bool {
         || normalized.eq_ignore_ascii_case("review findings")
 }
 
+#[cfg(test)]
+#[path = "review_cmd_output_fix_reuse_tests.rs"]
+mod fix_reuse_tests;
 #[cfg(test)]
 #[path = "review_cmd_output_tests.rs"]
 mod tests;

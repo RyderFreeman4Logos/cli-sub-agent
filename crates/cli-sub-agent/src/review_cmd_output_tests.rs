@@ -1,8 +1,8 @@
 use super::{
-    PersistedReviewArtifact, ToolReviewFailureKind, derive_decision_from_text,
-    detect_tool_review_failure, ensure_review_summary_artifact, extract_review_text,
-    persist_review_verdict,
+    ToolReviewFailureKind, derive_decision_from_text, detect_tool_review_failure,
+    ensure_review_summary_artifact, extract_review_text, persist_review_verdict,
 };
+use crate::review_cmd::output::artifacts::PersistedReviewArtifact;
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
@@ -187,24 +187,6 @@ fn detect_tool_review_failure_handles_guarded_browser_prompt_variant() {
         detected,
         Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
     );
-}
-
-#[test]
-fn persist_review_verdict_skips_when_ai_file_exists() {
-    let session_id = "01TESTSKIP0000000000000000";
-    let (_env_lock, project_root, session_dir) =
-        lock_test_session("persist-review-verdict-skip", session_id);
-    let verdict_path = session_dir.join("output").join("review-verdict.json");
-    let ai_payload = r#"{"ai":"preserved"}"#;
-    fs::write(&verdict_path, ai_payload).expect("write AI verdict artifact");
-
-    let meta = make_review_meta(session_id);
-    persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-    let actual = fs::read_to_string(&verdict_path).expect("read verdict artifact");
-    assert_eq!(actual, ai_payload);
-
-    fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
 #[test]

@@ -4,6 +4,10 @@ use std::process::Command;
 use csa_config::{GlobalConfig, ProjectProfile, TierStrategy, config::TierConfig};
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
+use csa_session::{
+    FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity,
+    write_findings_toml,
+};
 use tempfile::TempDir;
 
 #[cfg(unix)]
@@ -109,6 +113,131 @@ fn exact_test_write_executable(bin_dir: &Path, name: &str, body: &str) {
     let mut perms = std::fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms).unwrap();
+}
+
+fn exact_test_make_review_meta(
+    session_id: &str,
+    decision: ReviewDecision,
+    verdict: &str,
+) -> ReviewSessionMeta {
+    ReviewSessionMeta {
+        session_id: session_id.to_string(),
+        head_sha: String::new(),
+        decision: decision.as_str().to_string(),
+        verdict: verdict.to_string(),
+        status_reason: None,
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
+        tool: "codex".to_string(),
+        scope: "diff".to_string(),
+        exit_code: if decision == ReviewDecision::Pass { 0 } else { 1 },
+        fix_attempted: true,
+        fix_rounds: 1,
+        review_iterations: 1,
+        timestamp: chrono::Utc::now(),
+        diff_fingerprint: None,
+    }
+}
+
+fn exact_test_make_review_finding(severity: Severity, id: &str) -> ReviewFinding {
+    ReviewFinding {
+        id: id.to_string(),
+        severity,
+        file_ranges: vec![ReviewFindingFileRange {
+            path: "src/lib.rs".to_string(),
+            start: 1,
+            end: Some(1),
+        }],
+        is_regression_of_commit: None,
+        suggested_test_scenario: None,
+        description: format!("description {id}"),
+    }
+}
+
+#[test]
+fn fix_loop_exhausted_preserves_open_findings_in_findings_toml() {
+    let project_dir = exact_test_setup_git_repo();
+    let _state_home = test_env_lock::ScopedTestEnvVar::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let session_id = "01TESTFIXLOOPEXACT000000000";
+    let session_dir = csa_session::get_session_dir(project_dir.path(), session_id)
+        .expect("resolve session dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    let expected = FindingsFile {
+        findings: vec![exact_test_make_review_finding(Severity::High, "open-high")],
+    };
+    write_findings_toml(&session_dir, &expected).expect("write last-round findings.toml");
+
+    let mut exhausted_meta =
+        exact_test_make_review_meta(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    exhausted_meta.fix_rounds = 3;
+
+    review_cmd::persist_fix_final_artifacts_for_tests(project_dir.path(), &exhausted_meta, false);
+
+    let findings_path = session_dir.join("output").join("findings.toml");
+    let actual = std::fs::read_to_string(&findings_path).expect("read preserved findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse preserved findings.toml");
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn persist_verdict_refreshes_on_fix_reuse_session() {
+    let project_dir = exact_test_setup_git_repo();
+    let _state_home = test_env_lock::ScopedTestEnvVar::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let session_id = "01TESTVERDICTEXACT000000000";
+    let session_dir = csa_session::get_session_dir(project_dir.path(), session_id)
+        .expect("resolve session dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let stale_artifact = ReviewVerdictArtifact::from_parts(
+        session_id,
+        ReviewDecision::Fail,
+        "HAS_ISSUES",
+        &[],
+        Vec::new(),
+    );
+    std::fs::write(
+        &verdict_path,
+        serde_json::to_vec_pretty(&stale_artifact).expect("serialize stale verdict"),
+    )
+    .expect("write stale verdict");
+    write_findings_toml(
+        &session_dir,
+        &FindingsFile {
+            findings: Vec::new(),
+        },
+    )
+    .expect("write refreshed findings.toml");
+    let full_output = [
+        serde_json::json!({"type":"item.completed","item":{
+            "id":"item_1",
+            "type":"agent_message",
+            "text":"<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking issues found in this scope.\nOverall risk: low\n<!-- CSA:SECTION:details:END -->"
+        }}),
+    ]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    std::fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write full output transcript");
+
+    let meta = exact_test_make_review_meta(session_id, ReviewDecision::Pass, "CLEAN");
+    review_cmd::persist_review_verdict_for_tests(project_dir.path(), &meta, &[], Vec::new());
+
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&std::fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
 }
 
 #[cfg(unix)]

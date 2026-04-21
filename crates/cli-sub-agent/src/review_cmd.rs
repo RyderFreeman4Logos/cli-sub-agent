@@ -53,17 +53,15 @@ use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_revie
 use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_review_iterations};
 use execute::{compute_diff_fingerprint, execute_review};
 use findings_toml::persist_review_findings_toml;
-#[cfg(test)]
-pub(crate) use flow::execute_review_for_tests;
 use flow::review_decision_from_verdict;
 #[cfg(test)]
-pub(crate) use flow::{persist_review_sidecars_if_session_exists, should_run_fix_loop};
+#[rustfmt::skip]
+pub(crate) use flow::{ execute_review_for_tests, persist_review_sidecars_if_session_exists, should_run_fix_loop };
 #[cfg(not(test))]
 use flow::{persist_review_sidecars_if_session_exists, should_run_fix_loop};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
-use prior_rounds::{
-    explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id,
-};
+#[rustfmt::skip]
+use prior_rounds::{ explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id };
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
@@ -73,9 +71,11 @@ use resolve::{
     verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
 use result_handling::{build_reviewer_outcome, resolve_single_review_result};
-use reviewers::{
-    AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool,
-};
+#[rustfmt::skip]
+use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool };
+#[cfg(test)]
+#[rustfmt::skip]
+pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
