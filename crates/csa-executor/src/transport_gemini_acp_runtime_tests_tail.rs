@@ -702,3 +702,30 @@ fn resolve_first_path_entry(name: &str, path_env: &str) -> Option<PathBuf> {
 fn canonicalize_if_exists(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
+
+#[test]
+fn prepare_gemini_acp_runtime_propagates_mise_trusted_config_paths_from_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01TESTGEMINIMISETRUSTPROP0000001";
+    let source_home = temp.path().join("source-home");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "MISE_TRUSTED_CONFIG_PATHS".to_string(),
+        "/tmp/foo.toml:/tmp/bar.toml".to_string(),
+    );
+
+    prepare_gemini_acp_runtime(&mut env, None, None, session_id, &["--acp".to_string()])
+        .expect("prepare runtime");
+
+    assert_eq!(
+        env.get("MISE_TRUSTED_CONFIG_PATHS"),
+        Some(&"/tmp/foo.toml:/tmp/bar.toml".to_string()),
+        "parent MISE_TRUSTED_CONFIG_PATHS must propagate through the Gemini ACP runtime env"
+    );
+}
