@@ -3,6 +3,11 @@ use super::*;
 #[cfg(unix)]
 #[tokio::test]
 async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let _available_guard = crate::test_env_lock::ScopedEnvVarRestore::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    );
     let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
     config.tools.get_mut("codex").unwrap().transport = Some(csa_config::ToolTransport::Cli);
     config.tiers.insert(
