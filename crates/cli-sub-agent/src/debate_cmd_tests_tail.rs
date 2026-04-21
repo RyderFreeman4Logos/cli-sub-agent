@@ -421,7 +421,6 @@ async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
     );
     write_debate_project_config(project_dir.path(), &config);
     install_pattern(project_dir.path(), "debate");
-
     let cd = project_dir.path().display().to_string();
     let args = parse_debate_args(&[
         "csa",
