@@ -648,3 +648,88 @@ fn test_session_wait_procfs_failure_fallback() {
     assert_eq!(exit_code, 124);
     assert_eq!(sample_calls, 1);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_session_wait_memory_warn_sampler_survives_transient_error() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-memory-transient-sampler-error"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn child");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    let mut sample_calls = 0;
+    let mut emitted_marker: Option<String> = None;
+    let exit_code = handle_session_wait_with_hooks_and_sampler(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: Some(64),
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::ZERO,
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |_sid: &str, _status: &str, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("transient sampling errors should not emit completion");
+        },
+        |_project_root, _session_id| {
+            sample_calls += 1;
+            if sample_calls == 1 {
+                Err(std::io::Error::other("transient procfs race"))
+            } else {
+                Ok(65)
+            }
+        },
+        |sid, rss_mb, limit_mb| {
+            emitted_marker = Some(format!(
+                "<!-- CSA:MEMORY_WARN session={} rss_mb={} limit_mb={} -->",
+                sid, rss_mb, limit_mb
+            ));
+        },
+    )
+    .expect("transient sampling failure should recover on next tick");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(exit_code, SESSION_WAIT_MEMORY_WARN_EXIT_CODE);
+    assert_eq!(sample_calls, 2);
+    assert_eq!(
+        emitted_marker,
+        Some(format!(
+            "<!-- CSA:MEMORY_WARN session={} rss_mb=65 limit_mb=64 -->",
+            session_id
+        ))
+    );
+}

@@ -66,7 +66,7 @@ pub use output_section::{
     ChangedFile, FileAction, OutputIndex, OutputSection, RETURN_PACKET_MAX_SUMMARY_CHARS,
     RETURN_PACKET_SECTION_ID, ReturnPacket, ReturnPacketRef, ReturnStatus,
 };
-pub use process_tree_memory::session_tree_rss_mb;
+pub use process_tree_memory::{SessionTreeMemorySampler, session_tree_rss_mb};
 pub use redact::{redact_event, redact_text_content};
 pub use result::{SessionArtifact, SessionManagerFields, SessionResult};
 pub use review_artifact::{

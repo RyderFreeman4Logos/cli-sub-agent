@@ -3,6 +3,7 @@ use super::*;
 /// Exit code reserved for `csa session wait` memory warning early-exit.
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
 const SESSION_WAIT_MEMORY_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+const MAX_CONSECUTIVE_SAMPLING_ERRORS: u32 = 5;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WaitLoopTiming {
@@ -89,13 +90,25 @@ where
     R: for<'a, 'b, 'c> FnMut(&'a Path, &'b str, &'c str) -> Result<WaitReconciliationOutcome>,
     E: for<'a, 'b> FnMut(&'a str, &'b str, i32, bool, bool),
 {
+    let mut cached_memory_sampler: Option<csa_session::SessionTreeMemorySampler> = None;
     handle_session_wait_with_hooks_and_sampler(
         session,
         cd,
         wait_behavior,
         &mut reconcile_dead_active_session,
         &mut emit_completion_signal,
-        csa_session::session_tree_rss_mb,
+        |project_root, session_id| {
+            if cached_memory_sampler.is_none() {
+                cached_memory_sampler = Some(csa_session::SessionTreeMemorySampler::new(
+                    project_root,
+                    session_id,
+                )?);
+            }
+            cached_memory_sampler
+                .as_ref()
+                .expect("cached sampler initialized above")
+                .sample_rss_mb()
+        },
         emit_wait_memory_warn_marker,
     )
 }
@@ -131,6 +144,7 @@ where
     let memory_warn_mb = wait_behavior.memory_warn_mb.filter(|limit| *limit > 0);
     let mut next_memory_sample_at =
         memory_warn_mb.map(|_| start + wait_behavior.timing.memory_sample_interval);
+    let mut consecutive_sampling_errors = 0_u32;
 
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
@@ -297,6 +311,7 @@ where
         {
             match sample_session_tree_rss_mb(effective_root, &resolved.session_id) {
                 Ok(actual_rss_mb) => {
+                    consecutive_sampling_errors = 0;
                     if actual_rss_mb > limit_mb {
                         emit_memory_warn_marker(&resolved.session_id, actual_rss_mb, limit_mb);
                         return Ok(SESSION_WAIT_MEMORY_WARN_EXIT_CODE);
@@ -306,12 +321,19 @@ where
                     );
                 }
                 Err(err) => {
-                    tracing::debug!(
-                        session_id = %resolved.session_id,
-                        error = %err,
-                        "Disabling session wait memory sampler after sampling failure"
+                    consecutive_sampling_errors = consecutive_sampling_errors.saturating_add(1);
+                    if should_log_sampling_error(consecutive_sampling_errors) {
+                        tracing::debug!(
+                            session_id = %resolved.session_id,
+                            consecutive_errors = consecutive_sampling_errors,
+                            max_consecutive_errors = MAX_CONSECUTIVE_SAMPLING_ERRORS,
+                            error = %err,
+                            "Session wait memory sampling failed; keeping sampler active for next tick"
+                        );
+                    }
+                    next_memory_sample_at = Some(
+                        std::time::Instant::now() + wait_behavior.timing.memory_sample_interval,
                     );
-                    next_memory_sample_at = None;
                 }
             }
         }
@@ -353,6 +375,12 @@ where
 
         std::thread::sleep(wait_behavior.timing.poll_interval);
     }
+}
+
+fn should_log_sampling_error(consecutive_errors: u32) -> bool {
+    consecutive_errors <= 3
+        || consecutive_errors == MAX_CONSECUTIVE_SAMPLING_ERRORS
+        || consecutive_errors.is_multiple_of(MAX_CONSECUTIVE_SAMPLING_ERRORS)
 }
 
 fn stream_wait_output(session_dir: &std::path::Path) -> Result<bool> {
