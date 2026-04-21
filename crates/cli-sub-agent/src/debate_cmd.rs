@@ -8,7 +8,7 @@ use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
 use crate::debate_cmd_resolve::{
-    resolve_debate_model, resolve_debate_tier_name, resolve_debate_tool,
+    resolve_debate_model, resolve_debate_selection, resolve_debate_tier_name,
 };
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
@@ -207,7 +207,7 @@ pub(crate) async fn handle_debate(
             .and_then(|spec| spec.split('/').next())
             .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
     });
-    let (tool, debate_mode, resolved_model_spec) = match resolve_debate_tool(
+    let resolved_selection = match resolve_debate_selection(
         args.tool,
         args.model_spec.as_deref(),
         config.as_ref(),
@@ -234,6 +234,10 @@ pub(crate) async fn handle_debate(
             ));
         }
     };
+    let tool = resolved_selection.tool;
+    let debate_mode = resolved_selection.mode;
+    let resolved_model_spec = resolved_selection.model_spec.clone();
+    let tier_filter = resolved_selection.tier_filter.clone();
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
@@ -300,6 +304,7 @@ pub(crate) async fn handle_debate(
         resolved_tier_name.as_deref(),
         config.as_ref(),
         tier_active && args.tool.is_none(),
+        tier_filter.as_ref(),
     );
     let mut execution = None;
     let mut failures = Vec::new();

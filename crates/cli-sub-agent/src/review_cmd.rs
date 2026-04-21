@@ -52,7 +52,7 @@ pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
 #[cfg(test)]
 use bug_class_pipeline::try_resolve_review_iterations;
 use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
-use execute::{compute_diff_fingerprint, execute_review};
+use execute::{compute_diff_fingerprint, execute_review, execute_review_with_tier_filter};
 use findings_toml::persist_review_findings_toml;
 use flow::review_decision_from_verdict;
 #[cfg(test)]
@@ -65,10 +65,12 @@ use post_review::{build_post_review_output, emit_post_review_output, review_scop
 use prior_rounds::{ explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id };
 #[cfg(test)]
 use resolve::build_review_instruction;
+#[cfg(test)]
+pub(crate) use resolve::resolve_review_tool;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope,
-    resolve_review_model, resolve_review_stream_mode, resolve_review_thinking,
-    resolve_review_tier_name, resolve_review_tool, review_scope_allows_auto_discovery,
+    resolve_review_model, resolve_review_selection, resolve_review_stream_mode,
+    resolve_review_thinking, resolve_review_tier_name, review_scope_allows_auto_discovery,
     verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
 use result_handling::{build_reviewer_outcome, resolve_single_review_result};
@@ -261,7 +263,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, resolved_model_spec) = match resolve_review_tool(
+    let resolved_selection = match resolve_review_selection(
         args.tool,
         args.model_spec.as_deref(),
         config.as_ref(),
@@ -288,6 +290,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             ));
         }
     };
+    let tool = resolved_selection.tool;
+    let resolved_model_spec = resolved_selection.model_spec.clone();
+    let tier_filter = resolved_selection.tier_filter.clone();
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
@@ -314,7 +319,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         resolved_model_spec.is_some(),
     );
 
-    // Active tier model specs remain authoritative unless the user overrides on the CLI.
     let review_thinking = resolve_review_thinking(
         args.thinking.as_deref(),
         config
@@ -355,7 +359,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     if reviewers == 1 {
         // Single-reviewer path (with optional --fix loop).
-        let review_future = execute_review(
+        let review_future = execute_review_with_tier_filter(
             tool,
             prompt.clone(),
             args.session.clone(),
@@ -363,6 +367,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             resolved_model_spec.clone(),
             resolved_tier_name.clone(),
             tier_active && args.tool.is_none(),
+            tier_filter.clone(),
             review_thinking.clone(),
             review_description.clone(),
             &project_root,
@@ -451,8 +456,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let is_cumulative_review = review_scope_is_cumulative(&scope);
 
         if !should_run_fix_loop(args.fix, decision) {
-            // Accumulate only on FINAL result — prevents double-counting when
-            // --fix resolves the same issues.
+            // Accumulate only on FINAL result to avoid double-counting when --fix resolves the same issues.
             if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {
                 crate::review_findings::accumulate_findings(&project_root, &sanitized);
             }
@@ -525,9 +529,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         })
         .await;
 
-        // Fire PostReview hook after fix loop completes (final result).
-        // Hook stdout is forwarded so callers can mechanically chain the
-        // next required step without inferring it from prompts or docs.
+        // Fire PostReview hook after fix loop completes; forward stdout so callers can chain the next step mechanically.
         let fix_passed = matches!(&fix_exit_code, Ok(0));
         let post_review_output = build_post_review_output(
             &crate::pipeline::capture_observational_hook_output(
@@ -768,11 +770,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .iter()
         .map(|outcome| outcome.session_id.clone())
         .collect::<Vec<_>>();
-    // NOTE: Do NOT persist review_meta for the inherited CSA_SESSION_ID here.
-    // The single-reviewer path (review_cmd_execute.rs:80) explicitly ignores
-    // inherited CSA_SESSION_ID unless --session was passed.  Persisting it
-    // unconditionally in the multi-reviewer path would overwrite an unrelated
-    // session's review_meta.json when launched from another CSA session.
+    // Do not persist inherited CSA_SESSION_ID review metadata here; unlike the
+    // single-reviewer path, that would overwrite an unrelated parent session.
 
     maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 

@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
 use crate::tier_model_fallback::{
-    TierAttemptFailure, chain_failure_reasons, classify_next_model_failure,
+    TierAttemptFailure, TierFilter, chain_failure_reasons, classify_next_model_failure,
     format_all_models_failed_reason, ordered_tier_candidates,
 };
 
@@ -92,6 +92,62 @@ pub(crate) async fn execute_review(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
 ) -> Result<ReviewExecutionOutcome> {
+    execute_review_with_tier_filter(
+        tool,
+        prompt,
+        session,
+        model,
+        tier_model_spec,
+        tier_name,
+        tier_fallback_enabled,
+        None,
+        thinking,
+        description,
+        project_root,
+        project_config,
+        global_config,
+        review_routing,
+        stream_mode,
+        idle_timeout_seconds,
+        initial_response_timeout_seconds,
+        force_override_user_config,
+        force_ignore_tier_setting,
+        no_failover,
+        no_fs_sandbox,
+        readonly_project_root,
+        extra_writable,
+        extra_readable,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_review_with_tier_filter(
+    tool: ToolName,
+    prompt: String,
+    session: Option<String>,
+    model: Option<String>,
+    tier_model_spec: Option<String>,
+    tier_name: Option<String>,
+    tier_fallback_enabled: bool,
+    tier_filter: Option<TierFilter>,
+    thinking: Option<String>,
+    description: String,
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    review_routing: ReviewRoutingMetadata,
+    stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
+    initial_response_timeout_seconds: Option<u64>,
+    force_override_user_config: bool,
+    force_ignore_tier_setting: bool,
+    no_failover: bool,
+    no_fs_sandbox: bool,
+    readonly_project_root: bool,
+    extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
+) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
     if session.is_none()
         && let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID")
@@ -107,6 +163,7 @@ pub(crate) async fn execute_review(
         tier_name.as_deref(),
         project_config,
         tier_fallback_enabled,
+        tier_filter.as_ref(),
     );
     let mut failures = Vec::new();
 

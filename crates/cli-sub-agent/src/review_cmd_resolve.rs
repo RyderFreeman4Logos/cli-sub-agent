@@ -11,6 +11,7 @@ use crate::review_context::{
 };
 use crate::review_prior_rounds::REVIEW_FINDINGS_TOML_INSTRUCTION;
 use crate::review_routing::{ReviewRoutingMetadata, detect_review_routing_metadata};
+use crate::tier_model_fallback::TierFilter;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
@@ -77,9 +78,16 @@ pub(crate) fn resolve_review_stream_mode(
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedReviewSelection {
+    pub(crate) tool: ToolName,
+    pub(crate) model_spec: Option<String>,
+    pub(crate) tier_filter: Option<TierFilter>,
+}
+
 /// Returns (tool, optional_model_spec). When tier resolves, model_spec is set.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_review_tool(
+pub(crate) fn resolve_review_selection(
     arg_tool: Option<ToolName>,
     arg_model_spec: Option<&str>,
     project_config: Option<&ProjectConfig>,
@@ -89,7 +97,7 @@ pub(crate) fn resolve_review_tool(
     force_override_user_config: bool,
     cli_tier: Option<&str>,
     force_ignore_tier_setting: bool,
-) -> Result<(ToolName, Option<String>)> {
+) -> Result<ResolvedReviewSelection> {
     let tiers_configured = project_config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
 
@@ -114,7 +122,11 @@ pub(crate) fn resolve_review_tool(
             force_ignore_tier_setting,
             false,
         )?;
-        return Ok((tool, resolved_model_spec));
+        return Ok(ResolvedReviewSelection {
+            tool,
+            model_spec: resolved_model_spec,
+            tier_filter: None,
+        });
     }
 
     // Enforce tier routing: block direct --tool when tiers are configured,
@@ -152,13 +164,21 @@ pub(crate) fn resolve_review_tool(
                 force_override_user_config,
                 &[],
             )?;
-            return Ok((resolution.tool, Some(resolution.model_spec)));
+            return Ok(ResolvedReviewSelection {
+                tool: resolution.tool,
+                model_spec: Some(resolution.model_spec),
+                tier_filter: Some(TierFilter::whitelist([tool.as_str().to_string()])),
+            });
         }
 
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
         }
-        return Ok((tool, None));
+        return Ok(ResolvedReviewSelection {
+            tool,
+            model_spec: None,
+            tier_filter: None,
+        });
     }
 
     // Compute effective whitelist from tool selection (project > global).
@@ -207,7 +227,14 @@ pub(crate) fn resolve_review_tool(
         if let Some(resolution) =
             crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
         {
-            return Ok((resolution.tool, Some(resolution.model_spec)));
+            return Ok(ResolvedReviewSelection {
+                tool: resolution.tool,
+                model_spec: Some(resolution.model_spec),
+                tier_filter: Some(match whitelist {
+                    Some(wl) => TierFilter::whitelist(wl.iter().cloned()),
+                    None => TierFilter::all(),
+                }),
+            });
         }
 
         let filtered_tools =
@@ -238,7 +265,11 @@ pub(crate) fn resolve_review_tool(
             global_config,
             project_root,
         )
-        .map(|t| (t, None))
+        .map(|t| ResolvedReviewSelection {
+            tool: t,
+            model_spec: None,
+            tier_filter: None,
+        })
         .with_context(|| {
             format!(
                 "Failed to resolve review tool from project config: {}",
@@ -255,7 +286,38 @@ pub(crate) fn resolve_review_tool(
         global_config,
         project_root,
     )
-    .map(|t| (t, None))
+    .map(|t| ResolvedReviewSelection {
+        tool: t,
+        model_spec: None,
+        tier_filter: None,
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_review_tool(
+    arg_tool: Option<ToolName>,
+    arg_model_spec: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    parent_tool: Option<&str>,
+    project_root: &Path,
+    force_override_user_config: bool,
+    cli_tier: Option<&str>,
+    force_ignore_tier_setting: bool,
+) -> Result<(ToolName, Option<String>)> {
+    let resolved = resolve_review_selection(
+        arg_tool,
+        arg_model_spec,
+        project_config,
+        global_config,
+        parent_tool,
+        project_root,
+        force_override_user_config,
+        cli_tier,
+        force_ignore_tier_setting,
+    )?;
+    Ok((resolved.tool, resolved.model_spec))
 }
 
 pub(crate) fn resolve_review_tier_name(
@@ -528,7 +590,10 @@ pub(crate) fn build_review_instruction(
     context: Option<&ResolvedReviewContext>,
 ) -> String {
     let mut instruction = format!(
-        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN."
+        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, UNCERTAIN, or UNAVAILABLE."
+    );
+    instruction.push_str(
+        "\nUNAVAILABLE means infrastructure/tool failure (for example quota/auth/network), not low confidence; use UNCERTAIN for insufficient context. Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.",
     );
     if let Some(ctx) = context {
         instruction.push_str(&format!(" context={}", ctx.path));
