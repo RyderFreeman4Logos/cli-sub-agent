@@ -134,6 +134,10 @@ Resume same CSA session to fix all P0 and P1 issues.
 Generate fix-summary.md and post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
+### findings.toml semantics
+
+Invariant: `$CSA_SESSION_DIR/output/findings.toml` records the latest review phase's findings, not the latest run's state. Invariant: `csa review --fix` does not rewrite `findings.toml`; the pre-fix review remains authoritative. Invariant: to verify whether the fix worked, run a new `csa review` phase. Rationale: issue #820, Option A, user-approved on 2026-04-21, circuit-breaks same-point design flips.
+
 ```bash
 SID=$(csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
 csa session wait --session "$SID"

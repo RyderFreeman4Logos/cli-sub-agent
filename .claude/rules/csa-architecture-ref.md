@@ -25,7 +25,7 @@ Dual-axis isolation model: `ResourceCapability` (CgroupV2/Setrlimit/None) for me
 
 ## Debate & Review
 
-Heterogeneous model selection via `ModelFamily` enum ensures cognitive diversity. Consensus: `majority`/`unanimous`/`weighted` via `agent-teams-rs`. `detect_rate_limit` + `decide_failover` for 429 errors. Pattern resolution from `patterns/csa-review/` and `patterns/debate/`. Four-value review verdict: `ReviewDecision` enum (Pass/Fail/Skip/Uncertain) with backward-compatible aliases (CLEAN→Pass, HAS_ISSUES→Fail). Multi-layer quality gates (`GateStep` pipeline: L1 lint → L2 type → L3 test) run before AI review. Contract Alignment dimension checks spec intent, boundary compliance, and completion criteria when `--spec` is provided.
+Heterogeneous model selection via `ModelFamily` enum ensures cognitive diversity. Consensus: `majority`/`unanimous`/`weighted` via `agent-teams-rs`. `detect_rate_limit` + `decide_failover` for 429 errors. Pattern resolution from `patterns/csa-review/` and `patterns/debate/`. Four-value review verdict: `ReviewDecision` enum (Pass/Fail/Skip/Uncertain) with backward-compatible aliases (CLEAN→Pass, HAS_ISSUES→Fail). `$CSA_SESSION_DIR/output/findings.toml` is the latest review phase's findings; `csa review --fix` does not rewrite it, so post-fix verification requires a fresh review pass (decision anchor: #820 Option A, user-approved 2026-04-21). Multi-layer quality gates (`GateStep` pipeline: L1 lint → L2 type → L3 test) run before AI review. Contract Alignment dimension checks spec intent, boundary compliance, and completion criteria when `--spec` is provided.
 → `.agents/project-rules-ref/debate-review.md`
 
 ## VCS Abstraction
