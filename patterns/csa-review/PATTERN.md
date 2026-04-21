@@ -134,6 +134,23 @@ Resume same CSA session to fix all P0 and P1 issues.
 Generate fix-summary.md and post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
+### findings.toml semantics
+
+`$CSA_SESSION_DIR/output/findings.toml` records the latest review phase's findings.
+Its post-fix state is **asymmetric**:
+
+- On **successful `csa review --fix` convergence** (gate passed + non-empty output),
+  the file is overwritten with an empty findings list — an explicit "clean" signal.
+- On **`csa review --fix` exhaustion** (fix rounds end without gate pass), the
+  pre-fix findings are preserved — the last review phase's findings remain
+  authoritative.
+- To re-verify after exhaustion, run a fresh `csa review` phase.
+
+Rationale: empty post-fix findings.toml is a deliberate convergence signal;
+preserved findings.toml keeps the reviewer's verdict audit-accessible when the
+fix did not land. Anchored at issue #820 (Option A, user-approved 2026-04-21)
+to circuit-break prior design flips per CLAUDE.md lesson #821.
+
 ```bash
 SID=$(csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
 csa session wait --session "$SID"
