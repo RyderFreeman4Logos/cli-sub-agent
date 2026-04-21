@@ -633,3 +633,7 @@ mod guard_tests;
 #[cfg(test)]
 #[path = "review_cmd_execute_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_execute_redirect_guard_tests.rs"]
+mod redirect_guard_tests;

@@ -566,6 +566,48 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
     assert!(failure_reason.contains("gemini-cli/google/gemini-2.5-pro/medium=QUOTA_EXHAUSTED"));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier_debate() {
+    let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
+    config.tools.get_mut("codex").unwrap().transport = Some(ToolTransport::Cli);
+    config.tiers.insert(
+        "quality".to_string(),
+        csa_config::config::TierConfig {
+            description: "quality".to_string(),
+            models: vec![
+                "codex/openai/gpt-5.4/medium".to_string(),
+                "codex/openai/gpt-5/high".to_string(),
+                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+            ],
+            strategy: csa_config::TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    let candidates = crate::tier_model_fallback::ordered_tier_candidates(
+        ToolName::Codex,
+        Some("codex/openai/gpt-5.4/medium"),
+        Some("quality"),
+        Some(&config),
+        true,
+        Some(&crate::tier_model_fallback::TierFilter::whitelist([
+            "codex",
+        ])),
+    );
+
+    assert_eq!(
+        candidates,
+        vec![
+            (
+                ToolName::Codex,
+                Some("codex/openai/gpt-5.4/medium".to_string()),
+            ),
+            (ToolName::Codex, Some("codex/openai/gpt-5/high".to_string())),
+        ]
+    );
+}
+
 // --- CLI parse tests for --rounds flag (#138) ---
 
 #[test]

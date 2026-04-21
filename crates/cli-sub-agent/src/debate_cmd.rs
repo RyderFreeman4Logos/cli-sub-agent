@@ -303,7 +303,7 @@ pub(crate) async fn handle_debate(
         resolved_model_spec.as_deref(),
         resolved_tier_name.as_deref(),
         config.as_ref(),
-        tier_active && args.tool.is_none(),
+        tier_active,
         tier_filter.as_ref(),
     );
     let mut execution = None;
