@@ -28,37 +28,38 @@ use output::{
     GEMINI_AUTH_PROMPT_STATUS_REASON, is_worktree_submodule, persist_review_meta,
     persist_review_verdict, print_reviewer_outcomes,
 };
-
-#[path = "review_cmd_fix.rs"]
-mod fix;
-
-#[path = "review_cmd_findings_toml.rs"]
-mod findings_toml;
-
-#[path = "review_cmd_post_review.rs"]
-mod post_review;
-
-#[path = "review_cmd_reviewers.rs"]
-mod reviewers;
-
-#[path = "review_cmd_execute.rs"]
-mod execute;
-
-#[path = "review_cmd_result.rs"]
-mod result_handling;
-
-#[path = "review_cmd_prior_rounds.rs"]
-mod prior_rounds;
-
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
+#[path = "review_cmd_execute.rs"]
+mod execute;
+#[path = "review_cmd_findings_toml.rs"]
+mod findings_toml;
+#[path = "review_cmd_fix.rs"]
+mod fix;
+#[path = "review_cmd_flow.rs"]
+mod flow;
+#[path = "review_cmd_post_review.rs"]
+mod post_review;
+#[path = "review_cmd_prior_rounds.rs"]
+mod prior_rounds;
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
+#[path = "review_cmd_result.rs"]
+mod result_handling;
+#[path = "review_cmd_reviewers.rs"]
+mod reviewers;
 use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
 #[cfg(test)]
 use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_review_iterations};
 use execute::{compute_diff_fingerprint, execute_review};
 use findings_toml::persist_review_findings_toml;
+#[cfg(test)]
+pub(crate) use flow::execute_review_for_tests;
+use flow::review_decision_from_verdict;
+#[cfg(test)]
+pub(crate) use flow::{persist_review_sidecars_if_session_exists, should_run_fix_loop};
+#[cfg(not(test))]
+use flow::{persist_review_sidecars_if_session_exists, should_run_fix_loop};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 use prior_rounds::{
     explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id,
@@ -75,16 +76,6 @@ use result_handling::{build_reviewer_outcome, resolve_single_review_result};
 use reviewers::{
     AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool,
 };
-
-fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
-    match verdict {
-        CLEAN => ReviewDecision::Pass,
-        "SKIP" => ReviewDecision::Skip,
-        "UNCERTAIN" => ReviewDecision::Uncertain,
-        "UNAVAILABLE" => ReviewDecision::Unavailable,
-        _ => ReviewDecision::Fail,
-    }
-}
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -418,9 +409,17 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let auth_prompt_failure = resolved.auth_prompt_failure;
         print!("{}", sanitized);
         debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
-        let review_iterations =
-            resolve_review_iterations(&project_root, &result.execution.meta_session_id);
-        let review_session_ids = vec![result.execution.meta_session_id.clone()];
+        let review_iterations = result
+            .persistable_session_id
+            .as_deref()
+            .map_or(0, |session_id| {
+                resolve_review_iterations(&project_root, session_id)
+            });
+        let review_session_ids = result
+            .persistable_session_id
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
         // Write structured review metadata to session directory.
         let effective_exit_code = resolved.effective_exit_code;
@@ -443,13 +442,15 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             timestamp: chrono::Utc::now(),
             diff_fingerprint,
         };
-        persist_review_meta(&project_root, &review_meta);
-        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
-        persist_review_findings_toml(&project_root, &review_meta);
+        persist_review_sidecars_if_session_exists(
+            &project_root,
+            &review_meta,
+            result.persistable_session_id.as_deref(),
+        );
 
         let is_cumulative_review = review_scope_is_cumulative(&scope);
 
-        if !args.fix || verdict == CLEAN {
+        if !should_run_fix_loop(args.fix, decision) {
             // Accumulate only on FINAL result — prevents double-counting when
             // --fix resolves the same issues.
             if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {

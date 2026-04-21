@@ -192,6 +192,7 @@ mod tests {
                 meta_session_id: "01TESTRESULT".to_string(),
                 provider_session_id: None,
             },
+            persistable_session_id: Some("01TESTRESULT".to_string()),
             executed_tool: ToolName::Codex,
             status_reason: None,
             forced_decision: None,

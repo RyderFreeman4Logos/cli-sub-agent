@@ -47,8 +47,9 @@ use failures::{
     repair_completed_review_restriction_result,
 };
 
-pub(super) struct ReviewExecutionOutcome {
+pub(crate) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
+    pub persistable_session_id: Option<String>,
     pub executed_tool: ToolName,
     pub status_reason: Option<String>,
     pub forced_decision: Option<ReviewDecision>,
@@ -66,7 +67,7 @@ fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn execute_review(
+pub(crate) async fn execute_review(
     tool: ToolName,
     prompt: String,
     session: Option<String>,
@@ -225,6 +226,7 @@ pub(super) async fn execute_review(
                                 .unwrap_or_else(|| "unknown".to_string()),
                             provider_session_id: None,
                         },
+                        persistable_session_id: extract_meta_session_id_from_error(&err),
                         executed_tool: *attempt_tool,
                         status_reason: Some("tier_models_unavailable".to_string()),
                         forced_decision: Some(ReviewDecision::Unavailable),
@@ -357,8 +359,10 @@ pub(super) async fn execute_review(
             if attempt_index + 1 == candidates.len() {
                 let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
                 ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
+                let persistable_session_id = Some(execution.meta_session_id.clone());
                 return Ok(ReviewExecutionOutcome {
                     execution,
+                    persistable_session_id,
                     executed_tool: *attempt_tool,
                     status_reason: Some("tier_models_unavailable".to_string()),
                     forced_decision: Some(ReviewDecision::Unavailable),
@@ -395,8 +399,10 @@ pub(super) async fn execute_review(
             })
         })
         .flatten();
+        let persistable_session_id = Some(execution.meta_session_id.clone());
         return Ok(ReviewExecutionOutcome {
             execution,
+            persistable_session_id,
             executed_tool: *attempt_tool,
             status_reason,
             forced_decision: None,

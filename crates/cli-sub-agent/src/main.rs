@@ -78,6 +78,8 @@ mod main_auto_weave_tests;
 mod test_env_lock;
 #[cfg(test)]
 mod test_session_sandbox;
+#[cfg(test)]
+include!("review_cmd_exact_tests.rs");
 
 use cli::{
     Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, PlanCommands, SetupCommands,
