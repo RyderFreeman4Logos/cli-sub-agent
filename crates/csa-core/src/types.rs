@@ -210,13 +210,14 @@ pub enum OutputFormat {
     Json,
 }
 
-/// Four-value review decision semantics.
+/// Five-value review decision semantics.
 ///
 /// Replaces binary CLEAN/HAS_ISSUES with richer verdict vocabulary:
 /// - `Pass`: All checks passed, no issues found.
 /// - `Fail`: One or more blocking issues found.
 /// - `Skip`: Review was skipped (e.g., gate not configured, depth guard).
 /// - `Uncertain`: Reviewer could not reach a confident verdict.
+/// - `Unavailable`: Reviewer infrastructure could not run to completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
@@ -224,6 +225,8 @@ pub enum ReviewDecision {
     Fail,
     Skip,
     Uncertain,
+    #[serde(alias = "UNAVAILABLE")]
+    Unavailable,
 }
 
 impl ReviewDecision {
@@ -233,6 +236,7 @@ impl ReviewDecision {
             Self::Fail => "fail",
             Self::Skip => "skip",
             Self::Uncertain => "uncertain",
+            Self::Unavailable => "unavailable",
         }
     }
 
@@ -257,8 +261,9 @@ impl std::str::FromStr for ReviewDecision {
             "fail" | "has_issues" => Ok(Self::Fail),
             "skip" | "skipped" => Ok(Self::Skip),
             "uncertain" | "unknown" => Ok(Self::Uncertain),
+            "unavailable" => Ok(Self::Unavailable),
             _ => Err(format!(
-                "Unknown review decision '{s}'. Expected: pass, fail, skip, or uncertain."
+                "Unknown review decision '{s}'. Expected: pass, fail, skip, uncertain, or unavailable."
             )),
         }
     }
@@ -543,6 +548,10 @@ mod tests {
             ReviewDecision::from_str("uncertain").unwrap(),
             ReviewDecision::Uncertain
         );
+        assert_eq!(
+            ReviewDecision::from_str("UNAVAILABLE").unwrap(),
+            ReviewDecision::Unavailable
+        );
         assert!(ReviewDecision::from_str("invalid").is_err());
     }
 
@@ -552,6 +561,7 @@ mod tests {
         assert!(ReviewDecision::Skip.is_clean());
         assert!(!ReviewDecision::Fail.is_clean());
         assert!(!ReviewDecision::Uncertain.is_clean());
+        assert!(!ReviewDecision::Unavailable.is_clean());
     }
 
     #[test]
@@ -560,5 +570,21 @@ mod tests {
         assert_eq!(ReviewDecision::Fail.to_string(), "fail");
         assert_eq!(ReviewDecision::Skip.to_string(), "skip");
         assert_eq!(ReviewDecision::Uncertain.to_string(), "uncertain");
+        assert_eq!(ReviewDecision::Unavailable.to_string(), "unavailable");
+    }
+
+    #[test]
+    fn test_review_decision_serde_unavailable_roundtrip() {
+        let encoded =
+            serde_json::to_string(&ReviewDecision::Unavailable).expect("serialize unavailable");
+        assert_eq!(encoded, "\"unavailable\"");
+
+        let decoded: ReviewDecision =
+            serde_json::from_str("\"unavailable\"").expect("deserialize unavailable");
+        assert_eq!(decoded, ReviewDecision::Unavailable);
+
+        let legacy: ReviewDecision =
+            serde_json::from_str("\"UNAVAILABLE\"").expect("deserialize legacy unavailable");
+        assert_eq!(legacy, ReviewDecision::Unavailable);
     }
 }

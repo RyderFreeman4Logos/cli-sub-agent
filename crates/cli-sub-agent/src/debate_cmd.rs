@@ -8,17 +8,23 @@ use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
 use crate::debate_cmd_resolve::{
-    resolve_debate_model, resolve_debate_tier_name, resolve_debate_tool,
+    resolve_debate_model, resolve_debate_selection, resolve_debate_tier_name,
 };
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
 use csa_config::ExecutionEnvOptions;
 use csa_core::types::OutputFormat;
 
-use crate::debate_cmd_output::{
-    append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_text,
-    persist_debate_output_artifacts, render_debate_output, render_debate_stdout_json,
+use crate::debate_cmd_output::{format_debate_stdout_text, render_debate_stdout_json};
+use crate::tier_model_fallback::{
+    TierAttemptFailure, classify_next_model_failure, ordered_tier_candidates,
 };
+
+#[path = "debate_cmd_finalize.rs"]
+mod finalize;
+pub(crate) use finalize::finalize_debate_outcome;
+#[cfg(test)]
+pub(crate) use finalize::resolve_persisted_debate_session_id;
 
 /// Debate execution mode indicating model diversity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,7 +207,7 @@ pub(crate) async fn handle_debate(
             .and_then(|spec| spec.split('/').next())
             .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
     });
-    let (tool, debate_mode, resolved_model_spec) = match resolve_debate_tool(
+    let resolved_selection = match resolve_debate_selection(
         args.tool,
         args.model_spec.as_deref(),
         config.as_ref(),
@@ -228,6 +234,10 @@ pub(crate) async fn handle_debate(
             ));
         }
     };
+    let tool = resolved_selection.tool;
+    let debate_mode = resolved_selection.mode;
+    let resolved_model_spec = resolved_selection.model_spec.clone();
+    let tier_filter = resolved_selection.tier_filter.clone();
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
@@ -271,29 +281,6 @@ pub(crate) async fn handle_debate(
         resolved_model_spec.is_some(),
     );
 
-    // 6. Build executor and validate tool
-    let enforce_tier = tier_active;
-    let executor = crate::pipeline::build_and_validate_executor(
-        &tool,
-        resolved_model_spec.as_deref(),
-        debate_model.as_deref(),
-        thinking.as_deref(),
-        crate::pipeline::ConfigRefs {
-            project: config.as_ref(),
-            global: Some(&global_config),
-        },
-        enforce_tier,
-        args.force_override_user_config,
-        false, // debate must not inherit `csa run` per-tool defaults
-    )
-    .await?;
-
-    // 7. Get env injection from global config (with no-flash + api key fallback)
-    let extra_env_owned = global_config.build_execution_env(
-        executor.tool_name(),
-        debate_execution_env_options(args.no_failover),
-    );
-    let extra_env = extra_env_owned.as_ref();
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
     let initial_response_timeout_seconds =
@@ -301,183 +288,263 @@ pub(crate) async fn handle_debate(
             config.as_ref(),
             args.initial_response_timeout,
             args.idle_timeout,
-            executor.tool_name(),
+            tool.as_str(),
         );
 
     // Resolve stream mode from CLI flags (default: BufferOnly for debate)
     let stream_mode = resolve_debate_stream_mode(args.stream_stdout, args.no_stream_stdout);
 
-    // 8. Acquire global slot to enforce concurrency limit
-    let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
-
-    // 9. Execute with session (with optional absolute timeout + transient retry)
     let timeout_seconds =
         resolve_debate_timeout_seconds(args.timeout, Some(global_config.debate.timeout_seconds));
     let wall_clock_start = Instant::now();
-    let mut retry_count = 0u8;
-    let mut first_error_context: Option<String> = None;
-    let mut resume_session = args.session.clone();
     let readonly_project_root = global_config.debate.readonly_sandbox.unwrap_or(false);
-
-    let execution = loop {
-        ensure_debate_wall_clock_within_timeout(wall_clock_start, timeout_seconds)?;
-
-        let execute_future = crate::pipeline::execute_with_session_and_meta(
-            &executor,
-            &tool,
-            &prompt,
-            output_format,
-            resume_session.clone(),
-            false,
-            Some(debate_description.clone()),
-            None,
-            &project_root,
-            config.as_ref(),
-            extra_env,
-            Some("debate"),
-            resolved_tier_name.as_deref(),
-            None, // debate does not override context loading options
-            stream_mode,
-            idle_timeout_seconds,
-            initial_response_timeout_seconds,
-            None,
-            None,
-            Some(&global_config),
-            args.no_fs_sandbox,
-            readonly_project_root,
-            &args.extra_writable,
-            &args.extra_readable,
-        );
-
-        let execute_result = if let Some(timeout_secs) = timeout_seconds {
-            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), execute_future)
-                .await
-            {
-                Ok(inner) => inner,
-                Err(_) => Err(anyhow::anyhow!(
-                    "Debate aborted: --timeout {timeout_secs}s exceeded. \
-                     Increase --timeout for longer runs, or rely on --idle-timeout to terminate stalled output."
-                )),
-            }
-        } else {
-            execute_future.await
-        };
-
-        let executed = match execute_result {
-            Ok(execution) => execution,
-            Err(err) => {
-                let session_dir = resume_session.as_deref().and_then(|session_id| {
-                    csa_session::get_session_dir(&project_root, session_id).ok()
-                });
-                match classify_execution_error(&err, session_dir.as_deref()) {
-                    DebateErrorKind::StillWorking => {
-                        wait_for_still_working_backoff().await;
-                        continue;
-                    }
-                    DebateErrorKind::Transient(reason)
-                        if should_retry_debate_after_error(
-                            &DebateErrorKind::Transient(reason.clone()),
-                            retry_count,
-                            args.no_failover,
-                        ) =>
-                    {
-                        if first_error_context.is_none() {
-                            first_error_context = Some(err.to_string());
-                        }
-                        retry_count += 1;
-                        warn!("Retrying debate after transient error: {reason}");
-                        continue;
-                    }
-                    _ => {
-                        error!("Debate aborted before completion: {err}");
-                        return Err(err);
-                    }
-                }
-            }
-        };
-
-        resume_session = Some(executed.meta_session_id.clone());
-        if executed.execution.exit_code == 0 {
-            break executed;
-        }
-
-        let session_dir = csa_session::get_session_dir(&project_root, &executed.meta_session_id)?;
-        let session_state =
-            csa_session::load_session(&project_root, &executed.meta_session_id).ok();
-        match classify_execution_outcome(&executed.execution, session_state.as_ref(), &session_dir)
-        {
-            DebateErrorKind::StillWorking => {
-                wait_for_still_working_backoff().await;
-                continue;
-            }
-            DebateErrorKind::Transient(reason)
-                if should_retry_debate_after_error(
-                    &DebateErrorKind::Transient(reason.clone()),
-                    retry_count,
-                    args.no_failover,
-                ) =>
-            {
-                if first_error_context.is_none() {
-                    first_error_context = Some(format!(
-                        "summary={} stderr={} termination_reason={:?}",
-                        executed.execution.summary,
-                        executed.execution.stderr_output,
-                        session_state
-                            .as_ref()
-                            .and_then(|s| s.termination_reason.as_deref())
-                    ));
-                }
-                retry_count += 1;
-                warn!("Retrying debate after transient error: {reason}");
-                continue;
-            }
-            DebateErrorKind::Transient(reason) => {
-                if let Some(first) = first_error_context.as_deref() {
-                    warn!(
-                        first_error = first,
-                        "Debate transient failure persisted after retry"
-                    );
-                }
-                warn!("Debate ended after transient failure: {reason}");
-                break executed;
-            }
-            DebateErrorKind::Deterministic(reason) => {
-                debug!("Debate finished with deterministic non-zero outcome: {reason}");
-                break executed;
-            }
-        }
-    };
-
-    let output = render_debate_output(
-        &execution.execution.output,
-        &execution.meta_session_id,
-        execution.provider_session_id.as_deref(),
+    let candidates = ordered_tier_candidates(
+        tool,
+        resolved_model_spec.as_deref(),
+        resolved_tier_name.as_deref(),
+        config.as_ref(),
+        tier_active && args.tool.is_none(),
+        tier_filter.as_ref(),
     );
+    let mut execution = None;
+    let mut failures = Vec::new();
 
-    let debate_summary =
-        extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode);
-    let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;
-    let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
-    append_debate_artifacts_to_result(
+    'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
+        candidates.iter().enumerate()
+    {
+        let executor = crate::pipeline::build_and_validate_executor(
+            attempt_tool,
+            attempt_model_spec.as_deref(),
+            debate_model.as_deref(),
+            thinking.as_deref(),
+            crate::pipeline::ConfigRefs {
+                project: config.as_ref(),
+                global: Some(&global_config),
+            },
+            tier_active && attempt_model_spec.is_some(),
+            args.force_override_user_config,
+            false,
+        )
+        .await?;
+        let extra_env_owned = global_config.build_execution_env(
+            executor.tool_name(),
+            debate_execution_env_options(args.no_failover),
+        );
+        let extra_env = extra_env_owned.as_ref();
+        let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
+        let mut retry_count = 0u8;
+        let mut first_error_context: Option<String> = None;
+        let mut resume_session = args.session.clone();
+
+        loop {
+            ensure_debate_wall_clock_within_timeout(wall_clock_start, timeout_seconds)?;
+
+            let execute_future = crate::pipeline::execute_with_session_and_meta(
+                &executor,
+                attempt_tool,
+                &prompt,
+                output_format,
+                resume_session.clone(),
+                false,
+                Some(debate_description.clone()),
+                None,
+                &project_root,
+                config.as_ref(),
+                extra_env,
+                Some("debate"),
+                resolved_tier_name.as_deref(),
+                None,
+                stream_mode,
+                idle_timeout_seconds,
+                initial_response_timeout_seconds,
+                None,
+                None,
+                Some(&global_config),
+                args.no_fs_sandbox,
+                readonly_project_root,
+                &args.extra_writable,
+                &args.extra_readable,
+            );
+
+            let execute_result = if let Some(timeout_secs) = timeout_seconds {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs),
+                    execute_future,
+                )
+                .await
+                {
+                    Ok(inner) => inner,
+                    Err(_) => Err(anyhow::anyhow!(
+                        "Debate aborted: --timeout {timeout_secs}s exceeded. \
+                         Increase --timeout for longer runs, or rely on --idle-timeout to terminate stalled output."
+                    )),
+                }
+            } else {
+                execute_future.await
+            };
+
+            let executed = match execute_result {
+                Ok(execution) => execution,
+                Err(err) => {
+                    if let Some(detected) = classify_next_model_failure(
+                        attempt_tool.as_str(),
+                        &err.to_string(),
+                        "",
+                        1,
+                        attempt_model_spec.as_deref(),
+                    ) {
+                        let model_label = attempt_model_spec
+                            .clone()
+                            .unwrap_or_else(|| attempt_tool.as_str().to_string());
+                        failures.push(TierAttemptFailure {
+                            model_spec: model_label.clone(),
+                            reason: detected.reason.clone(),
+                        });
+                        warn!(
+                            failed_tool = %attempt_tool,
+                            failed_model = %model_label,
+                            reason = %detected.reason,
+                            attempt = attempt_index + 1,
+                            total = candidates.len(),
+                            "Debate tier model failed before completion; advancing to next configured model"
+                        );
+                        continue 'tier_attempts;
+                    }
+
+                    let session_dir = resume_session.as_deref().and_then(|session_id| {
+                        csa_session::get_session_dir(&project_root, session_id).ok()
+                    });
+                    match classify_execution_error(&err, session_dir.as_deref()) {
+                        DebateErrorKind::StillWorking => {
+                            wait_for_still_working_backoff().await;
+                            continue;
+                        }
+                        DebateErrorKind::Transient(reason)
+                            if should_retry_debate_after_error(
+                                &DebateErrorKind::Transient(reason.clone()),
+                                retry_count,
+                                args.no_failover,
+                            ) =>
+                        {
+                            if first_error_context.is_none() {
+                                first_error_context = Some(err.to_string());
+                            }
+                            retry_count += 1;
+                            warn!("Retrying debate after transient error: {reason}");
+                            continue;
+                        }
+                        _ => {
+                            error!("Debate aborted before completion: {err}");
+                            return Err(err);
+                        }
+                    }
+                }
+            };
+
+            resume_session = Some(executed.meta_session_id.clone());
+            if executed.execution.exit_code == 0 {
+                execution = Some(executed);
+                break 'tier_attempts;
+            }
+
+            if let Some(detected) = classify_next_model_failure(
+                attempt_tool.as_str(),
+                &executed.execution.stderr_output,
+                &executed.execution.output,
+                executed.execution.exit_code,
+                attempt_model_spec.as_deref(),
+            ) {
+                let model_label = attempt_model_spec
+                    .clone()
+                    .unwrap_or_else(|| attempt_tool.as_str().to_string());
+                failures.push(TierAttemptFailure {
+                    model_spec: model_label.clone(),
+                    reason: detected.reason.clone(),
+                });
+                warn!(
+                    failed_tool = %attempt_tool,
+                    failed_model = %model_label,
+                    reason = %detected.reason,
+                    attempt = attempt_index + 1,
+                    total = candidates.len(),
+                    "Debate tier model failed; advancing to next configured model"
+                );
+                execution = Some(executed);
+                continue 'tier_attempts;
+            }
+
+            let session_dir =
+                csa_session::get_session_dir(&project_root, &executed.meta_session_id)?;
+            let session_state =
+                csa_session::load_session(&project_root, &executed.meta_session_id).ok();
+            match classify_execution_outcome(
+                &executed.execution,
+                session_state.as_ref(),
+                &session_dir,
+            ) {
+                DebateErrorKind::StillWorking => {
+                    wait_for_still_working_backoff().await;
+                    continue;
+                }
+                DebateErrorKind::Transient(reason)
+                    if should_retry_debate_after_error(
+                        &DebateErrorKind::Transient(reason.clone()),
+                        retry_count,
+                        args.no_failover,
+                    ) =>
+                {
+                    if first_error_context.is_none() {
+                        first_error_context = Some(format!(
+                            "summary={} stderr={} termination_reason={:?}",
+                            executed.execution.summary,
+                            executed.execution.stderr_output,
+                            session_state
+                                .as_ref()
+                                .and_then(|s| s.termination_reason.as_deref())
+                        ));
+                    }
+                    retry_count += 1;
+                    warn!("Retrying debate after transient error: {reason}");
+                    continue;
+                }
+                DebateErrorKind::Transient(reason) => {
+                    if let Some(first) = first_error_context.as_deref() {
+                        warn!(
+                            first_error = first,
+                            "Debate transient failure persisted after retry"
+                        );
+                    }
+                    warn!("Debate ended after transient failure: {reason}");
+                    execution = Some(executed);
+                    break 'tier_attempts;
+                }
+                DebateErrorKind::Deterministic(reason) => {
+                    debug!("Debate finished with deterministic non-zero outcome: {reason}");
+                    execution = Some(executed);
+                    break 'tier_attempts;
+                }
+            }
+        }
+    }
+
+    let all_tier_models_failed = !failures.is_empty() && failures.len() == candidates.len();
+    let finalized = finalize_debate_outcome(
         &project_root,
-        &execution.meta_session_id,
-        &artifacts,
-        &debate_summary,
-    )?;
-
-    let rendered_output = render_debate_cli_output(
         output_format,
-        &debate_summary,
-        &output,
-        &execution.meta_session_id,
+        execution,
+        all_tier_models_failed,
+        resolved_tier_name.as_deref(),
+        &failures,
+        debate_mode,
     )?;
+    let rendered_output = finalized.rendered_output;
     if rendered_output.ends_with('\n') {
         print!("{rendered_output}");
     } else {
         println!("{rendered_output}");
     }
 
-    Ok(execution.execution.exit_code)
+    Ok(finalized.exit_code)
 }
 
 fn render_debate_cli_output(
@@ -627,3 +694,7 @@ fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) 
 #[cfg(test)]
 #[path = "debate_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "debate_cmd_round4_tests.rs"]
+mod round4_tests;

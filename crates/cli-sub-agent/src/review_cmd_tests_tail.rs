@@ -627,9 +627,10 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
         "scope=uncommitted mode=review-only security=auto".to_string(),
         None,
         None,
-        None, // tier_model_spec
-        None, // tier_name
-        None, // thinking
+        None,  // tier_model_spec
+        None,  // tier_name
+        false, // tier_fallback_enabled
+        None,  // thinking
         "review: stale-session-regression".to_string(),
         project_dir.path(),
         None,
@@ -789,3 +790,6 @@ mod review_cmd_tests_iteration;
 
 #[path = "review_cmd_tests_pre_exec.rs"]
 mod review_cmd_tests_pre_exec;
+
+#[path = "review_cmd_tests_fix_fallback.rs"]
+mod review_cmd_tests_fix_fallback;

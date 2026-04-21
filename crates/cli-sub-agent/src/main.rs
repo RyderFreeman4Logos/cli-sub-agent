@@ -46,6 +46,7 @@ mod review_design_anchor;
 mod review_findings;
 mod review_prior_rounds;
 mod review_routing;
+mod review_session_findings;
 mod run_cmd;
 mod run_cmd_daemon;
 mod run_cmd_fork;
@@ -62,6 +63,7 @@ mod session_observability;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_resolver;
+mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;
 mod todo_ref_cmd;
@@ -77,6 +79,12 @@ mod main_auto_weave_tests;
 mod test_env_lock;
 #[cfg(test)]
 mod test_session_sandbox;
+#[cfg(test)]
+include!("review_cmd_exact_tests.rs");
+#[cfg(test)]
+include!("review_round10_exact_tests.rs");
+#[cfg(test)]
+include!("debate_cmd_exact_tests.rs");
 
 use cli::{
     Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, PlanCommands, SetupCommands,

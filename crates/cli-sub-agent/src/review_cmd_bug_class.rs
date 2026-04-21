@@ -13,8 +13,7 @@ use crate::review_consensus::build_consolidated_artifact;
 use crate::review_consensus::review_iteration_resolver::{
     load_review_meta, try_max_review_iterations_for_branch,
 };
-
-const REVIEW_FINDINGS_ARTIFACT_FILE: &str = "review-findings.json";
+use crate::review_session_findings::read_session_findings_or_fall_back;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ReviewArtifactGroupKey {
@@ -43,7 +42,7 @@ pub(super) fn maybe_extract_recurring_bug_class_skills(
     }
 }
 
-pub(super) fn try_extract_recurring_bug_class_skills(
+pub(crate) fn try_extract_recurring_bug_class_skills(
     project_root: &Path,
     session_ids: &[String],
 ) -> Result<()> {
@@ -86,39 +85,20 @@ fn session_has_high_or_critical_review_findings(
 ) -> Result<bool> {
     let session_dir = csa_session::get_session_dir(project_root, session_id)
         .with_context(|| format!("failed to resolve review session dir for {session_id}"))?;
-    let Some(artifact) = load_session_review_artifact(&session_dir)? else {
+    let Some(findings) = read_session_findings_or_fall_back(&session_dir)? else {
         return Ok(false);
     };
 
-    Ok(artifact.severity_summary.critical > 0 || artifact.severity_summary.high > 0)
+    Ok(findings.iter().any(|finding| {
+        matches!(
+            finding.severity,
+            csa_session::review_artifact::Severity::Critical
+                | csa_session::review_artifact::Severity::High
+        )
+    }))
 }
 
-fn load_session_review_artifact(session_dir: &Path) -> Result<Option<ReviewArtifact>> {
-    for artifact_file in [
-        CONSOLIDATED_REVIEW_ARTIFACT_FILE,
-        REVIEW_FINDINGS_ARTIFACT_FILE,
-    ] {
-        let artifact_path = session_dir.join(artifact_file);
-        if !artifact_path.is_file() {
-            continue;
-        }
-
-        let artifact_content = std::fs::read_to_string(&artifact_path).with_context(|| {
-            format!("failed to read review artifact {}", artifact_path.display())
-        })?;
-        let artifact = serde_json::from_str(&artifact_content).with_context(|| {
-            format!(
-                "failed to parse review artifact {}",
-                artifact_path.display()
-            )
-        })?;
-        return Ok(Some(artifact));
-    }
-
-    Ok(None)
-}
-
-pub(super) fn load_bug_class_review_artifacts(project_root: &Path) -> Result<Vec<ReviewArtifact>> {
+pub(crate) fn load_bug_class_review_artifacts(project_root: &Path) -> Result<Vec<ReviewArtifact>> {
     let review_artifacts = load_review_artifacts_for_project(project_root)?;
     collapse_bug_class_review_artifacts(project_root, review_artifacts)
 }

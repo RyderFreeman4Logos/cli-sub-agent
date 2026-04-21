@@ -15,9 +15,13 @@ const DEBATE_TRANSCRIPT_REL_PATH: &str = "output/debate-transcript.md";
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct DebateVerdict {
     verdict: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<String>,
     confidence: String,
     summary: String,
     key_points: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
     timestamp: String,
     /// Debate execution mode annotation.
     ///
@@ -30,9 +34,11 @@ pub(crate) struct DebateVerdict {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DebateSummary {
     pub(crate) verdict: String,
+    pub(crate) decision: Option<String>,
     pub(crate) confidence: String,
     pub(crate) summary: String,
     pub(crate) key_points: Vec<String>,
+    pub(crate) failure_reason: Option<String>,
     /// Debate execution mode for output annotation.
     pub(crate) mode: DebateMode,
 }
@@ -46,9 +52,11 @@ pub(crate) fn extract_debate_summary(
     let key_points = extract_key_points(tool_output, summary.as_str());
     DebateSummary {
         verdict: extract_verdict(tool_output).to_string(),
+        decision: None,
         confidence: extract_confidence(tool_output).to_string(),
         summary,
         key_points,
+        failure_reason: None,
         mode,
     }
 }
@@ -74,9 +82,11 @@ pub(crate) fn persist_debate_output_artifacts(
     };
     let verdict = DebateVerdict {
         verdict: summary.verdict.clone(),
+        decision: summary.decision.clone(),
         confidence: summary.confidence.clone(),
         summary: summary.summary.clone(),
         key_points: summary.key_points.clone(),
+        failure_reason: summary.failure_reason.clone(),
         timestamp: Utc::now().to_rfc3339(),
         mode: mode_annotation,
     };
@@ -160,9 +170,13 @@ pub(crate) fn format_debate_stdout_text(summary: &DebateSummary, transcript: &st
 #[derive(Debug, Serialize)]
 struct DebateJsonOutput<'a> {
     verdict: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<&'a str>,
     confidence: &'a str,
     summary: &'a str,
     key_points: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<&'a str>,
     mode: &'static str,
     transcript: &'a str,
     meta_session_id: &'a str,
@@ -175,9 +189,11 @@ pub(crate) fn render_debate_stdout_json(
 ) -> Result<String> {
     let payload = DebateJsonOutput {
         verdict: summary.verdict.as_str(),
+        decision: summary.decision.as_deref(),
         confidence: summary.confidence.as_str(),
         summary: summary.summary.as_str(),
         key_points: &summary.key_points,
+        failure_reason: summary.failure_reason.as_deref(),
         mode: match summary.mode {
             DebateMode::Heterogeneous => "heterogeneous",
             DebateMode::SameModelAdversarial => "same-model-adversarial",

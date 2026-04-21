@@ -1,5 +1,7 @@
 use super::*;
 use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
+use csa_session::review_artifact::{FindingsFile, ReviewArtifact, Severity};
+use csa_session::write_findings_toml;
 use csa_todo::{SpecCriterion, TodoManager};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
@@ -254,6 +256,9 @@ fn make_review_meta(session_id: &str, decision: &str, iters: u32) -> ReviewSessi
         decision: decision.to_string(),
         verdict: "HAS_ISSUES".to_string(),
         status_reason: None,
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
         tool: "codex".to_string(),
         scope: "base:main".to_string(),
         exit_code: 1,
@@ -404,6 +409,52 @@ fn prior_round_assumptions_render_when_only_single_reviewer_artifact_exists() {
     assert!(rendered.contains("[high]"));
     assert!(rendered.contains("src/lib.rs:42"));
     assert!(rendered.contains("no unwrap"));
+}
+
+#[test]
+fn prior_round_context_prefers_session_findings_over_root() {
+    use crate::test_session_sandbox::ScopedSessionSandbox;
+    use csa_session::{create_session, get_session_dir, write_review_meta};
+    use std::fs;
+
+    let project = setup_git_repo_with_branch("feat/prior-round-session-findings");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project);
+
+    let prior = create_session(project.path(), Some("prior review"), None, Some("codex"))
+        .expect("prior session created");
+    let prior_dir = get_session_dir(project.path(), &prior.meta_session_id).unwrap();
+
+    write_review_meta(
+        &prior_dir,
+        &make_review_meta(&prior.meta_session_id, "fail", 1),
+    )
+    .expect("write review meta");
+
+    fs::write(
+        prior_dir.join(SINGLE_REVIEW_ARTIFACT_FILE),
+        serde_json::to_string(&make_review_artifact("reviewer-1", Severity::High)).unwrap(),
+    )
+    .expect("write stale single-reviewer findings");
+    write_findings_toml(
+        &prior_dir,
+        &FindingsFile {
+            findings: Vec::new(),
+        },
+    )
+    .expect("write empty session findings.toml");
+
+    let rendered = discover_prior_round_assumptions(
+        project.path(),
+        Some("feat/prior-round-session-findings"),
+        None,
+    )
+    .expect("prior round context should still render");
+
+    assert!(rendered.contains("No structured findings captured"));
+    assert!(
+        !rendered.contains("[high]"),
+        "stale root finding must not leak into prior-round context when findings.toml is empty"
+    );
 }
 
 #[test]

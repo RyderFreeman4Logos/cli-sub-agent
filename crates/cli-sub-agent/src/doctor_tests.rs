@@ -114,6 +114,7 @@ fn test_check_tool_version_nonexistent() {
 
 #[test]
 fn test_check_tool_status_nonexistent() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let status = check_tool_status("nonexistent-tool", None);
     assert!(!status.is_ready());
     assert!(status.version.is_none());
@@ -171,6 +172,7 @@ fn default_build_doctor_json_output_reports_codex_transport_details() {
 #[cfg(all(unix, not(feature = "codex-acp")))]
 #[test]
 fn explicit_codex_acp_transport_reports_rebuild_hint() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let config = project_config_with_codex_transport(ToolTransport::Acp);
     let status = check_tool_status("codex", Some(&config));
     let rendered = render_tool_status_lines(&status).join("\n");

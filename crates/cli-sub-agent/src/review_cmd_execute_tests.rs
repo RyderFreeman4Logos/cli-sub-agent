@@ -55,9 +55,10 @@ printf 'tool mutation\\n' >> tracked.txt\n",
         "scope=uncommitted mode=review-only security=auto".to_string(),
         None,
         None,
-        None, // tier_model_spec
-        None, // tier_name
-        None, // thinking
+        None,  // tier_model_spec
+        None,  // tier_name
+        false, // tier_fallback_enabled
+        None,  // thinking
         "review: edit-restriction-regression".to_string(),
         project_dir.path(),
         Some(&config),
@@ -158,6 +159,7 @@ printf '%s\\n' \
         None,
         Some("codex/openai/gpt-5.4/medium".to_string()),
         None,
+        false,
         None,
         "review: codex-target-default".to_string(),
         project_dir.path(),
@@ -249,8 +251,9 @@ printf '%s\\n' \
         None,
         None,
         Some("opencode/provider/model/medium".to_string()),
-        None, // tier_name
-        None, // thinking
+        None,  // tier_name
+        false, // tier_fallback_enabled
+        None,  // thinking
         "review: model-spec-bypasses-tier-regression".to_string(),
         project_dir.path(),
         Some(&config),
@@ -434,6 +437,7 @@ fi\n",
         None,
         None,
         None,
+        false,
         None,
         "review: gemini-auth-retry".to_string(),
         project_dir.path(),
@@ -499,6 +503,7 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
         None,
         None,
         None,
+        false,
         None,
         "review: gemini-auth-classified".to_string(),
         project_dir.path(),
@@ -591,6 +596,7 @@ printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
         None,
         None,
         None,
+        false,
         None,
         "review: gemini-auth-no-failover".to_string(),
         project_dir.path(),

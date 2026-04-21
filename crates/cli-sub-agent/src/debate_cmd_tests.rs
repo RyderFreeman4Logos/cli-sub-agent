@@ -468,9 +468,11 @@ fn extract_key_points_reads_bullets_and_numbers() {
 fn format_debate_stdout_summary_contains_required_fields() {
     let summary = DebateSummary {
         verdict: "APPROVE".to_string(),
+        decision: None,
         confidence: "high".to_string(),
         summary: "Proceed with the proposal.".to_string(),
         key_points: vec!["Point".to_string()],
+        failure_reason: None,
         mode: DebateMode::Heterogeneous,
     };
     let line = format_debate_stdout_summary(&summary);
@@ -484,9 +486,11 @@ fn format_debate_stdout_summary_contains_required_fields() {
 fn format_debate_stdout_summary_shows_degradation_for_same_model() {
     let summary = DebateSummary {
         verdict: "REVISE".to_string(),
+        decision: None,
         confidence: "medium".to_string(),
         summary: "Need more evidence.".to_string(),
         key_points: vec![],
+        failure_reason: None,
         mode: DebateMode::SameModelAdversarial,
     };
     let line = format_debate_stdout_summary(&summary);
@@ -498,9 +502,11 @@ fn format_debate_stdout_summary_shows_degradation_for_same_model() {
 fn format_debate_stdout_text_includes_summary_and_transcript() {
     let summary = DebateSummary {
         verdict: "REVISE".to_string(),
+        decision: None,
         confidence: "medium".to_string(),
         summary: "Needs stronger evidence.".to_string(),
         key_points: vec![],
+        failure_reason: None,
         mode: DebateMode::Heterogeneous,
     };
     let transcript = "<!-- CSA:SECTION:summary -->\nDetailed transcript\n";
@@ -509,31 +515,6 @@ fn format_debate_stdout_text_includes_summary_and_transcript() {
     assert!(text.starts_with("Debate verdict: REVISE"));
     assert!(text.contains("Needs stronger evidence."));
     assert!(text.contains("Detailed transcript"));
-}
-
-#[test]
-fn render_debate_stdout_json_outputs_valid_payload() {
-    let summary = DebateSummary {
-        verdict: "APPROVE".to_string(),
-        confidence: "high".to_string(),
-        summary: "Ship with safeguards.".to_string(),
-        key_points: vec!["Bounded retries".to_string()],
-        mode: DebateMode::SameModelAdversarial,
-    };
-    let transcript = "Full transcript body\nCSA Meta Session ID: 01META\n";
-    let json = render_debate_stdout_json(&summary, transcript, "01META").unwrap();
-    let parsed: Value = serde_json::from_str(&json).unwrap();
-
-    assert_eq!(parsed["verdict"], "APPROVE");
-    assert_eq!(parsed["confidence"], "high");
-    assert_eq!(parsed["mode"], "same-model-adversarial");
-    assert_eq!(parsed["meta_session_id"], "01META");
-    assert!(
-        parsed["transcript"]
-            .as_str()
-            .unwrap()
-            .contains("Full transcript body")
-    );
 }
 
 #[test]
@@ -548,42 +529,6 @@ Summary: Keep full debate transcript in stdout.
 }
 
 #[test]
-fn persist_debate_output_artifacts_writes_json_and_markdown() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let session_dir = tmp.path();
-    std::fs::create_dir_all(session_dir.join("output")).unwrap();
-
-    let summary = DebateSummary {
-        verdict: "REVISE".to_string(),
-        confidence: "low".to_string(),
-        summary: "Need more data before rollout.".to_string(),
-        key_points: vec!["Insufficient benchmark evidence.".to_string()],
-        mode: DebateMode::Heterogeneous,
-    };
-    let transcript = "# Debate transcript\n\nFull content.";
-    let artifacts = persist_debate_output_artifacts(session_dir, &summary, transcript).unwrap();
-
-    assert_eq!(artifacts.len(), 2);
-    assert_eq!(artifacts[0].path, "output/debate-verdict.json");
-    assert_eq!(artifacts[1].path, "output/debate-transcript.md");
-
-    let verdict_path = session_dir.join("output/debate-verdict.json");
-    let verdict_json = std::fs::read_to_string(verdict_path).unwrap();
-    let parsed: Value = serde_json::from_str(&verdict_json).unwrap();
-    assert_eq!(parsed["verdict"], "REVISE");
-    assert_eq!(parsed["confidence"], "low");
-    assert_eq!(parsed["summary"], "Need more data before rollout.");
-    assert_eq!(parsed["key_points"][0], "Insufficient benchmark evidence.");
-    assert!(parsed["timestamp"].as_str().is_some());
-    // Heterogeneous mode should not include mode annotation
-    assert!(parsed.get("mode").is_none());
-
-    let transcript_path = session_dir.join("output/debate-transcript.md");
-    let transcript_content = std::fs::read_to_string(transcript_path).unwrap();
-    assert_eq!(transcript_content, transcript);
-}
-
-#[test]
 fn persist_debate_output_artifacts_includes_mode_for_same_model() {
     let tmp = tempfile::TempDir::new().unwrap();
     let session_dir = tmp.path();
@@ -591,9 +536,11 @@ fn persist_debate_output_artifacts_includes_mode_for_same_model() {
 
     let summary = DebateSummary {
         verdict: "APPROVE".to_string(),
+        decision: None,
         confidence: "medium".to_string(),
         summary: "Acceptable with caveats.".to_string(),
         key_points: vec![],
+        failure_reason: None,
         mode: DebateMode::SameModelAdversarial,
     };
     let artifacts = persist_debate_output_artifacts(session_dir, &summary, "transcript").unwrap();
@@ -637,9 +584,11 @@ fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
 
     let debate_summary = DebateSummary {
         verdict: "APPROVE".to_string(),
+        decision: None,
         confidence: "high".to_string(),
         summary: "Persist the parsed debate summary.".to_string(),
         key_points: vec!["Key point".to_string()],
+        failure_reason: None,
         mode: DebateMode::Heterogeneous,
     };
     let artifacts = vec![SessionArtifact::new("output/debate-verdict.json")];

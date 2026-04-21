@@ -2,6 +2,8 @@
 
 #[path = "review_cmd_execute_artifact_guard.rs"]
 mod artifact_guard;
+#[path = "review_cmd_execute_failures.rs"]
+mod failures;
 
 use std::collections::HashMap;
 use std::fs;
@@ -16,7 +18,7 @@ use csa_core::{
         API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY, AUTH_MODE_ENV_KEY,
         AUTH_MODE_OAUTH,
     },
-    types::{OutputFormat, ToolName},
+    types::{OutputFormat, ReviewDecision, ToolName},
 };
 use csa_executor::{Executor, PeakMemoryContext};
 use csa_session::{
@@ -25,6 +27,10 @@ use csa_session::{
 use tracing::{info, warn};
 
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
+use crate::tier_model_fallback::{
+    TierAttemptFailure, TierFilter, chain_failure_reasons, classify_next_model_failure,
+    format_all_models_failed_reason, ordered_tier_candidates,
+};
 
 use super::output::{
     ToolReviewFailureKind, derive_review_result_summary, detect_tool_review_failure,
@@ -32,10 +38,24 @@ use super::output::{
     is_review_output_empty,
 };
 use artifact_guard::detect_repo_root_review_artifact_violations;
+#[cfg(test)]
+use failures::read_review_failure_excerpt;
+use failures::{
+    build_gemini_api_key_retry_env, classify_review_failover_reason,
+    classify_review_failure_result, enforce_review_artifact_contract,
+    extract_meta_session_id_from_error, maybe_synthesize_missing_review_result,
+    repair_completed_review_restriction_result,
+};
 
-pub(super) struct ReviewExecutionOutcome {
+pub(crate) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
+    pub persistable_session_id: Option<String>,
+    pub executed_tool: ToolName,
     pub status_reason: Option<String>,
+    pub forced_decision: Option<ReviewDecision>,
+    pub routed_to: Option<String>,
+    pub primary_failure: Option<String>,
+    pub failure_reason: Option<String>,
 }
 fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
     let options = ExecutionEnvOptions::with_no_flash_fallback();
@@ -47,13 +67,70 @@ fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn execute_review(
+pub(crate) async fn execute_review(
     tool: ToolName,
     prompt: String,
     session: Option<String>,
     model: Option<String>,
     tier_model_spec: Option<String>,
     tier_name: Option<String>,
+    tier_fallback_enabled: bool,
+    thinking: Option<String>,
+    description: String,
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    review_routing: ReviewRoutingMetadata,
+    stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
+    initial_response_timeout_seconds: Option<u64>,
+    force_override_user_config: bool,
+    force_ignore_tier_setting: bool,
+    no_failover: bool,
+    no_fs_sandbox: bool,
+    readonly_project_root: bool,
+    extra_writable: &[PathBuf],
+    extra_readable: &[PathBuf],
+) -> Result<ReviewExecutionOutcome> {
+    execute_review_with_tier_filter(
+        tool,
+        prompt,
+        session,
+        model,
+        tier_model_spec,
+        tier_name,
+        tier_fallback_enabled,
+        None,
+        thinking,
+        description,
+        project_root,
+        project_config,
+        global_config,
+        review_routing,
+        stream_mode,
+        idle_timeout_seconds,
+        initial_response_timeout_seconds,
+        force_override_user_config,
+        force_ignore_tier_setting,
+        no_failover,
+        no_fs_sandbox,
+        readonly_project_root,
+        extra_writable,
+        extra_readable,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_review_with_tier_filter(
+    tool: ToolName,
+    prompt: String,
+    session: Option<String>,
+    model: Option<String>,
+    tier_model_spec: Option<String>,
+    tier_name: Option<String>,
+    tier_fallback_enabled: bool,
+    tier_filter: Option<TierFilter>,
     thinking: Option<String>,
     description: String,
     project_root: &Path,
@@ -72,45 +149,6 @@ pub(super) async fn execute_review(
     extra_readable: &[PathBuf],
 ) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
-    let enforce_tier =
-        tier_name.is_some() && tier_model_spec.is_some() && !force_ignore_tier_setting;
-    let executor = crate::pipeline::build_and_validate_executor(
-        &tool,
-        tier_model_spec.as_deref(),
-        model.as_deref(),
-        thinking.as_deref(),
-        crate::pipeline::ConfigRefs {
-            project: project_config,
-            global: Some(global_config),
-        },
-        enforce_tier,
-        force_override_user_config,
-        false, // review must not inherit `csa run` per-tool defaults
-    )
-    .await?;
-
-    let can_edit =
-        project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let can_write_new =
-        project_config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
-    let mut effective_prompt = if !can_edit || !can_write_new {
-        info!(
-            tool = %executor.tool_name(),
-            can_edit,
-            can_write_new,
-            "Applying filesystem restrictions via prompt injection"
-        );
-        executor.apply_restrictions(&prompt, can_edit, can_write_new)
-    } else {
-        prompt
-    };
-
-    let extra_env_owned = global_config.build_execution_env(
-        executor.tool_name(),
-        review_execution_env_options(no_failover),
-    );
-    let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
-
     if session.is_none()
         && let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID")
     {
@@ -119,123 +157,321 @@ pub(super) async fn execute_review(
             "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
         );
     }
-
-    if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(project_config) {
-        effective_prompt = format!("{guard}\n\n{effective_prompt}");
-    }
-
-    let mut execution = match execute_review_once_with_artifact_guard(
-        &executor,
-        &tool,
-        &effective_prompt,
-        session.clone(),
-        description.clone(),
-        project_root,
-        project_config,
-        extra_env_owned.as_ref(),
-        tier_name.as_deref(),
-        global_config,
-        stream_mode,
-        idle_timeout_seconds,
-        initial_response_timeout_seconds,
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-        extra_readable,
-    )
-    .await
-    {
-        Ok(execution) => execution,
-        Err(err) => {
-            maybe_synthesize_missing_review_result(project_root, tool, execution_started_at, &err);
-            return Err(err);
-        }
-    };
-
-    persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
-
-    repair_completed_review_restriction_result(project_root, tool, &mut execution)?;
-
-    let mut status_reason = None;
-    if let Some(kind) = detect_tool_review_failure(
+    let candidates = ordered_tier_candidates(
         tool,
-        &execution.execution.output,
-        &execution.execution.stderr_output,
-    ) {
-        let retry_env = (!no_failover)
-            .then(|| build_gemini_api_key_retry_env(extra_env_owned.as_ref()))
-            .flatten();
-        warn!(
-            tool = %tool,
-            reason = kind.status_reason(),
-            retry_attempted = retry_env.is_some(),
-            "Detected Gemini OAuth browser prompt during review execution"
-        );
+        tier_model_spec.as_deref(),
+        tier_name.as_deref(),
+        project_config,
+        tier_fallback_enabled,
+        tier_filter.as_ref(),
+    );
+    let mut failures = Vec::new();
 
-        if let Some(api_key_env) = retry_env {
-            let mut retried = match execute_review_once_with_artifact_guard(
-                &executor,
-                &tool,
-                &effective_prompt,
-                session,
-                description,
-                project_root,
-                project_config,
-                Some(&api_key_env),
-                tier_name.as_deref(),
-                global_config,
-                stream_mode,
-                idle_timeout_seconds,
-                initial_response_timeout_seconds,
-                no_fs_sandbox,
-                readonly_project_root,
-                extra_writable,
-                extra_readable,
-            )
-            .await
-            {
-                Ok(execution) => execution,
-                Err(err) => {
+    for (attempt_index, (attempt_tool, attempt_model_spec)) in candidates.iter().enumerate() {
+        let enforce_tier =
+            tier_name.is_some() && attempt_model_spec.is_some() && !force_ignore_tier_setting;
+        let executor = crate::pipeline::build_and_validate_executor(
+            attempt_tool,
+            attempt_model_spec.as_deref(),
+            model.as_deref(),
+            thinking.as_deref(),
+            crate::pipeline::ConfigRefs {
+                project: project_config,
+                global: Some(global_config),
+            },
+            enforce_tier,
+            force_override_user_config,
+            false,
+        )
+        .await?;
+
+        let can_edit =
+            project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+        let can_write_new =
+            project_config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
+        let mut effective_prompt = if !can_edit || !can_write_new {
+            info!(
+                tool = %executor.tool_name(),
+                can_edit,
+                can_write_new,
+                "Applying filesystem restrictions via prompt injection"
+            );
+            executor.apply_restrictions(&prompt, can_edit, can_write_new)
+        } else {
+            prompt.clone()
+        };
+        if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(project_config) {
+            effective_prompt = format!("{guard}\n\n{effective_prompt}");
+        }
+
+        let extra_env_owned = global_config.build_execution_env(
+            executor.tool_name(),
+            review_execution_env_options(no_failover),
+        );
+        let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
+
+        let mut execution = match execute_review_once_with_artifact_guard(
+            &executor,
+            attempt_tool,
+            &effective_prompt,
+            session.clone(),
+            description.clone(),
+            project_root,
+            project_config,
+            extra_env_owned.as_ref(),
+            tier_name.as_deref(),
+            global_config,
+            stream_mode,
+            idle_timeout_seconds,
+            initial_response_timeout_seconds,
+            no_fs_sandbox,
+            readonly_project_root,
+            extra_writable,
+            extra_readable,
+        )
+        .await
+        {
+            Ok(execution) => execution,
+            Err(err) => {
+                let error_text = format!("{err:#}");
+                if tier_fallback_enabled
+                    && candidates.len() > 1
+                    && let Some(detected) = classify_next_model_failure(
+                        attempt_tool.as_str(),
+                        &error_text,
+                        "",
+                        1,
+                        attempt_model_spec.as_deref(),
+                    )
+                {
+                    let model_label = attempt_model_spec
+                        .clone()
+                        .unwrap_or_else(|| attempt_tool.as_str().to_string());
+                    failures.push(TierAttemptFailure {
+                        model_spec: model_label.clone(),
+                        reason: detected.reason.clone(),
+                    });
+                    warn!(
+                        failed_tool = %attempt_tool,
+                        failed_model = %model_label,
+                        reason = %detected.reason,
+                        attempt = attempt_index + 1,
+                        total = candidates.len(),
+                        "Review tier model failed before execution completed; advancing to next configured model"
+                    );
+                    if attempt_index + 1 < candidates.len() {
+                        continue;
+                    }
                     maybe_synthesize_missing_review_result(
                         project_root,
-                        tool,
+                        *attempt_tool,
                         execution_started_at,
                         &err,
                     );
-                    return Err(err);
+                    let failure_reason =
+                        format_all_models_failed_reason(tier_name.as_deref(), &failures);
+                    return Ok(ReviewExecutionOutcome {
+                        execution: crate::pipeline::SessionExecutionResult {
+                            execution: csa_process::ExecutionResult {
+                                exit_code: 1,
+                                output: String::new(),
+                                stderr_output: error_text,
+                                summary: "Review unavailable".to_string(),
+                                peak_memory_mb: None,
+                            },
+                            meta_session_id: extract_meta_session_id_from_error(&err)
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            provider_session_id: None,
+                        },
+                        persistable_session_id: extract_meta_session_id_from_error(&err),
+                        executed_tool: *attempt_tool,
+                        status_reason: Some("tier_models_unavailable".to_string()),
+                        forced_decision: Some(ReviewDecision::Unavailable),
+                        routed_to: None,
+                        primary_failure: chain_failure_reasons(&failures),
+                        failure_reason,
+                    });
                 }
-            };
-            persist_review_routing_artifact(
-                project_root,
-                &retried.meta_session_id,
-                &review_routing,
-            );
-            repair_completed_review_restriction_result(project_root, tool, &mut retried)?;
-
-            if let Some(retry_kind) = detect_tool_review_failure(
-                tool,
-                &retried.execution.output,
-                &retried.execution.stderr_output,
-            ) {
-                classify_review_failure_result(project_root, tool, &mut retried, retry_kind)?;
-                status_reason = Some(retry_kind.status_reason().to_string());
-                execution = retried;
-            } else {
-                execution = retried;
+                maybe_synthesize_missing_review_result(
+                    project_root,
+                    *attempt_tool,
+                    execution_started_at,
+                    &err,
+                );
+                return Err(err);
             }
-        } else {
-            classify_review_failure_result(project_root, tool, &mut execution, kind)?;
-            status_reason = Some(kind.status_reason().to_string());
+        };
+
+        persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
+        repair_completed_review_restriction_result(project_root, *attempt_tool, &mut execution)?;
+
+        let mut status_reason = None;
+        if let Some(kind) = detect_tool_review_failure(
+            *attempt_tool,
+            &execution.execution.output,
+            &execution.execution.stderr_output,
+        ) {
+            let retry_env = (!no_failover)
+                .then(|| build_gemini_api_key_retry_env(extra_env_owned.as_ref()))
+                .flatten();
+            warn!(
+                tool = %attempt_tool,
+                reason = kind.status_reason(),
+                retry_attempted = retry_env.is_some(),
+                "Detected Gemini OAuth browser prompt during review execution"
+            );
+
+            if let Some(api_key_env) = retry_env {
+                let mut retried = match execute_review_once_with_artifact_guard(
+                    &executor,
+                    attempt_tool,
+                    &effective_prompt,
+                    session.clone(),
+                    description.clone(),
+                    project_root,
+                    project_config,
+                    Some(&api_key_env),
+                    tier_name.as_deref(),
+                    global_config,
+                    stream_mode,
+                    idle_timeout_seconds,
+                    initial_response_timeout_seconds,
+                    no_fs_sandbox,
+                    readonly_project_root,
+                    extra_writable,
+                    extra_readable,
+                )
+                .await
+                {
+                    Ok(execution) => execution,
+                    Err(err) => {
+                        maybe_synthesize_missing_review_result(
+                            project_root,
+                            *attempt_tool,
+                            execution_started_at,
+                            &err,
+                        );
+                        return Err(err);
+                    }
+                };
+                persist_review_routing_artifact(
+                    project_root,
+                    &retried.meta_session_id,
+                    &review_routing,
+                );
+                repair_completed_review_restriction_result(
+                    project_root,
+                    *attempt_tool,
+                    &mut retried,
+                )?;
+
+                if let Some(retry_kind) = detect_tool_review_failure(
+                    *attempt_tool,
+                    &retried.execution.output,
+                    &retried.execution.stderr_output,
+                ) {
+                    classify_review_failure_result(
+                        project_root,
+                        *attempt_tool,
+                        &mut retried,
+                        retry_kind,
+                    )?;
+                    status_reason = Some(retry_kind.status_reason().to_string());
+                    execution = retried;
+                } else {
+                    execution = retried;
+                }
+            } else {
+                classify_review_failure_result(project_root, *attempt_tool, &mut execution, kind)?;
+                status_reason = Some(kind.status_reason().to_string());
+            }
         }
+
+        let failure_reason = classify_review_failover_reason(
+            *attempt_tool,
+            attempt_model_spec.as_deref(),
+            &execution,
+            status_reason.as_deref(),
+        );
+
+        if tier_fallback_enabled
+            && candidates.len() > 1
+            && let Some(reason) = failure_reason
+        {
+            let model_label = attempt_model_spec
+                .clone()
+                .unwrap_or_else(|| attempt_tool.as_str().to_string());
+            failures.push(TierAttemptFailure {
+                model_spec: model_label.clone(),
+                reason: reason.clone(),
+            });
+            warn!(
+                failed_tool = %attempt_tool,
+                failed_model = %model_label,
+                reason = %reason,
+                attempt = attempt_index + 1,
+                total = candidates.len(),
+                "Review tier model failed; advancing to next configured model"
+            );
+            if attempt_index + 1 == candidates.len() {
+                let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
+                ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
+                let persistable_session_id = Some(execution.meta_session_id.clone());
+                return Ok(ReviewExecutionOutcome {
+                    execution,
+                    persistable_session_id,
+                    executed_tool: *attempt_tool,
+                    status_reason: Some("tier_models_unavailable".to_string()),
+                    forced_decision: Some(ReviewDecision::Unavailable),
+                    routed_to: None,
+                    primary_failure: chain_failure_reasons(&failures),
+                    failure_reason: format_all_models_failed_reason(
+                        tier_name.as_deref(),
+                        &failures,
+                    ),
+                });
+            }
+            continue;
+        }
+
+        let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
+        ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
+        let routed_to = (attempt_tool != &tool
+            || attempt_model_spec.as_deref() != tier_model_spec.as_deref())
+        .then(|| {
+            attempt_model_spec.clone().or_else(|| {
+                tier_name.as_deref().and_then(|resolved_tier_name| {
+                    project_config.and_then(|cfg| {
+                        cfg.tiers.get(resolved_tier_name).and_then(|tier| {
+                            tier.models.iter().find_map(|model_spec| {
+                                model_spec
+                                    .split('/')
+                                    .next()
+                                    .filter(|tool_name| *tool_name == attempt_tool.as_str())
+                                    .map(|_| model_spec.clone())
+                            })
+                        })
+                    })
+                })
+            })
+        })
+        .flatten();
+        let persistable_session_id = Some(execution.meta_session_id.clone());
+        return Ok(ReviewExecutionOutcome {
+            execution,
+            persistable_session_id,
+            executed_tool: *attempt_tool,
+            status_reason,
+            forced_decision: None,
+            routed_to,
+            primary_failure: (!failures.is_empty())
+                .then(|| chain_failure_reasons(&failures))
+                .flatten(),
+            failure_reason: None,
+        });
     }
 
-    let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
-    ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
-
-    Ok(ReviewExecutionOutcome {
-        execution,
-        status_reason,
-    })
+    unreachable!("tier candidate list is never empty")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -354,332 +590,6 @@ async fn execute_review_once_with_artifact_guard(
     }
 }
 
-fn build_gemini_api_key_retry_env(
-    extra_env: Option<&HashMap<String, String>>,
-) -> Option<HashMap<String, String>> {
-    let env = extra_env?;
-    if env.get(AUTH_MODE_ENV_KEY).map(String::as_str) != Some(AUTH_MODE_OAUTH) {
-        return None;
-    }
-
-    let api_key = env.get(API_KEY_FALLBACK_ENV_KEY)?;
-    let mut retry_env = env.clone();
-    retry_env.insert(API_KEY_ENV.to_string(), api_key.clone());
-    retry_env.insert(AUTH_MODE_ENV_KEY.to_string(), AUTH_MODE_API_KEY.to_string());
-    retry_env.remove(API_KEY_FALLBACK_ENV_KEY);
-    Some(retry_env)
-}
-
-fn classify_review_failure_result(
-    project_root: &Path,
-    tool: ToolName,
-    execution: &mut crate::pipeline::SessionExecutionResult,
-    failure: ToolReviewFailureKind,
-) -> Result<()> {
-    let summary = failure.summary_note().to_string();
-    fail_review_execution(project_root, tool, execution, &summary)
-}
-
-fn maybe_synthesize_missing_review_result(
-    project_root: &Path,
-    tool: ToolName,
-    started_at: DateTime<Utc>,
-    error: &anyhow::Error,
-) {
-    let Some(session_id) = extract_meta_session_id_from_error(error) else {
-        return;
-    };
-
-    match load_result(project_root, &session_id) {
-        Ok(Some(_)) => return,
-        Ok(None) => {}
-        Err(load_err) => {
-            warn!(
-                session_id = %session_id,
-                error = %load_err,
-                "Failed to check for existing review result.toml before fallback synthesis"
-            );
-        }
-    }
-
-    let session_dir = match get_session_dir(project_root, &session_id) {
-        Ok(path) => path,
-        Err(session_dir_err) => {
-            warn!(
-                session_id = %session_id,
-                error = %session_dir_err,
-                "Failed to resolve review session dir for fallback result synthesis"
-            );
-            return;
-        }
-    };
-
-    let stderr_excerpt = read_review_failure_excerpt(&session_dir)
-        .unwrap_or_else(|| truncate_for_summary(&format!("{error:#}"), 500));
-    let (status, exit_code, error_kind) = classify_review_failure(error, &stderr_excerpt);
-    let summary = truncate_for_summary(
-        &format!("review {error_kind}: {}", stderr_excerpt.trim()),
-        200,
-    );
-    let completed_at = Utc::now();
-    let peak_memory_mb = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
-        .and_then(|ctx| ctx.0);
-    let fallback_result = SessionResult {
-        status: status.to_string(),
-        exit_code,
-        summary,
-        tool: tool.to_string(),
-        started_at,
-        completed_at,
-        events_count: 0,
-        artifacts: Vec::new(),
-        peak_memory_mb,
-        manager_fields: Default::default(),
-    };
-
-    if let Err(save_err) = save_result(project_root, &session_id, &fallback_result) {
-        warn!(
-            session_id = %session_id,
-            error = %save_err,
-            "Failed to synthesize missing review result.toml"
-        );
-        return;
-    }
-
-    csa_session::write_cooldown_marker_for_project(project_root, &session_id, completed_at);
-    warn!(
-        session_id = %session_id,
-        error_kind,
-        "Synthesized missing review result.toml after execution error"
-    );
-}
-
-fn extract_meta_session_id_from_error(error: &anyhow::Error) -> Option<String> {
-    const MARKER: &str = "meta_session_id=";
-    for cause in error.chain() {
-        let message = cause.to_string();
-        let Some(idx) = message.find(MARKER) else {
-            continue;
-        };
-        let suffix = &message[idx + MARKER.len()..];
-        let session_id: String = suffix
-            .chars()
-            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
-            .collect();
-        if !session_id.is_empty() {
-            return Some(session_id);
-        }
-    }
-    None
-}
-
-fn read_review_failure_excerpt(session_dir: &Path) -> Option<String> {
-    let stderr_path = session_dir.join("stderr.log");
-    let mut buf = Vec::with_capacity(4096);
-    let file = fs::File::open(stderr_path).ok()?;
-    let _ = file.take(4096).read_to_end(&mut buf);
-    let contents = String::from_utf8_lossy(&buf);
-    let trimmed = contents.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(truncate_for_summary(trimmed, 500))
-}
-
-fn classify_review_failure(
-    error: &anyhow::Error,
-    excerpt: &str,
-) -> (&'static str, i32, &'static str) {
-    let mut combined = excerpt.to_ascii_lowercase();
-    for cause in error.chain() {
-        combined.push('\n');
-        combined.push_str(&cause.to_string().to_ascii_lowercase());
-    }
-
-    if combined.contains("initial_response_timeout")
-        || combined.contains("timed out")
-        || combined.contains("timeout")
-    {
-        ("timeout", 124, "timeout")
-    } else if combined.contains("sigkill")
-        || combined.contains("sigterm")
-        || combined.contains("killed")
-        || combined.contains("terminated by signal")
-    {
-        ("signal", 137, "signal")
-    } else if combined.contains("fork")
-        || combined.contains("spawn")
-        || combined.contains("provider_session_id")
-    {
-        ("failure", 1, "spawn_fail")
-    } else {
-        ("failure", 1, "tool_crash")
-    }
-}
-
-fn truncate_for_summary(text: &str, max_chars: usize) -> String {
-    let truncated: String = text.chars().take(max_chars).collect();
-    truncated.trim().replace('\n', " ")
-}
-
-fn fail_review_execution(
-    project_root: &Path,
-    tool: ToolName,
-    execution: &mut crate::pipeline::SessionExecutionResult,
-    summary: &str,
-) -> Result<()> {
-    if execution.execution.stderr_output.is_empty() {
-        execution.execution.stderr_output = summary.to_string();
-    } else if !execution.execution.stderr_output.contains(summary) {
-        if !execution.execution.stderr_output.ends_with('\n') {
-            execution.execution.stderr_output.push('\n');
-        }
-        execution.execution.stderr_output.push_str(summary);
-        execution.execution.stderr_output.push('\n');
-    }
-    execution.execution.exit_code = 1;
-    execution.execution.summary = summary.to_string();
-
-    rewrite_failed_review_state(project_root, tool, &execution.meta_session_id, summary)
-}
-
-fn rewrite_failed_review_state(
-    project_root: &Path,
-    tool: ToolName,
-    session_id: &str,
-    summary: &str,
-) -> Result<()> {
-    let Some(mut persisted_result) = load_result(project_root, session_id)
-        .with_context(|| format!("failed to load result.toml for review session {session_id}"))?
-    else {
-        return Ok(());
-    };
-    persisted_result.status = SessionResult::status_from_exit_code(1);
-    persisted_result.exit_code = 1;
-    persisted_result.summary = summary.to_string();
-    save_result(project_root, session_id, &persisted_result).with_context(|| {
-        format!("failed to rewrite result.toml for review session {session_id}")
-    })?;
-
-    let mut session = load_session(project_root, session_id)
-        .with_context(|| format!("failed to load session state for review session {session_id}"))?;
-    if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
-        tool_state.last_action_summary = summary.to_string();
-        tool_state.last_exit_code = 1;
-        tool_state.updated_at = chrono::Utc::now();
-        save_session(&session).with_context(|| {
-            format!("failed to rewrite session state for review session {session_id}")
-        })?;
-    }
-
-    Ok(())
-}
-
-fn enforce_review_artifact_contract(
-    project_root: &Path,
-    tool: &ToolName,
-    execution_started_at: DateTime<Utc>,
-    execution: Option<&mut crate::pipeline::SessionExecutionResult>,
-    error: Option<&anyhow::Error>,
-) -> Result<()> {
-    let Some(leaked_paths) =
-        detect_repo_root_review_artifact_violations(project_root, execution_started_at)?
-    else {
-        return Ok(());
-    };
-
-    let message = format!(
-        "review artifact contract violation: review wrote artifacts outside $CSA_SESSION_DIR/output during this run: {}",
-        leaked_paths.join(", ")
-    );
-
-    if let Some(execution) = execution {
-        fail_review_execution(project_root, *tool, execution, &message)?;
-        return Err(anyhow::anyhow!(message)
-            .context(format!("meta_session_id={}", execution.meta_session_id)));
-    }
-
-    if let Some(session_id) = error.and_then(extract_meta_session_id_from_error) {
-        rewrite_failed_review_state(project_root, *tool, &session_id, &message)?;
-        return Err(anyhow::anyhow!(message).context(format!("meta_session_id={session_id}")));
-    }
-
-    Err(anyhow::anyhow!(message))
-}
-fn repair_completed_review_restriction_result(
-    project_root: &Path,
-    tool: ToolName,
-    execution: &mut crate::pipeline::SessionExecutionResult,
-) -> Result<()> {
-    if !should_repair_completed_review_restriction(&execution.execution) {
-        return Ok(());
-    }
-
-    let repaired_summary = derive_review_result_summary(&execution.execution.output)
-        .unwrap_or_else(|| execution.execution.summary.clone());
-
-    info!(
-        session_id = %execution.meta_session_id,
-        tool = %tool,
-        "Reclassifying completed review with edit restriction as success"
-    );
-
-    execution.execution.exit_code = 0;
-    execution.execution.summary = repaired_summary.clone();
-
-    let Some(mut persisted_result) = load_result(project_root, &execution.meta_session_id)
-        .with_context(|| {
-            format!(
-                "failed to load result.toml for review session {}",
-                execution.meta_session_id
-            )
-        })?
-    else {
-        return Ok(());
-    };
-    persisted_result.status = SessionResult::status_from_exit_code(0);
-    persisted_result.exit_code = 0;
-    persisted_result.summary = repaired_summary.clone();
-    save_result(project_root, &execution.meta_session_id, &persisted_result).with_context(
-        || {
-            format!(
-                "failed to rewrite repaired result.toml for review session {}",
-                execution.meta_session_id
-            )
-        },
-    )?;
-
-    let mut session =
-        load_session(project_root, &execution.meta_session_id).with_context(|| {
-            format!(
-                "failed to load session state for repaired review session {}",
-                execution.meta_session_id
-            )
-        })?;
-    if let Some(tool_state) = session.tools.get_mut(tool.as_str()) {
-        tool_state.last_action_summary = repaired_summary;
-        tool_state.last_exit_code = 0;
-        tool_state.updated_at = chrono::Utc::now();
-        save_session(&session).with_context(|| {
-            format!(
-                "failed to rewrite session state for repaired review session {}",
-                execution.meta_session_id
-            )
-        })?;
-    }
-
-    Ok(())
-}
-
-fn should_repair_completed_review_restriction(execution: &csa_process::ExecutionResult) -> bool {
-    execution.exit_code != 0
-        && is_edit_restriction_summary(&execution.summary)
-        && !is_review_output_empty(&execution.output)
-        && has_structured_review_content(&execution.output)
-}
-
 /// Compute a SHA-256 content hash of the diff being reviewed.
 ///
 /// The fingerprint enables diff-level deduplication: if two review
@@ -719,3 +629,7 @@ mod tests;
 #[cfg(test)]
 #[path = "review_cmd_execute_guard_tests.rs"]
 mod guard_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_execute_tier_tests.rs"]
+mod tier_tests;

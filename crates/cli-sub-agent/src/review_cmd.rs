@@ -21,70 +21,64 @@ use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
-
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{
     GEMINI_AUTH_PROMPT_STATUS_REASON, is_worktree_submodule, persist_review_meta,
     persist_review_verdict, print_reviewer_outcomes,
 };
-
-#[path = "review_cmd_fix.rs"]
-mod fix;
-
-#[path = "review_cmd_findings_toml.rs"]
-mod findings_toml;
-
-#[path = "review_cmd_post_review.rs"]
-mod post_review;
-
-#[path = "review_cmd_reviewers.rs"]
-mod reviewers;
-
-#[path = "review_cmd_execute.rs"]
-mod execute;
-
-#[path = "review_cmd_result.rs"]
-mod result_handling;
-
-#[path = "review_cmd_prior_rounds.rs"]
-mod prior_rounds;
-
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
+#[path = "review_cmd_execute.rs"]
+mod execute;
+#[path = "review_cmd_findings_toml.rs"]
+mod findings_toml;
+#[path = "review_cmd_fix.rs"]
+mod fix;
+#[path = "review_cmd_flow.rs"]
+mod flow;
+#[path = "review_cmd_post_review.rs"]
+mod post_review;
+#[path = "review_cmd_prior_rounds.rs"]
+mod prior_rounds;
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
-use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
+#[path = "review_cmd_result.rs"]
+mod result_handling;
+#[path = "review_cmd_reviewers.rs"]
+mod reviewers;
 #[cfg(test)]
-use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_review_iterations};
-use execute::{compute_diff_fingerprint, execute_review};
+pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
+#[cfg(test)]
+use bug_class_pipeline::try_resolve_review_iterations;
+use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
+use execute::{compute_diff_fingerprint, execute_review, execute_review_with_tier_filter};
 use findings_toml::persist_review_findings_toml;
+use flow::review_decision_from_verdict;
+#[cfg(test)]
+#[rustfmt::skip]
+pub(crate) use flow::{ execute_review_for_tests, persist_review_sidecars_if_session_exists, should_run_fix_loop };
+#[cfg(not(test))]
+use flow::{persist_review_sidecars_if_session_exists, should_run_fix_loop};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
-use prior_rounds::{
-    explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id,
-};
+#[rustfmt::skip]
+use prior_rounds::{ explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id };
 #[cfg(test)]
 use resolve::build_review_instruction;
+#[cfg(test)]
+pub(crate) use resolve::resolve_review_tool;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope,
-    resolve_review_model, resolve_review_stream_mode, resolve_review_thinking,
-    resolve_review_tier_name, resolve_review_tool, review_scope_allows_auto_discovery,
+    resolve_review_model, resolve_review_selection, resolve_review_stream_mode,
+    resolve_review_thinking, resolve_review_tier_name, review_scope_allows_auto_discovery,
     verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
 use result_handling::{build_reviewer_outcome, resolve_single_review_result};
-use reviewers::{
-    AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool,
-};
-
-fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
-    match verdict {
-        CLEAN => ReviewDecision::Pass,
-        "SKIP" => ReviewDecision::Skip,
-        "UNCERTAIN" => ReviewDecision::Uncertain,
-        _ => ReviewDecision::Fail,
-    }
-}
-
+#[rustfmt::skip]
+use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool };
+#[cfg(test)]
+#[rustfmt::skip]
+pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
@@ -269,7 +263,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, resolved_model_spec) = match resolve_review_tool(
+    let resolved_selection = match resolve_review_selection(
         args.tool,
         args.model_spec.as_deref(),
         config.as_ref(),
@@ -296,6 +290,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             ));
         }
     };
+    let tool = resolved_selection.tool;
+    let resolved_model_spec = resolved_selection.model_spec.clone();
+    let tier_filter = resolved_selection.tier_filter.clone();
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
@@ -322,7 +319,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         resolved_model_spec.is_some(),
     );
 
-    // Active tier model specs remain authoritative unless the user overrides on the CLI.
     let review_thinking = resolve_review_thinking(
         args.thinking.as_deref(),
         config
@@ -363,13 +359,15 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     if reviewers == 1 {
         // Single-reviewer path (with optional --fix loop).
-        let review_future = execute_review(
+        let review_future = execute_review_with_tier_filter(
             tool,
             prompt.clone(),
             args.session.clone(),
             review_model.clone(),
             resolved_model_spec.clone(),
             resolved_tier_name.clone(),
+            tier_active && args.tool.is_none(),
+            tier_filter.clone(),
             review_thinking.clone(),
             review_description.clone(),
             &project_root,
@@ -408,7 +406,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        let resolved = resolve_single_review_result(&result, tool, &scope);
+        let resolved = resolve_single_review_result(&result, result.executed_tool, &scope);
         let sanitized = resolved.sanitized;
         let empty_output = resolved.empty_output;
         let verdict = resolved.verdict;
@@ -416,9 +414,17 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let auth_prompt_failure = resolved.auth_prompt_failure;
         print!("{}", sanitized);
         debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
-        let review_iterations =
-            resolve_review_iterations(&project_root, &result.execution.meta_session_id);
-        let review_session_ids = vec![result.execution.meta_session_id.clone()];
+        let review_iterations = result
+            .persistable_session_id
+            .as_deref()
+            .map_or(0, |session_id| {
+                resolve_review_iterations(&project_root, session_id)
+            });
+        let review_session_ids = result
+            .persistable_session_id
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
         // Write structured review metadata to session directory.
         let effective_exit_code = resolved.effective_exit_code;
@@ -429,7 +435,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             decision: decision.as_str().to_string(),
             verdict: verdict.to_string(),
             status_reason: result.status_reason.clone(),
-            tool: tool.to_string(),
+            routed_to: result.routed_to.clone(),
+            primary_failure: result.primary_failure.clone(),
+            failure_reason: result.failure_reason.clone(),
+            tool: result.executed_tool.to_string(),
             scope: scope.clone(),
             exit_code: effective_exit_code,
             fix_attempted: args.fix,
@@ -438,15 +447,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             timestamp: chrono::Utc::now(),
             diff_fingerprint,
         };
-        persist_review_meta(&project_root, &review_meta);
-        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
-        persist_review_findings_toml(&project_root, &review_meta);
+        persist_review_sidecars_if_session_exists(
+            &project_root,
+            &review_meta,
+            result.persistable_session_id.as_deref(),
+        );
 
         let is_cumulative_review = review_scope_is_cumulative(&scope);
 
-        if !args.fix || verdict == CLEAN {
-            // Accumulate only on FINAL result — prevents double-counting when
-            // --fix resolves the same issues.
+        if !should_run_fix_loop(args.fix, decision) {
+            // Accumulate only on FINAL result to avoid double-counting when --fix resolves the same issues.
             if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {
                 crate::review_findings::accumulate_findings(&project_root, &sanitized);
             }
@@ -468,33 +478,35 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             );
             emit_post_review_output(&post_review_output);
             maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
-
             return Ok(effective_exit_code);
         }
 
-        // Gate: skip fix loop when the review tool has file-editing restrictions.
-        // Tools like gemini-cli may be configured with allow_edit_existing_files=false,
-        // and resuming such a session for fixing would waste tokens producing no edits.
+        // Skip --fix when the effective review tool cannot edit existing files.
+        let effective_fix_tool = result.executed_tool;
+        let effective_fix_model_spec = result.routed_to.clone().or_else(|| {
+            (effective_fix_tool == tool)
+                .then(|| resolved_model_spec.clone())
+                .flatten()
+        });
         let tool_can_edit = config
             .as_ref()
-            .is_none_or(|cfg| cfg.can_tool_edit_existing(tool.as_str()));
+            .is_none_or(|cfg| cfg.can_tool_edit_existing(effective_fix_tool.as_str()));
         if !tool_can_edit {
             warn!(
-                tool = %tool,
+                tool = %effective_fix_tool,
                 "--fix requested but tool has allow_edit_existing_files=false; skipping fix loop"
             );
             maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
             return Ok(effective_exit_code);
         }
-
-        // --- Fix loop: resume the review session to apply fixes, then re-gate ---
+        // Resume the effective review session to apply fixes, then re-gate.
         let scope_for_hook = scope.clone();
         let fix_exit_code = fix::run_fix_loop(fix::FixLoopContext {
-            tool,
+            effective_tool: effective_fix_tool,
             config: config.as_ref(),
             global_config: &global_config,
             review_model,
-            tier_model_spec: resolved_model_spec,
+            effective_tier_model_spec: effective_fix_model_spec,
             review_thinking,
             review_routing,
             stream_mode,
@@ -517,9 +529,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         })
         .await;
 
-        // Fire PostReview hook after fix loop completes (final result).
-        // Hook stdout is forwarded so callers can mechanically chain the
-        // next required step without inferring it from prompts or docs.
+        // Fire PostReview hook after fix loop completes; forward stdout so callers can chain the next step mechanically.
         let fix_passed = matches!(&fix_exit_code, Ok(0));
         let post_review_output = build_post_review_output(
             &crate::pipeline::capture_observational_hook_output(
@@ -626,6 +636,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_model,
                 reviewer_model_spec,
                 reviewer_tier_name,
+                false,
                 reviewer_thinking,
                 reviewer_description,
                 &reviewer_project_root,
@@ -700,6 +711,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                     .as_deref()
                     .is_some_and(|d| d.contains("OAuth browser prompt")))
             .then(|| GEMINI_AUTH_PROMPT_STATUS_REASON.to_string()),
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
             tool: outcome.tool.as_str().to_string(),
             scope: scope.clone(),
             exit_code: outcome.exit_code,
@@ -756,11 +770,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .iter()
         .map(|outcome| outcome.session_id.clone())
         .collect::<Vec<_>>();
-    // NOTE: Do NOT persist review_meta for the inherited CSA_SESSION_ID here.
-    // The single-reviewer path (review_cmd_execute.rs:80) explicitly ignores
-    // inherited CSA_SESSION_ID unless --session was passed.  Persisting it
-    // unconditionally in the multi-reviewer path would overwrite an unrelated
-    // session's review_meta.json when launched from another CSA session.
+    // Do not persist inherited CSA_SESSION_ID review metadata here; unlike the
+    // single-reviewer path, that would overwrite an unrelated parent session.
 
     maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 

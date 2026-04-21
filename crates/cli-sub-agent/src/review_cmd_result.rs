@@ -2,7 +2,9 @@ use anyhow::Result;
 use csa_core::types::{ReviewDecision, ToolName};
 use tracing::warn;
 
-use crate::review_consensus::{CLEAN, HAS_ISSUES, SKIP, UNCERTAIN, parse_review_decision};
+use crate::review_consensus::{
+    CLEAN, HAS_ISSUES, SKIP, UNAVAILABLE, UNCERTAIN, parse_review_decision,
+};
 
 use super::execute::ReviewExecutionOutcome;
 use super::output::{
@@ -13,6 +15,7 @@ use super::output::{
 const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAuth prompt detected; authentication required (no review verdict produced).\n";
 const AUTH_PROMPT_DIAGNOSTIC: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced";
+const REVIEW_UNAVAILABLE_PREFIX: &str = "Review unavailable: ";
 
 fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
     match decision {
@@ -20,13 +23,17 @@ fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
         ReviewDecision::Fail => HAS_ISSUES,
         ReviewDecision::Skip => SKIP,
         ReviewDecision::Uncertain => UNCERTAIN,
+        ReviewDecision::Unavailable => UNAVAILABLE,
     }
 }
 
 fn exit_code_from_decision(decision: ReviewDecision) -> i32 {
     match decision {
         ReviewDecision::Pass => 0,
-        ReviewDecision::Fail | ReviewDecision::Skip | ReviewDecision::Uncertain => 1,
+        ReviewDecision::Fail
+        | ReviewDecision::Skip
+        | ReviewDecision::Uncertain
+        | ReviewDecision::Unavailable => 1,
     }
 }
 
@@ -46,13 +53,23 @@ pub(super) fn resolve_single_review_result(
 ) -> SingleReviewResolution {
     let auth_prompt_failure =
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
+    let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
     let sanitized = if auth_prompt_failure {
         AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
+    } else if forced_unavailable {
+        format!(
+            "{REVIEW_UNAVAILABLE_PREFIX}{}\n",
+            result
+                .failure_reason
+                .as_deref()
+                .unwrap_or("all configured tier models failed")
+        )
     } else {
         sanitize_review_output(&result.execution.execution.output)
     };
-    let empty_output =
-        !auth_prompt_failure && is_review_output_empty(&result.execution.execution.output);
+    let empty_output = !auth_prompt_failure
+        && !forced_unavailable
+        && is_review_output_empty(&result.execution.execution.output);
     let tool_diagnostic = detect_tool_diagnostic(
         &result.execution.execution.output,
         &result.execution.execution.stderr_output,
@@ -71,7 +88,9 @@ pub(super) fn resolve_single_review_result(
             "Tool diagnostic detected in review output (review may be degraded)");
     }
 
-    let decision = if auth_prompt_failure || empty_output {
+    let decision = if let Some(forced) = result.forced_decision {
+        forced
+    } else if auth_prompt_failure || empty_output {
         ReviewDecision::Uncertain
     } else {
         parse_review_decision(
@@ -100,7 +119,13 @@ pub(super) fn build_reviewer_outcome(
     let result = &session_result.execution;
     let auth_prompt_failure =
         session_result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
-    let empty = !auth_prompt_failure && is_review_output_empty(&result.execution.output);
+    let forced_unavailable = matches!(
+        session_result.forced_decision,
+        Some(ReviewDecision::Unavailable)
+    );
+    let empty = !auth_prompt_failure
+        && !forced_unavailable
+        && is_review_output_empty(&result.execution.output);
     let diagnostic =
         detect_tool_diagnostic(&result.execution.output, &result.execution.stderr_output);
     if empty {
@@ -116,17 +141,29 @@ pub(super) fn build_reviewer_outcome(
         reviewer_index,
         tool: reviewer_tool,
         session_id: session_result.execution.meta_session_id.clone(),
-        verdict: verdict_from_decision(if auth_prompt_failure || empty {
+        verdict: verdict_from_decision(if let Some(forced) = session_result.forced_decision {
+            forced
+        } else if auth_prompt_failure || empty {
             ReviewDecision::Uncertain
         } else {
             parse_review_decision(&result.execution.output, result.execution.exit_code)
         }),
         output: if auth_prompt_failure {
             AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
+        } else if forced_unavailable {
+            format!(
+                "{REVIEW_UNAVAILABLE_PREFIX}{}\n",
+                session_result
+                    .failure_reason
+                    .as_deref()
+                    .unwrap_or("all configured tier models failed")
+            )
         } else {
             sanitize_review_output(&result.execution.output)
         },
-        exit_code: exit_code_from_decision(if auth_prompt_failure || empty {
+        exit_code: exit_code_from_decision(if let Some(forced) = session_result.forced_decision {
+            forced
+        } else if auth_prompt_failure || empty {
             ReviewDecision::Uncertain
         } else {
             parse_review_decision(&result.execution.output, result.execution.exit_code)
@@ -155,7 +192,13 @@ mod tests {
                 meta_session_id: "01TESTRESULT".to_string(),
                 provider_session_id: None,
             },
+            persistable_session_id: Some("01TESTRESULT".to_string()),
+            executed_tool: ToolName::Codex,
             status_reason: None,
+            forced_decision: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
         }
     }
 

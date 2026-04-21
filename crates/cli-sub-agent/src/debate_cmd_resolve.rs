@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::debate_cmd::DebateMode;
+use crate::tier_model_fallback::TierFilter;
 use anyhow::{Context, Result};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
@@ -13,8 +14,16 @@ use csa_core::types::ToolName;
 use tracing::warn;
 
 /// Returns (tool, debate_mode, optional_model_spec). When tier resolves, model_spec is set.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedDebateSelection {
+    pub(crate) tool: ToolName,
+    pub(crate) mode: DebateMode,
+    pub(crate) model_spec: Option<String>,
+    pub(crate) tier_filter: Option<TierFilter>,
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_debate_tool(
+pub(crate) fn resolve_debate_selection(
     arg_tool: Option<ToolName>,
     arg_model_spec: Option<&str>,
     project_config: Option<&ProjectConfig>,
@@ -24,7 +33,7 @@ pub(crate) fn resolve_debate_tool(
     force_override_user_config: bool,
     cli_tier: Option<&str>,
     force_ignore_tier_setting: bool,
-) -> Result<(ToolName, DebateMode, Option<String>)> {
+) -> Result<ResolvedDebateSelection> {
     let tiers_configured = project_config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
 
@@ -49,7 +58,12 @@ pub(crate) fn resolve_debate_tool(
             force_ignore_tier_setting,
             false,
         )?;
-        return Ok((tool, DebateMode::Heterogeneous, resolved_model_spec));
+        return Ok(ResolvedDebateSelection {
+            tool,
+            mode: DebateMode::Heterogeneous,
+            model_spec: resolved_model_spec,
+            tier_filter: None,
+        });
     }
 
     // Enforce tier routing: block direct --tool when tiers are configured,
@@ -87,17 +101,23 @@ pub(crate) fn resolve_debate_tool(
                 force_override_user_config,
                 &[],
             )?;
-            return Ok((
-                resolution.tool,
-                DebateMode::Heterogeneous,
-                Some(resolution.model_spec),
-            ));
+            return Ok(ResolvedDebateSelection {
+                tool: resolution.tool,
+                mode: DebateMode::Heterogeneous,
+                model_spec: Some(resolution.model_spec),
+                tier_filter: Some(TierFilter::whitelist([tool.as_str().to_string()])),
+            });
         }
 
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
         }
-        return Ok((tool, DebateMode::Heterogeneous, None));
+        return Ok(ResolvedDebateSelection {
+            tool,
+            mode: DebateMode::Heterogeneous,
+            model_spec: None,
+            tier_filter: None,
+        });
     }
 
     // Compute effective whitelist from tool selection (project > global).
@@ -155,11 +175,15 @@ pub(crate) fn resolve_debate_tool(
         if let Some(resolution) =
             crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
         {
-            return Ok((
-                resolution.tool,
-                DebateMode::Heterogeneous,
-                Some(resolution.model_spec),
-            ));
+            return Ok(ResolvedDebateSelection {
+                tool: resolution.tool,
+                mode: DebateMode::Heterogeneous,
+                model_spec: Some(resolution.model_spec),
+                tier_filter: Some(match whitelist {
+                    Some(wl) => TierFilter::whitelist(wl.iter().cloned()),
+                    None => TierFilter::all(),
+                }),
+            });
         }
 
         let configured_tools: Vec<&str> = tier_tools
@@ -189,7 +213,12 @@ pub(crate) fn resolve_debate_tool(
             global_config,
             project_root,
         )
-        .map(|(t, m)| (t, m, None))
+        .map(|(t, m)| ResolvedDebateSelection {
+            tool: t,
+            mode: m,
+            model_spec: None,
+            tier_filter: None,
+        })
         .with_context(|| {
             format!(
                 "Failed to resolve debate tool from project config: {}",
@@ -206,7 +235,39 @@ pub(crate) fn resolve_debate_tool(
         global_config,
         project_root,
     )
-    .map(|(t, m)| (t, m, None))
+    .map(|(t, m)| ResolvedDebateSelection {
+        tool: t,
+        mode: m,
+        model_spec: None,
+        tier_filter: None,
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_debate_tool(
+    arg_tool: Option<ToolName>,
+    arg_model_spec: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    parent_tool: Option<&str>,
+    project_root: &Path,
+    force_override_user_config: bool,
+    cli_tier: Option<&str>,
+    force_ignore_tier_setting: bool,
+) -> Result<(ToolName, DebateMode, Option<String>)> {
+    let resolved = resolve_debate_selection(
+        arg_tool,
+        arg_model_spec,
+        project_config,
+        global_config,
+        parent_tool,
+        project_root,
+        force_override_user_config,
+        cli_tier,
+        force_ignore_tier_setting,
+    )?;
+    Ok((resolved.tool, resolved.mode, resolved.model_spec))
 }
 
 pub(crate) fn resolve_debate_tier_name(

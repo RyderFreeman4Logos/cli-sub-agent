@@ -19,11 +19,11 @@ use super::resolve::ANTI_RECURSION_PREAMBLE;
 
 /// All context needed to run the fix loop after a review finds issues.
 pub(crate) struct FixLoopContext<'a> {
-    pub tool: ToolName,
+    pub effective_tool: ToolName,
     pub config: Option<&'a ProjectConfig>,
     pub global_config: &'a GlobalConfig,
     pub review_model: Option<String>,
-    pub tier_model_spec: Option<String>,
+    pub effective_tier_model_spec: Option<String>,
     pub review_thinking: Option<String>,
     pub review_routing: ReviewRoutingMetadata,
     pub stream_mode: csa_process::StreamMode,
@@ -66,12 +66,13 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         );
 
         let fix_future = super::execute_review(
-            ctx.tool,
+            ctx.effective_tool,
             fix_prompt,
             Some(session_id.clone()),
             ctx.review_model.clone(),
-            ctx.tier_model_spec.clone(),
+            ctx.effective_tier_model_spec.clone(),
             None,
+            false,
             ctx.review_thinking.clone(),
             format!("fix round {round}/{}", ctx.max_rounds),
             ctx.project_root,
@@ -183,7 +184,10 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 decision: "pass".to_string(),
                 verdict: CLEAN.to_string(),
                 status_reason: None,
-                tool: ctx.tool.to_string(),
+                routed_to: None,
+                primary_failure: None,
+                failure_reason: None,
+                tool: ctx.effective_tool.to_string(),
                 scope: ctx.scope.clone(),
                 exit_code: 0,
                 fix_attempted: true,
@@ -192,7 +196,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: None,
             };
-            persist_fix_final_artifacts(ctx.project_root, &review_meta);
+            persist_fix_final_artifacts(ctx.project_root, &review_meta, true);
             return Ok(0);
         }
     }
@@ -204,7 +208,10 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         decision: ctx.decision,
         verdict: ctx.verdict,
         status_reason: None,
-        tool: ctx.tool.to_string(),
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
+        tool: ctx.effective_tool.to_string(),
         scope: ctx.scope,
         exit_code: 1,
         fix_attempted: true,
@@ -213,7 +220,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
     };
-    persist_fix_final_artifacts(ctx.project_root, &review_meta);
+    persist_fix_final_artifacts(ctx.project_root, &review_meta, false);
     error!(
         max_rounds = ctx.max_rounds,
         "All fix rounds exhausted — quality gate still failing"
@@ -221,27 +228,42 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     Ok(1)
 }
 
-fn persist_fix_final_artifacts(project_root: &Path, review_meta: &ReviewSessionMeta) {
+fn persist_fix_final_artifacts(
+    project_root: &Path,
+    review_meta: &ReviewSessionMeta,
+    converged_clean: bool,
+) {
     persist_review_meta(project_root, review_meta);
-    persist_review_verdict(project_root, review_meta, &[], Vec::new());
-    match csa_session::get_session_dir(project_root, &review_meta.session_id) {
-        Ok(session_dir) => {
-            if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
+    if converged_clean {
+        match csa_session::get_session_dir(project_root, &review_meta.session_id) {
+            Ok(session_dir) => {
+                if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
+                    warn!(
+                        session_id = %review_meta.session_id,
+                        error = %error,
+                        "Failed to write output/findings.toml after CLEAN convergence"
+                    );
+                }
+            }
+            Err(error) => {
                 warn!(
                     session_id = %review_meta.session_id,
                     error = %error,
-                    "Failed to write output/findings.toml after CLEAN convergence"
+                    "Cannot resolve session dir for final fix artifacts"
                 );
             }
         }
-        Err(error) => {
-            warn!(
-                session_id = %review_meta.session_id,
-                error = %error,
-                "Cannot resolve session dir for final fix artifacts"
-            );
-        }
     }
+    persist_review_verdict(project_root, review_meta, &[], Vec::new());
+}
+
+#[cfg(test)]
+pub(crate) fn persist_fix_final_artifacts_for_tests(
+    project_root: &Path,
+    review_meta: &ReviewSessionMeta,
+    converged_clean: bool,
+) {
+    persist_fix_final_artifacts(project_root, review_meta, converged_clean);
 }
 
 #[cfg(test)]
@@ -264,6 +286,9 @@ mod tests {
             decision: ReviewDecision::Pass.as_str().to_string(),
             verdict: CLEAN.to_string(),
             status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
             tool: "codex".to_string(),
             scope: "diff".to_string(),
             exit_code: 0,
@@ -330,7 +355,7 @@ mod tests {
         )
         .expect("write stale findings.toml");
 
-        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id));
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
 
         let findings_path = session_dir.join("output").join("findings.toml");
         assert!(
@@ -341,5 +366,78 @@ mod tests {
         let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
         let parsed: FindingsFile = toml::from_str(&actual).expect("parse findings.toml");
         assert_eq!(parsed, FindingsFile::default());
+    }
+
+    #[test]
+    fn persist_fix_final_artifacts_refreshes_verdict_after_findings_normalized() {
+        let project_root = temp_project_root("persist-fix-final-artifacts-verdict-refresh");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXFINALVERDICT");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        write_findings_toml(
+            &session_dir,
+            &FindingsFile {
+                findings: vec![ReviewFinding {
+                    id: "stale-high".to_string(),
+                    severity: Severity::High,
+                    file_ranges: vec![ReviewFindingFileRange {
+                        path: "src/lib.rs".to_string(),
+                        start: 7,
+                        end: Some(7),
+                    }],
+                    is_regression_of_commit: None,
+                    suggested_test_scenario: None,
+                    description: "Stale high finding from a previous fix round.".to_string(),
+                }],
+            },
+        )
+        .expect("write stale findings.toml");
+
+        fs::write(
+            session_dir.join("output").join("full.md"),
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking issues found in this scope.\nOverall risk: low\n<!-- CSA:SECTION:details:END -->",
+        )
+        .expect("write full output transcript");
+
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: csa_session::ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.decision, ReviewDecision::Pass);
+        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    }
+
+    #[test]
+    fn fix_loop_exhausted_preserves_open_findings_in_findings_toml() {
+        let project_root = temp_project_root("persist-fix-final-artifacts-exhausted");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXEXHAUSTEDARTIFACTS");
+        let session_dir = create_session_dir(&project_root, &session_id);
+        let existing = FindingsFile {
+            findings: vec![sample_stale_finding()],
+        };
+
+        write_findings_toml(&session_dir, &existing).expect("write last-round findings.toml");
+
+        let mut exhausted_meta = make_clean_review_meta(&session_id);
+        exhausted_meta.decision = ReviewDecision::Fail.as_str().to_string();
+        exhausted_meta.verdict = "HAS_ISSUES".to_string();
+        exhausted_meta.exit_code = 1;
+        exhausted_meta.fix_rounds = 3;
+
+        persist_fix_final_artifacts(&project_root, &exhausted_meta, false);
+
+        let findings_path = session_dir.join("output").join("findings.toml");
+        assert!(
+            findings_path.exists(),
+            "findings.toml should remain present after exhausted fix loop"
+        );
+
+        let actual = fs::read_to_string(&findings_path).expect("read preserved findings.toml");
+        let parsed: FindingsFile = toml::from_str(&actual).expect("parse preserved findings.toml");
+        assert_eq!(parsed, existing);
     }
 }

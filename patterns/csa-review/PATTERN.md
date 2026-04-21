@@ -72,8 +72,12 @@ Review prompt instructs agent to:
      `boundary-violation` (change exceeds spec scope)
 6. When `review_mode=red-team`, load `references/red-team-mode.md` and review
    adversarially (counterexamples, boundary conditions, break attempts).
-7. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN.
+7. Emit exactly one final verdict token: PASS, FAIL, SKIP, UNCERTAIN, or UNAVAILABLE.
    Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.
+   Use `UNAVAILABLE` when reviewer infrastructure cannot complete the review
+   because all configured tier models failed (for example quota/auth/network).
+   Use `UNCERTAIN` only when the reviewer is available but lacks confidence in
+   the current evidence.
 8. Generate `$CSA_SESSION_DIR/review-findings.json`, `$CSA_SESSION_DIR/output/review-verdict.json`, and `$CSA_SESSION_DIR/review-report.md`
 9. Parse `[project_profile: <value>]` metadata from the instruction and apply
    framework-aware review dimensions from `references/review-protocol.md`
