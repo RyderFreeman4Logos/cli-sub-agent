@@ -46,6 +46,7 @@ mod review_design_anchor;
 mod review_findings;
 mod review_prior_rounds;
 mod review_routing;
+mod review_session_findings;
 mod run_cmd;
 mod run_cmd_daemon;
 mod run_cmd_fork;
@@ -80,6 +81,8 @@ mod test_env_lock;
 mod test_session_sandbox;
 #[cfg(test)]
 include!("review_cmd_exact_tests.rs");
+#[cfg(test)]
+include!("review_round10_exact_tests.rs");
 #[cfg(test)]
 include!("debate_cmd_exact_tests.rs");
 

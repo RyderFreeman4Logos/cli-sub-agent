@@ -21,7 +21,6 @@ use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
-
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{
@@ -48,9 +47,11 @@ mod resolve;
 mod result_handling;
 #[path = "review_cmd_reviewers.rs"]
 mod reviewers;
-use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
 #[cfg(test)]
-use bug_class_pipeline::{try_extract_recurring_bug_class_skills, try_resolve_review_iterations};
+pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
+#[cfg(test)]
+use bug_class_pipeline::try_resolve_review_iterations;
+use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
 use execute::{compute_diff_fingerprint, execute_review};
 use findings_toml::persist_review_findings_toml;
 use flow::review_decision_from_verdict;
@@ -76,7 +77,6 @@ use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count, resolve_
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
-
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;

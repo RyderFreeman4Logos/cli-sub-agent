@@ -9,7 +9,7 @@ use clap::Parser;
 use cli::{Cli, Commands, LinkAction};
 use weave::batch;
 use weave::check;
-use weave::compiler::{compile, plan_to_toml};
+use weave::compiler::{compile, plan_from_toml, plan_to_toml};
 use weave::link::{self, LinkScope};
 use weave::package;
 use weave::parser::parse_skill;
@@ -49,9 +49,17 @@ fn main() -> Result<()> {
         Commands::Compile { input, output } => {
             let content = std::fs::read_to_string(&input)
                 .with_context(|| format!("failed to read {}", input.display()))?;
-            let doc = parse_skill(&content)
-                .with_context(|| format!("failed to parse {}", input.display()))?;
-            let plan = compile(&doc).context("compilation failed")?;
+            let plan = if input
+                .file_name()
+                .is_some_and(|name| name == "workflow.toml")
+            {
+                plan_from_toml(&content)
+                    .with_context(|| format!("failed to parse {}", input.display()))?
+            } else {
+                let doc = parse_skill(&content)
+                    .with_context(|| format!("failed to parse {}", input.display()))?;
+                compile(&doc).context("compilation failed")?
+            };
             let toml_str = plan_to_toml(&plan)?;
 
             if let Some(out_path) = output {

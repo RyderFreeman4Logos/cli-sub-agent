@@ -95,7 +95,7 @@ Additional rich fields are allowed and will be ignored by the consolidator when 
   "schema_version": 1,
   "session_id": "string",
   "timestamp": "RFC3339 string",
-  "decision": "pass|fail|skip|uncertain",
+  "decision": "pass|fail|skip|uncertain|unavailable",
   "verdict_legacy": "CLEAN|HAS_ISSUES",
   "severity_counts": {
     "critical": 0,
@@ -109,10 +109,35 @@ Additional rich fields are allowed and will be ignored by the consolidator when 
 ```
 
 - `schema_version` is fixed at `1`.
-- `decision` uses the structured four-value review verdict.
+- `decision` uses the structured five-value review verdict.
+- `unavailable` means reviewer infrastructure failed across all configured
+  tier models (for example quota/auth/network), not merely low reviewer
+  confidence.
+- `uncertain` means the reviewer remained available but lacked enough evidence
+  to make a confident call.
 - `verdict_legacy` preserves the legacy binary token for compatibility.
 - `severity_counts` is a map keyed by severity name with finding counts.
 - `prior_round_refs` lists earlier related review session IDs when available.
+
+Example `unavailable` verdict:
+
+```json
+{
+  "schema_version": 1,
+  "session_id": "01KMUNAVAILABLEEXAMPLE000001",
+  "timestamp": "2026-04-21T00:00:00Z",
+  "decision": "unavailable",
+  "verdict_legacy": "HAS_ISSUES",
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "prior_round_refs": []
+}
+```
 
 Whitelist constraints:
 

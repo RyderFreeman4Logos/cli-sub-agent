@@ -4,6 +4,7 @@ use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
@@ -104,6 +105,44 @@ fn artifact_with_findings(session_id: &str, findings: Vec<Finding>) -> ReviewArt
         session_id: session_id.to_string(),
         timestamp: chrono::Utc::now(),
     }
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+#[test]
+fn reviewer_prompt_documents_unavailable_state() {
+    for relative_path in [
+        "patterns/csa-review/PATTERN.md",
+        "patterns/csa-review/workflow.toml",
+        "patterns/csa-review/skills/csa-review/SKILL.md",
+        "patterns/csa-review/skills/csa-review/references/output-schema.md",
+    ] {
+        let content =
+            std::fs::read_to_string(workspace_root().join(relative_path)).expect("read doc");
+        let lower = content.to_ascii_lowercase();
+        assert!(
+            lower.contains("unavailable"),
+            "{relative_path} must document the unavailable decision state"
+        );
+    }
+
+    let pattern = std::fs::read_to_string(workspace_root().join("patterns/csa-review/PATTERN.md"))
+        .expect("read pattern");
+    let pattern_lower = pattern.to_ascii_lowercase();
+    assert!(
+        pattern_lower.contains("quota/auth/network"),
+        "pattern must explain unavailable as an infrastructure failure"
+    );
+    assert!(
+        pattern_lower.contains("lacks confidence"),
+        "pattern must distinguish unavailable from uncertain"
+    );
 }
 
 #[test]

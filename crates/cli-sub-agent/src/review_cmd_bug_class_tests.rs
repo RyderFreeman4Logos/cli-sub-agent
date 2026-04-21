@@ -3,9 +3,11 @@ use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, classify_recurring_bug
 use crate::review_cmd::bug_class_pipeline::load_bug_class_review_artifacts;
 use crate::review_consensus::write_consolidated_artifact;
 use crate::test_session_sandbox::ScopedSessionSandbox;
-use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
+use csa_session::review_artifact::{
+    Finding, FindingsFile, ReviewArtifact, Severity, SeveritySummary,
+};
 use csa_session::state::ReviewSessionMeta;
-use csa_session::{create_session, get_session_dir, write_review_meta};
+use csa_session::{create_session, get_session_dir, write_findings_toml, write_review_meta};
 use std::path::Path;
 use tempfile::tempdir;
 
@@ -87,6 +89,61 @@ fn recurring_bug_class_skill_extraction_runs_for_high_severity_review_completion
         std::fs::read_to_string(skill_dir.join("references/detailed-patterns.md"))
             .unwrap()
             .contains("Recurrence: 2 review session(s)")
+    );
+}
+
+#[test]
+fn recurring_bug_extraction_prefers_session_findings_over_root() {
+    let temp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    let previous = create_session(&project_root, Some("previous review"), None, Some("codex"))
+        .expect("previous session");
+    let current = create_session(&project_root, Some("current review"), None, Some("codex"))
+        .expect("current session");
+    let previous_dir = get_session_dir(&project_root, &previous.meta_session_id).unwrap();
+    let current_dir = get_session_dir(&project_root, &current.meta_session_id).unwrap();
+
+    write_review_artifact(
+        &previous_dir,
+        &sample_review_artifact(&previous.meta_session_id, Severity::High, "rust/002"),
+    );
+    write_review_artifact(
+        &current_dir,
+        &sample_review_artifact(&current.meta_session_id, Severity::High, "rust/stale"),
+    );
+    write_findings_toml(
+        &current_dir,
+        &FindingsFile {
+            findings: Vec::new(),
+        },
+    )
+    .expect("write empty current findings.toml");
+
+    let current_artifacts =
+        load_bug_class_review_artifacts(&project_root).expect("load review artifacts");
+    let stale_rule_id = current_artifacts
+        .into_iter()
+        .find(|artifact| artifact.session_id == current.meta_session_id)
+        .and_then(|artifact| artifact.findings.into_iter().next())
+        .map(|finding| finding.rule_id)
+        .expect("current artifact should expose stale root finding");
+    assert_eq!(stale_rule_id, "rust/stale");
+
+    try_extract_recurring_bug_class_skills(
+        &project_root,
+        std::slice::from_ref(&current.meta_session_id),
+    )
+    .expect("recurring bug extraction should succeed");
+
+    let skill_dir = csa_config::paths::config_dir_write()
+        .expect("resolve config dir")
+        .join("skills/code-quality-rust");
+    assert!(
+        !skill_dir.exists(),
+        "empty session findings.toml must suppress recurring extraction from stale root findings"
     );
 }
 

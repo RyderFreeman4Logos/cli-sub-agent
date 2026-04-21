@@ -230,8 +230,13 @@ After every `csa review` run, structured metadata is written to
 
 This metadata enables downstream consumers (pr-bot, commit skill,
 orchestration scripts) to programmatically query review results without
-parsing free-form text output. The `decision` field uses the four-value
-`ReviewDecision` enum: `pass`, `fail`, `skip`, `uncertain`.
+parsing free-form text output. The `decision` field uses the five-value
+`ReviewDecision` enum: `pass`, `fail`, `skip`, `uncertain`, `unavailable`.
+`unavailable` means the reviewer infrastructure failed across all configured
+tier models (for example quota/auth/network), while `uncertain` means the
+reviewer ran but could not reach a confident conclusion. Legacy four-state
+reviewer output (`CLEAN`, `HAS_ISSUES`, `SKIP`, `UNCERTAIN`) still parses for
+backward compatibility.
 
 When `--fix` is enabled, the metadata is updated after each fix round with
 the latest verdict, exit code, and cumulative fix round count.
