@@ -620,7 +620,6 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
-
     let global = GlobalConfig::default();
     let result = execute_review(
         ToolName::Opencode,

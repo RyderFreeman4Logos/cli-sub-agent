@@ -694,7 +694,7 @@ fn collect_test_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn contains_relative_redirect(line: &str) -> bool {
+pub(super) fn contains_relative_redirect(line: &str) -> bool {
     fn is_allowed_redirect_target(target: &str) -> bool {
         let normalized_target = target.trim_start_matches('\\');
         let stripped_target = normalized_target.trim_start_matches(['"', '\'']);
@@ -771,31 +771,4 @@ fn test_fake_tool_scripts_write_to_absolute_paths_only() {
         "relative-path redirects in fake scripts:\n{}",
         violations.join("\n")
     );
-}
-
-#[test]
-fn contains_relative_redirect_catches_multiple_redirects_per_line() {
-    assert!(contains_relative_redirect(
-        "printf 'a' > /abs/path; printf 'b' > rel/path"
-    ));
-}
-
-#[test]
-fn contains_relative_redirect_catches_quoted_relative_target() {
-    assert!(contains_relative_redirect("printf 'a' > \"tracked.txt\""));
-    assert!(contains_relative_redirect(
-        "printf 'a' >> 'output/details.md'"
-    ));
-}
-
-#[test]
-fn contains_relative_redirect_allows_quoted_absolute_target() {
-    assert!(!contains_relative_redirect("printf 'a' > \"/abs/path\""));
-    assert!(!contains_relative_redirect("printf 'a' > \"{TMPDIR}/x\""));
-}
-
-#[test]
-fn contains_relative_redirect_allows_interpolated_target() {
-    assert!(!contains_relative_redirect("printf 'a' >> {tracked}"));
-    assert!(!contains_relative_redirect("printf 'a' > ${TMPDIR}/x"));
 }

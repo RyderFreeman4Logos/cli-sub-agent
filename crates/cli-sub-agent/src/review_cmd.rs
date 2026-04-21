@@ -366,7 +366,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_model.clone(),
             resolved_model_spec.clone(),
             resolved_tier_name.clone(),
-            tier_active && args.tool.is_none(),
+            tier_active,
             tier_filter.clone(),
             review_thinking.clone(),
             review_description.clone(),

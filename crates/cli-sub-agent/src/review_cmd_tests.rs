@@ -769,6 +769,8 @@ fn has_structured_review_content_requires_non_empty_sections() {
 
 #[path = "review_cmd_bug_class_tests.rs"]
 mod bug_class_tests;
+#[path = "review_cmd_tests_explicit_tool_tier_fallback.rs"]
+mod explicit_tool_tier_fallback_tests;
 #[path = "review_cmd_tests_no_failover.rs"]
 mod no_failover_tests;
 #[path = "review_cmd_tests_tail.rs"]
