@@ -568,6 +568,7 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
 #[cfg(unix)]
 #[tokio::test]
 async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier_debate() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
