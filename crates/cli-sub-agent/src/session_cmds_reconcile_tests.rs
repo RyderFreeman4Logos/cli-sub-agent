@@ -1,5 +1,7 @@
 use super::*;
-use crate::session_cmds_daemon::{WaitReconciliationOutcome, handle_session_wait_with_hooks};
+use crate::session_cmds_daemon::{
+    WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
+};
 use crate::test_env_lock::TEST_ENV_LOCK;
 use chrono::Utc;
 use csa_session::{
@@ -546,7 +548,11 @@ fn handle_session_wait_marks_late_real_result_completion_as_non_synthetic() {
     let exit_code = handle_session_wait_with_hooks(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
-        5,
+        WaitBehavior {
+            wait_timeout_secs: 5,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
         |project_root, current_session_id, trigger| {
             let reconciled = ensure_terminal_result_for_dead_active_session_with_before_write(
                 project_root,

@@ -52,6 +52,24 @@ fn test_kv_cache_defaults_parse_when_section_omitted() {
 }
 
 #[test]
+fn test_session_wait_defaults_parse_when_section_omitted() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.session_wait.memory_warn_mb, None);
+}
+
+#[test]
+fn test_session_wait_memory_warn_mb_parses_from_config() {
+    let config: GlobalConfig = toml::from_str(
+        r#"
+[session_wait]
+memory_warn_mb = 8192
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.session_wait.memory_warn_mb, Some(8192));
+}
+
+#[test]
 fn test_resolve_session_wait_long_poll_seconds_uses_configured_kv_cache_value() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

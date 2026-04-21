@@ -308,6 +308,21 @@ fn session_list_cli_help_mentions_tree_filter_incompatibility() {
 }
 
 #[test]
+fn session_wait_cli_help_mentions_memory_warn_exit_code() {
+    let mut wait_cmd = Cli::command()
+        .find_subcommand("session")
+        .expect("session command")
+        .find_subcommand("wait")
+        .expect("session wait command")
+        .clone();
+    let help = wait_cmd.render_long_help().to_string();
+
+    assert!(help.contains("--memory-warn-mb"));
+    assert!(help.contains("exits with code 33"));
+    assert!(help.contains("CSA:MEMORY_WARN"));
+}
+
+#[test]
 fn session_list_tree_rejects_limit_flag() {
     let td = tempdir().unwrap();
     let err = handle_session_list(

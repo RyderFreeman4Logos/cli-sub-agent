@@ -39,7 +39,7 @@ pub use global::{
     AiConfigSymlinkCheckConfig, DEFAULT_KV_CACHE_FREQUENT_POLL_SECS,
     DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions, GateMode, GateStep, GlobalConfig,
     GlobalMcpConfig, KvCacheConfig, KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS,
-    PreflightConfig, ResolvedKvCacheValue, ReviewConfig, ToolSelection,
+    PreflightConfig, ResolvedKvCacheValue, ReviewConfig, SessionWaitConfig, ToolSelection,
 };
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};

@@ -145,11 +145,19 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         SessionCommands::Wait {
             session_id,
             session,
+            memory_warn_mb,
             cd,
         } => {
             let sid = resolve_session_id(session_id, session)?;
             let wait_timeout = resolve_daemon_wait_timeout(cd.as_deref());
-            let exit_code = session_cmds::handle_session_wait(sid, cd, wait_timeout)?;
+            let resolved_memory_warn_mb =
+                resolve_session_wait_memory_warn_mb(memory_warn_mb, cd.as_deref());
+            let exit_code = session_cmds::handle_session_wait_with_memory_warn(
+                sid,
+                cd,
+                wait_timeout,
+                resolved_memory_warn_mb,
+            )?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
@@ -209,6 +217,15 @@ fn resolve_legacy_session_wait_timeout(cd: Option<&str>) -> Option<u64> {
     user_path
         .as_deref()
         .and_then(|path| read_legacy_session_wait_timeout(path, "user"))
+}
+
+fn resolve_session_wait_memory_warn_mb(cli_override: Option<u64>, cd: Option<&str>) -> Option<u64> {
+    if let Some(limit_mb) = cli_override {
+        return (limit_mb > 0).then_some(limit_mb);
+    }
+
+    let project_root = crate::pipeline::determine_project_root(cd).ok()?;
+    ProjectConfig::resolve_session_wait_memory_warn_mb(&project_root)
 }
 
 fn read_legacy_session_wait_timeout(path: &std::path::Path, source: &str) -> Option<u64> {

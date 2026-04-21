@@ -50,6 +50,9 @@ pub struct GlobalConfig {
     /// KV cache-aware polling defaults used by orchestration workflows.
     #[serde(default)]
     pub kv_cache: KvCacheConfig,
+    /// Optional memory warning threshold for `csa session wait`.
+    #[serde(default, skip_serializing_if = "SessionWaitConfig::is_default")]
+    pub session_wait: SessionWaitConfig,
     /// Pre-flight repository integrity checks before session spawn.
     #[serde(default)]
     pub preflight: PreflightConfig,
@@ -62,6 +65,22 @@ pub struct GlobalConfig {
         skip_serializing_if = "crate::config_filesystem_sandbox::FilesystemSandboxConfig::is_default"
     )]
     pub filesystem_sandbox: crate::config_filesystem_sandbox::FilesystemSandboxConfig,
+}
+
+/// Configuration for `csa session wait`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionWaitConfig {
+    /// Optional process-tree RSS warning threshold in MB.
+    ///
+    /// `None` or `0` disables the sampler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_warn_mb: Option<u64>,
+}
+
+impl SessionWaitConfig {
+    pub fn is_default(&self) -> bool {
+        self.memory_warn_mb.is_none()
+    }
 }
 
 /// Pre-flight checks that run before session creation.

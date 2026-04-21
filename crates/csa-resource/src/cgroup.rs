@@ -60,7 +60,7 @@ const SIGKILL: i32 = 9;
 ///
 /// Format: `csa-{tool_name}-{session_id_prefix}.scope`
 /// Truncates `session_id` if the full name would exceed 256 bytes.
-pub(crate) fn scope_unit_name(tool_name: &str, session_id: &str) -> String {
+pub fn scope_unit_name(tool_name: &str, session_id: &str) -> String {
     // "csa-" + tool + "-" + session + ".scope"
     let prefix = format!("csa-{tool_name}-");
     let suffix = ".scope";
