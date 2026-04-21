@@ -745,5 +745,8 @@ fn debate_cli_rejects_zero_idle_timeout() {
 #[path = "debate_cmd_tier_tests.rs"]
 mod tier_tests;
 
+#[path = "debate_cmd_execute_tier_tests.rs"]
+mod execute_tier_tests;
+
 #[path = "debate_cmd_tests_tail.rs"]
 mod tests_tail;
