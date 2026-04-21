@@ -530,23 +530,17 @@ pub(crate) async fn handle_debate(
     } else {
         execution.expect("debate tier candidate list is never empty")
     };
-    let persisted_session_id = if all_tier_models_failed
-        && csa_session::get_session_dir(&project_root, &execution.meta_session_id).is_err()
-    {
-        csa_session::list_sessions(&project_root, None)?
-            .into_iter()
-            .max_by_key(|session| session.created_at)
-            .map(|session| session.meta_session_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!("No persisted debate sessions found after all-tier failure")
-            })?
-    } else {
-        execution.meta_session_id.clone()
-    };
+    let persisted_session_id = resolve_persisted_debate_session_id(
+        &project_root,
+        &execution.meta_session_id,
+        all_tier_models_failed,
+    )?;
 
     let output = render_debate_output(
         &execution.execution.output,
-        &persisted_session_id,
+        persisted_session_id
+            .as_deref()
+            .unwrap_or(execution.meta_session_id.as_str()),
         execution.provider_session_id.as_deref(),
     );
 
@@ -569,20 +563,17 @@ pub(crate) async fn handle_debate(
     } else {
         extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode)
     };
-    let session_dir = csa_session::get_session_dir(&project_root, &persisted_session_id)?;
-    let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
-    append_debate_artifacts_to_result(
-        &project_root,
-        &persisted_session_id,
-        &artifacts,
-        &debate_summary,
-    )?;
+    if let Some(session_id) = persisted_session_id.as_deref() {
+        let session_dir = csa_session::get_session_dir(&project_root, session_id)?;
+        let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
+        append_debate_artifacts_to_result(&project_root, session_id, &artifacts, &debate_summary)?;
+    }
 
     let rendered_output = render_debate_cli_output(
         output_format,
         &debate_summary,
         &output,
-        &persisted_session_id,
+        execution.meta_session_id.as_str(),
     )?;
     if rendered_output.ends_with('\n') {
         print!("{rendered_output}");
@@ -591,6 +582,25 @@ pub(crate) async fn handle_debate(
     }
 
     Ok(execution.execution.exit_code)
+}
+
+fn resolve_persisted_debate_session_id(
+    project_root: &Path,
+    meta_session_id: &str,
+    allow_missing_for_all_tier_failure: bool,
+) -> Result<Option<String>> {
+    match csa_session::load_session(project_root, meta_session_id) {
+        Ok(_) => Ok(Some(meta_session_id.to_string())),
+        Err(err) if allow_missing_for_all_tier_failure => {
+            warn!(
+                session_id = meta_session_id,
+                error = %err,
+                "Skipping debate artifact persistence because no owned session directory exists"
+            );
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn render_debate_cli_output(
@@ -740,3 +750,7 @@ fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) 
 #[cfg(test)]
 #[path = "debate_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "debate_cmd_round4_tests.rs"]
+mod round4_tests;
