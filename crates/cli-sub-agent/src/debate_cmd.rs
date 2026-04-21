@@ -15,14 +15,16 @@ use crate::run_helpers::resolve_prompt_with_file;
 use csa_config::ExecutionEnvOptions;
 use csa_core::types::OutputFormat;
 
-use crate::debate_cmd_output::{
-    append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_text,
-    persist_debate_output_artifacts, render_debate_output, render_debate_stdout_json,
-};
+use crate::debate_cmd_output::{format_debate_stdout_text, render_debate_stdout_json};
 use crate::tier_model_fallback::{
-    TierAttemptFailure, classify_next_model_failure, format_all_models_failed_reason,
-    ordered_tier_candidates,
+    TierAttemptFailure, classify_next_model_failure, ordered_tier_candidates,
 };
+
+#[path = "debate_cmd_finalize.rs"]
+mod finalize;
+pub(crate) use finalize::finalize_debate_outcome;
+#[cfg(test)]
+pub(crate) use finalize::resolve_persisted_debate_session_id;
 
 /// Debate execution mode indicating model diversity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -521,86 +523,23 @@ pub(crate) async fn handle_debate(
     }
 
     let all_tier_models_failed = !failures.is_empty() && failures.len() == candidates.len();
-    let execution = if all_tier_models_failed {
-        execution.ok_or_else(|| {
-            anyhow::anyhow!(
-                "debate tier candidate list is never empty: all models failed before producing a resumable session"
-            )
-        })?
-    } else {
-        execution.expect("debate tier candidate list is never empty")
-    };
-    let persisted_session_id = resolve_persisted_debate_session_id(
+    let finalized = finalize_debate_outcome(
         &project_root,
-        &execution.meta_session_id,
-        all_tier_models_failed,
-    )?;
-
-    let output = render_debate_output(
-        &execution.execution.output,
-        persisted_session_id
-            .as_deref()
-            .unwrap_or(execution.meta_session_id.as_str()),
-        execution.provider_session_id.as_deref(),
-    );
-
-    let debate_summary = if all_tier_models_failed {
-        let failure_reason =
-            format_all_models_failed_reason(resolved_tier_name.as_deref(), &failures)
-                .unwrap_or_else(|| "all configured debate tier models failed".to_string());
-        crate::debate_cmd_output::DebateSummary {
-            verdict: "UNAVAILABLE".to_string(),
-            decision: Some("unavailable".to_string()),
-            confidence: "low".to_string(),
-            summary: format!("Debate unavailable: {failure_reason}"),
-            key_points: failures
-                .iter()
-                .map(|failure| format!("{}={}", failure.model_spec, failure.reason))
-                .collect(),
-            failure_reason: Some(failure_reason),
-            mode: debate_mode,
-        }
-    } else {
-        extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode)
-    };
-    if let Some(session_id) = persisted_session_id.as_deref() {
-        let session_dir = csa_session::get_session_dir(&project_root, session_id)?;
-        let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
-        append_debate_artifacts_to_result(&project_root, session_id, &artifacts, &debate_summary)?;
-    }
-
-    let rendered_output = render_debate_cli_output(
         output_format,
-        &debate_summary,
-        &output,
-        execution.meta_session_id.as_str(),
+        execution,
+        all_tier_models_failed,
+        resolved_tier_name.as_deref(),
+        &failures,
+        debate_mode,
     )?;
+    let rendered_output = finalized.rendered_output;
     if rendered_output.ends_with('\n') {
         print!("{rendered_output}");
     } else {
         println!("{rendered_output}");
     }
 
-    Ok(execution.execution.exit_code)
-}
-
-fn resolve_persisted_debate_session_id(
-    project_root: &Path,
-    meta_session_id: &str,
-    allow_missing_for_all_tier_failure: bool,
-) -> Result<Option<String>> {
-    match csa_session::load_session(project_root, meta_session_id) {
-        Ok(_) => Ok(Some(meta_session_id.to_string())),
-        Err(err) if allow_missing_for_all_tier_failure => {
-            warn!(
-                session_id = meta_session_id,
-                error = %err,
-                "Skipping debate artifact persistence because no owned session directory exists"
-            );
-            Ok(None)
-        }
-        Err(err) => Err(err),
-    }
+    Ok(finalized.exit_code)
 }
 
 fn render_debate_cli_output(
