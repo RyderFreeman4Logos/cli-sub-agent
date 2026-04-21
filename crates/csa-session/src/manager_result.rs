@@ -129,6 +129,9 @@ pub(crate) fn save_result_in(
         // envelope first so it never points at a sidecar that was deleted
         // before the new envelope became durable.
         if let Err(err) = clear_manager_sidecar(&session_dir) {
+            // NOTE: stale sidecar on disk is harmless. load_result_in gates the overlay
+            // on envelope.artifacts containing CONTRACT_RESULT_ARTIFACT_PATH (#956 Option A),
+            // so even if the unlink fails, the stale sidecar will be ignored on reload.
             tracing::warn!(
                 path = %contract_result_path(&session_dir).display(),
                 error = %err,
@@ -389,6 +392,9 @@ fn is_sensitive_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::redact_result_sidecar_value;
+    use super::*;
+    use chrono::Utc;
+    use tempfile::tempdir;
 
     #[test]
     fn manager_result_redaction_preserves_toml_datetime_values() {
@@ -430,6 +436,83 @@ mod tests {
         assert!(!payload.contains("top-secret"));
         assert!(payload.contains("[REDACTED]"));
     }
+
+    #[test]
+    fn load_result_in_ignores_orphaned_sidecar() {
+        let td = tempdir().expect("tempdir");
+        let session_id = crate::validate::new_session_id();
+        let session_dir = super::super::get_session_dir_in(td.path(), &session_id);
+        std::fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+        let result_path = session_dir.join(RESULT_FILE_NAME);
+
+        let now = Utc::now();
+        let turn_1_result = SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "turn 1".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 1,
+            artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
+            peak_memory_mb: None,
+            manager_fields: crate::result::SessionManagerFields {
+                report: Some(
+                    toml::toml! {
+                        [repo_write_audit]
+                        added = ["turn-1.txt"]
+                    }
+                    .into(),
+                ),
+                ..Default::default()
+            },
+        };
+        save_result_in(
+            td.path(),
+            &session_id,
+            &turn_1_result,
+            SaveOptions::default(),
+        )
+        .expect("save turn 1");
+
+        let turn_2_result = SessionResult {
+            summary: "turn 2".to_string(),
+            manager_fields: Default::default(),
+            ..turn_1_result
+        };
+        save_result_in(
+            td.path(),
+            &session_id,
+            &turn_2_result,
+            SaveOptions::default(),
+        )
+        .expect("save turn 2");
+
+        let mut turn_2_envelope: SessionResult =
+            toml::from_str(&std::fs::read_to_string(&result_path).expect("read turn 2 envelope"))
+                .expect("parse turn 2 envelope");
+        turn_2_envelope
+            .artifacts
+            .retain(|artifact| artifact.path != CONTRACT_RESULT_ARTIFACT_PATH);
+        let contents =
+            toml::to_string_pretty(&turn_2_envelope).expect("serialize orphaned envelope");
+        write_file_atomically(&result_path, &contents).expect("persist orphaned envelope");
+
+        let reloaded = load_result_in(td.path(), &session_id)
+            .expect("load result")
+            .expect("result should exist");
+        assert!(
+            reloaded
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.path != CONTRACT_RESULT_ARTIFACT_PATH),
+            "turn 2 envelope must not advertise the manager sidecar"
+        );
+        assert!(
+            reloaded.manager_fields.as_sidecar().is_none(),
+            "orphaned sidecar must not leak prior manager fields into turn 2"
+        );
+    }
 }
 
 /// Load a session result
@@ -458,7 +541,15 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
         .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
     let mut result: SessionResult = toml::from_str(&contents)
         .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
-    let manager_sidecar = load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)
+    let envelope_references_manager_sidecar = result
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.path == CONTRACT_RESULT_ARTIFACT_PATH);
+    if envelope_references_manager_sidecar {
+        let manager_sidecar = load_optional_result_sidecar(
+            &session_dir,
+            CONTRACT_RESULT_ARTIFACT_PATH,
+        )
         .unwrap_or_else(|error| {
             tracing::warn!(
                 target: "csa-session.load_result",
@@ -468,8 +559,9 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
             );
             None
         });
-    if let Some(sidecar) = manager_sidecar {
-        result.manager_fields = crate::result::SessionManagerFields::from_sidecar(&sidecar);
+        if let Some(sidecar) = manager_sidecar {
+            result.manager_fields = crate::result::SessionManagerFields::from_sidecar(&sidecar);
+        }
     }
     Ok(Some(result))
 }
@@ -482,9 +574,18 @@ pub(crate) fn load_result_view_in(
         return Ok(None);
     };
     let session_dir = super::get_session_dir_in(base_dir, session_id);
+    let manager_sidecar = if envelope
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.path == CONTRACT_RESULT_ARTIFACT_PATH)
+    {
+        load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)?
+    } else {
+        None
+    };
     Ok(Some(SessionResultView {
         envelope,
-        manager_sidecar: load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)?,
+        manager_sidecar,
         legacy_sidecar: load_optional_result_sidecar(
             &session_dir,
             LEGACY_USER_RESULT_ARTIFACT_PATH,

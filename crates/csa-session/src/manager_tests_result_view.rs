@@ -45,7 +45,7 @@ impl io::Write for SharedLogWriter {
 }
 
 #[test]
-fn test_load_result_view_surfaces_manager_and_legacy_sidecars() {
+fn test_load_result_view_ignores_orphaned_manager_sidecar() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
     let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
@@ -86,14 +86,7 @@ fn test_load_result_view_surfaces_manager_and_legacy_sidecars() {
         .unwrap()
         .expect("result view should exist");
     assert_eq!(loaded.envelope.summary, "runtime summary");
-    assert_eq!(
-        loaded.manager_sidecar.as_ref().and_then(|value| value.get("report")),
-        Some(&toml::Value::Table(
-            [("summary".to_string(), toml::Value::String("manager-visible".to_string()))]
-                .into_iter()
-                .collect()
-        ))
-    );
+    assert!(loaded.manager_sidecar.is_none());
     assert_eq!(
         loaded.legacy_sidecar.as_ref().and_then(|value| value.get("artifacts")),
         Some(&toml::Value::Table(
@@ -123,14 +116,6 @@ fn test_load_result_merges_manager_sidecar_sections_into_runtime_result() {
         peak_memory_mb: None,
         manager_fields: Default::default(),
     };
-    save_result_in(
-        td.path(),
-        &state.meta_session_id,
-        &runtime_result,
-        crate::SaveOptions::default(),
-    )
-    .unwrap();
-
     std::fs::write(
         session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
         r#"
@@ -158,6 +143,13 @@ questions = ["Question 1", "Question 2"]
 [artifacts]
 count = 2
 "#,
+    )
+    .unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &runtime_result,
+        crate::SaveOptions::default(),
     )
     .unwrap();
 
@@ -239,14 +231,6 @@ fn test_manager_sidecar_roundtrip_preserves_full_sa_schema() {
         peak_memory_mb: None,
         manager_fields: Default::default(),
     };
-    save_result_in(
-        td.path(),
-        &state.meta_session_id,
-        &runtime_result,
-        crate::SaveOptions::default(),
-    )
-    .unwrap();
-
     let input_sidecar = toml::Value::Table(toml::toml! {
         [result]
         status = "needs_clarification"
@@ -286,6 +270,13 @@ fn test_manager_sidecar_roundtrip_preserves_full_sa_schema() {
     std::fs::write(
         session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
         &input_sidecar_str,
+    )
+    .unwrap();
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &runtime_result,
+        crate::SaveOptions::default(),
     )
     .unwrap();
 
@@ -535,17 +526,16 @@ fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
         peak_memory_mb: None,
         manager_fields: Default::default(),
     };
+    std::fs::write(
+        session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
+        "not = [valid toml",
+    )
+    .unwrap();
     save_result_in(
         td.path(),
         &state.meta_session_id,
         &runtime_result,
         crate::SaveOptions::default(),
-    )
-    .unwrap();
-
-    std::fs::write(
-        session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
-        "not = [valid toml",
     )
     .unwrap();
 
