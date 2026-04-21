@@ -234,28 +234,27 @@ fn persist_fix_final_artifacts(
     converged_clean: bool,
 ) {
     persist_review_meta(project_root, review_meta);
-    persist_review_verdict(project_root, review_meta, &[], Vec::new());
-    if !converged_clean {
-        return;
-    }
-    match csa_session::get_session_dir(project_root, &review_meta.session_id) {
-        Ok(session_dir) => {
-            if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
+    if converged_clean {
+        match csa_session::get_session_dir(project_root, &review_meta.session_id) {
+            Ok(session_dir) => {
+                if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
+                    warn!(
+                        session_id = %review_meta.session_id,
+                        error = %error,
+                        "Failed to write output/findings.toml after CLEAN convergence"
+                    );
+                }
+            }
+            Err(error) => {
                 warn!(
                     session_id = %review_meta.session_id,
                     error = %error,
-                    "Failed to write output/findings.toml after CLEAN convergence"
+                    "Cannot resolve session dir for final fix artifacts"
                 );
             }
         }
-        Err(error) => {
-            warn!(
-                session_id = %review_meta.session_id,
-                error = %error,
-                "Cannot resolve session dir for final fix artifacts"
-            );
-        }
     }
+    persist_review_verdict(project_root, review_meta, &[], Vec::new());
 }
 
 #[cfg(test)]
@@ -367,6 +366,48 @@ mod tests {
         let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
         let parsed: FindingsFile = toml::from_str(&actual).expect("parse findings.toml");
         assert_eq!(parsed, FindingsFile::default());
+    }
+
+    #[test]
+    fn persist_fix_final_artifacts_refreshes_verdict_after_findings_normalized() {
+        let project_root = temp_project_root("persist-fix-final-artifacts-verdict-refresh");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXFINALVERDICT");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        write_findings_toml(
+            &session_dir,
+            &FindingsFile {
+                findings: vec![ReviewFinding {
+                    id: "stale-high".to_string(),
+                    severity: Severity::High,
+                    file_ranges: vec![ReviewFindingFileRange {
+                        path: "src/lib.rs".to_string(),
+                        start: 7,
+                        end: Some(7),
+                    }],
+                    is_regression_of_commit: None,
+                    suggested_test_scenario: None,
+                    description: "Stale high finding from a previous fix round.".to_string(),
+                }],
+            },
+        )
+        .expect("write stale findings.toml");
+
+        fs::write(
+            session_dir.join("output").join("full.md"),
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking issues found in this scope.\nOverall risk: low\n<!-- CSA:SECTION:details:END -->",
+        )
+        .expect("write full output transcript");
+
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: csa_session::ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.decision, ReviewDecision::Pass);
+        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
     }
 
     #[test]

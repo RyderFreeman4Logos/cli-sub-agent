@@ -38,8 +38,8 @@ pub(crate) fn persist_review_sidecars_if_session_exists(
     }
 
     persist_review_meta(project_root, meta);
-    persist_review_verdict(project_root, meta, &[], Vec::new());
     persist_review_findings_toml(project_root, meta);
+    persist_review_verdict(project_root, meta, &[], Vec::new());
 }
 
 #[cfg(test)]
