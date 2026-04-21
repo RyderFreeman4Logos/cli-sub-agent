@@ -317,13 +317,28 @@ external interactions), enumerate:
 - What information is exposed in logs/display/persistence?
 - What default behavior is safe vs unsafe?
 
+If this is a **default-change task** (changes a default value, default
+transport, default tool, default feature gate, or default config field),
+also produce this matrix as part of the threat model output:
+
+| Existing user state                  | Pre-change behavior | Post-change behavior | Gap? |
+|--------------------------------------|---------------------|----------------------|------|
+| Only legacy binary installed         | Works               | May fail (how?)      | Y/N  |
+| Config explicitly set to old default | Works               | Honored?             | Y/N  |
+| Config empty (uses default)          | Works               | Works                | expected |
+| Config via project override          | Works               | Works                | Y/N  |
+
+For each row where `Gap = Yes`, add a Phase-2.5-generated TODO item tagged
+`[Security]` or `[Compat]`. Non-default-change tasks skip the matrix.
+
 Output a structured threat analysis. Each finding should specify:
 
 1. **Surface** — what is being introduced
 2. **Risk** — what could go wrong
 3. **Mitigation** — how the TODO should address it
 
-These findings will be incorporated into the TODO as [Security] tagged items.
+These findings will be incorporated into the TODO as `[Security]` and, for
+default-change compatibility gaps, `[Compat]` tagged items.
 
 ### Output
 
