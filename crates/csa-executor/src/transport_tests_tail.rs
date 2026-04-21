@@ -121,8 +121,8 @@ fn test_transport_factory_create_rejects_codex_acp_runtime_transport_override() 
         "error should mention the required cargo feature: {rendered}"
     );
     assert!(
-        rendered.contains("cargo build --features codex-acp"),
-        "error should include a rebuild hint: {rendered}"
+        rendered.contains("not compiled in"),
+        "error should say feature is not compiled in: {rendered}"
     );
 }
 

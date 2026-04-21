@@ -5,11 +5,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use csa_session::state::{MetaSessionState, ToolState};
 
-use super::{ResolvedTimeout, TransportMode, TransportOptions, TransportResult};
+use super::{
+    ResolvedTimeout, TransportCapabilities, TransportMode, TransportOptions, TransportResult,
+};
 
 #[async_trait]
 pub trait Transport: Send + Sync {
     fn mode(&self) -> TransportMode;
+
+    fn capabilities(&self) -> TransportCapabilities;
 
     async fn execute(
         &self,

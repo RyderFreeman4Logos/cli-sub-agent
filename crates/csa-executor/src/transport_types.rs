@@ -65,6 +65,20 @@ pub struct TransportResult {
     pub metadata: csa_acp::StreamingMetadata,
 }
 
+/// Informational capability matrix for a Transport implementation.
+/// Used by `csa doctor` and Phase 2 config validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TransportCapabilities {
+    /// Streams agent events (ACP: true, legacy CLI: false).
+    pub streaming: bool,
+    /// Can resume a prior session by ID.
+    pub session_resume: bool,
+    /// Can fork an existing session (claude-code via ACP only).
+    pub session_fork: bool,
+    /// Emits typed event variants (vs raw stdout/stderr).
+    pub typed_events: bool,
+}
+
 pub(super) fn should_stream_acp_stdout_to_stderr(
     stream_mode: StreamMode,
     output_spool: Option<&Path>,
