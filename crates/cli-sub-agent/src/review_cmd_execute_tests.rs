@@ -695,20 +695,25 @@ fn collect_test_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 fn contains_relative_redirect(line: &str) -> bool {
+    fn is_allowed_redirect_target(target: &str) -> bool {
+        let normalized_target = target.trim_start_matches('\\');
+        let stripped_target = normalized_target.trim_start_matches(['"', '\'']);
+        stripped_target.starts_with('&')
+            || stripped_target.starts_with('/')
+            || stripped_target.starts_with('{')
+            || stripped_target.starts_with('$')
+    }
+
     let redirect_positions = [" >> ", " > "]
         .into_iter()
-        .filter_map(|needle| line.find(needle).map(|idx| (idx, needle.len())))
+        .flat_map(|needle| {
+            line.match_indices(needle)
+                .map(move |(idx, _)| (idx, needle.len()))
+        })
         .collect::<Vec<_>>();
     for (idx, needle_len) in redirect_positions {
         let target = line[idx + needle_len..].trim_start();
-        let normalized_target = target.trim_start_matches('\\');
-        if normalized_target.starts_with("&")
-            || normalized_target.starts_with('"')
-            || normalized_target.starts_with('\'')
-            || normalized_target.starts_with('/')
-            || normalized_target.starts_with('{')
-            || normalized_target.starts_with("$")
-        {
+        if is_allowed_redirect_target(target) {
             continue;
         }
         return true;
@@ -716,14 +721,7 @@ fn contains_relative_redirect(line: &str) -> bool {
 
     if let Some(idx) = line.find(" tee ") {
         let target = line[idx + " tee ".len()..].trim_start();
-        let normalized_target = target.trim_start_matches('\\');
-        if normalized_target.starts_with('&')
-            || normalized_target.starts_with('"')
-            || normalized_target.starts_with('\'')
-            || normalized_target.starts_with('/')
-            || normalized_target.starts_with('{')
-            || normalized_target.starts_with("$")
-        {
+        if is_allowed_redirect_target(target) {
             return false;
         }
         return true;
@@ -743,6 +741,7 @@ fn test_fake_tool_scripts_write_to_absolute_paths_only() {
         let content = std::fs::read_to_string(&path).expect("read test file");
         let mut in_fake_script = false;
         for (lineno, line) in content.lines().enumerate() {
+            let trimmed_line = line.trim_end();
             if line.contains("#!/bin/sh") {
                 in_fake_script = true;
             }
@@ -757,7 +756,11 @@ fn test_fake_tool_scripts_write_to_absolute_paths_only() {
                     line.trim()
                 ));
             }
-            if in_fake_script && line.trim_end().ends_with("\",") {
+            if in_fake_script
+                && (trimmed_line.ends_with("\",")
+                    || trimmed_line.ends_with("\")")
+                    || trimmed_line.ends_with("\");"))
+            {
                 in_fake_script = false;
             }
         }
@@ -768,4 +771,31 @@ fn test_fake_tool_scripts_write_to_absolute_paths_only() {
         "relative-path redirects in fake scripts:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn contains_relative_redirect_catches_multiple_redirects_per_line() {
+    assert!(contains_relative_redirect(
+        "printf 'a' > /abs/path; printf 'b' > rel/path"
+    ));
+}
+
+#[test]
+fn contains_relative_redirect_catches_quoted_relative_target() {
+    assert!(contains_relative_redirect("printf 'a' > \"tracked.txt\""));
+    assert!(contains_relative_redirect(
+        "printf 'a' >> 'output/details.md'"
+    ));
+}
+
+#[test]
+fn contains_relative_redirect_allows_quoted_absolute_target() {
+    assert!(!contains_relative_redirect("printf 'a' > \"/abs/path\""));
+    assert!(!contains_relative_redirect("printf 'a' > \"{TMPDIR}/x\""));
+}
+
+#[test]
+fn contains_relative_redirect_allows_interpolated_target() {
+    assert!(!contains_relative_redirect("printf 'a' >> {tracked}"));
+    assert!(!contains_relative_redirect("printf 'a' > ${TMPDIR}/x"));
 }
