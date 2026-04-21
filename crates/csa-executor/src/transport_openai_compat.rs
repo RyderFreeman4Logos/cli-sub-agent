@@ -141,6 +141,15 @@ impl Transport for OpenaiCompatTransport {
         crate::transport::TransportMode::OpenaiCompat
     }
 
+    fn capabilities(&self) -> crate::transport::TransportCapabilities {
+        crate::transport::TransportCapabilities {
+            streaming: false,
+            session_resume: false,
+            session_fork: false,
+            typed_events: false,
+        }
+    }
+
     async fn execute(
         &self,
         prompt: &str,

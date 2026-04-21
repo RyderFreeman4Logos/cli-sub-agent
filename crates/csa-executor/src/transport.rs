@@ -63,7 +63,7 @@ mod transport_fork;
 pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
 #[path = "transport_factory.rs"]
 mod transport_factory;
-pub use transport_factory::{TransportFactory, TransportMode};
+pub use transport_factory::{TransportFactory, TransportFactoryError, TransportMode};
 #[path = "transport_acp_payload_debug.rs"]
 mod transport_acp_payload_debug;
 use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};
@@ -89,7 +89,8 @@ use transport_legacy_codex_exec_stall::{
 mod transport_types;
 use transport_types::should_stream_acp_stdout_to_stderr;
 pub use transport_types::{
-    ResolvedTimeout, SandboxTransportConfig, TransportOptions, TransportResult,
+    ResolvedTimeout, SandboxTransportConfig, TransportCapabilities, TransportOptions,
+    TransportResult,
 };
 
 pub(crate) fn build_ephemeral_meta_session(work_dir: &Path) -> MetaSessionState {

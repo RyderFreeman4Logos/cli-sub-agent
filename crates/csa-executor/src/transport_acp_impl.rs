@@ -4,6 +4,16 @@ impl Transport for AcpTransport {
         TransportMode::Acp
     }
 
+    fn capabilities(&self) -> super::TransportCapabilities {
+        super::TransportCapabilities {
+            streaming: true,
+            session_resume: true,
+            session_fork: TransportFactory::fork_method_for_tool(&self.tool_name)
+                == ForkMethod::Native,
+            typed_events: true,
+        }
+    }
+
     #[tracing::instrument(skip_all, fields(tool = %self.tool_name))]
     async fn execute(
         &self,

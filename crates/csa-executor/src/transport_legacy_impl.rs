@@ -4,6 +4,15 @@ impl Transport for LegacyTransport {
         TransportMode::Legacy
     }
 
+    fn capabilities(&self) -> super::TransportCapabilities {
+        super::TransportCapabilities {
+            streaming: false,
+            session_resume: true,
+            session_fork: false,
+            typed_events: false,
+        }
+    }
+
     async fn execute(
         &self,
         prompt: &str,
