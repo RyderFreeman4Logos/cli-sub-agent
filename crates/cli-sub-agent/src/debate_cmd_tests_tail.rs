@@ -402,7 +402,12 @@ fn verify_debate_skill_no_fallback_without_skill() {
 #[tokio::test]
 async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
     let project_dir = tempdir().unwrap();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: test-scoped env mutation while ScopedSessionSandbox holds TEST_ENV_LOCK.
+    unsafe {
+        std::env::remove_var("CSA_SESSION_ID");
+    }
     let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     config.tiers.insert(
         "default".to_string(),
@@ -452,6 +457,113 @@ async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
             .summary
             .contains("restricted when tiers are configured")
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project_dir = tempdir().unwrap();
+    let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: test-scoped env mutation while ScopedSessionSandbox holds TEST_ENV_LOCK.
+    unsafe {
+        std::env::remove_var("CSA_SESSION_ID");
+    }
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+
+    for (binary, version, stderr_line) in
+        [("gemini", "gemini-cli 1.0.0", "reason: 'QUOTA_EXHAUSTED'")]
+    {
+        let path = bin_dir.join(binary);
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '{version}\\n'\n  exit 0\nfi\nprintf '{stderr_line}\\n' >&2\nexit 1\n"
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+    let _available_guard =
+        EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+
+    let mut config = project_config_with_enabled_tools(&["gemini-cli"]);
+    config.review = Some(csa_config::ReviewConfig {
+        gate_command: Some("true".to_string()),
+        ..Default::default()
+    });
+    config.tiers.insert(
+        "quality".to_string(),
+        csa_config::config::TierConfig {
+            description: "quality".to_string(),
+            models: vec![
+                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "gemini-cli/google/gemini-3.1-pro/high".to_string(),
+                "gemini-cli/google/gemini-2.5-pro/medium".to_string(),
+            ],
+            strategy: csa_config::TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    write_debate_project_config(project_dir.path(), &config);
+    install_pattern(project_dir.path(), "debate");
+
+    let cd = project_dir.path().display().to_string();
+    let args = parse_debate_args(&[
+        "csa",
+        "debate",
+        "--cd",
+        &cd,
+        "--tier",
+        "quality",
+        "Should we ship this migration?",
+    ]);
+
+    let exit_code = handle_debate(args, 0, csa_core::types::OutputFormat::Json)
+        .await
+        .expect("all-tier-fail debate should return unavailable, not panic");
+    assert_eq!(exit_code, 1);
+
+    let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    let verdict_session = sessions
+        .iter()
+        .find_map(|session| {
+            let result = csa_session::load_result(project_dir.path(), &session.meta_session_id)
+                .ok()
+                .flatten()?;
+            result
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == "output/debate-verdict.json")
+                .then_some(session.meta_session_id.clone())
+        })
+        .expect("unavailable debate should persist verdict artifact");
+
+    let verdict_path = csa_session::get_session_dir(project_dir.path(), &verdict_session)
+        .unwrap()
+        .join("output")
+        .join("debate-verdict.json");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(verdict_path).unwrap()).unwrap();
+
+    assert_eq!(parsed["decision"], "unavailable");
+    assert_eq!(parsed["verdict"], "UNAVAILABLE");
+    let failure_reason = parsed["failure_reason"].as_str().expect("failure_reason");
+    assert!(
+        failure_reason.contains("gemini-cli/google/gemini-3.1-pro-preview/xhigh=QUOTA_EXHAUSTED")
+    );
+    assert!(failure_reason.contains("gemini-cli/google/gemini-3.1-pro/high=QUOTA_EXHAUSTED"));
+    assert!(failure_reason.contains("gemini-cli/google/gemini-2.5-pro/medium=QUOTA_EXHAUSTED"));
 }
 
 // --- CLI parse tests for --rounds flag (#138) ---
@@ -525,9 +637,11 @@ fn render_debate_cli_output_respects_json_format() {
 
     let summary = DebateSummary {
         verdict: "REVISE".to_string(),
+        decision: None,
         confidence: "medium".to_string(),
         summary: "Need more evidence.".to_string(),
         key_points: vec!["Point A".to_string()],
+        failure_reason: None,
         mode: DebateMode::Heterogeneous,
     };
 
@@ -537,4 +651,68 @@ fn render_debate_cli_output_respects_json_format() {
     let parsed: Value = serde_json::from_str(&rendered).unwrap();
     assert_eq!(parsed["meta_session_id"], "01META");
     assert_eq!(parsed["transcript"], "Transcript body");
+}
+
+#[test]
+fn render_debate_stdout_json_outputs_valid_payload() {
+    let summary = DebateSummary {
+        verdict: "APPROVE".to_string(),
+        decision: None,
+        confidence: "high".to_string(),
+        summary: "Ship with safeguards.".to_string(),
+        key_points: vec!["Bounded retries".to_string()],
+        failure_reason: None,
+        mode: DebateMode::SameModelAdversarial,
+    };
+    let transcript = "Full transcript body\nCSA Meta Session ID: 01META\n";
+    let json = render_debate_stdout_json(&summary, transcript, "01META").unwrap();
+    let parsed: Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed["verdict"], "APPROVE");
+    assert_eq!(parsed["confidence"], "high");
+    assert_eq!(parsed["mode"], "same-model-adversarial");
+    assert_eq!(parsed["meta_session_id"], "01META");
+    assert!(
+        parsed["transcript"]
+            .as_str()
+            .unwrap()
+            .contains("Full transcript body")
+    );
+}
+
+#[test]
+fn persist_debate_output_artifacts_writes_json_and_markdown() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let session_dir = tmp.path();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap();
+
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        decision: None,
+        confidence: "low".to_string(),
+        summary: "Need more data before rollout.".to_string(),
+        key_points: vec!["Insufficient benchmark evidence.".to_string()],
+        failure_reason: None,
+        mode: DebateMode::Heterogeneous,
+    };
+    let transcript = "# Debate transcript\n\nFull content.";
+    let artifacts = persist_debate_output_artifacts(session_dir, &summary, transcript).unwrap();
+
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0].path, "output/debate-verdict.json");
+    assert_eq!(artifacts[1].path, "output/debate-transcript.md");
+
+    let verdict_path = session_dir.join("output/debate-verdict.json");
+    let verdict_json = std::fs::read_to_string(verdict_path).unwrap();
+    let parsed: Value = serde_json::from_str(&verdict_json).unwrap();
+    assert_eq!(parsed["verdict"], "REVISE");
+    assert_eq!(parsed["confidence"], "low");
+    assert_eq!(parsed["summary"], "Need more data before rollout.");
+    assert_eq!(parsed["key_points"][0], "Insufficient benchmark evidence.");
+    assert!(parsed["timestamp"].as_str().is_some());
+    assert!(parsed.get("mode").is_none());
+
+    let transcript_path = session_dir.join("output/debate-transcript.md");
+    let transcript_content = std::fs::read_to_string(transcript_path).unwrap();
+    assert_eq!(transcript_content, transcript);
 }

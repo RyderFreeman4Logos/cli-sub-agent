@@ -19,11 +19,11 @@ use super::resolve::ANTI_RECURSION_PREAMBLE;
 
 /// All context needed to run the fix loop after a review finds issues.
 pub(crate) struct FixLoopContext<'a> {
-    pub tool: ToolName,
+    pub effective_tool: ToolName,
     pub config: Option<&'a ProjectConfig>,
     pub global_config: &'a GlobalConfig,
     pub review_model: Option<String>,
-    pub tier_model_spec: Option<String>,
+    pub effective_tier_model_spec: Option<String>,
     pub review_thinking: Option<String>,
     pub review_routing: ReviewRoutingMetadata,
     pub stream_mode: csa_process::StreamMode,
@@ -66,11 +66,11 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         );
 
         let fix_future = super::execute_review(
-            ctx.tool,
+            ctx.effective_tool,
             fix_prompt,
             Some(session_id.clone()),
             ctx.review_model.clone(),
-            ctx.tier_model_spec.clone(),
+            ctx.effective_tier_model_spec.clone(),
             None,
             false,
             ctx.review_thinking.clone(),
@@ -187,7 +187,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 routed_to: None,
                 primary_failure: None,
                 failure_reason: None,
-                tool: ctx.tool.to_string(),
+                tool: ctx.effective_tool.to_string(),
                 scope: ctx.scope.clone(),
                 exit_code: 0,
                 fix_attempted: true,
@@ -211,7 +211,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         routed_to: None,
         primary_failure: None,
         failure_reason: None,
-        tool: ctx.tool.to_string(),
+        tool: ctx.effective_tool.to_string(),
         scope: ctx.scope,
         exit_code: 1,
         fix_attempted: true,

@@ -473,33 +473,35 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             );
             emit_post_review_output(&post_review_output);
             maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
-
             return Ok(effective_exit_code);
         }
 
-        // Gate: skip fix loop when the review tool has file-editing restrictions.
-        // Tools like gemini-cli may be configured with allow_edit_existing_files=false,
-        // and resuming such a session for fixing would waste tokens producing no edits.
+        // Skip --fix when the effective review tool cannot edit existing files.
+        let effective_fix_tool = result.executed_tool;
+        let effective_fix_model_spec = result.routed_to.clone().or_else(|| {
+            (effective_fix_tool == tool)
+                .then(|| resolved_model_spec.clone())
+                .flatten()
+        });
         let tool_can_edit = config
             .as_ref()
-            .is_none_or(|cfg| cfg.can_tool_edit_existing(tool.as_str()));
+            .is_none_or(|cfg| cfg.can_tool_edit_existing(effective_fix_tool.as_str()));
         if !tool_can_edit {
             warn!(
-                tool = %tool,
+                tool = %effective_fix_tool,
                 "--fix requested but tool has allow_edit_existing_files=false; skipping fix loop"
             );
             maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
             return Ok(effective_exit_code);
         }
-
-        // --- Fix loop: resume the review session to apply fixes, then re-gate ---
+        // Resume the effective review session to apply fixes, then re-gate.
         let scope_for_hook = scope.clone();
         let fix_exit_code = fix::run_fix_loop(fix::FixLoopContext {
-            tool,
+            effective_tool: effective_fix_tool,
             config: config.as_ref(),
             global_config: &global_config,
             review_model,
-            tier_model_spec: resolved_model_spec,
+            effective_tier_model_spec: effective_fix_model_spec,
             review_thinking,
             review_routing,
             stream_mode,

@@ -19,7 +19,10 @@ use crate::debate_cmd_output::{
     append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_text,
     persist_debate_output_artifacts, render_debate_output, render_debate_stdout_json,
 };
-use crate::tier_model_fallback::{classify_next_model_failure, ordered_tier_candidates};
+use crate::tier_model_fallback::{
+    TierAttemptFailure, classify_next_model_failure, format_all_models_failed_reason,
+    ordered_tier_candidates,
+};
 
 /// Debate execution mode indicating model diversity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +300,7 @@ pub(crate) async fn handle_debate(
         tier_active && args.tool.is_none(),
     );
     let mut execution = None;
+    let mut failures = Vec::new();
 
     'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
         candidates.iter().enumerate()
@@ -382,9 +386,16 @@ pub(crate) async fn handle_debate(
                         1,
                         attempt_model_spec.as_deref(),
                     ) {
+                        let model_label = attempt_model_spec
+                            .clone()
+                            .unwrap_or_else(|| attempt_tool.as_str().to_string());
+                        failures.push(TierAttemptFailure {
+                            model_spec: model_label.clone(),
+                            reason: detected.reason.clone(),
+                        });
                         warn!(
                             failed_tool = %attempt_tool,
-                            failed_model = %attempt_model_spec.as_deref().unwrap_or(attempt_tool.as_str()),
+                            failed_model = %model_label,
                             reason = %detected.reason,
                             attempt = attempt_index + 1,
                             total = candidates.len(),
@@ -436,14 +447,22 @@ pub(crate) async fn handle_debate(
                 executed.execution.exit_code,
                 attempt_model_spec.as_deref(),
             ) {
+                let model_label = attempt_model_spec
+                    .clone()
+                    .unwrap_or_else(|| attempt_tool.as_str().to_string());
+                failures.push(TierAttemptFailure {
+                    model_spec: model_label.clone(),
+                    reason: detected.reason.clone(),
+                });
                 warn!(
                     failed_tool = %attempt_tool,
-                    failed_model = %attempt_model_spec.as_deref().unwrap_or(attempt_tool.as_str()),
+                    failed_model = %model_label,
                     reason = %detected.reason,
                     attempt = attempt_index + 1,
                     total = candidates.len(),
                     "Debate tier model failed; advancing to next configured model"
                 );
+                execution = Some(executed);
                 continue 'tier_attempts;
             }
 
@@ -501,21 +520,60 @@ pub(crate) async fn handle_debate(
         }
     }
 
-    let execution = execution.expect("debate tier candidate list is never empty");
+    let all_tier_models_failed = !failures.is_empty() && failures.len() == candidates.len();
+    let execution = if all_tier_models_failed {
+        execution.ok_or_else(|| {
+            anyhow::anyhow!(
+                "debate tier candidate list is never empty: all models failed before producing a resumable session"
+            )
+        })?
+    } else {
+        execution.expect("debate tier candidate list is never empty")
+    };
+    let persisted_session_id = if all_tier_models_failed
+        && csa_session::get_session_dir(&project_root, &execution.meta_session_id).is_err()
+    {
+        csa_session::list_sessions(&project_root, None)?
+            .into_iter()
+            .max_by_key(|session| session.created_at)
+            .map(|session| session.meta_session_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("No persisted debate sessions found after all-tier failure")
+            })?
+    } else {
+        execution.meta_session_id.clone()
+    };
 
     let output = render_debate_output(
         &execution.execution.output,
-        &execution.meta_session_id,
+        &persisted_session_id,
         execution.provider_session_id.as_deref(),
     );
 
-    let debate_summary =
-        extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode);
-    let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;
+    let debate_summary = if all_tier_models_failed {
+        let failure_reason =
+            format_all_models_failed_reason(resolved_tier_name.as_deref(), &failures)
+                .unwrap_or_else(|| "all configured debate tier models failed".to_string());
+        crate::debate_cmd_output::DebateSummary {
+            verdict: "UNAVAILABLE".to_string(),
+            decision: Some("unavailable".to_string()),
+            confidence: "low".to_string(),
+            summary: format!("Debate unavailable: {failure_reason}"),
+            key_points: failures
+                .iter()
+                .map(|failure| format!("{}={}", failure.model_spec, failure.reason))
+                .collect(),
+            failure_reason: Some(failure_reason),
+            mode: debate_mode,
+        }
+    } else {
+        extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode)
+    };
+    let session_dir = csa_session::get_session_dir(&project_root, &persisted_session_id)?;
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
     append_debate_artifacts_to_result(
         &project_root,
-        &execution.meta_session_id,
+        &persisted_session_id,
         &artifacts,
         &debate_summary,
     )?;
@@ -524,7 +582,7 @@ pub(crate) async fn handle_debate(
         output_format,
         &debate_summary,
         &output,
-        &execution.meta_session_id,
+        &persisted_session_id,
     )?;
     if rendered_output.ends_with('\n') {
         print!("{rendered_output}");

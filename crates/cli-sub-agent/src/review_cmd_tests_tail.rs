@@ -790,3 +790,6 @@ mod review_cmd_tests_iteration;
 
 #[path = "review_cmd_tests_pre_exec.rs"]
 mod review_cmd_tests_pre_exec;
+
+#[path = "review_cmd_tests_fix_fallback.rs"]
+mod review_cmd_tests_fix_fallback;
