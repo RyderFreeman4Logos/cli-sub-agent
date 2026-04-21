@@ -169,8 +169,38 @@ fn is_retry_noise(line: &str) -> bool {
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 250;
 pub const DEFAULT_STDIN_WRITE_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
-const WORKSPACE_BOUNDARY_ERROR_THRESHOLD: usize = 3;
+/// Default threshold for workspace-boundary rejection warn-hint emission.
+///
+/// Historically this threshold triggered an immediate kill, which produced
+/// false positives whenever long-running employee sessions legitimately hit
+/// a handful of sandbox-rejected reads (e.g. CSA state dirs under
+/// `~/.local/state/cli-sub-agent/...`).  The detector now only emits a
+/// one-shot hint on threshold crossing — see #981 for history.
+const WORKSPACE_BOUNDARY_ERROR_THRESHOLD: usize = 20;
+const WORKSPACE_BOUNDARY_THRESHOLD_ENV: &str = "CSA_WORKSPACE_BOUNDARY_THRESHOLD";
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Resolve the workspace-boundary warn-hint threshold.
+///
+/// Tunable without rebuild via `CSA_WORKSPACE_BOUNDARY_THRESHOLD`; 0 / invalid /
+/// missing -> [`WORKSPACE_BOUNDARY_ERROR_THRESHOLD`].
+fn resolve_workspace_boundary_threshold() -> usize {
+    std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(WORKSPACE_BOUNDARY_ERROR_THRESHOLD)
+}
+
+/// Build the one-shot hint injected into the child's output on threshold crossing.
+fn workspace_boundary_hint(threshold: usize) -> String {
+    format!(
+        "[csa-notice] Workspace boundary rejections have crossed {threshold}. \
+         Refocus on paths inside the project root; CSA state/cache and tool-internal \
+         directories are inspectable via `csa session logs` / `csa session result` \
+         from the orchestrator, not via direct filesystem reads from inside this session.\n"
+    )
+}
 
 /// Spawn-time process control options.
 #[derive(Debug, Clone, Copy)]
@@ -331,11 +361,15 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut idle_timed_out = false;
     let mut workspace_boundary_timed_out = false;
     let mut workspace_boundary_error_hits = 0usize;
+    let mut workspace_boundary_warned = false;
+    // Tunable without rebuild; 0/invalid/missing -> default.  Resolved once so a
+    // per-line re-read cannot cause mid-session drift.
+    let workspace_boundary_threshold = resolve_workspace_boundary_threshold();
     // timeout_note is set lazily when idle timeout fires, so that it reflects
     // whether the initial_response_timeout or the normal idle_timeout was active.
     let mut timeout_note = String::new();
     let workspace_boundary_note = format!(
-        "workspace boundary timeout: detected {WORKSPACE_BOUNDARY_ERROR_THRESHOLD} repeated boundary errors ('Path not in workspace'); process killed"
+        "workspace boundary hits crossed threshold {workspace_boundary_threshold}; session continued (non-fatal)"
     );
 
     if let Some(stderr_handle) = stderr {
@@ -378,15 +412,19 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 stream_mode,
                             );
                             drain_if_over_high_water(&mut output);
-                            if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
+                            if workspace_boundary_error_hits >= workspace_boundary_threshold
+                                && !workspace_boundary_warned
+                            {
                                 workspace_boundary_timed_out = true;
+                                workspace_boundary_warned = true;
                                 warn!(
                                     hits = workspace_boundary_error_hits,
-                                    threshold = WORKSPACE_BOUNDARY_ERROR_THRESHOLD,
-                                    "Killing child due to repeated workspace boundary errors"
+                                    threshold = workspace_boundary_threshold,
+                                    "Workspace boundary hits crossed threshold; continuing but flagging for diagnostics"
                                 );
-                                terminate_child_process_group(&mut child, termination_grace_period).await;
-                                break;
+                                // Inject a one-shot hint into the child's output accumulator.
+                                // We DO NOT kill the child; idle-timeout and exit paths still apply.
+                                output.push_str(&workspace_boundary_hint(workspace_boundary_threshold));
                             }
                         }
                         Err(_) => {
@@ -424,15 +462,19 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 stream_mode,
                             );
                             drain_if_over_high_water(&mut stderr_output);
-                            if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
+                            if workspace_boundary_error_hits >= workspace_boundary_threshold
+                                && !workspace_boundary_warned
+                            {
                                 workspace_boundary_timed_out = true;
+                                workspace_boundary_warned = true;
                                 warn!(
                                     hits = workspace_boundary_error_hits,
-                                    threshold = WORKSPACE_BOUNDARY_ERROR_THRESHOLD,
-                                    "Killing child due to repeated workspace boundary errors"
+                                    threshold = workspace_boundary_threshold,
+                                    "Workspace boundary hits crossed threshold; continuing but flagging for diagnostics"
                                 );
-                                terminate_child_process_group(&mut child, termination_grace_period).await;
-                                break;
+                                // Inject a one-shot hint into the child's output accumulator.
+                                // We DO NOT kill the child; idle-timeout and exit paths still apply.
+                                output.push_str(&workspace_boundary_hint(workspace_boundary_threshold));
                             }
                         }
                         Err(_) => {
@@ -533,15 +575,19 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 stream_mode,
                             );
                             drain_if_over_high_water(&mut output);
-                            if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
+                            if workspace_boundary_error_hits >= workspace_boundary_threshold
+                                && !workspace_boundary_warned
+                            {
                                 workspace_boundary_timed_out = true;
+                                workspace_boundary_warned = true;
                                 warn!(
                                     hits = workspace_boundary_error_hits,
-                                    threshold = WORKSPACE_BOUNDARY_ERROR_THRESHOLD,
-                                    "Killing child due to repeated workspace boundary errors"
+                                    threshold = workspace_boundary_threshold,
+                                    "Workspace boundary hits crossed threshold; continuing but flagging for diagnostics"
                                 );
-                                terminate_child_process_group(&mut child, termination_grace_period).await;
-                                break;
+                                // Inject a one-shot hint into the child's output accumulator.
+                                // We DO NOT kill the child; idle-timeout and exit paths still apply.
+                                output.push_str(&workspace_boundary_hint(workspace_boundary_threshold));
                             }
                         }
                         Err(_) => {
@@ -623,7 +669,9 @@ pub async fn wait_and_capture_with_idle_timeout(
         stderr_output.push_str(&timeout_note);
         stderr_output.push('\n');
     } else if workspace_boundary_timed_out {
-        exit_code = 125;
+        // Non-fatal post #981: the boundary-warn annotation goes to stderr as a
+        // diagnostic, but we do NOT override exit_code.  The session's real
+        // exit status (success or a different failure) wins.
         if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
             stderr_output.push('\n');
         }
@@ -633,10 +681,13 @@ pub async fn wait_and_capture_with_idle_timeout(
 
     let summary = if idle_timed_out {
         timeout_note
-    } else if workspace_boundary_timed_out {
-        workspace_boundary_note
     } else if exit_code == 0 {
         extract_summary(&output)
+    } else if workspace_boundary_timed_out {
+        // Session failed AND crossed the boundary threshold: prefer the boundary
+        // note over a generic failure summary, because the threshold crossing is
+        // usually the actionable signal.
+        workspace_boundary_note
     } else {
         failure_summary(&output, &stderr_output, exit_code)
     };
@@ -723,6 +774,9 @@ pub async fn run_and_capture_with_stdin(
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "lib_tests_boundary.rs"]
+mod tests_boundary;
 #[cfg(test)]
 #[path = "lib_tests_heartbeat.rs"]
 mod tests_heartbeat;
