@@ -243,6 +243,11 @@ fn persist_verdict_refreshes_on_fix_reuse_session() {
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
+    if which::which("bwrap").is_err() {
+        eprintln!("skipping: bwrap not installed (CI gap, see #987)");
+        return;
+    }
+
     let project_dir = exact_test_setup_git_repo();
     let _sandbox = test_session_sandbox::ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
@@ -321,6 +326,11 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metadata() {
+    if which::which("bwrap").is_err() {
+        eprintln!("skipping: bwrap not installed (CI gap, see #987)");
+        return;
+    }
+
     let project_dir = exact_test_setup_git_repo();
     let _sandbox = test_session_sandbox::ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");

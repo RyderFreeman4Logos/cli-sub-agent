@@ -28,6 +28,11 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
     use crate::review_cmd::output::persist_review_verdict;
     use std::os::unix::fs::PermissionsExt;
 
+    if which::which("bwrap").is_err() {
+        eprintln!("skipping: bwrap not installed (CI gap, see #987)");
+        return;
+    }
+
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
@@ -137,6 +142,11 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
 #[tokio::test]
 async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
     use std::os::unix::fs::PermissionsExt;
+
+    if which::which("bwrap").is_err() {
+        eprintln!("skipping: bwrap not installed (CI gap, see #987)");
+        return;
+    }
 
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
