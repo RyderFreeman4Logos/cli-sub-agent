@@ -81,6 +81,7 @@ fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
         CLEAN => ReviewDecision::Pass,
         "SKIP" => ReviewDecision::Skip,
         "UNCERTAIN" => ReviewDecision::Uncertain,
+        "UNAVAILABLE" => ReviewDecision::Unavailable,
         _ => ReviewDecision::Fail,
     }
 }
@@ -370,6 +371,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_model.clone(),
             resolved_model_spec.clone(),
             resolved_tier_name.clone(),
+            tier_active && args.tool.is_none(),
             review_thinking.clone(),
             review_description.clone(),
             &project_root,
@@ -408,7 +410,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        let resolved = resolve_single_review_result(&result, tool, &scope);
+        let resolved = resolve_single_review_result(&result, result.executed_tool, &scope);
         let sanitized = resolved.sanitized;
         let empty_output = resolved.empty_output;
         let verdict = resolved.verdict;
@@ -429,7 +431,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             decision: decision.as_str().to_string(),
             verdict: verdict.to_string(),
             status_reason: result.status_reason.clone(),
-            tool: tool.to_string(),
+            routed_to: result.routed_to.clone(),
+            primary_failure: result.primary_failure.clone(),
+            failure_reason: result.failure_reason.clone(),
+            tool: result.executed_tool.to_string(),
             scope: scope.clone(),
             exit_code: effective_exit_code,
             fix_attempted: args.fix,
@@ -626,6 +631,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_model,
                 reviewer_model_spec,
                 reviewer_tier_name,
+                false,
                 reviewer_thinking,
                 reviewer_description,
                 &reviewer_project_root,
@@ -700,6 +706,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                     .as_deref()
                     .is_some_and(|d| d.contains("OAuth browser prompt")))
             .then(|| GEMINI_AUTH_PROMPT_STATUS_REASON.to_string()),
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
             tool: outcome.tool.as_str().to_string(),
             scope: scope.clone(),
             exit_code: outcome.exit_code,

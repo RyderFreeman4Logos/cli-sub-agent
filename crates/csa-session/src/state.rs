@@ -143,7 +143,7 @@ pub struct ReviewSessionMeta {
     pub session_id: String,
     /// Git HEAD SHA at review time.
     pub head_sha: String,
-    /// Four-value review decision: pass, fail, skip, uncertain.
+    /// Five-value review decision: pass, fail, skip, uncertain, unavailable.
     pub decision: String,
     /// Legacy verdict string (CLEAN, HAS_ISSUES, etc.) for backward compatibility.
     pub verdict: String,
@@ -151,6 +151,16 @@ pub struct ReviewSessionMeta {
     /// (for example, an auth/setup failure that prevented the review from running).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_reason: Option<String>,
+    /// Tier model spec actually used after fallback, when it differs from the primary choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routed_to: Option<String>,
+    /// Classified failure reason for the primary tier entry, optionally chained with
+    /// intermediate fallback failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_failure: Option<String>,
+    /// Human-readable explanation when the reviewer infrastructure could not run to completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
     /// Tool used for this review (e.g., "claude-code", "codex").
     pub tool: String,
     /// Review scope (e.g., "uncommitted", "range:main...HEAD", "base:main").

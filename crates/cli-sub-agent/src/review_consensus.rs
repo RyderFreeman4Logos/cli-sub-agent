@@ -30,6 +30,7 @@ pub(crate) const CLEAN: &str = "CLEAN";
 pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";
 pub(crate) const SKIP: &str = "SKIP";
 pub(crate) const UNCERTAIN: &str = "UNCERTAIN";
+pub(crate) const UNAVAILABLE: &str = "UNAVAILABLE";
 
 /// Contract alignment rule_id constants for spec-aware review findings.
 /// These are emitted by the review agent when a spec/TODO context is provided.
@@ -166,7 +167,7 @@ pub(crate) fn build_multi_reviewer_instruction(
     let mut prompt = format!(
         "{base_prompt}\n\
 You are reviewer {reviewer_index}. Emit exactly one final verdict token: \
-PASS, FAIL, SKIP, or UNCERTAIN.\n\
+PASS, FAIL, SKIP, UNCERTAIN, or UNAVAILABLE.\n\
 Legacy aliases accepted: {CLEAN} → PASS, {HAS_ISSUES} → FAIL.\n\
 Write review artifacts to {output_dir}/review-findings.json and {output_dir}/review-report.md.\n\
 Verdict rules:\n\
@@ -174,6 +175,7 @@ Verdict rules:\n\
 - FAIL: serious issues found.\n\
 - SKIP: review scope is empty or not applicable.\n\
 - UNCERTAIN: insufficient context to make a confident determination.\n\
+- UNAVAILABLE: reviewer infrastructure could not complete the review.\n\
 When spec/contract context is provided, use rule_id values: \
 '{RULE_SPEC_DEVIATION}' (implementation contradicts spec), \
 '{RULE_UNVERIFIED_CRITERION}' (criterion not addressed by diff), \
@@ -260,9 +262,9 @@ pub(crate) fn parse_review_verdict(output: &str, exit_code: i32) -> &'static str
     }
 }
 
-/// Parse review output into four-value `ReviewDecision`.
+/// Parse review output into five-value `ReviewDecision`.
 ///
-/// Token priority: FAIL/HAS_ISSUES > UNCERTAIN > PASS/CLEAN > SKIP.
+/// Token priority: FAIL/HAS_ISSUES > UNAVAILABLE > UNCERTAIN > PASS/CLEAN > SKIP.
 /// Falls back to exit code when no verdict token is found.
 pub(crate) fn parse_review_decision(
     output: &str,
@@ -272,12 +274,15 @@ pub(crate) fn parse_review_decision(
 
     let has_fail =
         contains_verdict_token(output, HAS_ISSUES) || contains_verdict_token(output, "FAIL");
+    let has_unavailable = contains_verdict_token(output, UNAVAILABLE);
     let has_uncertain = contains_verdict_token(output, UNCERTAIN);
     let has_pass = contains_verdict_token(output, CLEAN) || contains_verdict_token(output, "PASS");
     let has_skip = contains_verdict_token(output, SKIP);
 
     if has_fail {
         ReviewDecision::Fail
+    } else if has_unavailable {
+        ReviewDecision::Unavailable
     } else if has_uncertain {
         ReviewDecision::Uncertain
     } else if has_pass {
@@ -365,6 +370,9 @@ pub(crate) fn consensus_verdict(consensus_result: &ConsensusResult) -> &'static 
         }
         if decision.eq_ignore_ascii_case(SKIP) {
             return SKIP;
+        }
+        if decision.eq_ignore_ascii_case(UNAVAILABLE) {
+            return UNAVAILABLE;
         }
         if decision.eq_ignore_ascii_case(UNCERTAIN) {
             return UNCERTAIN;

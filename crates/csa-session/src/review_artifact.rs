@@ -107,6 +107,12 @@ pub struct ReviewVerdictArtifact {
     pub decision: ReviewDecision,
     pub verdict_legacy: String,
     pub severity_counts: BTreeMap<Severity, u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routed_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
     #[serde(default)]
     pub prior_round_refs: Vec<String>,
 }
@@ -139,6 +145,9 @@ impl ReviewVerdictArtifact {
             decision,
             verdict_legacy: verdict_legacy.into(),
             severity_counts,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
             prior_round_refs,
         }
     }

@@ -19,9 +19,12 @@ use tracing::{debug, warn};
 
 #[path = "review_cmd_output_clean.rs"]
 mod clean_detection;
+#[path = "review_cmd_output_diagnostics.rs"]
+mod diagnostics;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
 use clean_detection::{contains_clean_phrase, review_contains_prose_clean_conclusion};
+pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
 };
@@ -227,14 +230,18 @@ pub(super) fn persist_review_verdict(
                 );
                 return;
             }
-            let artifact = if meta.status_reason.is_some() {
-                ReviewVerdictArtifact::from_parts(
+            let mut artifact = if meta.status_reason.is_some() {
+                let mut artifact = ReviewVerdictArtifact::from_parts(
                     meta.session_id.clone(),
                     ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain),
                     meta.verdict.clone(),
                     findings,
                     prior_round_refs.clone(),
-                )
+                );
+                artifact.routed_to = meta.routed_to.clone();
+                artifact.primary_failure = meta.primary_failure.clone();
+                artifact.failure_reason = meta.failure_reason.clone();
+                artifact
             } else {
                 match derive_review_verdict_artifact(&session_dir, meta, findings) {
                     Ok(mut artifact) => {
@@ -258,6 +265,9 @@ pub(super) fn persist_review_verdict(
                     }
                 }
             };
+            artifact.routed_to = meta.routed_to.clone();
+            artifact.primary_failure = meta.primary_failure.clone();
+            artifact.failure_reason = meta.failure_reason.clone();
             if let Err(e) = write_review_verdict(&session_dir, &artifact) {
                 warn!(
                     session_id = %meta.session_id,
@@ -303,6 +313,9 @@ fn derive_review_verdict_artifact(
             decision,
             legacy_verdict_for_decision(decision, &meta.verdict),
             severity_counts,
+            meta.routed_to.clone(),
+            meta.primary_failure.clone(),
+            meta.failure_reason.clone(),
             Vec::new(),
         ));
     }
@@ -373,6 +386,9 @@ fn infer_review_verdict_from_full_output(
         decision,
         legacy_verdict_for_decision(decision, &meta.verdict),
         counts,
+        meta.routed_to.clone(),
+        meta.primary_failure.clone(),
+        meta.failure_reason.clone(),
         Vec::new(),
     )))
 }
@@ -433,6 +449,7 @@ fn looks_like_review_message(text: &str) -> bool {
         || contains_verdict_token(text, "CLEAN")
         || contains_verdict_token(text, "FAIL")
         || contains_verdict_token(text, "HAS_ISSUES")
+        || contains_verdict_token(text, "UNAVAILABLE")
         || contains_verdict_token(text, "UNCERTAIN")
         || contains_clean_phrase(text)
         || text.lines().any(|line| {
@@ -525,6 +542,7 @@ fn derive_decision_from_findings(
             Some(
                 meta_decision @ (ReviewDecision::Skip
                 | ReviewDecision::Uncertain
+                | ReviewDecision::Unavailable
                 | ReviewDecision::Fail),
             ) => {
                 return meta_decision;
@@ -556,6 +574,9 @@ fn derive_decision_from_text(
     if contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES") {
         return ReviewDecision::Fail;
     }
+    if contains_verdict_token(text, "UNAVAILABLE") {
+        return ReviewDecision::Unavailable;
+    }
     if contains_verdict_token(text, "SKIP") {
         return ReviewDecision::Skip;
     }
@@ -581,11 +602,15 @@ fn derive_decision_from_text(
     ReviewDecision::Uncertain
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_review_verdict_artifact(
     session_id: String,
     decision: ReviewDecision,
     verdict_legacy: String,
     severity_counts: std::collections::BTreeMap<Severity, u32>,
+    routed_to: Option<String>,
+    primary_failure: Option<String>,
+    failure_reason: Option<String>,
     prior_round_refs: Vec<String>,
 ) -> ReviewVerdictArtifact {
     ReviewVerdictArtifact {
@@ -595,6 +620,9 @@ fn build_review_verdict_artifact(
         decision,
         verdict_legacy,
         severity_counts,
+        routed_to,
+        primary_failure,
+        failure_reason,
         prior_round_refs,
     }
 }
@@ -603,7 +631,9 @@ fn legacy_verdict_for_decision(decision: ReviewDecision, fallback: &str) -> Stri
     match decision {
         ReviewDecision::Pass => "CLEAN".to_string(),
         ReviewDecision::Fail => "HAS_ISSUES".to_string(),
-        ReviewDecision::Skip | ReviewDecision::Uncertain => fallback.to_string(),
+        ReviewDecision::Skip | ReviewDecision::Uncertain | ReviewDecision::Unavailable => {
+            fallback.to_string()
+        }
     }
 }
 
@@ -625,42 +655,6 @@ pub(super) fn is_worktree_submodule(project_root: &Path) -> bool {
     };
     let gitdir = gitdir_raw.trim();
     gitdir.contains("/worktrees/") && gitdir.contains("/modules/")
-}
-
-/// Detect known tool-level diagnostic messages that indicate the review tool
-/// failed to actually perform a review (e.g., gemini-cli MCP connectivity issues).
-///
-/// Checks both stdout and stderr for known failure patterns.
-/// Returns a human-readable diagnostic summary when a known pattern is found.
-pub(super) fn detect_tool_diagnostic(stdout: &str, stderr: &str) -> Option<String> {
-    let has_quota_issue = |text: &str| {
-        let text_lower = text.to_ascii_lowercase();
-        RATE_LIMIT_PATTERNS
-            .iter()
-            .copied()
-            .any(|marker| text_lower.contains(marker))
-            || text_lower.contains("quota will reset")
-    };
-    let has_mcp_issue =
-        |text: &str| text.contains("MCP issues detected") || text.contains("Run /mcp list");
-
-    if has_quota_issue(stdout) || has_quota_issue(stderr) {
-        return Some(
-            "gemini-cli OAuth quota exhausted. Either (a) configure GEMINI_API_KEY in ~/.config/cli-sub-agent/config.toml under [tools.gemini-cli] api_key for automatic retry, or (b) wait for quota reset."
-                .to_string(),
-        );
-    }
-
-    if has_mcp_issue(stdout) || has_mcp_issue(stderr) {
-        return Some(
-            "gemini-cli MCP init degraded. \
-             Retry with `--force-ignore-tier-setting` + a different `--tool`, \
-             or run `csa doctor` to diagnose unhealthy MCP servers."
-                .to_string(),
-        );
-    }
-
-    None
 }
 
 pub(super) fn detect_tool_review_failure(

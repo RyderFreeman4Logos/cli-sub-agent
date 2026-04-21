@@ -1,6 +1,5 @@
-//! 429 / rate-limit detection from tool stderr and stdout.
+//! Classify stderr/stdout conditions that may require tier failover.
 
-use csa_core::gemini::RATE_LIMIT_PATTERNS as GEMINI_RATE_LIMIT_PATTERNS;
 use serde::Serialize;
 
 const ACP_CRASH_EXHAUSTION_PATTERNS: &[&str] =
@@ -13,16 +12,52 @@ const GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS: &[&str] =
 pub struct RateLimitDetected {
     pub tool: String,
     pub matched_pattern: String,
+    pub reason: String,
+    pub advance_to_next_model: bool,
     /// The model spec that was running when the rate limit hit (e.g.
     /// "gemini-cli/google/gemini-2.5-pro/high"). Enables tier-aware failover
     /// to pick an equivalent model from a different family.
     pub model_spec: Option<String>,
 }
 
-/// Check stderr/stdout for rate-limit indicators.
+#[derive(Clone, Copy)]
+struct FailoverPattern {
+    pattern: &'static str,
+    reason: &'static str,
+    advance_to_next_model: bool,
+}
+
+const GEMINI_RETRY_CHAIN_FAILOVER_PATTERNS: &[FailoverPattern] = &[
+    FailoverPattern {
+        pattern: GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS[0],
+        reason: "gemini_retry_chain_exhausted",
+        advance_to_next_model: false,
+    },
+    FailoverPattern {
+        pattern: GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS[1],
+        reason: "gemini_retry_chain_exhausted",
+        advance_to_next_model: false,
+    },
+];
+
+const ACP_CRASH_FAILOVER_PATTERNS: &[FailoverPattern] = &[
+    FailoverPattern {
+        pattern: ACP_CRASH_EXHAUSTION_PATTERNS[0],
+        reason: "acp_crash_retry_exhausted",
+        advance_to_next_model: false,
+    },
+    FailoverPattern {
+        pattern: ACP_CRASH_EXHAUSTION_PATTERNS[1],
+        reason: "acp_crash_retry_exhausted",
+        advance_to_next_model: false,
+    },
+];
+
+/// Check stderr/stdout for failover indicators.
 ///
-/// Each tool emits different error messages when rate-limited. This function
-/// checks known patterns and returns `Some` if a match is found.
+/// Each tool emits different error messages for quota/auth/permission failures.
+/// This function normalizes the known patterns and indicates whether the caller
+/// should advance to the next tier model.
 pub fn detect_rate_limit(
     tool_name: &str,
     stderr: &str,
@@ -36,14 +71,16 @@ pub fn detect_rate_limit(
     }
 
     let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
-    let patterns = patterns_for_tool(tool_name);
-    let failover_patterns = failover_patterns_for_tool(tool_name);
-
-    for pattern in patterns.iter().chain(failover_patterns.iter()).copied() {
-        if combined_lower.contains(pattern) {
+    for pattern in patterns_for_tool(tool_name)
+        .iter()
+        .chain(failover_patterns_for_tool(tool_name).iter())
+    {
+        if combined_lower.contains(pattern.pattern) {
             return Some(RateLimitDetected {
                 tool: tool_name.to_string(),
-                matched_pattern: pattern.to_string(),
+                matched_pattern: pattern.pattern.to_string(),
+                reason: pattern.reason.to_string(),
+                advance_to_next_model: pattern.advance_to_next_model,
                 model_spec: model_spec.map(String::from),
             });
         }
@@ -52,27 +89,216 @@ pub fn detect_rate_limit(
     None
 }
 
-fn failover_patterns_for_tool(tool: &str) -> &'static [&'static str] {
+fn failover_patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
     match tool {
-        "gemini-cli" => GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS,
-        "codex" | "claude-code" => ACP_CRASH_EXHAUSTION_PATTERNS,
+        "gemini-cli" => GEMINI_RETRY_CHAIN_FAILOVER_PATTERNS,
+        "codex" | "claude-code" => ACP_CRASH_FAILOVER_PATTERNS,
         _ => &[],
     }
 }
 
-fn patterns_for_tool(tool: &str) -> &'static [&'static str] {
+fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
     match tool {
-        "gemini-cli" => GEMINI_RATE_LIMIT_PATTERNS,
-        "opencode" => &["rate limit", "429", "too many requests"],
-        "codex" => &[
-            "rate_limit_exceeded",
-            "usage_limit_exceeded",
-            "usage limit",
-            "429",
-            "ratelimiterror",
+        "gemini-cli" => &[
+            FailoverPattern {
+                pattern: "429",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "quota_exhausted",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "quota exhausted",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "resource exhausted",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "resource_exhausted",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "capacity exhausted",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "capacity_exhausted",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "exhausted your capacity",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "no capacity available",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "quota exceeded",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 401",
+                reason: "HTTP 401",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "_apierror: {\"error\":\"invalid api key\"}",
+                reason: "Invalid API key",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "invalid api key",
+                reason: "Invalid API key",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 403",
+                reason: "HTTP 403",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "forbidden",
+                reason: "HTTP 403",
+                advance_to_next_model: true,
+            },
         ],
-        "claude-code" => &["rate limit", "529", "429", "overloaded"],
-        _ => &["429", "rate limit"],
+        "opencode" => &[
+            FailoverPattern {
+                pattern: "rate limit",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "429",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "too many requests",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 401",
+                reason: "HTTP 401",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 403",
+                reason: "HTTP 403",
+                advance_to_next_model: true,
+            },
+        ],
+        "codex" => &[
+            FailoverPattern {
+                pattern: "rate_limit_exceeded",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "usage_limit_exceeded",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "usage limit",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "ratelimiterror",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "429",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 401",
+                reason: "HTTP 401",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "invalid api key",
+                reason: "Invalid API key",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 403",
+                reason: "HTTP 403",
+                advance_to_next_model: true,
+            },
+        ],
+        "claude-code" => &[
+            FailoverPattern {
+                pattern: "rate limit",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "429",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "529",
+                reason: "HTTP 529",
+                advance_to_next_model: false,
+            },
+            FailoverPattern {
+                pattern: "overloaded",
+                reason: "HTTP 529",
+                advance_to_next_model: false,
+            },
+            FailoverPattern {
+                pattern: "http 401",
+                reason: "HTTP 401",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 403",
+                reason: "HTTP 403",
+                advance_to_next_model: true,
+            },
+        ],
+        _ => &[
+            FailoverPattern {
+                pattern: "429",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "rate limit",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 401",
+                reason: "HTTP 401",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
+                pattern: "http 403",
+                reason: "HTTP 403",
+                advance_to_next_model: true,
+            },
+        ],
     }
 }
 
@@ -169,7 +395,9 @@ mod tests {
     fn test_claude_529_overloaded() {
         let result = detect_rate_limit("claude-code", "HTTP 529 Service Overloaded", "", 1, None);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "529");
+        let detected = result.unwrap();
+        assert_eq!(detected.matched_pattern, "529");
+        assert!(!detected.advance_to_next_model);
     }
 
     #[test]
@@ -261,6 +489,7 @@ mod tests {
         let detected = result.unwrap();
         assert_eq!(detected.tool, "claude-code");
         assert_eq!(detected.matched_pattern, "rate limit");
+        assert_eq!(detected.reason, "HTTP 429");
     }
 
     #[test]
@@ -323,7 +552,32 @@ mod tests {
     fn test_gemini_quota_exhausted_case_insensitive() {
         let result = detect_rate_limit("gemini-cli", "reason: 'QUOTA_EXHAUSTED'", "", 1, None);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "quota_exhausted");
+        let detected = result.unwrap();
+        assert_eq!(detected.matched_pattern, "quota_exhausted");
+        assert_eq!(detected.reason, "QUOTA_EXHAUSTED");
+        assert!(detected.advance_to_next_model);
+    }
+
+    #[test]
+    fn test_gemini_invalid_api_key_advances_to_next_model() {
+        let detected = detect_rate_limit(
+            "gemini-cli",
+            "_ApiError: {\"error\":\"Invalid API key\"}",
+            "",
+            1,
+            None,
+        )
+        .expect("invalid api key should classify");
+        assert_eq!(detected.reason, "Invalid API key");
+        assert!(detected.advance_to_next_model);
+    }
+
+    #[test]
+    fn test_http_403_advances_to_next_model() {
+        let detected = detect_rate_limit("codex", "HTTP 403 Forbidden", "", 1, None)
+            .expect("403 should classify");
+        assert_eq!(detected.reason, "HTTP 403");
+        assert!(detected.advance_to_next_model);
     }
 
     #[test]

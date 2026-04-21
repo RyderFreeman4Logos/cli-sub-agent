@@ -62,6 +62,7 @@ mod session_observability;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_resolver;
+mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;
 mod todo_ref_cmd;
