@@ -7,7 +7,7 @@ use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{GlobalConfig, ProjectProfile, ToolRestrictions, global::GlobalToolConfig};
 use csa_core::types::ToolName;
 use csa_executor::PeakMemoryContext;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 #[tokio::test]
@@ -17,11 +17,13 @@ async fn execute_review_reclassifies_complete_review_after_edit_restriction() {
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
+    let tracked_path = project_dir.path().join("tracked.txt");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        "#!/bin/sh\n\
+        &format!(
+            "#!/bin/sh\n\
 printf '%s\\n' \
 '<!-- CSA:SECTION:summary -->' \
 'Review completed successfully.' \
@@ -32,7 +34,9 @@ printf '%s\\n' \
 '<!-- CSA:SECTION:details:END -->' \
 '' \
 'PASS'\n\
-printf 'tool mutation\\n' >> tracked.txt\n",
+printf 'tool mutation\\n' >> \"{}\"\n",
+            tracked_path.display()
+        ),
     )
     .unwrap();
     let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
@@ -669,5 +673,99 @@ fn csa_review_patterns_do_not_use_relative_output_paths() {
         offenders.is_empty(),
         "found relative output/ paths in review pattern files:\n{}",
         offenders.join("\n")
+    );
+}
+
+fn collect_test_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read_dir") {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_test_files(&path, files);
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with("_tests.rs"))
+        {
+            files.push(path);
+        }
+    }
+}
+
+fn contains_relative_redirect(line: &str) -> bool {
+    let redirect_positions = [" >> ", " > "]
+        .into_iter()
+        .filter_map(|needle| line.find(needle).map(|idx| (idx, needle.len())))
+        .collect::<Vec<_>>();
+    for (idx, needle_len) in redirect_positions {
+        let target = line[idx + needle_len..].trim_start();
+        let normalized_target = target.trim_start_matches('\\');
+        if normalized_target.starts_with("&")
+            || normalized_target.starts_with('"')
+            || normalized_target.starts_with('\'')
+            || normalized_target.starts_with('/')
+            || normalized_target.starts_with('{')
+            || normalized_target.starts_with("$")
+        {
+            continue;
+        }
+        return true;
+    }
+
+    if let Some(idx) = line.find(" tee ") {
+        let target = line[idx + " tee ".len()..].trim_start();
+        let normalized_target = target.trim_start_matches('\\');
+        if normalized_target.starts_with('&')
+            || normalized_target.starts_with('"')
+            || normalized_target.starts_with('\'')
+            || normalized_target.starts_with('/')
+            || normalized_target.starts_with('{')
+            || normalized_target.starts_with("$")
+        {
+            return false;
+        }
+        return true;
+    }
+
+    false
+}
+
+#[test]
+fn test_fake_tool_scripts_write_to_absolute_paths_only() {
+    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut test_files = Vec::new();
+    collect_test_files(&src_dir, &mut test_files);
+    let mut violations = Vec::new();
+
+    for path in test_files {
+        let content = std::fs::read_to_string(&path).expect("read test file");
+        let mut in_fake_script = false;
+        for (lineno, line) in content.lines().enumerate() {
+            if line.contains("#!/bin/sh") {
+                in_fake_script = true;
+            }
+            if in_fake_script
+                && (line.contains("printf") || line.contains("echo") || line.contains("tee "))
+                && contains_relative_redirect(line)
+            {
+                violations.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    lineno + 1,
+                    line.trim()
+                ));
+            }
+            if in_fake_script && line.trim_end().ends_with("\",") {
+                in_fake_script = false;
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "relative-path redirects in fake scripts:\n{}",
+        violations.join("\n")
     );
 }

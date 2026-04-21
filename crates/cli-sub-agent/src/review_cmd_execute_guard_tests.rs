@@ -14,13 +14,16 @@ async fn execute_review_fails_when_repo_root_output_artifact_is_created() {
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
+    let output_dir = project_dir.path().join("output");
+    let details_path = output_dir.join("details.md");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        "#!/bin/sh\n\
-mkdir -p output\n\
-printf 'repo-root leak\\n' > output/details.md\n\
+        &format!(
+            "#!/bin/sh\n\
+mkdir -p \"{}\"\n\
+printf 'repo-root leak\\n' > \"{}\"\n\
 printf '%s\\n' \
 '<!-- CSA:SECTION:summary -->' \
 'Review completed successfully.' \
@@ -31,6 +34,9 @@ printf '%s\\n' \
 '<!-- CSA:SECTION:details:END -->' \
 '' \
 'PASS'\n",
+            output_dir.display(),
+            details_path.display()
+        ),
     )
     .unwrap();
     let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
@@ -96,15 +102,21 @@ async fn execute_review_error_path_still_checks_artifact_contract() {
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
+    let output_dir = project_dir.path().join("output");
+    let details_path = output_dir.join("details.md");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        "#!/bin/sh\n\
-mkdir -p output\n\
-printf 'repo-root leak\\n' > output/details.md\n\
+        &format!(
+            "#!/bin/sh\n\
+mkdir -p \"{}\"\n\
+printf 'repo-root leak\\n' > \"{}\"\n\
 printf 'review tool failed\\n' >&2\n\
 exit 7\n",
+            output_dir.display(),
+            details_path.display()
+        ),
     )
     .unwrap();
     let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
@@ -170,6 +182,8 @@ async fn execute_review_retry_path_still_checks_artifact_contract() {
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_gemini = bin_dir.join("gemini");
     let auth_log = project_dir.path().join("gemini-auth.log");
+    let output_dir = project_dir.path().join("output");
+    let details_path = output_dir.join("details.md");
     std::fs::write(
         &fake_gemini,
         format!(
@@ -180,8 +194,8 @@ if [ \"$1\" = \"--version\" ]; then\n\
 fi\n\
 if [ -n \"${{GEMINI_API_KEY:-}}\" ]; then\n\
   printf 'api_key\\n' >> \"{}\"\n\
-  mkdir -p output\n\
-  printf 'leak\\n' > output/details.md\n\
+  mkdir -p \"{}\"\n\
+  printf 'leak\\n' > \"{}\"\n\
   printf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS' '<!-- CSA:SECTION:summary:END -->'\n\
   printf '%s\\n' '<!-- CSA:SECTION:details -->' 'No issues found.' '<!-- CSA:SECTION:details:END -->'\n\
 else\n\
@@ -189,6 +203,8 @@ else\n\
   printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n\
 fi\n",
             auth_log.display(),
+            output_dir.display(),
+            details_path.display(),
             auth_log.display()
         ),
     )
@@ -265,12 +281,14 @@ async fn execute_review_fails_when_repo_root_findings_artifact_is_created() {
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
+    let findings_path = project_dir.path().join("review-findings.json");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        "#!/bin/sh\n\
-printf '{\"findings\":[]}\n' > review-findings.json\n\
+        &format!(
+            "#!/bin/sh\n\
+printf '{{\"findings\":[]}}\\n' > \"{}\"\n\
 printf '%s\\n' \
 '<!-- CSA:SECTION:summary -->' \
 'Review completed successfully.' \
@@ -281,6 +299,8 @@ printf '%s\\n' \
 '<!-- CSA:SECTION:details:END -->' \
 '' \
 'PASS'\n",
+            findings_path.display()
+        ),
     )
     .unwrap();
     let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
