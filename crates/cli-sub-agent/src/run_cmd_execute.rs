@@ -67,6 +67,7 @@ pub(crate) async fn handle_run(
     prompt: Option<String>,
     prompt_flag: Option<String>,
     prompt_file: Option<PathBuf>,
+    inline_context_from_review_session: Option<String>,
     session_arg: Option<String>,
     last: bool,
     fork_from: Option<String>,
@@ -198,6 +199,20 @@ pub(crate) async fn handle_run(
     } else {
         prompt
     };
+    let prompt = if inline_context_from_review_session.is_some() && skill.is_none() {
+        Some(crate::run_helpers::read_prompt(prompt)?)
+    } else {
+        prompt
+    };
+    let prompt = prompt
+        .map(|prompt| {
+            crate::run_helpers::prepend_review_context_to_prompt(
+                &project_root,
+                prompt,
+                inline_context_from_review_session.as_deref(),
+            )
+        })
+        .transpose()?;
 
     let skill_res = resolve_skill_and_prompt(
         skill.as_deref(),
