@@ -199,7 +199,7 @@ fn test_matrix_claude_code_openai_compat_rejected() {
     assert_unsupported(
         &make_claude_code(),
         super::TransportMode::OpenaiCompat,
-        "only supports Legacy or ACP",
+        "only supports cli or acp",
     );
 }
 
@@ -220,7 +220,7 @@ fn test_matrix_codex_openai_compat_rejected() {
     assert_unsupported(
         &make_codex(),
         super::TransportMode::OpenaiCompat,
-        "only supports Legacy or ACP",
+        "only supports cli or acp",
     );
 }
 
@@ -241,7 +241,7 @@ fn test_matrix_gemini_cli_openai_compat_rejected() {
     assert_unsupported(
         &make_gemini_cli(),
         super::TransportMode::OpenaiCompat,
-        "only supports Legacy or ACP",
+        "only supports cli or acp",
     );
 }
 
@@ -257,7 +257,7 @@ fn test_matrix_opencode_acp_rejected() {
     assert_unsupported(
         &make_opencode(),
         super::TransportMode::Acp,
-        "no ACP transport",
+        "no acp transport",
     );
 }
 
@@ -266,7 +266,7 @@ fn test_matrix_opencode_openai_compat_rejected() {
     assert_unsupported(
         &make_opencode(),
         super::TransportMode::OpenaiCompat,
-        "only supports Legacy",
+        "only supports cli",
     );
 }
 
@@ -282,7 +282,7 @@ fn test_matrix_openai_compat_legacy_rejected() {
     assert_unsupported(
         &make_openai_compat(),
         super::TransportMode::Legacy,
-        "no CLI binary",
+        "no cli binary",
     );
 }
 
@@ -291,7 +291,7 @@ fn test_matrix_openai_compat_acp_rejected() {
     assert_unsupported(
         &make_openai_compat(),
         super::TransportMode::Acp,
-        "does not support ACP",
+        "does not support acp",
     );
 }
 

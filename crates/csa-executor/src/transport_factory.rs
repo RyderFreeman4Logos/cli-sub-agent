@@ -132,37 +132,37 @@ impl TransportFactory {
             (Executor::ClaudeCode { .. }, TransportMode::Acp) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::Legacy) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::OpenaiCompat) => {
-                err("claude-code only supports Legacy or ACP transport")
+                err("claude-code only supports cli or acp transport")
             }
 
             // Codex: Legacy and ACP are both supported
             (Executor::Codex { .. }, TransportMode::Legacy) => Ok(()),
             (Executor::Codex { .. }, TransportMode::Acp) => Ok(()),
             (Executor::Codex { .. }, TransportMode::OpenaiCompat) => {
-                err("codex only supports Legacy or ACP transport")
+                err("codex only supports cli or acp transport")
             }
 
             // GeminiCli: Legacy and ACP (native --acp mode)
             (Executor::GeminiCli { .. }, TransportMode::Legacy) => Ok(()),
             (Executor::GeminiCli { .. }, TransportMode::Acp) => Ok(()),
             (Executor::GeminiCli { .. }, TransportMode::OpenaiCompat) => {
-                err("gemini-cli only supports Legacy or ACP transport")
+                err("gemini-cli only supports cli or acp transport")
             }
 
             // Opencode: Legacy only
             (Executor::Opencode { .. }, TransportMode::Legacy) => Ok(()),
-            (Executor::Opencode { .. }, TransportMode::Acp) => err("opencode has no ACP transport"),
+            (Executor::Opencode { .. }, TransportMode::Acp) => err("opencode has no acp transport"),
             (Executor::Opencode { .. }, TransportMode::OpenaiCompat) => {
-                err("opencode only supports Legacy transport")
+                err("opencode only supports cli transport")
             }
 
             // OpenaiCompat: OpenaiCompat mode only
             (Executor::OpenaiCompat { .. }, TransportMode::OpenaiCompat) => Ok(()),
             (Executor::OpenaiCompat { .. }, TransportMode::Legacy) => {
-                err("openai-compat has no CLI binary")
+                err("openai-compat has no cli binary")
             }
             (Executor::OpenaiCompat { .. }, TransportMode::Acp) => {
-                err("openai-compat does not support ACP transport")
+                err("openai-compat does not support acp transport")
             }
         }
     }
