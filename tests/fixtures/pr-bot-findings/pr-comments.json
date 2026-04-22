@@ -1,0 +1,50 @@
+[
+  {
+    "id": 100001,
+    "body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nThe function `process_data` uses `unwrap()` on untrusted input from the network layer, which will panic on malformed packets. This is reachable from the public API endpoint `/api/v1/process`.\n\n```suggestion\nlet data = parse_input(raw).map_err(|e| ApiError::BadRequest(e))?;\n```",
+    "user": {
+      "login": "gemini-code-assist[bot]"
+    },
+    "html_url": "https://github.com/example/repo/pull/999#discussion_r100001",
+    "commit_id": "abc123def456789",
+    "path": "src/api/processor.rs",
+    "line": 42,
+    "created_at": "2026-04-20T10:00:00Z"
+  },
+  {
+    "id": 100002,
+    "body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nConsider adding a doc comment to explain the retry backoff strategy. The current magic number `1.5` is unclear without context.\n\n```suggestion\n/// Exponential backoff with 1.5x multiplier, capped at 30s.\nconst BACKOFF_MULTIPLIER: f64 = 1.5;\n```",
+    "user": {
+      "login": "gemini-code-assist[bot]"
+    },
+    "html_url": "https://github.com/example/repo/pull/999#discussion_r100002",
+    "commit_id": "abc123def456789",
+    "path": "src/retry.rs",
+    "line": 18,
+    "created_at": "2026-04-20T10:01:00Z"
+  },
+  {
+    "id": 100003,
+    "body": "![critical](https://www.gstatic.com/codereviewagent/critical-priority.svg)\n\nRace condition: `session_map` is read without holding the lock in `cleanup_expired()` while `register_session()` can concurrently insert. This can cause use-after-free if the HashMap reallocates during iteration. The `Arc<Mutex<_>>` wrapper on the outer struct does not protect this inner access path.\n\nThis is a data race (undefined behavior in Rust terms if using unsafe, logical race with safe code).",
+    "user": {
+      "login": "gemini-code-assist[bot]"
+    },
+    "html_url": "https://github.com/example/repo/pull/999#discussion_r100003",
+    "commit_id": "abc123def456789",
+    "path": "src/session/manager.rs",
+    "line": 87,
+    "created_at": "2026-04-20T10:02:00Z"
+  },
+  {
+    "id": 100004,
+    "body": "Nice refactoring! The new structure is much cleaner. One small nit: the variable name `x` on line 15 could be more descriptive.",
+    "user": {
+      "login": "some-human-reviewer"
+    },
+    "html_url": "https://github.com/example/repo/pull/999#discussion_r100004",
+    "commit_id": "abc123def456789",
+    "path": "src/lib.rs",
+    "line": 15,
+    "created_at": "2026-04-20T10:03:00Z"
+  }
+]
