@@ -1,15 +1,5 @@
 use super::*;
-use crate::global::ToolSelection;
 use tempfile::tempdir;
-
-#[test]
-fn test_load_nonexistent_returns_none() {
-    let dir = tempdir().unwrap();
-    // Use load_with_paths to isolate from real ~/.config/cli-sub-agent/config.toml on host.
-    let project_path = dir.path().join(".csa").join("config.toml");
-    let result = ProjectConfig::load_with_paths(None, &project_path).unwrap();
-    assert!(result.is_none());
-}
 
 #[test]
 fn test_save_and_load_roundtrip() {
@@ -47,6 +37,7 @@ fn test_save_and_load_roundtrip() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -68,52 +59,6 @@ fn test_save_and_load_roundtrip() {
     assert!(codex.enabled);
     assert_eq!(codex.default_model.as_deref(), Some("gpt-5.4"));
     assert_eq!(codex.default_thinking.as_deref(), Some("xhigh"));
-}
-
-#[test]
-fn test_save_and_load_roundtrip_with_review_override() {
-    let dir = tempdir().unwrap();
-
-    let config = ProjectConfig {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project: ProjectMeta {
-            name: "test-project".to_string(),
-            created_at: Utc::now(),
-            max_recursion_depth: 5,
-        },
-        resources: ResourcesConfig::default(),
-        acp: Default::default(),
-        tools: HashMap::new(),
-        review: Some(crate::global::ReviewConfig {
-            tool: ToolSelection::Single("codex".to_string()),
-            ..Default::default()
-        }),
-        debate: None,
-        tiers: HashMap::new(),
-        tier_mapping: HashMap::new(),
-        aliases: HashMap::new(),
-        tool_aliases: HashMap::new(),
-        preferences: None,
-        session: Default::default(),
-        memory: Default::default(),
-        hooks: Default::default(),
-        execution: Default::default(),
-        preflight: Default::default(),
-        vcs: Default::default(),
-        filesystem_sandbox: Default::default(),
-    };
-
-    config.save(dir.path()).unwrap();
-
-    // Use load_with_paths to avoid accidental merge with host user config.
-    let project_path = dir.path().join(".csa").join("config.toml");
-    let loaded = ProjectConfig::load_with_paths(None, &project_path).unwrap();
-    let loaded = loaded.unwrap();
-
-    assert_eq!(
-        loaded.review.unwrap().tool,
-        ToolSelection::Single("codex".to_string())
-    );
 }
 
 #[test]
@@ -142,6 +87,7 @@ fn test_is_tool_enabled_configured_enabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -184,6 +130,7 @@ fn test_is_tool_enabled_configured_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -215,6 +162,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -262,6 +210,7 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -323,6 +272,7 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -370,6 +320,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -404,6 +355,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -435,6 +387,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -520,6 +473,7 @@ fn test_max_recursion_depth_override() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -652,6 +606,7 @@ fn test_schema_version_current_is_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -684,6 +639,7 @@ fn test_schema_version_older_is_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -715,6 +671,7 @@ fn test_schema_version_newer_fails() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -777,6 +734,7 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),

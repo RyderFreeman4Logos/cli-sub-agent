@@ -30,6 +30,7 @@ fn empty_config() -> ProjectConfig {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),

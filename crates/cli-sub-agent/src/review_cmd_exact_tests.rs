@@ -83,6 +83,7 @@ fn exact_test_project_config_with_enabled_tools(tools: &[&str]) -> csa_config::P
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),

@@ -733,6 +733,10 @@ pub(crate) fn resolve_tool(detected: Option<String>, config: &GlobalConfig) -> O
 mod tests;
 
 #[cfg(test)]
+#[path = "run_helpers_tests_tail.rs"]
+mod tests_tail;
+
+#[cfg(test)]
 #[path = "run_helpers_tier_tests.rs"]
 mod tier_tests;
 

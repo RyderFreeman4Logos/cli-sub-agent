@@ -1,5 +1,12 @@
 use super::*;
 
+#[test]
+fn determine_project_root_none_returns_cwd() {
+    let result = determine_project_root(None).unwrap();
+    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+    assert_eq!(result, cwd);
+}
+
 /// When config has no tiers, both enforce_tier values must behave identically:
 /// no tier-related errors regardless of the flag.
 #[tokio::test]
@@ -21,6 +28,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),

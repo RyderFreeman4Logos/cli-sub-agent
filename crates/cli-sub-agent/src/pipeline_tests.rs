@@ -58,13 +58,6 @@ fn sandbox_pipeline_config_env(
 }
 
 #[test]
-fn determine_project_root_none_returns_cwd() {
-    let result = determine_project_root(None).unwrap();
-    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
-    assert_eq!(result, cwd);
-}
-
-#[test]
 fn determine_project_root_with_valid_path() {
     let tmp = tempfile::tempdir().unwrap();
     let result = determine_project_root(Some(tmp.path().to_str().unwrap())).unwrap();
@@ -155,6 +148,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -268,6 +262,7 @@ fn resolve_idle_timeout_uses_config_then_default() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -306,6 +301,7 @@ fn resolve_liveness_dead_seconds_uses_config_then_default() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -451,6 +447,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -641,6 +638,7 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),

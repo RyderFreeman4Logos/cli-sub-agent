@@ -49,11 +49,6 @@ fn truncate_prompt_emoji_no_panic() {
 }
 
 #[test]
-fn truncate_prompt_empty_string() {
-    assert_eq!(truncate_prompt("", 10), "");
-}
-
-#[test]
 fn truncate_prompt_mixed_multibyte() {
     // Mix of ASCII, CJK, emoji
     let mixed = "Fix \u{4fee}\u{590d} bug \u{1f41b} in auth";
@@ -195,6 +190,7 @@ fn mutating_skill_contract_routes_default_tier_away_from_restricted_tool() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -354,6 +350,7 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -393,6 +390,7 @@ fn build_executor_ignores_project_tool_defaults_when_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -438,6 +436,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -682,6 +681,7 @@ fn build_executor_model_spec_overrides_both() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),

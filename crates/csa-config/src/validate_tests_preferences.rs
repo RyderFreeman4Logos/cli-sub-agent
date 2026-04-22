@@ -28,6 +28,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),

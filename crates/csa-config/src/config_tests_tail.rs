@@ -1,4 +1,165 @@
 use super::*;
+use crate::global::ToolSelection;
+use std::io;
+use std::sync::{Arc, LazyLock, Mutex};
+use tempfile::tempdir;
+use tracing_subscriber::fmt::MakeWriter;
+
+static TEST_TRACING_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer {
+    inner: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SharedLogBuffer {
+    fn contents(&self) -> String {
+        String::from_utf8(self.inner.lock().expect("log buffer poisoned").clone())
+            .expect("log buffer should be valid UTF-8")
+    }
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = SharedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriter {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+struct SharedLogWriter {
+    inner: Arc<Mutex<Vec<u8>>>,
+}
+
+impl io::Write for SharedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner
+            .lock()
+            .expect("log buffer poisoned")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn test_load_nonexistent_returns_none() {
+    let dir = tempdir().unwrap();
+    // Use load_with_paths to isolate from real ~/.config/cli-sub-agent/config.toml on host.
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let result = ProjectConfig::load_with_paths(None, &project_path).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_save_and_load_roundtrip_with_review_override() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test-project".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: Some(crate::global::ReviewConfig {
+            tool: ToolSelection::Single("codex".to_string()),
+            ..Default::default()
+        }),
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+
+    // Use load_with_paths to avoid accidental merge with host user config.
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let loaded = ProjectConfig::load_with_paths(None, &project_path).unwrap();
+    let loaded = loaded.unwrap();
+
+    assert_eq!(
+        loaded.review.unwrap().tool,
+        ToolSelection::Single("codex".to_string())
+    );
+}
+
+#[test]
+fn test_project_config_deserializes_session_wait_override() {
+    let config: ProjectConfig = toml::from_str(
+        r#"
+[project]
+name = "test-project"
+
+[session_wait]
+memory_warn_mb = 8192
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config
+            .session_wait
+            .as_ref()
+            .and_then(|cfg| cfg.memory_warn_mb),
+        Some(8192)
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_memory_warn_logs_parse_failures_at_error_level() {
+    let _tracing_guard = TEST_TRACING_LOCK.lock().expect("tracing lock poisoned");
+    let dir = tempdir().unwrap();
+    let project_path = dir.path().join(".csa").join("config.toml");
+    std::fs::create_dir_all(project_path.parent().expect("project config parent")).unwrap();
+    std::fs::write(&project_path, "[session_wait\nmemory_warn_mb = 8192\n").unwrap();
+
+    let buffer = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::ERROR)
+        .with_writer(buffer.clone())
+        .without_time()
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    assert_eq!(
+        ProjectConfig::resolve_session_wait_memory_warn_mb_with_paths(None, &project_path),
+        None
+    );
+
+    let logs = buffer.contents();
+    assert!(
+        logs.contains(
+            "Failed to parse config while resolving session wait memory warning threshold"
+        ),
+        "unexpected logs: {logs}"
+    );
+    assert!(
+        logs.contains(&project_path.display().to_string()),
+        "unexpected logs: {logs}"
+    );
+    assert!(logs.contains("unclosed table"), "unexpected logs: {logs}");
+}
 
 #[test]
 fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
@@ -22,6 +183,7 @@ fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -49,6 +211,7 @@ fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
@@ -85,6 +248,7 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
