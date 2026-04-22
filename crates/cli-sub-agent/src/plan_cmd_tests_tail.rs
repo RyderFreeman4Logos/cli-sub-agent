@@ -183,7 +183,7 @@ fn pr_bot_workflow_marks_non_ai_steps_explicitly() {
         .iter()
         .find(|step| step.title == "Assumed Fork Convention")
         .expect("missing fork convention advisory step");
-    assert_eq!(fork_convention.tool.as_deref(), Some("bash"));
+    assert_eq!(fork_convention.tool.as_deref(), Some("note"));
 
     let clean_note = plan
         .steps

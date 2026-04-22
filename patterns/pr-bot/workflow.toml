@@ -476,9 +476,8 @@ name = "tmp_file"
 [[workflow.steps]]
 id = 1
 title = "Assumed Fork Convention"
-tool = "bash"
+tool = "note"
 prompt = """
-cat <<'EOF'
 pr-bot assumes the GitHub-common fork convention:
 
 - `origin` = your personal fork (push target and PR source)
@@ -506,7 +505,6 @@ When multiple remotes exist, `origin` does not reference the authenticated
 GitHub login, and no explicit push remote is configured, pr-bot fails closed
 with an actionable error instead of guessing and risking a push to the
 canonical repository.
-EOF
 """
 on_fail = "abort"
 
