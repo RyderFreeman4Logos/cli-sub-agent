@@ -164,7 +164,8 @@ pub(crate) async fn handle_debate(
     }
 
     // 3. Read question (from --prompt-file, positional arg, --topic, or stdin)
-    let effective_question = args.question.or(args.topic);
+    let effective_question =
+        crate::run_helpers::resolve_positional_stdin_sentinel(args.question)?.or(args.topic);
     let mut question = resolve_prompt_with_file(effective_question, args.prompt_file.as_deref())?;
     if let Some(ctx) = &args.context {
         question = format!("<debate-context>\n{ctx}\n</debate-context>\n\n{question}");
