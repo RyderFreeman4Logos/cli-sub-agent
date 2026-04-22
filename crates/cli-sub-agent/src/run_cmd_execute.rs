@@ -64,11 +64,13 @@ fn finalize_prompt_text(
     prompt_text: String,
     inline_context_from_review_session: Option<&str>,
 ) -> Result<String> {
-    crate::run_helpers::prepend_review_context_to_prompt(
+    let prompt_with_review_context = crate::run_helpers::prepend_review_context_to_prompt(
         project_root,
         prompt_text,
         inline_context_from_review_session,
-    )
+    )?;
+
+    Ok(crate::run_helpers::prepend_atomic_commit_discipline_to_prompt(prompt_with_review_context))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -220,12 +222,16 @@ pub(crate) async fn handle_run(
         thinking,
         &project_root,
     )?;
+    let resolved_skill = skill_res.resolved_skill;
+    let task_needs_edit = crate::run_helpers::resolve_task_edit_requirement(
+        resolved_skill.as_ref(),
+        &skill_res.prompt_text,
+    );
     let prompt_text = finalize_prompt_text(
         &project_root,
         skill_res.prompt_text,
         inline_context_from_review_session.as_deref(),
     )?;
-    let resolved_skill = skill_res.resolved_skill;
     let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
     let thinking = skill_res.thinking;
     let model = skill_res.model;
@@ -301,8 +307,6 @@ pub(crate) async fn handle_run(
     };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
-    let task_needs_edit =
-        crate::run_helpers::resolve_task_edit_requirement(resolved_skill.as_ref(), &prompt_text);
     let needs_edit = task_needs_edit.unwrap_or(false);
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
@@ -592,200 +596,5 @@ pub(crate) async fn handle_run(
 mod pre_exec_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::{finalize_prompt_text, resolve_run_tier_context};
-    use crate::run_cmd_tool_selection::resolve_skill_and_prompt;
-    use crate::test_session_sandbox::ScopedSessionSandbox;
-    use chrono::Utc;
-    use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
-    use std::collections::HashMap;
-    use std::fs;
-    use tempfile::TempDir;
-
-    fn make_test_config() -> ProjectConfig {
-        let mut tiers = HashMap::new();
-        tiers.insert(
-            "tier-3-complex".to_string(),
-            TierConfig {
-                description: "test".to_string(),
-                models: vec![
-                    "codex/openai/o4-mini/high".to_string(),
-                    "claude-code/anthropic/claude-sonnet/high".to_string(),
-                ],
-                strategy: TierStrategy::default(),
-                token_budget: None,
-                max_turns: None,
-            },
-        );
-
-        ProjectConfig {
-            schema_version: 1,
-            project: ProjectMeta {
-                name: "test".to_string(),
-                created_at: Utc::now(),
-                max_recursion_depth: 5,
-            },
-            resources: Default::default(),
-            acp: Default::default(),
-            tools: HashMap::new(),
-            review: None,
-            debate: None,
-            tiers,
-            tier_mapping: HashMap::from([("default".to_string(), "tier-3-complex".to_string())]),
-            aliases: HashMap::new(),
-            tool_aliases: HashMap::new(),
-            preferences: None,
-            session: Default::default(),
-            memory: Default::default(),
-            hooks: Default::default(),
-            execution: Default::default(),
-            session_wait: None,
-            preflight: Default::default(),
-            vcs: Default::default(),
-            filesystem_sandbox: Default::default(),
-        }
-    }
-
-    #[test]
-    fn finalize_prompt_text_prepends_review_context_for_skill_only_prompt() {
-        let tmp = TempDir::new().expect("tempdir");
-        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
-        let skill_dir = tmp.path().join(".csa").join("skills").join("demo");
-        fs::create_dir_all(&skill_dir).expect("create skill dir");
-        fs::write(skill_dir.join("SKILL.md"), "demo skill body").expect("write SKILL.md");
-
-        let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R4";
-        let session_dir =
-            csa_session::get_session_dir(tmp.path(), session_id).expect("session dir");
-        fs::create_dir_all(session_dir.join("output")).expect("create output dir");
-        fs::write(
-            session_dir.join("output").join("summary.md"),
-            "Summary line\n",
-        )
-        .expect("write summary");
-
-        let skill_resolution =
-            resolve_skill_and_prompt(Some("demo"), None, None, None, None, tmp.path())
-                .expect("resolve skill prompt");
-
-        let prompt_text =
-            finalize_prompt_text(tmp.path(), skill_resolution.prompt_text, Some(session_id))
-                .expect("finalize prompt text");
-
-        assert!(prompt_text.starts_with(&format!(
-            "<csa-review-context session=\"{session_id}\">\n<!-- summary.md -->\nSummary line\n"
-        )));
-        assert!(prompt_text.contains("<original-prompt>\n<skill-mode>executor</skill-mode>\n"));
-        assert!(prompt_text.contains("demo skill body"));
-        assert!(prompt_text.ends_with("</original-prompt>\n"));
-    }
-
-    #[test]
-    fn resolve_run_tier_context_keeps_active_strategy_tier() {
-        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
-            resolve_run_tier_context(
-                None,
-                "codex",
-                Some("tier-3-complex".to_string()),
-                None,
-                false,
-                false,
-                false,
-            );
-
-        assert!(tier_auto_select);
-        assert!(failover_on_crash_enabled);
-        assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
-    }
-
-    #[test]
-    fn resolve_run_tier_context_drops_bypassed_tier() {
-        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
-            resolve_run_tier_context(
-                None,
-                "codex",
-                Some("tier-3-complex".to_string()),
-                Some("tier-2-standard".to_string()),
-                true,
-                false,
-                true,
-            );
-
-        assert!(!tier_auto_select);
-        assert!(!failover_on_crash_enabled);
-        assert!(resolved_tier_name.is_none());
-    }
-
-    #[test]
-    fn resolve_run_tier_context_restores_fallback_tier_for_auto_routing() {
-        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
-            resolve_run_tier_context(
-                None,
-                "codex",
-                None,
-                Some("tier-3-complex".to_string()),
-                false,
-                false,
-                false,
-            );
-
-        assert!(tier_auto_select);
-        assert!(failover_on_crash_enabled);
-        assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
-    }
-
-    #[test]
-    fn resolve_run_tier_context_does_not_restore_fallback_for_user_explicit_tool() {
-        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
-            resolve_run_tier_context(
-                None,
-                "codex",
-                None,
-                Some("tier-3-complex".to_string()),
-                false,
-                false,
-                true,
-            );
-
-        assert!(!tier_auto_select);
-        assert!(!failover_on_crash_enabled);
-        assert!(resolved_tier_name.is_none());
-    }
-
-    #[test]
-    fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
-        let config = make_test_config();
-        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
-            resolve_run_tier_context(
-                Some(&config),
-                "codex",
-                Some("tier-3-complex".to_string()),
-                None,
-                false,
-                false,
-                true,
-            );
-
-        assert!(!tier_auto_select);
-        assert!(failover_on_crash_enabled);
-        assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
-    }
-
-    #[test]
-    fn resolve_run_tier_context_drops_tier_for_explicit_model_spec() {
-        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
-            resolve_run_tier_context(
-                None,
-                "codex",
-                None,
-                Some("tier-3-complex".to_string()),
-                false,
-                true,
-                false,
-            );
-
-        assert!(!tier_auto_select);
-        assert!(!failover_on_crash_enabled);
-        assert!(resolved_tier_name.is_none());
-    }
-}
+#[path = "run_cmd_execute_tests.rs"]
+mod tests;
