@@ -49,28 +49,24 @@ fn reviewer_tool_binary_available(tool_name: &str, config: Option<&ProjectConfig
         return true;
     }
 
-    let binary_name = match tool_name {
-        "gemini-cli" => "gemini",
-        "opencode" => "opencode",
-        "claude-code" => "claude-code-acp",
-        "codex" => {
-            let transport = config
-                .and_then(|cfg| cfg.tool_transport("codex"))
-                .map(|transport| match transport {
-                    TransportKind::Cli => CodexTransport::Cli,
-                    TransportKind::Acp => CodexTransport::Acp,
-                    TransportKind::Auto => {
-                        unreachable!("tool_transport() returns resolved transports")
-                    }
-                })
-                .unwrap_or_else(CodexTransport::default_for_build);
-            if matches!(transport, CodexTransport::Acp) && !CodexRuntimeMetadata::acp_compiled_in()
-            {
-                return false;
-            }
-            transport.runtime_binary_name()
+    if tool_name == "codex" {
+        let transport = config
+            .and_then(|cfg| cfg.tool_transport("codex"))
+            .map(|transport| match transport {
+                TransportKind::Cli => CodexTransport::Cli,
+                TransportKind::Acp => CodexTransport::Acp,
+                TransportKind::Auto => {
+                    unreachable!("tool_transport() returns resolved transports")
+                }
+            })
+            .unwrap_or_else(CodexTransport::default_for_build);
+        if matches!(transport, CodexTransport::Acp) && !CodexRuntimeMetadata::acp_compiled_in() {
+            return false;
         }
-        _ => return false,
+    }
+
+    let Some(binary_name) = crate::run_helpers::resolved_tool_binary_name(tool_name, config) else {
+        return false;
     };
 
     Command::new("which")

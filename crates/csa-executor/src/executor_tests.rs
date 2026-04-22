@@ -1,4 +1,7 @@
 use super::*;
+use crate::claude_runtime::{
+    ClaudeCodeRuntimeMetadata, ClaudeCodeTransport, claude_runtime_metadata,
+};
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 
 #[test]
@@ -33,6 +36,7 @@ fn test_tool_name() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: claude_runtime_metadata(),
         }
         .tool_name(),
         "claude-code"
@@ -71,6 +75,7 @@ fn test_executable_name() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: claude_runtime_metadata(),
         }
         .executable_name(),
         "claude"
@@ -109,9 +114,10 @@ fn test_install_hint() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: claude_runtime_metadata(),
         }
         .install_hint(),
-        "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
+        claude_runtime_metadata().install_hint()
     );
 }
 
@@ -149,9 +155,40 @@ fn test_runtime_binary_name() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: claude_runtime_metadata(),
         }
         .runtime_binary_name(),
-        "claude-code-acp"
+        claude_runtime_metadata().runtime_binary_name()
+    );
+}
+
+#[test]
+fn test_claude_runtime_binary_name_honors_explicit_cli_runtime_metadata() {
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::from_transport(ClaudeCodeTransport::Cli),
+    };
+
+    assert_eq!(executor.runtime_binary_name(), "claude");
+    assert_eq!(
+        executor.install_hint(),
+        "Install Claude Code CLI and ensure `claude` is on PATH"
+    );
+}
+
+#[test]
+fn test_claude_runtime_binary_name_honors_explicit_acp_runtime_metadata() {
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::from_transport(ClaudeCodeTransport::Acp),
+    };
+
+    assert_eq!(executor.runtime_binary_name(), "claude-code-acp");
+    assert_eq!(
+        executor.install_hint(),
+        "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
     );
 }
 
@@ -217,6 +254,7 @@ fn test_yolo_args() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: claude_runtime_metadata(),
         }
         .yolo_args(),
         &["--dangerously-skip-permissions"]
@@ -264,6 +302,7 @@ fn test_from_tool_name() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            ..
         }
     ));
 }
@@ -401,6 +440,7 @@ fn test_thinking_budget_custom_value() {
     let exec = Executor::ClaudeCode {
         model_override: Some("claude-opus".to_string()),
         thinking_budget: Some(ThinkingBudget::Custom(10000)),
+        runtime_metadata: claude_runtime_metadata(),
     };
 
     let mut cmd = Command::new(exec.executable_name());
@@ -494,6 +534,7 @@ fn test_apply_restrictions_preserves_all_tools() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: claude_runtime_metadata(),
         },
     ];
 
@@ -584,6 +625,7 @@ fn test_execute_in_preserves_model_override() {
         Executor::ClaudeCode {
             model_override: Some("claude-opus".to_string()),
             thinking_budget: Some(ThinkingBudget::Custom(10000)),
+            runtime_metadata: claude_runtime_metadata(),
         },
         Executor::Opencode {
             model_override: Some("google/gemini-2.5-pro".to_string()),

@@ -11,10 +11,12 @@ use std::ffi::OsString;
 use std::path::Path;
 use tokio::process::Command;
 
+use crate::claude_runtime::{
+    ClaudeCodeRuntimeMetadata, ClaudeCodeTransport, claude_runtime_metadata,
+};
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 use crate::install_hints::{
-    CLAUDE_CODE_ACP_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT,
-    OPENCODE_INSTALL_HINT,
+    GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT, OPENCODE_INSTALL_HINT,
 };
 use crate::lefthook_guard::{sanitize_args_for_codex, sanitize_env_for_codex};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
@@ -62,6 +64,8 @@ pub enum Executor {
     ClaudeCode {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
+        #[serde(default = "default_claude_runtime_metadata")]
+        runtime_metadata: ClaudeCodeRuntimeMetadata,
     },
     /// OpenAI-compatible HTTP API tool (no CLI process, pure HTTP).
     OpenaiCompat {
@@ -72,6 +76,10 @@ pub enum Executor {
 
 const fn default_codex_runtime_metadata() -> CodexRuntimeMetadata {
     CodexRuntimeMetadata::current()
+}
+
+const fn default_claude_runtime_metadata() -> ClaudeCodeRuntimeMetadata {
+    ClaudeCodeRuntimeMetadata::current()
 }
 
 impl Executor {
@@ -106,7 +114,9 @@ impl Executor {
             Self::Codex {
                 runtime_metadata, ..
             } => runtime_metadata.runtime_binary_name(),
-            Self::ClaudeCode { .. } => "claude-code-acp",
+            Self::ClaudeCode {
+                runtime_metadata, ..
+            } => runtime_metadata.runtime_binary_name(),
             Self::OpenaiCompat { .. } => "openai-compat", // no binary; HTTP-only
         }
     }
@@ -119,7 +129,9 @@ impl Executor {
             Self::Codex {
                 runtime_metadata, ..
             } => runtime_metadata.install_hint(),
-            Self::ClaudeCode { .. } => CLAUDE_CODE_ACP_INSTALL_HINT,
+            Self::ClaudeCode {
+                runtime_metadata, ..
+            } => runtime_metadata.install_hint(),
             Self::OpenaiCompat { .. } => OPENAI_COMPAT_INSTALL_HINT,
         }
     }
@@ -157,6 +169,7 @@ impl Executor {
             "claude-code" => Ok(Self::ClaudeCode {
                 model_override: model,
                 thinking_budget: budget,
+                runtime_metadata: claude_runtime_metadata(),
             }),
             "openai-compat" => Ok(Self::OpenaiCompat {
                 model_override: model,
@@ -190,6 +203,7 @@ impl Executor {
             ToolName::ClaudeCode => Self::ClaudeCode {
                 model_override: model,
                 thinking_budget,
+                runtime_metadata: claude_runtime_metadata(),
             },
             ToolName::OpenaiCompat => Self::OpenaiCompat {
                 model_override: model,
@@ -231,26 +245,6 @@ impl Executor {
             | Self::OpenaiCompat { model_override, .. } => {
                 *model_override = Some(model);
             }
-        }
-    }
-
-    /// Override codex runtime transport metadata.
-    pub fn override_codex_transport(&mut self, transport: CodexTransport) {
-        if let Self::Codex {
-            runtime_metadata, ..
-        } = self
-        {
-            *runtime_metadata = CodexRuntimeMetadata::from_transport(transport);
-        }
-    }
-
-    #[must_use]
-    pub fn codex_transport(&self) -> Option<CodexTransport> {
-        match self {
-            Self::Codex {
-                runtime_metadata, ..
-            } => Some(runtime_metadata.transport_mode()),
-            _ => None,
         }
     }
 
@@ -667,10 +661,13 @@ impl Executor {
                 Self::Codex { .. } => {
                     cmd.arg("resume").arg(session_id);
                 }
-                Self::ClaudeCode { .. } => {
+                Self::ClaudeCode { .. }
+                    if matches!(self.claude_code_transport(), Some(ClaudeCodeTransport::Acp)) =>
+                {
                     cmd.arg("--resume").arg(session_id);
                 }
                 Self::OpenaiCompat { .. } => {} // HTTP-only
+                Self::ClaudeCode { .. } => {}
             }
         }
 
@@ -758,6 +755,7 @@ impl Executor {
             Self::ClaudeCode {
                 model_override,
                 thinking_budget,
+                ..
             } => {
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);
@@ -778,6 +776,8 @@ impl Executor {
         }
     }
 }
+
+include!("executor_runtime_transport.rs");
 
 #[cfg(test)]
 #[path = "executor_tests.rs"]

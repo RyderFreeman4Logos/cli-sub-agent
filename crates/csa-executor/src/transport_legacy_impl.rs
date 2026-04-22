@@ -7,7 +7,10 @@ impl Transport for LegacyTransport {
     fn capabilities(&self) -> super::TransportCapabilities {
         super::TransportCapabilities {
             streaming: false,
-            session_resume: true,
+            session_resume: !matches!(
+                self.executor.claude_code_transport(),
+                Some(crate::ClaudeCodeTransport::Cli)
+            ),
             session_fork: false,
             typed_events: false,
         }

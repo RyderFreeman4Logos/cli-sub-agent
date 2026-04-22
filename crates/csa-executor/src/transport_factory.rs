@@ -85,6 +85,16 @@ impl TransportFactory {
                     Ok(TransportMode::Acp)
                 }
             },
+            Executor::ClaudeCode { .. } => match executor.claude_code_transport() {
+                Some(crate::ClaudeCodeTransport::Cli) => {
+                    Self::validate_mode_for_executor(executor, TransportMode::Legacy)?;
+                    Ok(TransportMode::Legacy)
+                }
+                Some(crate::ClaudeCodeTransport::Acp) | None => {
+                    Self::validate_mode_for_executor(executor, TransportMode::Acp)?;
+                    Ok(TransportMode::Acp)
+                }
+            },
             _ => {
                 let mode = Self::mode_for_tool(executor.tool_name());
                 Self::validate_mode_for_executor(executor, mode)?;
@@ -100,7 +110,7 @@ impl TransportFactory {
     ///
     /// | Executor     | Legacy | Acp                      | OpenaiCompat |
     /// |--------------|--------|--------------------------| -------------|
-    /// | ClaudeCode   | No     | Yes                      | No           |
+    /// | ClaudeCode   | Yes    | Yes                      | No           |
     /// | Codex        | Yes    | Yes                      | No           |
     /// | GeminiCli    | Yes    | Yes                      | No           |
     /// | Opencode     | Yes    | No                       | No           |
@@ -118,13 +128,11 @@ impl TransportFactory {
         };
 
         match (executor, mode) {
-            // ClaudeCode: ACP only
+            // ClaudeCode: Legacy CLI and ACP are both supported
             (Executor::ClaudeCode { .. }, TransportMode::Acp) => Ok(()),
-            (Executor::ClaudeCode { .. }, TransportMode::Legacy) => {
-                err("claude-code has no CLI transport (use ACP)")
-            }
+            (Executor::ClaudeCode { .. }, TransportMode::Legacy) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::OpenaiCompat) => {
-                err("claude-code only supports ACP transport")
+                err("claude-code only supports Legacy or ACP transport")
             }
 
             // Codex: Legacy and ACP are both supported

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use csa_config::{ProjectConfig, TransportKind};
-use csa_executor::{CodexTransport, install_hint_for_known_tool};
+use csa_executor::{ClaudeCodeTransport, CodexTransport, install_hint_for_known_tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToolBinaryAvailability {
@@ -45,6 +45,19 @@ pub(crate) fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexT
         .unwrap_or_else(CodexTransport::default_for_build)
 }
 
+pub(crate) fn resolved_claude_code_transport(
+    config: Option<&ProjectConfig>,
+) -> ClaudeCodeTransport {
+    config
+        .and_then(|cfg| cfg.tool_transport("claude-code"))
+        .map(|transport| match transport {
+            TransportKind::Cli => ClaudeCodeTransport::Cli,
+            TransportKind::Acp => ClaudeCodeTransport::Acp,
+            TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
+        })
+        .unwrap_or_else(ClaudeCodeTransport::default_for_build)
+}
+
 pub(crate) fn resolved_tool_binary_name(
     tool_name: &str,
     config: Option<&ProjectConfig>,
@@ -53,7 +66,7 @@ pub(crate) fn resolved_tool_binary_name(
         "gemini-cli" => Some("gemini"),
         "opencode" => Some("opencode"),
         "codex" => Some(resolved_codex_transport(config).runtime_binary_name()),
-        "claude-code" => Some("claude-code-acp"),
+        "claude-code" => Some(resolved_claude_code_transport(config).runtime_binary_name()),
         "openai-compat" => None,
         _ => None,
     }
@@ -98,13 +111,13 @@ pub(crate) fn tool_binary_availability(
             binary_name: binary_name.to_string(),
         }
     } else {
-        let hint = if tool_name == "codex" {
-            Cow::Borrowed(resolved_codex_transport(config).install_hint())
-        } else {
-            Cow::Borrowed(
+        let hint = match tool_name {
+            "codex" => Cow::Borrowed(resolved_codex_transport(config).install_hint()),
+            "claude-code" => Cow::Borrowed(resolved_claude_code_transport(config).install_hint()),
+            _ => Cow::Borrowed(
                 install_hint_for_known_tool(tool_name)
                     .unwrap_or("Install the tool and ensure it is on PATH"),
-            )
+            ),
         };
         ToolBinaryAvailability::Missing {
             binary_name: binary_name.to_string(),

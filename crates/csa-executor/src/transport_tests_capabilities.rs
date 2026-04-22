@@ -84,7 +84,7 @@ fn test_create_with_mode_allows_codex_acp() {
 //
 // | Executor     | Legacy | Acp                       | OpenaiCompat |
 // |--------------|--------|---------------------------| -------------|
-// | ClaudeCode   | No     | Yes                       | No           |
+// | ClaudeCode   | Yes    | Yes                       | No           |
 // | Codex        | Yes    | Yes (feature `codex-acp`) | No           |
 // | GeminiCli    | Yes    | Yes                       | No           |
 // | Opencode     | Yes    | No                        | No           |
@@ -94,6 +94,7 @@ fn make_claude_code() -> crate::executor::Executor {
     crate::executor::Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     }
 }
 
@@ -189,12 +190,8 @@ fn test_matrix_claude_code_acp_supported() {
 }
 
 #[test]
-fn test_matrix_claude_code_legacy_rejected() {
-    assert_unsupported(
-        &make_claude_code(),
-        super::TransportMode::Legacy,
-        "no CLI transport",
-    );
+fn test_matrix_claude_code_legacy_supported() {
+    assert_supported(&make_claude_code(), super::TransportMode::Legacy);
 }
 
 #[test]
@@ -202,7 +199,7 @@ fn test_matrix_claude_code_openai_compat_rejected() {
     assert_unsupported(
         &make_claude_code(),
         super::TransportMode::OpenaiCompat,
-        "only supports ACP",
+        "only supports Legacy or ACP",
     );
 }
 
@@ -326,6 +323,25 @@ fn test_each_impl_capabilities_matches_spec() {
         super::TransportCapabilities {
             streaming: false,
             session_resume: true,
+            session_fork: false,
+            typed_events: false,
+        }
+    );
+
+    let legacy_claude_cli = super::LegacyTransport::new(crate::executor::Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::ClaudeCodeRuntimeMetadata::from_transport(
+            crate::claude_runtime::ClaudeCodeTransport::Cli,
+        ),
+    });
+    let legacy_claude_cli_caps =
+        <super::LegacyTransport as super::Transport>::capabilities(&legacy_claude_cli);
+    assert_eq!(
+        legacy_claude_cli_caps,
+        super::TransportCapabilities {
+            streaming: false,
+            session_resume: false,
             session_fork: false,
             typed_events: false,
         }

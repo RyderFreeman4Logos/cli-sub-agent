@@ -155,6 +155,7 @@ mod tests {
         let executor = Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: csa_executor::claude_runtime_metadata(),
         };
         assert!(detect_tool_version(&executor).await.is_none());
     }

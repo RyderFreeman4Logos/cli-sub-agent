@@ -12,7 +12,7 @@ fn write_raw_project_config(dir: &Path, config_toml: &str) -> PathBuf {
 }
 
 #[test]
-fn validate_tool_transport_matrix_matches_phase_2_contract() {
+fn validate_tool_transport_matrix_matches_phase_3_contract() {
     struct Case {
         tool: &'static str,
         value: &'static str,
@@ -36,10 +36,8 @@ fn validate_tool_transport_matrix_matches_phase_2_contract() {
         Case {
             tool: "claude-code",
             value: "cli",
-            should_pass: false,
-            expected_message: Some(
-                "claude-code does not yet support CLI transport — will be added in #643 Phase 3",
-            ),
+            should_pass: true,
+            expected_message: None,
         },
         Case {
             tool: "codex",

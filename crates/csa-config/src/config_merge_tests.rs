@@ -190,7 +190,7 @@ fn test_invalid_user_transport_override_fails_before_merge() {
         &user_path,
         r#"
 schema_version = 1
-[tools.claude-code]
+[tools.codex]
 transport = "cli"
 "#,
     )
@@ -219,7 +219,7 @@ transport = "acp"
         "error should include the user config path: {rendered}"
     );
     assert!(
-        rendered.contains("tools.claude-code.transport"),
+        rendered.contains("tools.codex.transport"),
         "error should surface the invalid user transport key: {rendered}"
     );
 }
@@ -244,7 +244,7 @@ transport = "acp"
         &project_path,
         r#"
 schema_version = 1
-[tools.claude-code]
+[tools.codex]
 transport = "cli"
 "#,
     )
@@ -263,7 +263,7 @@ transport = "cli"
         "error should include the project config path: {rendered}"
     );
     assert!(
-        rendered.contains("tools.claude-code.transport"),
+        rendered.contains("tools.codex.transport"),
         "error should surface the invalid project transport key: {rendered}"
     );
 }

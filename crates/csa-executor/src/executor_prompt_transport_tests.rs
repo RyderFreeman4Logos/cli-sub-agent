@@ -128,6 +128,7 @@ fn test_build_command_long_prompt_uses_stdin_for_claude_code() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
     let prompt = "c".repeat(MAX_ARGV_PROMPT_LEN + 1);

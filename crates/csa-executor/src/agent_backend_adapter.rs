@@ -308,6 +308,7 @@ mod tests {
             ExecutorAgentBackend::backend_type_for_executor(&Executor::ClaudeCode {
                 model_override: None,
                 thinking_budget: None,
+                runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
             }),
             BackendType::ClaudeCode
         );

@@ -142,6 +142,7 @@ fn test_build_command_depth_increments() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let mut session = make_test_session();
     session.genealogy.depth = 3;
@@ -202,6 +203,7 @@ fn test_build_command_extra_env_injection() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
     let mut extra = HashMap::new();
@@ -522,6 +524,7 @@ fn test_build_command_claude_args_structure() {
     let exec = Executor::ClaudeCode {
         model_override: Some("claude-opus".to_string()),
         thinking_budget: Some(ThinkingBudget::Medium),
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("do stuff", None, &session, None);
