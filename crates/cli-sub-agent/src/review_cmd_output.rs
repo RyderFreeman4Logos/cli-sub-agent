@@ -29,7 +29,9 @@ use artifacts::{
     load_findings_toml_from_output, load_review_artifact_from_output, severity_counts_for_artifact,
     severity_counts_for_findings_toml,
 };
-use clean_detection::{contains_clean_phrase, review_contains_prose_clean_conclusion};
+use clean_detection::{
+    contains_clean_phrase, review_contains_prose_clean_conclusion, strip_prompt_guards,
+};
 pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
@@ -285,6 +287,37 @@ fn derive_review_verdict_artifact(
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
         let severity_counts =
             severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
+
+        // Cross-check: when findings.toml is empty (possibly synthetic-empty from
+        // failed TOML extraction), consult review-findings.json before trusting
+        // the zero-count signal. A synthetic-empty findings.toml must not mask
+        // blocking findings that the reviewer actually produced (#1045 round 2).
+        if findings_file.findings.is_empty()
+            && severity_counts_are_zero(&severity_counts)
+            && let Some(json_artifact) = load_review_artifact_from_output(session_dir)?
+        {
+            let json_counts = severity_counts_for_artifact(&json_artifact, zero_severity_counts);
+            if has_blocking_severity(&json_counts) {
+                let decision = derive_decision_from_severity_counts(
+                    &json_counts,
+                    json_artifact.findings.is_empty(),
+                    json_artifact.overall_risk.as_deref(),
+                    ReviewDecision::from_str(&meta.decision).ok(),
+                    || review_contains_prose_clean_conclusion(session_dir),
+                )?;
+                return Ok(build_review_verdict_artifact(
+                    meta.session_id.clone(),
+                    decision,
+                    legacy_verdict_for_decision(decision, &meta.verdict),
+                    json_counts,
+                    meta.routed_to.clone(),
+                    meta.primary_failure.clone(),
+                    meta.failure_reason.clone(),
+                    Vec::new(),
+                ));
+            }
+        }
+
         let decision = derive_decision_from_severity_counts(
             &severity_counts,
             findings_file.findings.is_empty(),
@@ -726,46 +759,7 @@ pub(super) fn print_reviewer_outcomes(outcomes: &[ReviewerOutcome]) {
     }
 }
 
-/// Check whether review output contains substantive content beyond prompt guards.
-///
-/// Returns `true` when the raw output is empty or contains only CSA prompt
-/// injection markers / hook output and whitespace — indicating the review tool
-/// produced no actual findings.
-pub(super) fn is_review_output_empty(raw_output: &str) -> bool {
-    strip_prompt_guards(raw_output).trim().is_empty()
-}
-
-/// Remove non-review content: prompt injection blocks, hook markers, and section wrappers.
-fn strip_prompt_guards(text: &str) -> String {
-    let mut result = String::new();
-    let mut in_guard = false;
-    for line in text.lines() {
-        if line.contains("<csa-caller-prompt-injection") {
-            in_guard = true;
-            continue;
-        }
-        if line.contains("</csa-caller-prompt-injection>") {
-            in_guard = false;
-            continue;
-        }
-        if in_guard {
-            continue;
-        }
-        if line.trim_start().starts_with("[csa-hook]") {
-            continue;
-        }
-        if line.trim_start().starts_with("[csa-heartbeat]") {
-            continue;
-        }
-        // Strip CSA section markers (empty wrappers are not substantive content)
-        if line.trim_start().starts_with("<!-- CSA:SECTION:") {
-            continue;
-        }
-        result.push_str(line);
-        result.push('\n');
-    }
-    result
-}
+pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
 
 fn contains_verdict_token(haystack: &str, token: &str) -> bool {
     haystack
