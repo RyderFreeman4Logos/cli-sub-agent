@@ -31,11 +31,12 @@ mod transport_gemini_helpers;
 #[cfg(test)]
 use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
-    GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
-    apply_gemini_acp_initial_stall_summary, apply_gemini_legacy_initial_stall_summary,
-    apply_gemini_mcp_warning_summary, apply_gemini_sandbox_runtime_env_overrides,
-    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
-    classify_gemini_legacy_initial_stall, classify_gemini_oauth_prompt_result, classify_join_error,
+    GeminiAcpInitFailureClassification, GeminiRetryPhase, annotate_gemini_retry_error,
+    append_gemini_retry_report, apply_gemini_acp_initial_stall_summary,
+    apply_gemini_legacy_initial_stall_summary, apply_gemini_mcp_warning_summary,
+    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
+    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
+    classify_gemini_oauth_prompt_result, classify_join_error,
     ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
     gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure, is_gemini_mcp_issue_result,
@@ -52,8 +53,8 @@ use transport_gemini_acp_runtime::{
 #[path = "transport_gemini_mcp_diagnostic.rs"]
 mod transport_gemini_mcp_diagnostic;
 use transport_gemini_mcp_diagnostic::{
-    diagnose_mcp_init_failure, disable_mcp_servers_in_runtime, format_mcp_init_warning_summary,
-    gemini_allow_degraded_mcp,
+    McpInitDiagnostic, diagnose_mcp_init_failure, disable_mcp_servers_in_runtime,
+    format_mcp_init_warning_summary, gemini_allow_degraded_mcp,
 };
 #[path = "transport_acp_crash_retry.rs"]
 mod transport_acp_crash_retry;
@@ -393,6 +394,8 @@ impl AcpTransport {
     }
 }
 
+include!("transport_acp_spawn.rs");
+
 impl AcpTransport {
     /// Execute a single ACP attempt with the given args and env.
     ///
@@ -494,156 +497,66 @@ impl AcpTransport {
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
         let output_spool_max_bytes = options.output_spool_max_bytes;
         let output_spool_keep_rotated = options.output_spool_keep_rotated;
-        let output =
-            tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| anyhow!("failed to build ACP runtime: {e}"))?;
+        let spawn_request = AcpPromptRunRequest {
+            tool_name: self.tool_name.clone(),
+            acp_command,
+            acp_args,
+            prompt,
+            working_dir,
+            env,
+            system_prompt,
+            resume_session_id,
+            session_meta,
+            sandbox_plan,
+            sandbox_tool_name,
+            sandbox_session_id,
+            sandbox_best_effort,
+            idle_timeout_seconds,
+            initial_response_timeout_seconds,
+            acp_init_timeout_seconds,
+            termination_grace_period_seconds,
+            stream_stdout_to_stderr,
+            output_spool,
+            output_spool_max_bytes,
+            output_spool_keep_rotated,
+            acp_payload_debug_path,
+            gemini_classification_env,
+            gemini_env_allowlist_applied,
+            memory_max_mb: options
+                .sandbox
+                .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb),
+        };
 
-                if let Some(ref plan) = sandbox_plan {
-                    let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
-                    let sess_id = sandbox_session_id.as_deref().unwrap_or("");
-                    let sr = rt.block_on(run_acp_sandboxed(
-                        &acp_command,
-                        &acp_args,
-                        &working_dir,
-                        &env,
-                        system_prompt.as_deref(),
-                        resume_session_id.as_deref(),
-                        session_meta.clone(),
-                        &prompt,
-                        std::time::Duration::from_secs(idle_timeout_seconds),
-                        initial_response_timeout_seconds
-                            .map(std::time::Duration::from_secs),
-                        std::time::Duration::from_secs(acp_init_timeout_seconds),
-                        std::time::Duration::from_secs(termination_grace_period_seconds),
-                        plan,
-                        tool_name,
-                        sess_id,
-                        stream_stdout_to_stderr,
-                        output_spool.as_deref(),
-                        output_spool_max_bytes,
-                        output_spool_keep_rotated,
-                    ));
-                    match sr.result {
-                        Ok(mut output) => {
-                            output.peak_memory_mb = output.peak_memory_mb.or(sr.peak_memory_mb);
-                            Ok(output)
-                        }
-                        Err(e) if sandbox_best_effort && sr.sandbox_spawn_failed => {
-                            tracing::warn!(
-                                "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
-                            );
-                            rt.block_on(csa_acp::transport::run_prompt_with_io(
-                                &acp_command,
-                                &acp_args,
-                                &working_dir,
-                                &env,
-                                csa_acp::transport::AcpSessionStart {
-                                    system_prompt: system_prompt.as_deref(),
-                                    resume_session_id: resume_session_id.as_deref(),
-                                    meta: session_meta.clone(),
-                                    ..Default::default()
-                                },
-                                &prompt,
-                                csa_acp::transport::AcpRunOptions {
-                                    idle_timeout: std::time::Duration::from_secs(
-                                        idle_timeout_seconds,
-                                    ),
-                                    initial_response_timeout: initial_response_timeout_seconds
-                                        .map(std::time::Duration::from_secs),
-                                    init_timeout: std::time::Duration::from_secs(
-                                        acp_init_timeout_seconds,
-                                    ),
-                                    termination_grace_period: std::time::Duration::from_secs(
-                                        termination_grace_period_seconds,
-                                    ),
-                                    io: csa_acp::transport::AcpOutputIoOptions {
-                                        stream_stdout_to_stderr,
-                                        output_spool: output_spool.as_deref(),
-                                        spool_max_bytes: output_spool_max_bytes,
-                                        keep_rotated_spool: output_spool_keep_rotated,
-                                    },
-                                },
-                            ))
-                            .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
-                        }
-                        Err(e) => Err(PeakMemoryContext(sr.peak_memory_mb)
-                            .into_anyhow(format!("sandboxed ACP: {e}"))),
-                    }
-                } else {
-                    rt.block_on(csa_acp::transport::run_prompt_with_io(
-                        &acp_command,
-                        &acp_args,
-                        &working_dir,
-                        &env,
-                        csa_acp::transport::AcpSessionStart {
-                            system_prompt: system_prompt.as_deref(),
-                            resume_session_id: resume_session_id.as_deref(),
-                            meta: session_meta.clone(),
-                            ..Default::default()
-                        },
-                        &prompt,
-                        csa_acp::transport::AcpRunOptions {
-                            idle_timeout: std::time::Duration::from_secs(idle_timeout_seconds),
-                            initial_response_timeout: initial_response_timeout_seconds
-                                .map(std::time::Duration::from_secs),
-                            init_timeout: std::time::Duration::from_secs(
-                                acp_init_timeout_seconds,
-                            ),
-                            termination_grace_period: std::time::Duration::from_secs(
-                                termination_grace_period_seconds,
-                            ),
-                            io: csa_acp::transport::AcpOutputIoOptions {
-                                stream_stdout_to_stderr,
-                                output_spool: output_spool.as_deref(),
-                                spool_max_bytes: output_spool_max_bytes,
-                                keep_rotated_spool: output_spool_keep_rotated,
-                            },
-                        },
-                    ))
-                    .map_err(|e| anyhow!("ACP transport failed: {e}"))
-                }
-            })
-            .await
-            .map_err(classify_join_error)?
-            .map_err(|error| {
-                if self.tool_name == "gemini-cli" {
+        let (output, gemini_warning_summary) = if self.tool_name == "gemini-cli" {
+            let runtime_home = gemini_runtime_home
+                .clone()
+                .expect("gemini runtime home should exist for ACP execution");
+            let path_override = spawn_request.env.get("PATH").map(std::ffi::OsString::from);
+            let outcome = Self::execute_gemini_acp_with_degraded_mcp_retry(
+                &runtime_home,
+                path_override,
+                gemini_allow_degraded_mcp(&spawn_request.env),
+                || Self::run_acp_prompt(spawn_request.clone()),
+                diagnose_mcp_init_failure,
+                disable_mcp_servers_in_runtime,
+                |error| {
                     let error_display = format!("{error:#}");
-                    if is_gemini_acp_init_failure(&error_display) {
-                        let memory_max_mb = options
-                            .sandbox
-                            .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
-                        let classification = classify_gemini_acp_init_failure(
+                    is_gemini_acp_init_failure(&error_display).then(|| {
+                        classify_gemini_acp_init_failure(
                             &error_display,
-                            gemini_classification_env
+                            spawn_request
+                                .gemini_classification_env
                                 .as_ref()
                                 .expect("gemini classification env"),
-                        );
-                        tracing::warn!(
-                            classified_reason = classification.code,
-                            memory_max_mb,
-                            env_allowlist_applied = %gemini_env_allowlist_applied,
-                            missing_env_vars = %classification.missing_env_vars.join(","),
-                            "classified gemini ACP initialization failure"
-                        );
-                        return format_gemini_acp_init_failure(
-                            &classification,
-                            error,
-                            memory_max_mb,
-                        );
-                    }
-                }
-                if let Some(path) = acp_payload_debug_path.as_deref() {
-                    error.context(format!(
-                        "ACP payload debug written to {}",
-                        path.display()
-                    ))
-                } else {
-                    error
-                }
-            })?;
+                        )
+                    })
+                },
+            )
+            .await?;
+            (outcome.value, outcome.warning_summary)
+        } else {
+            (Self::run_acp_prompt(spawn_request).await?, None)
+        };
         let mut execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
             output: output.output,
@@ -651,6 +564,9 @@ impl AcpTransport {
             exit_code: output.exit_code,
             peak_memory_mb: output.peak_memory_mb,
         };
+        if let Some(warning_summary) = gemini_warning_summary.as_deref() {
+            apply_gemini_mcp_warning_summary(&mut execution, warning_summary);
+        }
         if let Some(classification) = (self.tool_name == "gemini-cli")
             .then(|| {
                 classify_gemini_acp_initial_stall(&execution, initial_response_timeout_seconds)
