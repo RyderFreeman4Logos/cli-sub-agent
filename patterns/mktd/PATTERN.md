@@ -174,6 +174,23 @@ CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, 
 Report: potential breaking changes, security considerations, performance, compatibility.
 Working directory: ${CWD}
 
+## Step 4a: Phase 1 — RECON Dimension 4 (Semantic Invariants)
+
+Tool: csa
+Session: ${STEP_1_OUTPUT}
+Tier: tier-1-quick
+
+Identify the semantic invariants and concurrency assumptions for ${FEATURE}.
+
+CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, specific modules), evaluate invariants and concurrency semantics WITHIN that scope. Do NOT invent a different design just to simplify the invariant story.
+
+Report using these keys:
+- `invariant_list`: what invariants must hold during this module's lifetime
+- `assumption_list`: what assumptions this module makes about external state, other writers, or process lifetime
+- `concurrency_model`: who else can write to the files/state this touches, plus the failure / rollback model for each important step
+
+Working directory: ${CWD}
+
 ## Step 4b: Phase 1 — Persist RECON References
 
 Tool: bash
@@ -183,8 +200,8 @@ Each dimension's output is stored as a reference file so the full plan
 can link to detailed findings without bloating TODO.md itself.
 
 ```bash
-[[ -n "${STEP_12_OUTPUT:-}" ]] || { echo "no TODO path yet — skip ref persistence" >&2; exit 0; }
-TODO_DIR="$(dirname "${STEP_12_OUTPUT}")"
+[[ -n "${STEP_13_OUTPUT:-}" ]] || { echo "no TODO path yet — skip ref persistence" >&2; exit 0; }
+TODO_DIR="$(dirname "${STEP_13_OUTPUT}")"
 TODO_TS="$(basename "${TODO_DIR}")"
 if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
   csa todo ref add -t "${TODO_TS}" --content "${STEP_3_OUTPUT}" recon-structure.md 2>/dev/null || true
@@ -195,16 +212,19 @@ fi
 if [[ -n "${STEP_5_OUTPUT:-}" ]]; then
   csa todo ref add -t "${TODO_TS}" --content "${STEP_5_OUTPUT}" recon-constraints.md 2>/dev/null || true
 fi
+if [[ -n "${STEP_6_OUTPUT:-}" ]]; then
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_6_OUTPUT}" recon-invariants.md 2>/dev/null || true
+fi
 echo "RECON references persisted"
 ```
 
-> **Note**: This step runs best AFTER Step 11 (Save TODO) creates the todo
+> **Note**: This step runs best AFTER Step 13 (Save TODO) creates the todo
 > directory. When run before save, the step is a no-op. The orchestrator MAY
 > re-invoke this step after save to persist references retroactively, or agents
 > can call `csa todo ref add` directly during RECON to attach findings as they
 > become available.
 
-## Step 5: Phase 2 — DRAFT TODO
+## Step 7: Phase 2 — DRAFT TODO
 
 Synthesize CSA findings into a structured TODO plan.
 
@@ -218,6 +238,9 @@ ${STEP_4_OUTPUT}
 
 ### Constraints (Step 5)
 ${STEP_5_OUTPUT}
+
+### Semantic Invariants (Step 6)
+${STEP_6_OUTPUT}
 
 ### Instructions
 
@@ -256,14 +279,14 @@ Output the COMPLETE TODO plan as text to stdout.
 Do NOT write files to the project directory.
 Do NOT manually create `output/summary.md` or other `output/*` files in the repo.
 CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
-The output is captured as `${STEP_6_OUTPUT}` for subsequent steps.
+The output is captured as `${STEP_7_OUTPUT}` for subsequent steps.
 
-## Step 6: Phase 2.25 — Spec Generation
+## Step 8: Phase 2.25 — Spec Generation
 
 Extract verifiable acceptance criteria from the draft TODO plan.
 
 ### Draft TODO Plan
-${STEP_6_OUTPUT}
+${STEP_7_OUTPUT}
 
 ### Instructions
 
@@ -291,21 +314,21 @@ description = "<verifiable acceptance criterion description>"
 status = "pending"
 ```
 
-Use `plan_ulid = "__PLAN_ID__"` as a placeholder. Step 11 must replace it with
+Use `plan_ulid = "__PLAN_ID__"` as a placeholder. Step 13 must replace it with
 the actual plan id returned by `csa todo create` before writing `spec.toml`.
 Do NOT write files to the project directory.
 Do NOT manually create `output/summary.md` or other `output/*` files in the repo.
 CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
-The output is captured as `${STEP_7_OUTPUT}` for subsequent steps.
+The output is captured as `${STEP_8_OUTPUT}` for subsequent steps.
 
-## Step 7: Phase 2.5 — Threat Model
+## Step 9: Phase 2.5 — Threat Model
 
 **Condition**: Skip if `INTENSITY=light`.
 
 Review the draft TODO plan for security and safety concerns.
 
 ### Draft TODO Plan
-${STEP_6_OUTPUT}
+${STEP_7_OUTPUT}
 
 ### Instructions
 
@@ -316,6 +339,10 @@ external interactions), enumerate:
 - What happens with malformed/hostile input?
 - What information is exposed in logs/display/persistence?
 - What default behavior is safe vs unsafe?
+- What is the concurrent writer model for every external state this touches?
+- Where are the TOCTOU / rollback / cleanup races?
+- Which state-machine invariants must hold under concurrent transitions?
+- Is each file write atomic (rename-into-place) or vulnerable to write-then-maybe-delete races?
 
 If this is a **default-change task** (changes a default value, default
 transport, default tool, default feature gate, or default config field),
@@ -344,7 +371,7 @@ default-change compatibility gaps, `[Compat]` tagged items.
 
 Print the COMPLETE threat analysis as text to stdout.
 
-## Step 8: Phase 3 — Adversarial Debate
+## Step 10: Phase 3 — Adversarial Debate
 
 **Condition**: Skip if `INTENSITY=light`.
 
@@ -353,7 +380,7 @@ Tier: tier-2-standard
 
 Run explicit adversarial debate via `csa debate`.
 Capture debate stdout, then normalize into a structured evidence packet
-for mechanical validation in Step 9.
+for mechanical validation in Step 11.
 
 ```bash
 LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
@@ -361,13 +388,17 @@ DEBATE_PROMPT="$(printf '%s\n' \
 "Critically evaluate this draft TODO plan, generated spec, and threat model. Act as a devil's advocate." \
 "" \
 "## Draft TODO Plan" \
-"${STEP_6_OUTPUT}" \
-"" \
-"## Generated Spec (Step 7)" \
 "${STEP_7_OUTPUT}" \
 "" \
-"## Threat Model (Step 8)" \
+"## Generated Spec (Step 8)" \
 "${STEP_8_OUTPUT}" \
+"" \
+"## Threat Model (Step 9)" \
+"${STEP_9_OUTPUT}" \
+"" \
+"## Required Red-Team Coverage" \
+"Enumerate every assumption made in the TODO plan." \
+"For each assumption, construct at least one scenario where it is false and explain the resulting failure mode or missing mitigation." \
 "" \
 "## Output Requirements" \
 "Provide explicit verdict and confidence in your conclusion." )"
@@ -407,7 +438,7 @@ else
 fi
 ```
 
-## Step 9: Phase 3.5 — Validate Debate Evidence
+## Step 11: Phase 3.5 — Validate Debate Evidence
 
 **Condition**: Skip if `INTENSITY=light`.
 
@@ -416,17 +447,17 @@ Tool: bash
 Validate that debate output exists and carries required evidence markers.
 
 ```bash
-[[ -n "${STEP_9_OUTPUT:-}" ]] || { echo "STEP_9_OUTPUT is empty — debate did not run" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -q '^DEBATE_EVIDENCE:' || { echo "debate evidence header missing" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -Eq 'mapped_verdict:[[:space:]]*(READY|REVISE)' || { echo "mapped debate verdict missing" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -Eq 'raw_verdict:[[:space:]]*(APPROVE|REVISE|REJECT|UNKNOWN)' || { echo "raw debate verdict missing" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -Eq 'confidence:[[:space:]]*(high|medium|low|unknown)' || { echo "debate confidence missing" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -q '^VALID_CONCERNS:' || { echo "valid concerns section missing" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -q '^SUGGESTED_CHANGES:' || { echo "suggested changes section missing" >&2; exit 1; }
-printf '%s\n' "${STEP_9_OUTPUT}" | grep -q '^OVERALL_ASSESSMENT:' || { echo "overall assessment section missing" >&2; exit 1; }
+[[ -n "${STEP_10_OUTPUT:-}" ]] || { echo "STEP_10_OUTPUT is empty — debate did not run" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -q '^DEBATE_EVIDENCE:' || { echo "debate evidence header missing" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -Eq 'mapped_verdict:[[:space:]]*(READY|REVISE)' || { echo "mapped debate verdict missing" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -Eq 'raw_verdict:[[:space:]]*(APPROVE|REVISE|REJECT|UNKNOWN)' || { echo "raw debate verdict missing" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -Eq 'confidence:[[:space:]]*(high|medium|low|unknown)' || { echo "debate confidence missing" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -q '^VALID_CONCERNS:' || { echo "valid concerns section missing" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -q '^SUGGESTED_CHANGES:' || { echo "suggested changes section missing" >&2; exit 1; }
+printf '%s\n' "${STEP_10_OUTPUT}" | grep -q '^OVERALL_ASSESSMENT:' || { echo "overall assessment section missing" >&2; exit 1; }
 ```
 
-## Step 10: Revise TODO
+## Step 12: Revise TODO
 
 **Condition**: Skip if `INTENSITY=light`.
 
@@ -446,17 +477,17 @@ Populate the "## Debate Findings" section with:
 
 ### Prior Context
 
-### Draft TODO (Step 6)
-${STEP_6_OUTPUT}
-
-### Generated Spec (Step 7)
+### Draft TODO (Step 7)
 ${STEP_7_OUTPUT}
 
-### Threat Model (Step 8)
+### Generated Spec (Step 8)
 ${STEP_8_OUTPUT}
 
-### Adversarial Critique (Step 9)
+### Threat Model (Step 9)
 ${STEP_9_OUTPUT}
+
+### Adversarial Critique (Step 10)
+${STEP_10_OUTPUT}
 
 ### Output
 
@@ -465,41 +496,41 @@ Include threat model findings as [Security] tagged checkbox items.
 Do NOT write files to the project directory.
 Do NOT manually create `output/summary.md` or other `output/*` files in the repo.
 CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
-The output is captured as `${STEP_11_OUTPUT}` for the save step.
+The output is captured as `${STEP_12_OUTPUT}` for the save step.
 
-## Step 11: Save TODO
+## Step 13: Save TODO
 
 Tool: bash
 
 Save finalized TODO and `spec.toml` using csa todo for git-tracked lifecycle.
-In full mode, uses `${STEP_11_OUTPUT}` (revised TODO). In light mode, falls back
-to `${STEP_6_OUTPUT}` (draft TODO) since threat model/debate/revise are skipped.
-Spec comes from `${STEP_7_OUTPUT}` in both modes.
+In full mode, uses `${STEP_12_OUTPUT}` (revised TODO). In light mode, falls back
+to `${STEP_7_OUTPUT}` (draft TODO) since threat model/debate/revise are skipped.
+Spec comes from `${STEP_8_OUTPUT}` in both modes.
 Execute ONLY the command block below.
 FORBIDDEN: custom shell snippets, heredoc (`<<EOF`, `cat <<`), branch create/switch,
 and writing intermediate files outside the TODO path.
 
 ```bash
 # Resolve TODO content: revised (full) or draft (light)
-if [[ -n "${STEP_11_OUTPUT:-}" ]]; then
-  FINAL_TODO="${STEP_11_OUTPUT}"
-elif [[ -n "${STEP_6_OUTPUT:-}" ]]; then
-  FINAL_TODO="${STEP_6_OUTPUT}"
+if [[ -n "${STEP_12_OUTPUT:-}" ]]; then
+  FINAL_TODO="${STEP_12_OUTPUT}"
+elif [[ -n "${STEP_7_OUTPUT:-}" ]]; then
+  FINAL_TODO="${STEP_7_OUTPUT}"
 else
-  echo "Neither STEP_11_OUTPUT (revised) nor STEP_6_OUTPUT (draft) is available" >&2; exit 1
+  echo "Neither STEP_12_OUTPUT (revised) nor STEP_7_OUTPUT (draft) is available" >&2; exit 1
 fi
 printf '%s\n' "${FINAL_TODO}" | grep -qE '^- \[ \] .+' || { echo "TODO has no non-empty checkbox tasks" >&2; exit 1; }
 printf '%s\n' "${FINAL_TODO}" | grep -q 'DONE WHEN:' || { echo "TODO has no DONE WHEN clauses" >&2; exit 1; }
-[[ -n "${STEP_7_OUTPUT:-}" ]] || { echo "STEP_7_OUTPUT is empty — Step 7 must output spec.toml content" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^schema_version = 1$' || { echo "STEP_7_OUTPUT missing schema_version = 1" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^plan_ulid = "__PLAN_ID__"$' || { echo "STEP_7_OUTPUT missing __PLAN_ID__ placeholder" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^summary = "' || { echo "STEP_7_OUTPUT missing summary" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^\[\[criteria\]\]$' || { echo "STEP_7_OUTPUT has no criteria entries" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | rg -q '^kind = "(scenario|property|check)"$' || { echo "STEP_7_OUTPUT has invalid criterion kinds" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^id = "' || { echo "STEP_7_OUTPUT missing criterion id" >&2; exit 1; }
-printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^description = "' || { echo "STEP_7_OUTPUT missing criterion description" >&2; exit 1; }
-SUMMARY_LINE=$(printf '%s\n' "${STEP_7_OUTPUT}" | sed -n 's/^summary = "\(.*\)"$/\1/p' | head -n1)
-printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "STEP_7_OUTPUT summary must be one Chinese line" >&2; exit 1; }
+[[ -n "${STEP_8_OUTPUT:-}" ]] || { echo "STEP_8_OUTPUT is empty — Step 8 must output spec.toml content" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^schema_version = 1$' || { echo "STEP_8_OUTPUT missing schema_version = 1" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^plan_ulid = "__PLAN_ID__"$' || { echo "STEP_8_OUTPUT missing __PLAN_ID__ placeholder" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^summary = "' || { echo "STEP_8_OUTPUT missing summary" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^\[\[criteria\]\]$' || { echo "STEP_8_OUTPUT has no criteria entries" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | rg -q '^kind = "(scenario|property|check)"$' || { echo "STEP_8_OUTPUT has invalid criterion kinds" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^id = "' || { echo "STEP_8_OUTPUT missing criterion id" >&2; exit 1; }
+printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^description = "' || { echo "STEP_8_OUTPUT missing criterion description" >&2; exit 1; }
+SUMMARY_LINE=$(printf '%s\n' "${STEP_8_OUTPUT}" | sed -n 's/^summary = "\(.*\)"$/\1/p' | head -n1)
+printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "STEP_8_OUTPUT summary must be one Chinese line" >&2; exit 1; }
 RESOLVED_LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
   TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
@@ -525,7 +556,7 @@ TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${F
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
 SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
 printf '%s\n' "${FINAL_TODO}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
-SPEC_CONTENT="${STEP_7_OUTPUT//__PLAN_ID__/${TODO_TS}}"
+SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_PATH}" || { echo "write spec failed" >&2; exit 1; }
 [[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }
 [[ -s "${SPEC_PATH}" ]] || { echo "saved spec is empty" >&2; exit 1; }
@@ -558,7 +589,7 @@ printf '%s\n' "${SPEC_RENDERED}" | grep -q '^- \[pending\] ' || { echo "csa todo
 csa todo show -t "${TODO_TS}" --path
 ```
 
-## Step 11b: Persist References & Design Document
+## Step 14: Persist References & Design Document
 
 Tool: bash
 
@@ -570,8 +601,8 @@ executing the plan can retrieve it via `csa todo ref show design.md`
 without loading the full plan into their context window.
 
 ```bash
-TODO_PATH="${STEP_12_OUTPUT}"
-[[ -n "${TODO_PATH:-}" ]] || { echo "STEP_12_OUTPUT empty — cannot persist refs" >&2; exit 1; }
+TODO_PATH="${STEP_13_OUTPUT}"
+[[ -n "${TODO_PATH:-}" ]] || { echo "STEP_13_OUTPUT empty — cannot persist refs" >&2; exit 1; }
 TODO_DIR="$(dirname "${TODO_PATH}")"
 TODO_TS="$(basename "${TODO_DIR}")"
 if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
@@ -583,11 +614,14 @@ fi
 if [[ -n "${STEP_5_OUTPUT:-}" ]]; then
   csa todo ref add -t "${TODO_TS}" --content "${STEP_5_OUTPUT}" recon-constraints.md 2>/dev/null || true
 fi
-if [[ -n "${STEP_8_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_8_OUTPUT}" threat-model.md 2>/dev/null || true
+if [[ -n "${STEP_6_OUTPUT:-}" ]]; then
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_6_OUTPUT}" recon-invariants.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_9_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_9_OUTPUT}" debate-evidence.md 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_9_OUTPUT}" threat-model.md 2>/dev/null || true
+fi
+if [[ -n "${STEP_10_OUTPUT:-}" ]]; then
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_10_OUTPUT}" debate-evidence.md 2>/dev/null || true
 fi
 
 # Generate consolidated design document (not git-tracked)
@@ -603,16 +637,18 @@ DESIGN_DOC=$(printf '%s\n\n' \
   "${STEP_4_OUTPUT}" \
   "## Constraints & Risks" \
   "${STEP_5_OUTPUT}" \
+  "## Semantic Invariants" \
+  "${STEP_6_OUTPUT}" \
   "## Threat Model" \
-  "${STEP_8_OUTPUT}" \
+  "${STEP_9_OUTPUT}" \
   "## Debate Evidence" \
-  "${STEP_9_OUTPUT}")
+  "${STEP_10_OUTPUT}")
 csa todo ref add -t "${TODO_TS}" --content "${DESIGN_DOC}" design.md 2>/dev/null || true
 
 csa todo ref list -t "${TODO_TS}" 2>/dev/null || echo "(no refs persisted)"
 ```
 
-## Step 12: Phase 4 — User Approval
+## Step 15: Phase 4 — User Approval
 
 Present TODO to user for review in `${STEP_2_OUTPUT}`.
 User chooses: APPROVE → proceed to mktsk, MODIFY → revise, REJECT → abandon.

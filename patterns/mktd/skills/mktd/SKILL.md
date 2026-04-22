@@ -30,7 +30,7 @@ Treat the run as executor ONLY when initial prompt contains:
 
 ## Purpose
 
-Generate a structured TODO plan for a feature through five phases: parallel CSA reconnaissance (structure, patterns, constraints), draft synthesis, security threat model, mandatory adversarial debate review, and user approval gate. The main agent performs zero file reads during exploration -- CSA sub-agents gather all context. Plans are saved via `csa todo` for git-tracked lifecycle management.
+Generate a structured TODO plan for a feature through five phases: parallel CSA reconnaissance (structure, patterns, constraints, semantic invariants), draft synthesis, security threat model, mandatory adversarial debate review, and user approval gate. The main agent performs zero file reads during exploration -- CSA sub-agents gather all context. Plans are saved via `csa todo` for git-tracked lifecycle management.
 
 ## Intensity Modes
 
@@ -68,19 +68,20 @@ breaks prompt-guard propagation.
 
 ### Step-by-Step
 
-1. **Phase 1 -- RECON** (3 parallel CSA calls, tier-1):
+1. **Phase 1 -- RECON** (4 parallel CSA calls, tier-1):
    - **Dimension 1 (Structure)**: Analyze codebase structure relevant to the feature (files, types, dependencies, entry points).
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.
+   - **Dimension 4 (Semantic Invariants)**: Capture invariants, assumptions, concurrent writers, and failure/rollback model.
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
 2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> default Chinese (Simplified) when script is mixed/unknown -> fallback Chinese (Simplified) when `${FEATURE}` is empty. This language is captured as `${STEP_2_OUTPUT}`.
 3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_2_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
-4. **Phase 2.5 -- THREAT MODEL** *(skipped in light mode)*: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults). If the task is a default-change task (changes a default value, default transport, default tool, default feature gate, or default config field), emit an `existing-config x upgrade-path` matrix covering legitimate pre-change user states, pre-change behavior, post-change behavior, and whether a gap exists. Each matrix row with `Gap = Yes` MUST be tagged `[Security]` or `[Compat]` and added as a Phase-2.5-generated TODO item. Non-default-change tasks skip the matrix.
-5. **Phase 3 -- DEBATE** *(skipped in light mode)*: Run explicit `csa debate` (uses global `[debate]` config) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`.
+4. **Phase 2.5 -- THREAT MODEL** *(skipped in light mode)*: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults), plus concurrency-specific failure modes: concurrent writers, TOCTOU / rollback / cleanup races, state-machine invariants under concurrent transitions, and file-write atomicity. If the task is a default-change task (changes a default value, default transport, default tool, default feature gate, or default config field), emit an `existing-config x upgrade-path` matrix covering legitimate pre-change user states, pre-change behavior, post-change behavior, and whether a gap exists. Each matrix row with `Gap = Yes` MUST be tagged `[Security]` or `[Compat]` and added as a Phase-2.5-generated TODO item. Non-default-change tasks skip the matrix.
+5. **Phase 3 -- DEBATE** *(skipped in light mode)*: Run explicit `csa debate` (uses global `[debate]` config) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`. The red-team MUST enumerate every TODO-plan assumption and construct a counterexample scenario for each.
 6. **Phase 3.5 -- DEBATE VALIDATION** *(skipped in light mode)*: Hard-fail if required evidence headers, mapped verdict (`READY|REVISE`), raw verdict (`APPROVE|REVISE|REJECT|UNKNOWN`), or confidence are missing.
 7. **Phase 3b -- REVISE** *(skipped in light mode)*: Incorporate debate feedback and threat model findings. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
-8. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch> --language <resolved-language>`. In full mode, writes `${STEP_11_OUTPUT}` (revised TODO); in light mode, falls back to `${STEP_6_OUTPUT}` (draft TODO). Persists `spec.toml` from `${STEP_7_OUTPUT}`, then `csa todo save`. The save step returns the TODO path as `${STEP_12_OUTPUT}` and MUST validate non-empty checkbox tasks, `DONE WHEN` clauses, and language consistency.
-9. **Phase 4.25 -- PERSIST REFERENCES**: Persist RECON findings, threat model, debate evidence, and a consolidated `design.md` reference using `${STEP_12_OUTPUT}` as the saved TODO path anchor.
+8. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch> --language <resolved-language>`. In full mode, writes `${STEP_12_OUTPUT}` (revised TODO); in light mode, falls back to `${STEP_7_OUTPUT}` (draft TODO). Persists `spec.toml` from `${STEP_8_OUTPUT}`, then `csa todo save`. The save step returns the TODO path as `${STEP_13_OUTPUT}` and MUST validate non-empty checkbox tasks, `DONE WHEN` clauses, and language consistency.
+9. **Phase 4.25 -- PERSIST REFERENCES**: Persist RECON findings, threat model, debate evidence, and a consolidated `design.md` reference using `${STEP_13_OUTPUT}` as the saved TODO path anchor.
 10. **Phase 4.5 -- APPROVE**: Present to user in `${STEP_2_OUTPUT}` for APPROVE / MODIFY / REJECT.
 
 ## Example Usage
@@ -112,7 +113,7 @@ context via `csa todo ref show <name>` without bloating their context window.
 
 ## Done Criteria
 
-1. Three RECON dimensions completed via CSA (structure, patterns, constraints).
+1. Four RECON dimensions completed via CSA (structure, patterns, constraints, semantic invariants).
 2. Main agent performed zero file reads during Phase 1.
 3. TODO draft synthesized with executor tags and checkbox items.
 4. Each task has >= 20 words of context/description.
