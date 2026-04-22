@@ -6,13 +6,12 @@ use crate::test_session_sandbox::ScopedSessionSandbox;
 async fn handle_review_fix_loop_uses_effective_fallback_tool() {
     use std::os::unix::fs::PermissionsExt;
 
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     if which::which("bwrap").is_err() {
         eprintln!("skipping: bwrap not installed (CI gap, see #987)");
         return;
     }
-
-    let project_dir = setup_git_repo();
-    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let codex_count_path = project_dir.path().join("codex-count.txt");
