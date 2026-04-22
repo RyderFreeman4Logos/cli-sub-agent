@@ -97,11 +97,11 @@ fn auto_selection_uses_codex_acp_when_transport_is_unset() {
     let td = tempfile::tempdir().expect("tempdir");
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
-    let codex_path = bin_dir.join("codex");
-    fs::write(&codex_path, "#!/bin/sh\necho 'codex 9.9.9'\n").expect("write codex stub");
+    let codex_path = bin_dir.join("codex-acp");
+    fs::write(&codex_path, "#!/bin/sh\necho 'codex-acp 9.9.9'\n").expect("write codex-acp stub");
     let mut perms = fs::metadata(&codex_path).expect("metadata").permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&codex_path, perms).expect("chmod codex");
+    fs::set_permissions(&codex_path, perms).expect("chmod codex-acp");
 
     let path = std::env::var_os("PATH").unwrap_or_default();
     let joined =
