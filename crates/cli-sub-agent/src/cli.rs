@@ -7,15 +7,12 @@ use csa_core::types::{OutputFormat, ToolArg, ToolName};
 #[path = "cli_session.rs"]
 mod cli_session;
 pub use cli_session::*;
-
 #[path = "cli_todo.rs"]
 mod cli_todo;
 pub use cli_todo::*;
-
 #[path = "cli_doctor.rs"]
 mod cli_doctor;
 pub use cli_doctor::*;
-
 #[path = "cli_review.rs"]
 mod cli_review;
 pub use cli_review::*;
@@ -65,7 +62,6 @@ pub fn parse_return_to(value: &str) -> Result<ReturnTarget> {
     if trimmed.is_empty() {
         anyhow::bail!("return target cannot be empty");
     }
-
     match trimmed.to_ascii_lowercase().as_str() {
         "last" => Ok(ReturnTarget::Last),
         "auto" => Ok(ReturnTarget::Auto),
@@ -75,6 +71,12 @@ pub fn parse_return_to(value: &str) -> Result<ReturnTarget> {
 
 fn validate_return_to(value: &str) -> std::result::Result<String, String> {
     parse_return_to(value)
+        .map(|_| value.to_string())
+        .map_err(|e| e.to_string())
+}
+
+fn validate_ulid(value: &str) -> std::result::Result<String, String> {
+    csa_session::validate_session_id(value)
         .map(|_| value.to_string())
         .map_err(|e| e.to_string())
 }
@@ -108,27 +110,24 @@ pub enum Commands {
         /// Read prompt from a file (bypasses shell quoting issues with complex prompts)
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         prompt_file: Option<PathBuf>,
-
+        /// Prepend summary/details/findings from a prior review session into the employee prompt
+        #[arg(long, value_name = "SESSION_ID", value_parser = validate_ulid)]
+        inline_context_from_review_session: Option<String>,
         /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
         #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last"])]
         session: Option<String>,
-
         /// Resume the most recent session for this project [DEPRECATED: use --fork-last]
         #[arg(long, conflicts_with_all = ["session", "ephemeral", "fork_from", "fork_last"])]
         last: bool,
-
         /// Fork from a specific session (ULID or prefix match)
         #[arg(long, conflicts_with_all = ["session", "last", "fork_last", "ephemeral"])]
         fork_from: Option<String>,
-
         /// Fork the most recent session for this project
         #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "ephemeral"])]
         fork_last: bool,
-
         /// Human-readable description for a new session
         #[arg(short, long)]
         description: Option<String>,
-
         /// Fork-call mode: fork a session, execute task, return only the ReturnPacket.
         /// Incompatible with --session, --last, --ephemeral.
         #[arg(long, conflicts_with_all = ["session", "last", "ephemeral"])]

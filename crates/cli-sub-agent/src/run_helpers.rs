@@ -10,6 +10,8 @@ use csa_session::TokenUsage;
 
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
+#[path = "run_helpers_inline_review_context.rs"]
+mod inline_review_context;
 #[path = "run_helpers_prompt.rs"]
 mod prompt;
 #[path = "run_helpers_routing_conflict.rs"]
@@ -18,6 +20,7 @@ mod routing_conflict;
 mod tool_availability;
 
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
+pub(crate) use inline_review_context::prepend_review_context_to_prompt;
 pub(crate) use prompt::{read_prompt, resolve_positional_stdin_sentinel};
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use tool_availability::{
@@ -751,6 +754,10 @@ mod model_spec_tests;
 #[cfg(test)]
 #[path = "run_helpers_override_tests.rs"]
 mod override_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_inline_review_context_tests.rs"]
+mod inline_review_context_tests;
 
 #[cfg(test)]
 #[path = "run_helpers_transport_integration_tests.rs"]
