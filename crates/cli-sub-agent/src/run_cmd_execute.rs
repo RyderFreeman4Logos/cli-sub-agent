@@ -187,7 +187,7 @@ pub(crate) async fn handle_run(
     // resolution may override it).  This drives tier enforcement: explicit
     // --tool (including --tool auto) is blocked when tiers are configured.
     let user_explicit_tool = tool.is_some();
-    let prompt = prompt.or(prompt_flag);
+    let prompt = crate::run_helpers::resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
 
     // Resolve --prompt-file into the prompt if provided.
     let prompt = if prompt_file.is_some() {

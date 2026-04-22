@@ -1,7 +1,6 @@
 //! Helper functions for `csa run`: tool resolution, executor building, token parsing.
 
 use anyhow::{Context, Result};
-use std::io::Read;
 use std::path::Path;
 
 use csa_config::{GlobalConfig, ProjectConfig};
@@ -11,12 +10,15 @@ use csa_session::TokenUsage;
 
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
+#[path = "run_helpers_prompt.rs"]
+mod prompt;
 #[path = "run_helpers_routing_conflict.rs"]
 mod routing_conflict;
 #[path = "run_helpers_tool_availability.rs"]
 mod tool_availability;
 
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
+pub(crate) use prompt::{read_prompt, resolve_positional_stdin_sentinel};
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_tool_binary_name,
@@ -550,35 +552,6 @@ pub(crate) fn resolve_prompt_with_file(
         return Ok(content);
     }
     read_prompt(prompt)
-}
-
-/// Read prompt from CLI argument or stdin.
-pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
-    if let Some(p) = prompt {
-        if p.trim().is_empty() {
-            anyhow::bail!(
-                "Empty prompt provided. Usage:\n  csa run --sa-mode <true|false> --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --sa-mode <true|false> --tool <tool>"
-            );
-        }
-        Ok(p)
-    } else {
-        // No prompt argument: read from stdin
-        use std::io::IsTerminal;
-        if std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "No prompt provided and stdin is a terminal.\n\n\
-                 Usage:\n  \
-                 csa run --sa-mode <true|false> --tool <tool> \"your prompt here\"\n  \
-                 echo \"prompt\" | csa run --sa-mode <true|false> --tool <tool>"
-            );
-        }
-        let mut buffer = String::new();
-        std::io::stdin().read_to_string(&mut buffer)?;
-        if buffer.trim().is_empty() {
-            anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
-        }
-        Ok(buffer)
-    }
 }
 
 /// Result of resolving a tool from a tier's models list.

@@ -777,3 +777,22 @@ fn resolve_prompt_with_file_falls_through_to_positional() {
     let result = super::resolve_prompt_with_file(Some("hello".to_string()), None).unwrap();
     assert_eq!(result, "hello");
 }
+
+#[test]
+fn resolve_positional_stdin_sentinel_preserves_non_sentinel_prompt() {
+    let result =
+        super::resolve_positional_stdin_sentinel(Some("literal prompt".to_string())).unwrap();
+    assert_eq!(result, Some("literal prompt".to_string()));
+}
+
+#[test]
+fn resolve_positional_stdin_sentinel_reads_from_stdin_for_dash() {
+    let mut stdin = std::io::Cursor::new("prompt from stdin");
+    let result = super::prompt::resolve_positional_stdin_sentinel_from_reader(
+        Some("-".to_string()),
+        false,
+        &mut stdin,
+    )
+    .unwrap();
+    assert_eq!(result, Some("prompt from stdin".to_string()));
+}
