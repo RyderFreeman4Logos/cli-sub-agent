@@ -141,7 +141,7 @@ Its post-fix state is **asymmetric**:
 
 - On **successful `csa review --fix` convergence** (gate passed + non-empty output),
   the file is overwritten with an empty findings list — an explicit "clean" signal.
-- On **`csa review --fix` exhaustion** (fix rounds end without gate pass), the
+- On **`csa review --fix` exhaustion** (fix rounds end without convergence), the
   pre-fix findings are preserved — the last review phase's findings remain
   authoritative.
 - To re-verify after exhaustion, run a fresh `csa review` phase.
