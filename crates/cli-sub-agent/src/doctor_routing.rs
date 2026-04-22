@@ -699,7 +699,7 @@ mod tests {
         std::fs::write(
             &user_config_path,
             r#"
-[tools.claude-code]
+[tools.codex]
 transport = "cli"
 "#,
         )
@@ -736,7 +736,7 @@ default = "tier-1"
         assert!(
             report.diagnostics[0]
                 .message
-                .contains("tools.claude-code.transport"),
+                .contains("tools.codex.transport"),
             "diagnostic should surface the merged-config key: {:?}",
             report.diagnostics[0]
         );
@@ -766,7 +766,7 @@ default = "tier-1"
             json["diagnostics"][0]["message"]
                 .as_str()
                 .expect("routing json diagnostic message")
-                .contains("tools.claude-code.transport"),
+                .contains("tools.codex.transport"),
             "json output should surface the merged-config key: {json}"
         );
         assert_eq!(json["context"]["vcs_backend"], serde_json::json!("git"));

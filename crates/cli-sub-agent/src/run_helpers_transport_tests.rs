@@ -1,12 +1,12 @@
 use super::{build_executor, is_tool_binary_available_for_config, resolve_tool_and_model};
 use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig, TransportKind};
 use csa_core::types::ToolName;
-use csa_executor::{CodexTransport, Executor};
+use csa_executor::{ClaudeCodeTransport, CodexTransport, Executor};
 use std::collections::HashMap;
 
-fn project_config_with_codex_tool(tool_config: ToolConfig) -> ProjectConfig {
+fn project_config_with_tool(tool_name: &str, tool_config: ToolConfig) -> ProjectConfig {
     let mut tools = HashMap::new();
-    tools.insert("codex".to_string(), tool_config);
+    tools.insert(tool_name.to_string(), tool_config);
 
     ProjectConfig {
         schema_version: 1,
@@ -35,7 +35,7 @@ fn project_config_with_codex_tool(tool_config: ToolConfig) -> ProjectConfig {
 
 #[test]
 fn build_executor_codex_transport_defaults_to_build_setting_when_unset() {
-    let config = project_config_with_codex_tool(ToolConfig::default());
+    let config = project_config_with_tool("codex", ToolConfig::default());
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
 
     match exec {
@@ -53,10 +53,13 @@ fn build_executor_codex_transport_defaults_to_build_setting_when_unset() {
 
 #[test]
 fn build_executor_codex_transport_respects_explicit_cli_override() {
-    let config = project_config_with_codex_tool(ToolConfig {
-        transport: Some(TransportKind::Cli),
-        ..Default::default()
-    });
+    let config = project_config_with_tool(
+        "codex",
+        ToolConfig {
+            transport: Some(TransportKind::Cli),
+            ..Default::default()
+        },
+    );
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
 
     match exec {
@@ -71,10 +74,13 @@ fn build_executor_codex_transport_respects_explicit_cli_override() {
 
 #[test]
 fn build_executor_codex_transport_respects_explicit_acp_override() {
-    let config = project_config_with_codex_tool(ToolConfig {
-        transport: Some(TransportKind::Acp),
-        ..Default::default()
-    });
+    let config = project_config_with_tool(
+        "codex",
+        ToolConfig {
+            transport: Some(TransportKind::Acp),
+            ..Default::default()
+        },
+    );
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
 
     match exec {
@@ -109,7 +115,7 @@ fn auto_selection_uses_codex_acp_when_transport_is_unset() {
             .expect("join PATH");
     let _path_guard = ScopedTestEnvVar::set("PATH", joined);
 
-    let mut config = project_config_with_codex_tool(ToolConfig::default());
+    let mut config = project_config_with_tool("codex", ToolConfig::default());
     config.tools.insert(
         "gemini-cli".to_string(),
         ToolConfig {
@@ -153,6 +159,121 @@ fn auto_selection_uses_codex_acp_when_transport_is_unset() {
     .expect("resolve tool");
 
     assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec, None);
+    assert_eq!(model, None);
+}
+
+#[test]
+fn build_executor_claude_code_transport_respects_explicit_cli_override() {
+    let config = project_config_with_tool(
+        "claude-code",
+        ToolConfig {
+            transport: Some(TransportKind::Cli),
+            ..Default::default()
+        },
+    );
+    let exec =
+        build_executor(&ToolName::ClaudeCode, None, None, None, Some(&config), true).unwrap();
+
+    match exec {
+        Executor::ClaudeCode {
+            runtime_metadata, ..
+        } => {
+            assert_eq!(runtime_metadata.transport_mode(), ClaudeCodeTransport::Cli);
+        }
+        other => panic!("expected claude-code executor, got: {other:?}"),
+    }
+}
+
+#[test]
+fn build_executor_claude_code_transport_respects_explicit_acp_override() {
+    let config = project_config_with_tool(
+        "claude-code",
+        ToolConfig {
+            transport: Some(TransportKind::Acp),
+            ..Default::default()
+        },
+    );
+    let exec =
+        build_executor(&ToolName::ClaudeCode, None, None, None, Some(&config), true).unwrap();
+
+    match exec {
+        Executor::ClaudeCode {
+            runtime_metadata, ..
+        } => {
+            assert_eq!(runtime_metadata.transport_mode(), ClaudeCodeTransport::Acp);
+        }
+        other => panic!("expected claude-code executor, got: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_selection_uses_claude_code_acp_when_transport_is_unset() {
+    use crate::test_env_lock::ScopedTestEnvVar;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let bin_dir = td.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let claude_path = bin_dir.join("claude-code-acp");
+    fs::write(&claude_path, "#!/bin/sh\necho 'claude-code-acp 9.9.9'\n")
+        .expect("write claude-code-acp stub");
+    let mut perms = fs::metadata(&claude_path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&claude_path, perms).expect("chmod claude-code-acp");
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let joined =
+        std::env::join_paths(std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&path)))
+            .expect("join PATH");
+    let _path_guard = ScopedTestEnvVar::set("PATH", joined);
+
+    let mut config = project_config_with_tool("claude-code", ToolConfig::default());
+    config.tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    config.tools.insert(
+        "opencode".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    config.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    assert!(
+        is_tool_binary_available_for_config("claude-code", Some(&config)),
+        "unset claude-code transport should probe `claude-code-acp`, not `claude`"
+    );
+
+    let (tool, model_spec, model) = resolve_tool_and_model(
+        None,
+        None,
+        None,
+        Some(&config),
+        td.path(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        true,
+    )
+    .expect("resolve tool");
+
+    assert_eq!(tool, ToolName::ClaudeCode);
     assert_eq!(model_spec, None);
     assert_eq!(model, None);
 }

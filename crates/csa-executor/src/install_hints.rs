@@ -4,6 +4,8 @@ pub const GEMINI_CLI_INSTALL_HINT: &str = "Install: npm install -g @google/gemin
 pub const OPENCODE_INSTALL_HINT: &str = "Install: go install github.com/sst/opencode@latest";
 pub const CLAUDE_CODE_ACP_INSTALL_HINT: &str =
     "Install ACP adapter: npm install -g @zed-industries/claude-code-acp";
+pub const CLAUDE_CODE_CLI_INSTALL_HINT: &str =
+    "Install Claude Code CLI and ensure `claude` is on PATH";
 pub const OPENAI_COMPAT_INSTALL_HINT: &str =
     "Configure [tools.openai-compat] with base_url and api_key in config.toml";
 

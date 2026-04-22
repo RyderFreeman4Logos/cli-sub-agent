@@ -83,10 +83,13 @@ fn test_build_command_with_session_resume_codex_long_prompt_uses_stdin_marker() 
 }
 
 #[test]
-fn test_build_command_with_session_resume_claude() {
+fn test_build_command_with_session_resume_claude_cli_is_ignored() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::ClaudeCodeRuntimeMetadata::from_transport(
+            crate::claude_runtime::ClaudeCodeTransport::Cli,
+        ),
     };
     let session = make_test_session();
     let tool_state = ToolState {
@@ -107,12 +110,12 @@ fn test_build_command_with_session_resume_claude() {
         .collect();
 
     assert!(
-        args.contains(&"--resume".to_string()),
-        "ClaudeCode should use --resume"
+        !args.contains(&"--resume".to_string()),
+        "Claude CLI transport must not advertise resume support"
     );
     assert!(
-        args.contains(&"claude_session_789".to_string()),
-        "Should pass the session id"
+        !args.contains(&"claude_session_789".to_string()),
+        "Claude CLI transport must not pass provider session IDs"
     );
 }
 

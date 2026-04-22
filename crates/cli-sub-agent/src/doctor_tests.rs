@@ -302,7 +302,7 @@ fn doctor_project_config_display_ignores_invalid_user_global_config() {
     std::fs::write(
         &user_config_path,
         r#"
-[tools.claude-code]
+[tools.codex]
 transport = "cli"
 "#,
     )
@@ -318,7 +318,7 @@ transport = "acp"
 
     let merged_error = ProjectConfig::load(td.path()).expect_err("merged load should fail");
     assert!(
-        format!("{merged_error:#}").contains("tools.claude-code.transport"),
+        format!("{merged_error:#}").contains("tools.codex.transport"),
         "test fixture should exercise an invalid user-level transport override: {merged_error}"
     );
 
@@ -350,7 +350,7 @@ fn doctor_text_reports_invalid_effective_config() {
     std::fs::write(
         &user_config_path,
         r#"
-[tools.claude-code]
+[tools.codex]
 transport = "cli"
 "#,
     )
@@ -382,7 +382,7 @@ transport = "acp"
         "doctor text should surface the invalid effective-config branch: {rendered}"
     );
     assert!(
-        rendered.contains("tools.claude-code.transport"),
+        rendered.contains("tools.codex.transport"),
         "doctor text should surface the exact merged-config key: {rendered}"
     );
     assert!(
@@ -411,7 +411,7 @@ fn doctor_json_reports_invalid_effective_config() {
     std::fs::write(
         &user_config_path,
         r#"
-[tools.claude-code]
+[tools.codex]
 transport = "cli"
 "#,
     )
@@ -437,7 +437,7 @@ transport = "acp"
     assert_eq!(report["config"]["valid"], serde_json::json!(true));
     assert_eq!(effective["valid"], serde_json::json!(false));
     assert!(
-        effective_error.contains("tools.claude-code.transport"),
+        effective_error.contains("tools.codex.transport"),
         "doctor JSON should surface the exact merged-config key: {effective_error}"
     );
     assert!(

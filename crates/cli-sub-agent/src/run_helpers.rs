@@ -394,6 +394,10 @@ pub(crate) fn build_executor(
         let transport = tool_availability::resolved_codex_transport(config);
         executor.override_codex_transport(transport);
     }
+    if matches!(executor, Executor::ClaudeCode { .. }) {
+        let transport = tool_availability::resolved_claude_code_transport(config);
+        executor.override_claude_code_transport(transport);
+    }
 
     Ok(executor)
 }

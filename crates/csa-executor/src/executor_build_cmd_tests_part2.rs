@@ -78,6 +78,7 @@ fn test_build_command_with_empty_prompt() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("", None, &session, None);
@@ -167,6 +168,7 @@ fn test_build_command_no_model_override_omits_model_flag() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
@@ -210,6 +212,7 @@ fn test_build_command_current_dir() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let mut session = make_test_session();
     session.project_path = "/home/user/my-project".to_string();
@@ -256,6 +259,7 @@ fn test_build_command_strips_claudecode_env() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
     let (cmd, _stdin_data) = exec.build_command("test", None, &session, None);
@@ -287,6 +291,7 @@ fn test_build_command_strips_claudecode_for_all_executors() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
         },
         Executor::Codex {
             model_override: None,
@@ -323,6 +328,7 @@ fn test_build_execute_in_command_strips_claudecode_env() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let work_dir = std::path::Path::new("/tmp/test-project");
     let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None);
@@ -412,6 +418,7 @@ fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
         },
         Executor::Codex {
             model_override: None,

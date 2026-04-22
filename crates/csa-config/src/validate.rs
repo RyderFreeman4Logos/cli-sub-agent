@@ -256,10 +256,7 @@ fn validate_tool_transport_override_with_raw(
 
     match tool_name {
         "claude-code" => match transport {
-            TransportKind::Auto | TransportKind::Acp => Ok(()),
-            TransportKind::Cli => bail!(
-                "Invalid {key} = \"{raw_transport}\": claude-code does not yet support CLI transport — will be added in #643 Phase 3."
-            ),
+            TransportKind::Auto | TransportKind::Cli | TransportKind::Acp => Ok(()),
         },
         "codex" => match transport {
             TransportKind::Auto | TransportKind::Acp => Ok(()),

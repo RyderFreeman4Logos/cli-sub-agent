@@ -24,6 +24,7 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
         Executor::ClaudeCode {
             model_override: None,
             thinking_budget: None,
+            runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
         },
         Executor::Codex {
             model_override: None,
@@ -47,6 +48,7 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
     let executor = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session_config = SessionConfig {
         no_load: vec!["skills/foo".to_string()],
@@ -82,6 +84,23 @@ fn test_transport_factory_create_honors_codex_cli_runtime_transport_override() {
     assert!(
         cli_transport.as_ref().as_any().is::<LegacyTransport>(),
         "codex cli override should use LegacyTransport"
+    );
+}
+
+#[test]
+fn test_transport_factory_create_honors_claude_cli_runtime_transport_override() {
+    let cli_executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::ClaudeCodeRuntimeMetadata::from_transport(
+            crate::claude_runtime::ClaudeCodeTransport::Cli,
+        ),
+    };
+    let cli_transport = TransportFactory::create(&cli_executor, Some(SessionConfig::default()))
+        .expect("transport should build");
+    assert!(
+        cli_transport.as_ref().as_any().is::<LegacyTransport>(),
+        "claude-code cli override should use LegacyTransport"
     );
 }
 

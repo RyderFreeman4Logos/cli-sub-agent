@@ -39,7 +39,7 @@ transport = "acp"
 }
 
 #[test]
-fn config_show_rejects_invalid_claude_code_cli_transport() {
+fn config_show_renders_valid_claude_code_cli_transport() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = csa_config::ProjectConfig::config_path(tmp.path());
     std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
@@ -61,8 +61,8 @@ transport = "cli"
         .output()
         .expect("failed to run csa config show --cd");
 
-    assert!(!output.status.success(), "csa config show should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("tools.claude-code.transport"));
-    assert!(stderr.contains("#643 Phase 3"));
+    assert!(output.status.success(), "csa config show should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[tools.claude-code]"));
+    assert!(stdout.contains("transport = \"cli\""));
 }
