@@ -42,7 +42,11 @@ This pattern follows a 3-layer dispatcher architecture:
 
 Each step below is annotated with its execution layer.
 
-## Assumed Fork Convention
+## Workflow Step 1: Assumed Fork Convention
+
+Tool: note
+
+> **Layer**: 0 (Orchestrator) -- advisory text only.
 
 pr-bot assumes the GitHub-common fork convention:
 

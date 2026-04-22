@@ -178,6 +178,13 @@ fn pr_bot_workflow_marks_non_ai_steps_explicitly() {
         .expect("missing bot setup abort step");
     assert_eq!(setup_abort.tool.as_deref(), Some("await-user"));
 
+    let fork_convention = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Assumed Fork Convention")
+        .expect("missing fork convention advisory step");
+    assert_eq!(fork_convention.tool.as_deref(), Some("note"));
+
     let clean_note = plan
         .steps
         .iter()
