@@ -346,6 +346,31 @@ impl ProjectConfig {
         paths::config_dir().map(|dir| dir.join("config.toml"))
     }
 
+    /// Resolve `[session_wait].memory_warn_mb` from the merged user/project config view.
+    ///
+    /// `0` and invalid values are treated as disabled.
+    pub fn resolve_session_wait_memory_warn_mb(project_root: &Path) -> Option<u64> {
+        let project_path = project_root.join(".csa").join("config.toml");
+        let user_path = Self::user_config_path();
+        Self::resolve_session_wait_memory_warn_mb_with_paths(user_path.as_deref(), &project_path)
+    }
+
+    pub(crate) fn resolve_session_wait_memory_warn_mb_with_paths(
+        user_path: Option<&Path>,
+        project_path: &Path,
+    ) -> Option<u64> {
+        let project_raw = read_optional_toml(project_path, "project");
+        let user_raw = user_path.and_then(|path| read_optional_toml(path, "user"));
+        let merged = match (user_raw, project_raw) {
+            (Some(base), Some(overlay)) => merge_toml_values(base, overlay),
+            (Some(base), None) => base,
+            (None, Some(overlay)) => overlay,
+            (None, None) => return None,
+        };
+
+        parse_session_wait_memory_warn_mb(&merged)
+    }
+
     fn user_config_write_path() -> Option<PathBuf> {
         paths::config_dir_write().map(|dir| dir.join("config.toml"))
     }
@@ -651,6 +676,46 @@ init_timeout_seconds = 120
             .cloned()
             .unwrap_or_else(|| input.to_string())
     }
+}
+
+fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Value> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                source,
+                error = %err,
+                "Failed to read config while resolving session wait memory warning threshold"
+            );
+            return None;
+        }
+    };
+
+    match toml::from_str::<toml::Value>(&content) {
+        Ok(raw) => Some(raw),
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                source,
+                error = %err,
+                "Failed to parse config while resolving session wait memory warning threshold"
+            );
+            None
+        }
+    }
+}
+
+fn parse_session_wait_memory_warn_mb(raw: &toml::Value) -> Option<u64> {
+    let value = raw
+        .get("session_wait")
+        .and_then(|session_wait| session_wait.get("memory_warn_mb"))?;
+    let limit = value.as_integer()?;
+    if limit <= 0 {
+        return None;
+    }
+    u64::try_from(limit).ok()
 }
 
 #[cfg(test)]

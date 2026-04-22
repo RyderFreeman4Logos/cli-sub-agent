@@ -242,6 +242,15 @@ pub enum SessionCommands {
     /// Wait for a daemon session to complete (poll until result exists and the daemon exits).
     /// Timeout comes from `~/.config/cli-sub-agent/config.toml` `[kv_cache].long_poll_seconds`
     /// with a legacy 250s fallback when `[kv_cache]` is absent.
+    ///
+    /// Optional memory early-exit: `--memory-warn-mb <N>` (or config
+    /// `[session_wait].memory_warn_mb`) samples the watched session's process-tree RSS
+    /// every 15s while waiting. When RSS exceeds the threshold, this command prints:
+    ///
+    /// `<!-- CSA:MEMORY_WARN session=<ULID> rss_mb=<N> limit_mb=<M> -->`
+    ///
+    /// to stdout and exits with code 33, without killing the session or emitting a
+    /// completion notification.
     Wait {
         /// Session ID to wait for (positional alternative to --session)
         #[arg(conflicts_with = "session")]
@@ -250,6 +259,11 @@ pub enum SessionCommands {
         /// Session ID to wait for
         #[arg(long)]
         session: Option<String>,
+
+        /// Override `[session_wait].memory_warn_mb` for this invocation.
+        /// `0` disables the sampler for this wait command.
+        #[arg(long)]
+        memory_warn_mb: Option<u64>,
 
         /// Working directory
         #[arg(long)]

@@ -84,6 +84,12 @@ cloud_review_exhausted = "ask-user"
 frequent_poll_seconds = 60
 long_poll_seconds = 240
 
+# Optional early-exit warning for `csa session wait`.
+# When the watched session's process tree RSS exceeds this threshold,
+# `csa session wait` prints a CSA:MEMORY_WARN marker and exits 33.
+# [session_wait]
+# memory_warn_mb = 8192
+
 # Display commands for `csa todo` subcommands.
 # When set, output is piped through the specified command (only when stdout is a terminal).
 # [todo]

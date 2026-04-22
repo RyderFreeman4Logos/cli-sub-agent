@@ -18,6 +18,7 @@ pub mod sandbox;
 pub use bwrap::{BwrapCommandBuilder, from_isolation_plan};
 pub use cgroup::{
     CgroupScopeGuard, OrphanScope, SandboxConfig, cleanup_orphan_scopes, create_scope_command,
+    scope_unit_name,
 };
 pub use filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
 pub use guard::{ResourceGuard, ResourceLimits};
