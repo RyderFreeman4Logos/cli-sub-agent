@@ -96,12 +96,12 @@ pub(crate) fn prepare_gemini_acp_runtime(
     // Preserve explicit trust state from the inherited environment only.
     // Do not synthesize trust from project-local mise.toml, because that would
     // elevate repo-controlled input into trusted execution state. See #972.
-    let inherited_trusted = env
-        .get("MISE_TRUSTED_CONFIG_PATHS")
-        .cloned()
-        .or_else(|| std::env::var("MISE_TRUSTED_CONFIG_PATHS").ok());
-    if let Some(trusted) = inherited_trusted {
-        env.insert("MISE_TRUSTED_CONFIG_PATHS".to_string(), trusted);
+    if std::env::var("MISE_TRUSTED_CONFIG_PATHS").is_ok() {
+        env.entry("MISE_TRUSTED_CONFIG_PATHS".to_string())
+            .or_insert_with(|| {
+                std::env::var("MISE_TRUSTED_CONFIG_PATHS")
+                    .expect("MISE_TRUSTED_CONFIG_PATHS existence checked above")
+            });
     }
 
     let inherited_path = env
