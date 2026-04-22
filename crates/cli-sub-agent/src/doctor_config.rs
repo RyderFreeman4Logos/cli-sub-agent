@@ -1,6 +1,7 @@
 use super::{DoctorEffectiveConfigStatus, DoctorProjectConfigStatus};
 use anyhow::Result;
 use csa_config::ProjectConfig;
+use csa_core::types::PRIMARY_TOOL_NAMES;
 use std::path::Path;
 
 pub(super) fn project_config_tool_lists(
@@ -9,11 +10,11 @@ pub(super) fn project_config_tool_lists(
     let mut enabled = Vec::new();
     let mut disabled = Vec::new();
 
-    for tool_name in &["gemini-cli", "opencode", "codex", "claude-code"] {
+    for &tool_name in PRIMARY_TOOL_NAMES {
         if config.is_tool_enabled(tool_name) {
-            enabled.push(*tool_name);
+            enabled.push(tool_name);
         } else {
-            disabled.push(*tool_name);
+            disabled.push(tool_name);
         }
     }
 

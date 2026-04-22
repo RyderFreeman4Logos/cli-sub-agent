@@ -1,15 +1,16 @@
 use super::{ToolAvailabilityState, ToolStatus, ToolTransportDoctorStatus};
 use csa_config::ProjectConfig;
+use csa_core::types::PRIMARY_TOOL_NAMES;
 use csa_executor::{ClaudeCodeTransport, CodexRuntimeMetadata, CodexTransport};
 use std::process::Command;
 
 pub(super) async fn print_tool_availability(config: Option<&ProjectConfig>) {
-    let tools = ["gemini-cli", "opencode", "codex", "claude-code"];
+    let tools = PRIMARY_TOOL_NAMES;
 
     let mut installed_count = 0;
     let total_count = tools.len();
 
-    for tool_name in &tools {
+    for tool_name in tools.iter().copied() {
         let status = check_tool_status(tool_name, config);
         if status.is_ready() {
             installed_count += 1;
@@ -134,6 +135,12 @@ pub(super) fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
             object.insert(
                 "acp_compiled_in".to_string(),
                 serde_json::json!(acp_compiled_in),
+            );
+        }
+        if let Some(acp_override_hint) = transport_status.acp_override_hint {
+            object.insert(
+                "acp_override_hint".to_string(),
+                serde_json::json!(acp_override_hint),
             );
         }
         object.insert(

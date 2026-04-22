@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use csa_config::{ProjectConfig, paths};
-use csa_core::types::OutputFormat;
+use csa_core::types::{OutputFormat, PRIMARY_TOOL_NAMES};
 use csa_resource::filesystem_sandbox::detect_filesystem_capability;
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
@@ -239,8 +239,9 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
         .unwrap_or_default();
 
     let tool_statuses: Vec<serde_json::Value> = match effective_config_status.runtime_config() {
-        Some(config) => ["gemini-cli", "opencode", "codex", "claude-code"]
+        Some(config) => PRIMARY_TOOL_NAMES
             .iter()
+            .copied()
             .map(|tool_name| {
                 let status = check_tool_status(tool_name, Some(config));
                 tool_status_json(&status)
@@ -250,8 +251,9 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
             if effective_config_status.tool_availability_error().is_some() {
                 Vec::new()
             } else {
-                ["gemini-cli", "opencode", "codex", "claude-code"]
+                PRIMARY_TOOL_NAMES
                     .iter()
+                    .copied()
                     .map(|tool_name| {
                         let status = check_tool_status(tool_name, None);
                         tool_status_json(&status)
