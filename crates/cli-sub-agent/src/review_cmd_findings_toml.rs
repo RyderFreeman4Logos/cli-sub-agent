@@ -9,10 +9,21 @@ use crate::review_cmd::output::extract_review_text;
 
 const FINDINGS_TOML_FENCE_LABEL: &str = "findings.toml";
 
+/// Sidecar marker file written alongside `output/findings.toml` when the TOML
+/// was synthesized (extraction failed or block missing). Downstream verdict
+/// derivation checks for this marker to distinguish synthetic-empty from
+/// true-empty (#1045 round 3).
+pub(super) const FINDINGS_TOML_SYNTHETIC_MARKER: &str = ".findings.toml.synthetic";
+
 /// Persist `output/findings.toml` extracted from the reviewer message.
 ///
 /// Best-effort: missing/invalid fenced TOML produces a synthetic empty file and
 /// logs a warning, but never fails the review command.
+///
+/// When extraction fails, a sidecar marker file
+/// `output/.findings.toml.synthetic` is written so downstream readers can
+/// distinguish "reviewer said clean" from "extraction failed, we synthesized
+/// empty" (#1045 round 3).
 pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSessionMeta) {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
@@ -27,6 +38,8 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                     (FindingsFile::default(), Some("derivation failure"))
                 }
             };
+
+            let is_synthetic = warning_reason.is_some();
 
             if let Some(reason) = warning_reason {
                 warn!(
@@ -44,6 +57,23 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                 );
             } else {
                 debug!(session_id = %meta.session_id, "Wrote output/findings.toml");
+            }
+
+            // Write or remove sidecar marker depending on whether the TOML is synthetic.
+            let marker_path = session_dir
+                .join("output")
+                .join(FINDINGS_TOML_SYNTHETIC_MARKER);
+            if is_synthetic {
+                if let Err(error) = fs::write(&marker_path, b"") {
+                    warn!(
+                        session_id = %meta.session_id,
+                        error = %error,
+                        "Failed to write synthetic-empty marker"
+                    );
+                }
+            } else {
+                // Real extraction succeeded — remove any stale marker from a prior round.
+                let _ = fs::remove_file(&marker_path);
             }
         }
         Err(error) => {

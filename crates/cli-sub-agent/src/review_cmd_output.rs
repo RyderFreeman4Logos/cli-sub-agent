@@ -279,6 +279,47 @@ pub(crate) fn persist_review_verdict_for_tests(
     persist_review_verdict(project_root, meta, findings, prior_round_refs);
 }
 
+/// Build a [`ReviewVerdictArtifact`] from meta fields + computed decision/counts.
+fn verdict_from_meta(
+    meta: &ReviewSessionMeta,
+    decision: ReviewDecision,
+    severity_counts: std::collections::BTreeMap<Severity, u32>,
+) -> ReviewVerdictArtifact {
+    build_review_verdict_artifact(
+        meta.session_id.clone(),
+        decision,
+        legacy_verdict_for_decision(decision, &meta.verdict),
+        severity_counts,
+        meta.routed_to.clone(),
+        meta.primary_failure.clone(),
+        meta.failure_reason.clone(),
+        Vec::new(),
+    )
+}
+
+/// Cross-check review-findings.json when findings.toml shows zero counts.
+/// Returns `Some(artifact)` if JSON has blocking findings; `None` otherwise.
+fn cross_check_json_for_blocking(
+    session_dir: &Path,
+    meta: &ReviewSessionMeta,
+) -> Result<Option<ReviewVerdictArtifact>, anyhow::Error> {
+    let Some(json_artifact) = load_review_artifact_from_output(session_dir)? else {
+        return Ok(None);
+    };
+    let json_counts = severity_counts_for_artifact(&json_artifact, zero_severity_counts);
+    if !has_blocking_severity(&json_counts) {
+        return Ok(None);
+    }
+    let decision = derive_decision_from_severity_counts(
+        &json_counts,
+        json_artifact.findings.is_empty(),
+        json_artifact.overall_risk.as_deref(),
+        ReviewDecision::from_str(&meta.decision).ok(),
+        || review_contains_prose_clean_conclusion(session_dir),
+    )?;
+    Ok(Some(verdict_from_meta(meta, decision, json_counts)))
+}
+
 fn derive_review_verdict_artifact(
     session_dir: &Path,
     meta: &ReviewSessionMeta,
@@ -288,53 +329,45 @@ fn derive_review_verdict_artifact(
         let severity_counts =
             severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
 
-        // Cross-check: when findings.toml is empty (possibly synthetic-empty from
-        // failed TOML extraction), consult review-findings.json before trusting
-        // the zero-count signal. A synthetic-empty findings.toml must not mask
-        // blocking findings that the reviewer actually produced (#1045 round 2).
-        if findings_file.findings.is_empty()
-            && severity_counts_are_zero(&severity_counts)
-            && let Some(json_artifact) = load_review_artifact_from_output(session_dir)?
-        {
-            let json_counts = severity_counts_for_artifact(&json_artifact, zero_severity_counts);
-            if has_blocking_severity(&json_counts) {
-                let decision = derive_decision_from_severity_counts(
-                    &json_counts,
-                    json_artifact.findings.is_empty(),
-                    json_artifact.overall_risk.as_deref(),
-                    ReviewDecision::from_str(&meta.decision).ok(),
-                    || review_contains_prose_clean_conclusion(session_dir),
-                )?;
-                return Ok(build_review_verdict_artifact(
-                    meta.session_id.clone(),
-                    decision,
-                    legacy_verdict_for_decision(decision, &meta.verdict),
-                    json_counts,
-                    meta.routed_to.clone(),
-                    meta.primary_failure.clone(),
-                    meta.failure_reason.clone(),
-                    Vec::new(),
-                ));
-            }
-        }
+        // Detect synthetic-empty findings.toml: the sidecar marker is written by
+        // persist_review_findings_toml when TOML extraction failed (#1045 round 3).
+        let synthetic_marker = session_dir
+            .join("output")
+            .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
+        let is_synthetic = synthetic_marker.exists();
 
-        let decision = derive_decision_from_severity_counts(
-            &severity_counts,
-            findings_file.findings.is_empty(),
-            None,
-            ReviewDecision::from_str(&meta.decision).ok(),
-            || review_contains_prose_clean_conclusion(session_dir),
-        )?;
-        return Ok(build_review_verdict_artifact(
-            meta.session_id.clone(),
-            decision,
-            legacy_verdict_for_decision(decision, &meta.verdict),
-            severity_counts,
-            meta.routed_to.clone(),
-            meta.primary_failure.clone(),
-            meta.failure_reason.clone(),
-            Vec::new(),
-        ));
+        // Synthetic-empty + zero counts → fall through to full.md chain (#1045 r3).
+        if is_synthetic
+            && findings_file.findings.is_empty()
+            && severity_counts_are_zero(&severity_counts)
+        {
+            if let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)? {
+                return Ok(artifact);
+            }
+            // Synthetic-empty + no blocking JSON → fall through to full.md chain.
+            debug!(
+                session_id = %meta.session_id,
+                "Synthetic-empty findings.toml detected; falling through to full.md fallback chain"
+            );
+        } else {
+            // Non-synthetic (trusted) or non-empty findings.toml: cross-check
+            // review-findings.json for the empty case (round 2 logic), then return.
+            if findings_file.findings.is_empty()
+                && severity_counts_are_zero(&severity_counts)
+                && let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)?
+            {
+                return Ok(artifact);
+            }
+
+            let decision = derive_decision_from_severity_counts(
+                &severity_counts,
+                findings_file.findings.is_empty(),
+                None,
+                ReviewDecision::from_str(&meta.decision).ok(),
+                || review_contains_prose_clean_conclusion(session_dir),
+            )?;
+            return Ok(verdict_from_meta(meta, decision, severity_counts));
+        }
     }
 
     if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
@@ -346,16 +379,7 @@ fn derive_review_verdict_artifact(
             ReviewDecision::from_str(&meta.decision).ok(),
             || review_contains_prose_clean_conclusion(session_dir),
         )?;
-        return Ok(build_review_verdict_artifact(
-            meta.session_id.clone(),
-            decision,
-            legacy_verdict_for_decision(decision, &meta.verdict),
-            severity_counts,
-            meta.routed_to.clone(),
-            meta.primary_failure.clone(),
-            meta.failure_reason.clone(),
-            Vec::new(),
-        ));
+        return Ok(verdict_from_meta(meta, decision, severity_counts));
     }
 
     if let Some(artifact) = infer_review_verdict_from_full_output(session_dir, meta)? {
@@ -404,16 +428,7 @@ fn infer_review_verdict_from_full_output(
     let counts = severity_counts_from_text(&review_text);
     let overall_risk = parse_overall_risk_from_text(&review_text);
     let decision = derive_decision_from_text(&review_text, &counts, overall_risk.as_deref());
-    Ok(Some(build_review_verdict_artifact(
-        meta.session_id.clone(),
-        decision,
-        legacy_verdict_for_decision(decision, &meta.verdict),
-        counts,
-        meta.routed_to.clone(),
-        meta.primary_failure.clone(),
-        meta.failure_reason.clone(),
-        Vec::new(),
-    )))
+    Ok(Some(verdict_from_meta(meta, decision, counts)))
 }
 
 fn full_output_is_effectively_empty(session_dir: &Path) -> Result<bool, anyhow::Error> {

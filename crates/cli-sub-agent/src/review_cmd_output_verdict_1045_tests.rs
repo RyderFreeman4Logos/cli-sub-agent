@@ -1,5 +1,9 @@
 use super::*;
 
+/// Mirror of [`super::super::super::findings_toml::SYNTHETIC_MARKER_FILENAME`].
+/// Duplicated here to avoid a 3-level super path from this nested test module.
+const SYNTHETIC_MARKER_FILENAME: &str = ".findings.toml.synthetic";
+
 // ─── #1045 regression tests: verdict must derive from severity_counts ────
 
 /// Case 1: Clean PASS summary + empty findings.toml → decision=pass.
@@ -209,6 +213,12 @@ fn issue_1045_r2_synthetic_empty_toml_with_json_high_emits_fail() {
         findings_toml,
     )
     .expect("write findings.toml");
+    // Write sidecar synthetic marker (#1045 round 3 addition).
+    fs::write(
+        session_dir.join("output").join(SYNTHETIC_MARKER_FILENAME),
+        b"",
+    )
+    .expect("write synthetic marker");
 
     // Write review-findings.json with a HIGH finding (reviewer's actual output).
     let json_findings = vec![make_finding(Severity::High, "real-high-finding")];
@@ -244,14 +254,14 @@ fn issue_1045_r2_synthetic_empty_toml_with_json_high_emits_fail() {
 /// Case 7 (#1045 round 2): true-empty findings.toml + empty review-findings.json → pass.
 ///
 /// When both findings.toml and review-findings.json agree on zero findings,
-/// the cross-check must not flip to fail.
+/// the cross-check must not flip to fail. No synthetic marker present.
 #[test]
 fn issue_1045_r2_true_empty_toml_with_empty_json_emits_pass() {
     let session_id = "01TEST1045R2TRUEEMPTY000000";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1045-r2-true-empty", session_id);
 
-    // True-empty findings.toml (reviewer genuinely found nothing).
+    // True-empty findings.toml (reviewer genuinely found nothing — NO synthetic marker).
     let findings_toml = "findings = []\n";
     fs::create_dir_all(session_dir.join("output")).expect("create output dir");
     fs::write(
@@ -291,6 +301,160 @@ fn issue_1045_r2_true_empty_toml_with_empty_json_emits_pass() {
         "#1045 round 2: true-empty + empty json must still pass"
     );
     assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+// ─── #1045 round 3 regression tests: synthetic-empty + missing JSON ──────
+
+/// Case 8 (#1045 round 3): synthetic-empty findings.toml + NO review-findings.json
+/// + structured [High] finding in full.md → decision=fail.
+///
+/// This is the round 3 bug: when both findings.toml is synthetic-empty AND
+/// review-findings.json is absent, the code short-circuited with pass, silently
+/// dropping blocking prose findings in full.md.
+#[test]
+fn issue_1045_r3_synthetic_empty_toml_missing_json_high_in_full_md_emits_fail() {
+    let session_id = "01TEST1045R3SYNTHNOJS0HIGH0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1045-r3-synth-no-json-high-full", session_id);
+
+    // Synthetic-empty findings.toml + sidecar marker.
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(SYNTHETIC_MARKER_FILENAME),
+        b"",
+    )
+    .expect("write synthetic marker");
+
+    // NO review-findings.json — deliberately absent.
+
+    // full.md with structured [High] finding in transcript.
+    let full_output = [json!({"type":"item.completed","item":{
+        "id":"item_1",
+        "type":"agent_message",
+        "text":"<!-- CSA:SECTION:summary -->\nFAIL\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nFindings\n1. [High][correctness] derive_review_verdict_artifact short-circuits on synthetic-empty TOML, dropping full.md fallback.\n\nOverall risk: high\n<!-- CSA:SECTION:details:END -->"
+    }})]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write full output transcript");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1045 round 3: synthetic-empty TOML + missing JSON + [High] in full.md must fail"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+/// Case 9 (#1045 round 3): synthetic-empty findings.toml + NO review-findings.json
+/// + non-empty unstructured full.md → decision=fail.
+///
+/// full.md has content but no severity markers — fail-closed via the
+/// `!full_output_is_effectively_empty` fallback.
+#[test]
+fn issue_1045_r3_synthetic_empty_toml_missing_json_nonempty_unstructured_full_md_emits_fail() {
+    let session_id = "01TEST1045R3SYNTHNOJSUNSTR0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1045-r3-synth-no-json-unstructured-full", session_id);
+
+    // Synthetic-empty findings.toml + sidecar marker.
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(SYNTHETIC_MARKER_FILENAME),
+        b"",
+    )
+    .expect("write synthetic marker");
+
+    // NO review-findings.json.
+
+    // full.md with unstructured (non-transcript) prose — no severity markers,
+    // no CSA sections. Just plain text that isn't JSON and isn't empty.
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        "The reviewer produced some output but no structured verdict.\nSome notes about the diff.\n",
+    )
+    .expect("write unstructured full output");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1045 round 3: synthetic-empty TOML + missing JSON + non-empty unstructured full.md must fail-closed"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+/// Case 10 (#1045 round 3): synthetic-empty findings.toml + NO review-findings.json
+/// + empty full.md → decision=uncertain.
+///
+/// Last-resort fallback when everything is empty/absent.
+#[test]
+fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_uncertain() {
+    let session_id = "01TEST1045R3SYNTHNOJSEMPTY0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1045-r3-synth-no-json-empty-full", session_id);
+
+    // Synthetic-empty findings.toml + sidecar marker.
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(SYNTHETIC_MARKER_FILENAME),
+        b"",
+    )
+    .expect("write synthetic marker");
+
+    // NO review-findings.json.
+    // NO full.md (or empty — absent is equivalent for the empty check).
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Uncertain,
+        "#1045 round 3: synthetic-empty TOML + missing JSON + empty/missing full.md must yield uncertain"
+    );
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
