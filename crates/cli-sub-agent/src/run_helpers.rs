@@ -28,6 +28,36 @@ pub(crate) use tool_availability::{
     tool_binary_availability,
 };
 
+pub(crate) const ATOMIC_COMMIT_DISCIPLINE_PREAMBLE: &str = r#"<atomic-commit-discipline>
+When this task involves multiple independent logical changes (different
+files, different concerns, different issue references), commit each
+logical change atomically before moving to the next. Never batch unrelated
+logical changes into one commit.
+
+For EACH logical change:
+  1. Run `just pre-commit` (or the project's commit-gate command).
+  2. `git add <specific-files>` — stage only files relevant to this
+     logical change. Do NOT `git add -A`.
+  3. `git commit -m "<type>(<scope>): <imperative description>"` using
+     Conventional Commits. Use the smallest scope that is accurate.
+  4. `git status --short` to verify a clean working tree before the
+     next logical change.
+
+If a single logical change must touch multiple unrelated files, explain
+the grouping in the commit body.
+</atomic-commit-discipline>"#;
+
+pub(crate) fn prepend_atomic_commit_discipline_to_prompt(prompt: String) -> String {
+    if prompt.contains("<atomic-commit-discipline>")
+        || prompt.starts_with("# REVIEW:")
+        || prompt.starts_with("# DEBATE:")
+    {
+        return prompt;
+    }
+
+    format!("{ATOMIC_COMMIT_DISCIPLINE_PREAMBLE}\n\n{prompt}")
+}
+
 #[cfg(test)]
 pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
     "CSA_TEST_SKIP_TOOL_AVAILABILITY_CHECK";
