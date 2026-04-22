@@ -769,14 +769,21 @@ Before triggering the bot, consult the persisted quota cache at
 `${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml`.
 If the configured bot is still inside a recorded quota-exhaustion window and
 `CSA_PR_BOT_FORCE` is not set, skip the bot path and route directly to Step 6a.
+Also inspect the latest configured-bot PR comment; if that newest comment
+already signals quota exhaustion, record the 24h window and take the same
+Step 6a fallback path without entering Step 5.
 
 ```bash
 set -euo pipefail
 if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
   CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+  PR_BOT_QUOTA_CACHE_SCRIPT="${CSA_WORKFLOW_DIR}/scripts/pr-bot-quota-cache.sh"
 else
   CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+  PR_BOT_QUOTA_CACHE_SCRIPT="patterns/pr-bot/scripts/pr-bot-quota-cache.sh"
 fi
+# shellcheck source=patterns/pr-bot/scripts/pr-bot-quota-cache.sh
+. "${PR_BOT_QUOTA_CACHE_SCRIPT}"
 CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 CLOUD_BOT_NAME=$(csa config get pr_review.cloud_bot_name --default gemini-code-assist)
 CLOUD_BOT_TRIGGER=$(csa config get pr_review.cloud_bot_trigger --default auto)
@@ -840,6 +847,10 @@ quota_clear_section() {
   fi
   mv "${tmp_file}" "${CLOUD_BOT_QUOTA_CACHE_FILE}"
 }
+query_latest_bot_comment_json() {
+  gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
+    | jq -c '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'")] | sort_by(.created_at) | last // empty'
+}
 if [ "${CLOUD_BOT}" = "true" ]; then
   CLOUD_BOT_QUOTA_EXHAUSTED_AT="$(quota_read_field exhausted_at)"
   CLOUD_BOT_QUOTA_EXPECTED_RESET_AT="$(quota_read_field expected_reset_at)"
@@ -857,6 +868,30 @@ if [ "${CLOUD_BOT}" = "true" ]; then
       quota_clear_section
       CLOUD_BOT_QUOTA_EXHAUSTED_AT=""
       CLOUD_BOT_QUOTA_EXPECTED_RESET_AT=""
+    fi
+  fi
+fi
+if [ "${CLOUD_BOT}" = "true" ] \
+  && [ "${CLOUD_BOT_SKIPPED}" != "true" ] \
+  && [ "${CSA_PR_BOT_FORCE:-0}" != "1" ]
+then
+  set +e
+  LATEST_BOT_COMMENT_JSON="$(query_latest_bot_comment_json)"
+  LATEST_BOT_COMMENT_RC=$?
+  set -e
+  if [ "${LATEST_BOT_COMMENT_RC}" -eq 0 ] && [ -n "${LATEST_BOT_COMMENT_JSON}" ]; then
+    LATEST_BOT_COMMENT_BODY="$(printf '%s\n' "${LATEST_BOT_COMMENT_JSON}" | jq -r '.body // ""')"
+    if quota_comment_indicates_exhaustion "${LATEST_BOT_COMMENT_BODY}" "${CLOUD_BOT_LOGIN}" "${CLOUD_BOT_NAME}"; then
+      LATEST_BOT_COMMENT_CREATED_AT="$(printf '%s\n' "${LATEST_BOT_COMMENT_JSON}" | jq -r '.created_at // ""')"
+      QUOTA_NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      QUOTA_EXPECTED_RESET_AT="$(compute_quota_expected_reset_at)"
+      QUOTA_CACHE_FILE="${CLOUD_BOT_QUOTA_CACHE_FILE}" \
+      BOT_NAME="${CLOUD_BOT_NAME}" \
+      PR_NUMBER="${PR_NUM}" \
+      write_quota_cache "${QUOTA_NOW_UTC}" "${QUOTA_EXPECTED_RESET_AT}" "cloud_bot_quota_exhausted" "${LATEST_BOT_COMMENT_BODY}"
+      CLOUD_BOT_SKIPPED=true
+      CLOUD_BOT_SKIP_KIND="quota_exhausted"
+      CLOUD_BOT_SKIP_REASON="latest ${CLOUD_BOT_NAME} comment indicates quota exhaustion at ${LATEST_BOT_COMMENT_CREATED_AT:-unknown}"
     fi
   fi
 fi
@@ -963,11 +998,13 @@ or aborting on resume/rerun.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
-If a bot issue comment contains `daily quota limit` (case-insensitive), record
-the 24h quota window in the cache file, mark the bot unavailable, and continue
-through the Step 6a merge-without-bot path instead of spending another wait cycle.
-This applies both to the polling helper path and to the later Step 5
-post-verification quota-comment check.
+If the most recent issue comment from the configured bot indicates quota
+exhaustion (`daily quota limit`, `resource exhausted`, gemini `try again
+later`, or generic quota/rate-limit wording), record the 24h quota window in
+the cache file, mark the bot unavailable, and continue through the Step 6a
+merge-without-bot path instead of spending another wait cycle. This applies
+both to the polling helper path and to the later Step 5 post-verification
+latest-comment check.
 
 ```bash
 set -euo pipefail
@@ -1200,30 +1237,35 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
   fi
   # Helper: check for setup/configuration messages before marking unavailable
-  check_quota_message_step5() {
+  query_latest_bot_comment_json_step5() {
+    gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
+      | jq -c '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'")] | sort_by(.created_at) | last // empty'
+  }
+
+  check_latest_quota_comment_step5() {
     set +e
+    local latest_bot_comment_json
     local quota_body
     local quota_now_utc
     local quota_expected_reset_at
-    quota_body="$(
-      gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-        | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body // "") | test("daily quota limit"; "i"))] | .[0].body // ""' \
-        2>/dev/null
-    )"
+    latest_bot_comment_json="$(query_latest_bot_comment_json_step5)"
     set -e
-    if [ -n "${quota_body}" ]; then
-      echo "Quota exhaustion detected from cloud bot comment during post-poll verification." >&2
-      quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      quota_expected_reset_at="$(compute_quota_expected_reset_at)"
-      QUOTA_CACHE_FILE="${CLOUD_BOT_QUOTA_CACHE_FILE}" \
-      BOT_NAME="${CLOUD_BOT_NAME}" \
-      PR_NUMBER="${PR_NUM}" \
-      write_quota_cache "${quota_now_utc}" "${quota_expected_reset_at}" "cloud_bot_quota_exhausted" "${quota_body}"
-      CLOUD_BOT_SKIPPED=true
-      CLOUD_BOT_SKIP_KIND="quota_exhausted"
-      CLOUD_BOT_SKIP_REASON="quota exhausted detected on PR #${PR_NUM}"
-      BOT_UNAVAILABLE=true
-      return 0
+    if [ -n "${latest_bot_comment_json}" ]; then
+      quota_body="$(printf '%s\n' "${latest_bot_comment_json}" | jq -r '.body // ""')"
+      if quota_comment_indicates_exhaustion "${quota_body}" "${CLOUD_BOT_LOGIN}" "${CLOUD_BOT_NAME}"; then
+        echo "Quota exhaustion detected from latest cloud bot comment during post-poll verification." >&2
+        quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        quota_expected_reset_at="$(compute_quota_expected_reset_at)"
+        QUOTA_CACHE_FILE="${CLOUD_BOT_QUOTA_CACHE_FILE}" \
+        BOT_NAME="${CLOUD_BOT_NAME}" \
+        PR_NUMBER="${PR_NUM}" \
+        write_quota_cache "${quota_now_utc}" "${quota_expected_reset_at}" "cloud_bot_quota_exhausted" "${quota_body}"
+        CLOUD_BOT_SKIPPED=true
+        CLOUD_BOT_SKIP_KIND="quota_exhausted"
+        CLOUD_BOT_SKIP_REASON="latest ${CLOUD_BOT_NAME} comment indicates quota exhaustion on PR #${PR_NUM}"
+        BOT_UNAVAILABLE=true
+        return 0
+      fi
     fi
     return 1
   }
@@ -1250,7 +1292,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
 
   if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
     echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
-    check_quota_message_step5 || _check_setup_message_step5 || {
+    check_latest_quota_comment_step5 || _check_setup_message_step5 || {
       echo "Treating as bot unavailable — API failure with no setup message." >&2
       BOT_UNAVAILABLE=true
     }
@@ -1296,7 +1338,7 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
       BOT_HAS_ISSUES=true
     elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
       echo "WARN: No current-HEAD review event or inline comments for HEAD ${CURRENT_SHA} since ${BOT_REVIEW_WINDOW_START}." >&2
-      check_quota_message_step5 || _check_setup_message_step5 || {
+      check_latest_quota_comment_step5 || _check_setup_message_step5 || {
         echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
         BOT_UNAVAILABLE=true
       }
@@ -2256,6 +2298,8 @@ guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
 This step executes in either of these cases:
 - `cloud_bot=false` (no cloud bot path)
 - `cloud_bot=true`, bot is skipped due to cached quota exhaustion, and fallback local review is clean
+Note: this Step 6a path now also covers the latest-comment quota fallback once
+the workflow records the quota window.
 
 **MANDATORY**: Before merging, leave a PR comment explaining the merge rationale.
 This step has two audit-trail cases:
@@ -2296,7 +2340,7 @@ elif [ "${MERGE_WITHOUT_BOT_REASON_KIND:-}" = "cloud_bot_quota_exhausted" ]; the
     printf '%s\n' \
       '## Merge audit trail — cloud bot skipped (quota exhausted)' \
       '' \
-      "Configured cloud bot \`${CLOUD_BOT_NAME}\` is quota-exhausted (detected at \`${CLOUD_BOT_QUOTA_EXHAUSTED_AT:-unknown}\`, expected reset \`${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT:-unknown}\`). Per pr-bot Step 4 auto-skip, routing directly to bot-unavailable + local-review-clean merge path." \
+      "Configured cloud bot \`${CLOUD_BOT_NAME}\` is quota-exhausted (detected at \`${CLOUD_BOT_QUOTA_EXHAUSTED_AT:-unknown}\`, expected reset \`${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT:-unknown}\`). Per pr-bot quota fallback, routing to the bot-unavailable + local-review-clean merge path." \
       '' \
       "**Local pre-merge review verdict**: CLEAN (session \`${LOCAL_REVIEW_SESSION_ID:-unknown}\`)" \
       '' \

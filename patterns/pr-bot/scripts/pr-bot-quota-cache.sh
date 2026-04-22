@@ -8,6 +8,30 @@ compute_quota_expected_reset_at() {
   date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+24H +%Y-%m-%dT%H:%M:%SZ
 }
 
+quota_comment_indicates_exhaustion() {
+  local comment_body="${1:-}"
+  local bot_login="${2:-${BOT_LOGIN:-${CLOUD_BOT_LOGIN:-}}}"
+  local bot_name="${3:-${BOT_NAME:-${CLOUD_BOT_NAME:-${CSA_PR_BOT_NAME:-}}}}"
+
+  if [ -z "${comment_body}" ]; then
+    return 1
+  fi
+
+  if printf '%s\n' "${comment_body}" | grep -Eqi 'daily quota limit|resource exhausted|quota|exhausted|rate.{0,3}limit.{0,20}exceed'; then
+    return 0
+  fi
+
+  if {
+    [ "${bot_name}" = "gemini-code-assist" ] \
+      || [ "${bot_login}" = "gemini-code-assist" ] \
+      || [ "${bot_login}" = "gemini-code-assist[bot]" ];
+  } && printf '%s\n' "${comment_body}" | grep -qi 'try again later'; then
+    return 0
+  fi
+
+  return 1
+}
+
 write_quota_cache() {
   local exhausted_at="$1"
   local expected_reset_at="$2"
