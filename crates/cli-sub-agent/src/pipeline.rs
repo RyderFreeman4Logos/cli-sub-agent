@@ -500,3 +500,7 @@ mod prompt_guard_tests;
 #[cfg(test)]
 #[path = "pipeline_tests_preflight.rs"]
 mod preflight_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_session_cleanup.rs"]
+mod session_cleanup_tests;

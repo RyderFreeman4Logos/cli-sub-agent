@@ -27,9 +27,9 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    DEFAULT_COOLDOWN_SECS, EnforcementMode, ExecutionConfig, HooksSection, ProjectConfig,
-    ProjectMeta, SessionConfig, TierConfig, TierStrategy, ToolConfig, ToolFilesystemSandboxConfig,
-    ToolResourceProfile, ToolRestrictions, ToolTransport,
+    DEFAULT_COOLDOWN_SECS, EnforcementMode, ExecutionConfig, HooksSection, PostExecGateConfig,
+    ProjectConfig, ProjectMeta, RunConfig, SessionConfig, TierConfig, TierStrategy, ToolConfig,
+    ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions, ToolTransport,
 };
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;

@@ -50,6 +50,7 @@ fn resolve_tool_by_strategy_model_spec_disables_default_tier_and_runtime_fallbac
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: Default::default(),

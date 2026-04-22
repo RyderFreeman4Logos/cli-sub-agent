@@ -73,6 +73,7 @@ fn write_project_config_with_tier(project_root: &Path) {
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: Default::default(),

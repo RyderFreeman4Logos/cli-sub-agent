@@ -65,6 +65,8 @@ Leave it off if soft fallback is acceptable; turn it on when debate diversity is
 
 ## Project Config
 
+Successful `csa run` employee sessions now pass through a configurable post-exec gate before CSA returns success to the caller. Configure it under `[run.post_exec_gate]`; the default is enabled, runs `just pre-commit`, times out after 600 seconds, and skips itself when `git status --porcelain` is clean so read-only or no-op runs do not pay the extra gate cost.
+
 ### `[project]` -- Metadata
 
 | Field | Type | Default | Description |

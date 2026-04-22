@@ -44,6 +44,9 @@ pub struct GlobalConfig {
     /// Tool name aliases (`gem` → `gemini-cli`). Project-level wins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tool_aliases: HashMap<String, String>,
+    /// `csa run` behavior defaults; project config overrides through the merged project view.
+    #[serde(default)]
+    pub run: crate::config::RunConfig,
     /// Execution tuning; project-level `[execution]` overrides.
     #[serde(default)]
     pub execution: crate::config::ExecutionConfig,

@@ -28,6 +28,7 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: csa_config::PreflightConfig {
@@ -110,6 +111,7 @@ async fn execute_with_session_and_meta_runs_preflight_for_fresh_spawn_override()
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: csa_config::PreflightConfig {
@@ -186,6 +188,7 @@ async fn execute_with_session_and_meta_skips_preflight_for_resume_session() {
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: csa_config::PreflightConfig {

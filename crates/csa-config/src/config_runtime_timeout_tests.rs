@@ -24,6 +24,7 @@ fn empty_config() -> ProjectConfig {
         tool_aliases: HashMap::new(),
         preferences: None,
         hooks: HooksSection::default(),
+        run: Default::default(),
         execution: ExecutionConfig::default(),
         session_wait: None,
         preflight: Default::default(),
