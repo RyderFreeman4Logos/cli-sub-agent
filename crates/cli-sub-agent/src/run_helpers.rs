@@ -30,21 +30,22 @@ pub(crate) use tool_availability::{
 
 pub(crate) const ATOMIC_COMMIT_DISCIPLINE_PREAMBLE: &str = r#"<atomic-commit-discipline>
 When this task involves multiple independent logical changes (different
-files, different concerns, different issue references), commit each
-logical change atomically before moving to the next. Never batch unrelated
-logical changes into one commit.
+files, different concerns, different issue references), finish each
+logical change with its own commit before starting the next. Never
+batch unrelated logical changes into one commit.
 
 For EACH logical change:
-  1. Run `just pre-commit` (or the project's commit-gate command).
-  2. `git add <specific-files>` — stage only files relevant to this
-     logical change. Do NOT `git add -A`.
-  3. `git commit -m "<type>(<scope>): <imperative description>"` using
-     Conventional Commits. Use the smallest scope that is accurate.
-  4. `git status --short` to verify a clean working tree before the
-     next logical change.
+  1. Make the code edits for that change only.
+  2. Invoke the `/commit` skill to handle staging, pre-commit gates,
+     two-layer review, and conventional-commit message generation.
+     Do NOT run manual Git staging, commit, or push commands —
+     those are forbidden by AGENTS.md rule 015. The `/commit`
+     skill is the only sanctioned commit path.
+  3. Verify the working tree is clean (post-skill) before starting
+     the next logical change.
 
-If a single logical change must touch multiple unrelated files, explain
-the grouping in the commit body.
+If a single logical change must touch multiple unrelated files,
+explain the grouping to `/commit` (it surfaces in the commit body).
 </atomic-commit-discipline>"#;
 
 pub(crate) fn prepend_atomic_commit_discipline_to_prompt(prompt: String) -> String {

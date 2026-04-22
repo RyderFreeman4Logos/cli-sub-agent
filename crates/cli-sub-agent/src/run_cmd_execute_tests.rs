@@ -57,6 +57,11 @@ fn finalize_prompt_text_prepends_atomic_commit_preamble() {
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
 
     let result = finalize_prompt_text(tmp.path(), "user task".to_string(), None).expect("finalize");
+    let preamble_start = result
+        .find("<atomic-commit-discipline>")
+        .expect("preamble must exist");
+    let user_task_pos = result.find("user task").expect("user task must exist");
+    let preamble_body = &result[preamble_start..user_task_pos];
 
     assert!(
         result.contains("<atomic-commit-discipline>"),
@@ -64,7 +69,19 @@ fn finalize_prompt_text_prepends_atomic_commit_preamble() {
     );
     assert!(result.contains("user task"));
     assert!(
-        result.find("<atomic-commit-discipline>").unwrap() < result.find("user task").unwrap(),
+        preamble_body.contains("/commit"),
+        "preamble must direct agents to the /commit skill; got: {preamble_body}"
+    );
+    assert!(
+        !preamble_body.contains("git commit -m"),
+        "preamble must not instruct manual git commit; got: {preamble_body}"
+    );
+    assert!(
+        !preamble_body.contains("git add"),
+        "preamble must not instruct manual git add; got: {preamble_body}"
+    );
+    assert!(
+        preamble_start < user_task_pos,
         "preamble must come BEFORE the user prompt"
     );
 }
