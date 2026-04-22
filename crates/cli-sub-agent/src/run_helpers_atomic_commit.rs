@@ -47,7 +47,10 @@ fn is_csa_subprocess() -> bool {
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
         .map(|depth| depth > 0)
-        .unwrap_or_else(|| std::env::var_os("CSA_SESSION_ID").is_some())
+        .unwrap_or_else(|| {
+            std::env::var_os("CSA_SESSION_ID").is_some()
+                || std::env::var_os("CSA_DAEMON_SESSION_ID").is_some()
+        })
 }
 
 pub(crate) fn atomic_commit_discipline_preamble() -> &'static str {
@@ -67,4 +70,20 @@ pub(crate) fn prepend_atomic_commit_discipline_to_prompt(prompt: String) -> Stri
     }
 
     format!("{}\n\n{prompt}", atomic_commit_discipline_preamble())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_csa_subprocess;
+    use crate::test_env_lock::{ScopedEnvVarRestore, ScopedTestEnvVar};
+
+    #[test]
+    fn run_helpers_atomic_commit_daemon_session_id_alone_marks_csa_subprocess() {
+        let _daemon_guard =
+            ScopedTestEnvVar::set("CSA_DAEMON_SESSION_ID", "01KPTB1TSQ89AT5GVH8PCZ2SP4");
+        let _depth_guard = ScopedEnvVarRestore::unset("CSA_DEPTH");
+        let _session_guard = ScopedEnvVarRestore::unset("CSA_SESSION_ID");
+
+        assert!(is_csa_subprocess());
+    }
 }
