@@ -52,17 +52,30 @@ fn make_test_config() -> ProjectConfig {
     }
 }
 
+fn atomic_commit_block<'a>(prompt: &'a str, user_task_marker: &str) -> &'a str {
+    let preamble_start = prompt
+        .find("<atomic-commit-discipline>")
+        .expect("preamble must exist");
+    let user_task_pos = prompt
+        .find(user_task_marker)
+        .expect("user task marker must exist");
+    &prompt[preamble_start..user_task_pos]
+}
+
 #[test]
 fn finalize_prompt_text_prepends_atomic_commit_preamble() {
     let tmp = TempDir::new().expect("tempdir");
-    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    sandbox.track_env("CSA_DEPTH");
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::remove_var("CSA_DEPTH");
+        std::env::remove_var("CSA_SESSION_ID");
+    }
 
     let result = finalize_prompt_text(tmp.path(), "user task".to_string(), None).expect("finalize");
-    let preamble_start = result
-        .find("<atomic-commit-discipline>")
-        .expect("preamble must exist");
-    let user_task_pos = result.find("user task").expect("user task must exist");
-    let preamble_body = &result[preamble_start..user_task_pos];
+    let preamble_body = atomic_commit_block(&result, "user task");
 
     assert!(
         result.contains("<atomic-commit-discipline>"),
@@ -82,8 +95,118 @@ fn finalize_prompt_text_prepends_atomic_commit_preamble() {
         "preamble must not instruct manual git add; got: {preamble_body}"
     );
     assert!(
-        preamble_start < user_task_pos,
+        result.find("<atomic-commit-discipline>").unwrap() < result.find("user task").unwrap(),
         "preamble must come BEFORE the user prompt"
+    );
+}
+
+#[test]
+fn finalize_prompt_text_uses_subprocess_atomic_commit_preamble_when_csa_depth_positive() {
+    let tmp = TempDir::new().expect("tempdir");
+    let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    sandbox.track_env("CSA_DEPTH");
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::set_var("CSA_DEPTH", "1");
+        std::env::remove_var("CSA_SESSION_ID");
+    }
+
+    let result =
+        finalize_prompt_text(tmp.path(), "subprocess task".to_string(), None).expect("finalize");
+    let preamble_body = atomic_commit_block(&result, "subprocess task");
+
+    assert!(
+        preamble_body.contains("git commit -m"),
+        "subprocess preamble must instruct direct git commit; got: {preamble_body}"
+    );
+    assert!(
+        preamble_body.contains("git add"),
+        "subprocess preamble must instruct direct git add; got: {preamble_body}"
+    );
+    assert!(
+        !preamble_body.contains("/commit"),
+        "subprocess preamble must not reference /commit; got: {preamble_body}"
+    );
+}
+
+#[test]
+fn finalize_prompt_text_uses_main_agent_preamble_when_csa_depth_missing() {
+    let tmp = TempDir::new().expect("tempdir");
+    let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    sandbox.track_env("CSA_DEPTH");
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::remove_var("CSA_DEPTH");
+        std::env::remove_var("CSA_SESSION_ID");
+    }
+
+    let result =
+        finalize_prompt_text(tmp.path(), "main agent task".to_string(), None).expect("finalize");
+    let preamble_body = atomic_commit_block(&result, "main agent task");
+
+    assert!(
+        preamble_body.contains("/commit"),
+        "main-agent preamble must reference /commit; got: {preamble_body}"
+    );
+    assert!(
+        !preamble_body.contains("git commit -m"),
+        "main-agent preamble must not instruct manual git commit; got: {preamble_body}"
+    );
+}
+
+#[test]
+fn finalize_prompt_text_uses_main_agent_preamble_when_csa_depth_zero() {
+    let tmp = TempDir::new().expect("tempdir");
+    let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    sandbox.track_env("CSA_DEPTH");
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::set_var("CSA_DEPTH", "0");
+        std::env::remove_var("CSA_SESSION_ID");
+    }
+
+    let result =
+        finalize_prompt_text(tmp.path(), "depth zero task".to_string(), None).expect("finalize");
+    let preamble_body = atomic_commit_block(&result, "depth zero task");
+
+    assert!(
+        preamble_body.contains("/commit"),
+        "CSA_DEPTH=0 must still use main-agent /commit instructions; got: {preamble_body}"
+    );
+    assert!(
+        !preamble_body.contains("git commit -m"),
+        "CSA_DEPTH=0 must not use subprocess git commit instructions; got: {preamble_body}"
+    );
+}
+
+#[test]
+fn finalize_prompt_text_uses_subprocess_preamble_when_only_session_id_is_set() {
+    let tmp = TempDir::new().expect("tempdir");
+    let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    sandbox.track_env("CSA_DEPTH");
+    sandbox.track_env("CSA_SESSION_ID");
+    // Treat CSA_SESSION_ID alone as subprocess so detached child contexts still avoid the
+    // unavailable /commit slash-command path.
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::remove_var("CSA_DEPTH");
+        std::env::set_var("CSA_SESSION_ID", "01KPSX30G8HRHM5RHGBDB2XPSA");
+    }
+
+    let result =
+        finalize_prompt_text(tmp.path(), "session-id task".to_string(), None).expect("finalize");
+    let preamble_body = atomic_commit_block(&result, "session-id task");
+
+    assert!(
+        preamble_body.contains("git commit -m"),
+        "CSA_SESSION_ID fallback must use subprocess git commit instructions; got: {preamble_body}"
+    );
+    assert!(
+        !preamble_body.contains("/commit"),
+        "CSA_SESSION_ID fallback must not reference /commit; got: {preamble_body}"
     );
 }
 
@@ -169,7 +292,7 @@ fn finalize_prompt_text_prepends_review_context_for_skill_only_prompt() {
     let expected_review_context_prefix = format!(
         "<csa-review-context session=\"{session_id}\">\n<!-- summary.md -->\nSummary line\n"
     );
-    assert!(prompt_text.starts_with(crate::run_helpers::ATOMIC_COMMIT_DISCIPLINE_PREAMBLE));
+    assert!(prompt_text.starts_with(crate::run_helpers::atomic_commit_discipline_preamble()));
     let review_context_pos = prompt_text
         .find(&expected_review_context_prefix)
         .expect("review context should appear");
