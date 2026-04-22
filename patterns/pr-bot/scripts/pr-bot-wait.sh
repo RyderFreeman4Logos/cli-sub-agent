@@ -192,13 +192,12 @@ while [ "${elapsed}" -le "${TIMEOUT_SEC}" ]; do
   fi
 
   comments_json="$(gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100")"
-  quota_comment_json="$(
+  latest_bot_comment_json="$(
     if [ -n "${BOT_LOGIN}" ]; then
       printf '%s\n' "${comments_json}" | jq -c --arg login "${BOT_LOGIN}" --arg push_time "${PUSH_TIME}" '
         [ .[] | .[]
           | select((.user.login // "") == $login)
           | select($push_time == "" or (.created_at // "") > $push_time)
-          | select((.body // "") | test("daily quota limit"; "i"))
         ]
         | sort_by(.created_at)
         | last // empty
@@ -208,65 +207,41 @@ while [ "${elapsed}" -le "${TIMEOUT_SEC}" ]; do
         [ .[] | .[]
           | select((.user.type // "") == "Bot" or ((.user.login // "") | test("\\[bot\\]$")))
           | select($push_time == "" or (.created_at // "") > $push_time)
-          | select((.body // "") | test("daily quota limit"; "i"))
         ]
         | sort_by(.created_at)
         | last // empty
       ' || true
     fi
   )"
-  if [ -n "${quota_comment_json}" ]; then
-    quota_body="$(printf '%s\n' "${quota_comment_json}" | jq -r '.body // ""')"
-    quota_preview="$(quota_cache_preview_body "${quota_body}")"
-    quota_created_at="$(printf '%s\n' "${quota_comment_json}" | jq -r '.created_at // ""')"
-    quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    quota_expected_reset_at="$(compute_quota_expected_reset_at)"
-    write_quota_cache "${quota_now_utc}" "${quota_expected_reset_at}" "cloud_bot_quota_exhausted" "${quota_body}"
-    result_json="$(
-      jq -n \
-        --argjson pr "${PR_NUMBER}" \
-        --argjson elapsed "${elapsed}" \
-        --arg preview "${quota_preview}" \
-        --arg created_at "${quota_created_at}" \
-        --arg exhausted_at "${QUOTA_EXHAUSTED_AT}" \
-        --arg expected_reset_at "${QUOTA_EXPECTED_RESET_AT}" \
-        '{status:"quota_exhausted", pr:$pr, elapsed_seconds:$elapsed, exhausted_at:$exhausted_at, expected_reset_at:$expected_reset_at, comment:{preview:$preview, created_at:$created_at}}'
-    )"
-    write_output "${result_json}"
-    exit 0
-  fi
+  if [ -n "${latest_bot_comment_json}" ]; then
+    latest_comment_body="$(printf '%s\n' "${latest_bot_comment_json}" | jq -r '.body // ""')"
+    latest_comment_created_at="$(printf '%s\n' "${latest_bot_comment_json}" | jq -r '.created_at // ""')"
+    if quota_comment_indicates_exhaustion "${latest_comment_body}" "${BOT_LOGIN}" "${BOT_NAME}"; then
+      quota_preview="$(quota_cache_preview_body "${latest_comment_body}")"
+      quota_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      quota_expected_reset_at="$(compute_quota_expected_reset_at)"
+      write_quota_cache "${quota_now_utc}" "${quota_expected_reset_at}" "cloud_bot_quota_exhausted" "${latest_comment_body}"
+      result_json="$(
+        jq -n \
+          --argjson pr "${PR_NUMBER}" \
+          --argjson elapsed "${elapsed}" \
+          --arg preview "${quota_preview}" \
+          --arg created_at "${latest_comment_created_at}" \
+          --arg exhausted_at "${QUOTA_EXHAUSTED_AT}" \
+          --arg expected_reset_at "${QUOTA_EXPECTED_RESET_AT}" \
+          '{status:"quota_exhausted", pr:$pr, elapsed_seconds:$elapsed, exhausted_at:$exhausted_at, expected_reset_at:$expected_reset_at, comment:{preview:$preview, created_at:$created_at}}'
+      )"
+      write_output "${result_json}"
+      exit 0
+    fi
 
-  reply_comment_json="$(
-    if [ -n "${BOT_LOGIN}" ]; then
-      printf '%s\n' "${comments_json}" | jq -c --arg login "${BOT_LOGIN}" --arg push_time "${PUSH_TIME}" '
-        [ .[] | .[]
-          | select((.user.login // "") == $login)
-          | select($push_time == "" or (.created_at // "") > $push_time)
-        ]
-        | sort_by(.created_at)
-        | last // empty
-      ' || true
-    else
-      printf '%s\n' "${comments_json}" | jq -c --arg push_time "${PUSH_TIME}" '
-        [ .[] | .[]
-          | select((.user.type // "") == "Bot" or ((.user.login // "") | test("\\[bot\\]$")))
-          | select($push_time == "" or (.created_at // "") > $push_time)
-        ]
-        | sort_by(.created_at)
-        | last // empty
-      ' || true
-    fi
-  )"
-  if [ -n "${reply_comment_json}" ]; then
-    reply_body="$(printf '%s\n' "${reply_comment_json}" | jq -r '.body // ""')"
-    reply_preview="$(preview_body "${reply_body}")"
-    reply_created_at="$(printf '%s\n' "${reply_comment_json}" | jq -r '.created_at // ""')"
+    reply_preview="$(quota_cache_preview_body "${latest_comment_body}")"
     result_json="$(
       jq -n \
         --argjson pr "${PR_NUMBER}" \
         --argjson elapsed "${elapsed}" \
         --arg preview "${reply_preview}" \
-        --arg created_at "${reply_created_at}" \
+        --arg created_at "${latest_comment_created_at}" \
         '{status:"replied", pr:$pr, elapsed_seconds:$elapsed, comment:{preview:$preview, created_at:$created_at}}'
     )"
     write_output "${result_json}"
