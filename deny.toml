@@ -22,6 +22,9 @@ ignore = [
     "RUSTSEC-2026-0098",
     # Transitive from rustls-webpki 0.101.7 (old chain). Wildcard name constraints bypass.
     "RUSTSEC-2026-0099",
+    # Transitive from rustls-webpki 0.101.7 (old agent-teams/cc-sdk reqwest 0.11 chain).
+    # No non-breaking upgrade path exists on the 0.101 line.
+    "RUSTSEC-2026-0104",
 ]
 
 [licenses]
