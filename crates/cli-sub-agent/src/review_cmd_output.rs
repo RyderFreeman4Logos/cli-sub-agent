@@ -285,18 +285,13 @@ fn derive_review_verdict_artifact(
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
         let severity_counts =
             severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
-        let decision = if findings_file.findings.is_empty()
-            && severity_counts_are_zero(&severity_counts)
-            && review_contains_prose_clean_conclusion(session_dir)?
-        {
-            ReviewDecision::Pass
-        } else {
-            derive_decision_from_findings(
-                findings_file.findings.is_empty(),
-                None,
-                ReviewDecision::from_str(&meta.decision).ok(),
-            )
-        };
+        let decision = derive_decision_from_severity_counts(
+            &severity_counts,
+            findings_file.findings.is_empty(),
+            None,
+            ReviewDecision::from_str(&meta.decision).ok(),
+            || review_contains_prose_clean_conclusion(session_dir),
+        )?;
         return Ok(build_review_verdict_artifact(
             meta.session_id.clone(),
             decision,
@@ -311,19 +306,13 @@ fn derive_review_verdict_artifact(
 
     if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
         let severity_counts = severity_counts_for_artifact(&artifact, zero_severity_counts);
-        let decision = if artifact.findings.is_empty()
-            && severity_counts_are_zero(&severity_counts)
-            && !artifact.overall_risk_is_severe()
-            && review_contains_prose_clean_conclusion(session_dir)?
-        {
-            ReviewDecision::Pass
-        } else {
-            derive_decision_from_findings(
-                artifact.findings.is_empty(),
-                artifact.overall_risk.as_deref(),
-                ReviewDecision::from_str(&meta.decision).ok(),
-            )
-        };
+        let decision = derive_decision_from_severity_counts(
+            &severity_counts,
+            artifact.findings.is_empty(),
+            artifact.overall_risk.as_deref(),
+            ReviewDecision::from_str(&meta.decision).ok(),
+            || review_contains_prose_clean_conclusion(session_dir),
+        )?;
         return Ok(build_review_verdict_artifact(
             meta.session_id.clone(),
             decision,
@@ -512,35 +501,75 @@ fn parse_overall_risk_from_text(text: &str) -> Option<String> {
         .map(|level| level.as_str().to_ascii_lowercase())
 }
 
-fn derive_decision_from_findings(
+/// Whether the severity counts contain any blocking findings (critical, high, or medium).
+fn has_blocking_severity(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
+    counts
+        .iter()
+        .any(|(severity, count)| *count > 0 && *severity > Severity::Low)
+}
+
+/// Derive the review decision from structured severity counts.
+///
+/// Core invariant (#1045): the decision is derived from `severity_counts`, not from
+/// summary-text keywords or stale `meta.decision` values.
+///
+/// - critical > 0 or high > 0 or medium > 0 → `Fail` / `HAS_ISSUES`
+/// - low > 0 only → `Pass` / `CLEAN` (LOWs don't block merge)
+/// - all zero + findings empty → `Pass` / `CLEAN`
+fn derive_decision_from_severity_counts(
+    severity_counts: &std::collections::BTreeMap<Severity, u32>,
     findings_empty: bool,
     overall_risk: Option<&str>,
     meta_decision: Option<ReviewDecision>,
-) -> ReviewDecision {
-    if findings_empty {
-        match meta_decision {
-            Some(
-                meta_decision @ (ReviewDecision::Skip
-                | ReviewDecision::Uncertain
-                | ReviewDecision::Unavailable
-                | ReviewDecision::Fail),
-            ) => {
-                return meta_decision;
-            }
-            Some(ReviewDecision::Pass)
-                if overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) =>
-            {
-                return ReviewDecision::Pass;
-            }
-            Some(ReviewDecision::Pass) => return ReviewDecision::Fail,
-            None if overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) => {
-                return ReviewDecision::Uncertain;
-            }
-            None => return ReviewDecision::Fail,
-        }
+    prose_clean_check: impl FnOnce() -> Result<bool, anyhow::Error>,
+) -> Result<ReviewDecision, anyhow::Error> {
+    // Blocking findings (critical/high/medium) always fail.
+    if has_blocking_severity(severity_counts) {
+        return Ok(ReviewDecision::Fail);
     }
 
-    ReviewDecision::Fail
+    // Non-blocking findings (low only) → pass.
+    // Zero severity counts but non-empty findings list → fail-closed (parsing anomaly).
+    if !findings_empty && !severity_counts_are_zero(severity_counts) {
+        // Only low-severity findings present — non-blocking.
+        return Ok(ReviewDecision::Pass);
+    }
+    if !findings_empty && severity_counts_are_zero(severity_counts) {
+        // Findings exist but severity counts are zero (unrecognized severities).
+        // Fail-closed.
+        return Ok(ReviewDecision::Fail);
+    }
+
+    // From here: findings list is empty AND severity_counts are all zero.
+
+    // Honour overall_risk as a fail-closed signal when it's severe.
+    if overall_risk.is_some_and(|risk| {
+        risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
+    }) {
+        return Ok(ReviewDecision::Fail);
+    }
+
+    // Preserve non-fail meta decisions (skip, uncertain, unavailable) as-is:
+    // these represent infrastructure/scope signals, not finding-based verdicts.
+    if let Some(
+        meta @ (ReviewDecision::Skip | ReviewDecision::Uncertain | ReviewDecision::Unavailable),
+    ) = meta_decision
+    {
+        return Ok(meta);
+    }
+
+    // At this point: zero severity counts, empty findings, non-severe overall_risk,
+    // and meta_decision is either Pass, Fail, or None. Prose clean check is a tiebreaker
+    // only when meta_decision is None (no verdict token was parsed from output).
+    if meta_decision == Some(ReviewDecision::Pass) || prose_clean_check()? {
+        return Ok(ReviewDecision::Pass);
+    }
+
+    // No findings, no prose clean marker, meta_decision is Fail or None.
+    // Zero findings + meta_decision=fail is the exact bug scenario (#1045):
+    // the caller parsed "fail" from summary prose, but there are no actual findings.
+    // The invariant says: zero severity_counts → pass.
+    Ok(ReviewDecision::Pass)
 }
 
 fn derive_decision_from_text(

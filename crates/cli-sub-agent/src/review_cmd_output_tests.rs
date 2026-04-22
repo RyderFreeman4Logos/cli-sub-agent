@@ -739,3 +739,6 @@ fn persisted_review_artifact_deserializes_optional_overall_risk() {
     .expect("deserialize persisted review artifact");
     assert_eq!(artifact.overall_risk.as_deref(), Some("low"));
 }
+
+#[path = "review_cmd_output_verdict_1045_tests.rs"]
+mod verdict_1045_tests;
