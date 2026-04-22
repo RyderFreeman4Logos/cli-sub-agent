@@ -13,6 +13,9 @@ pub enum ToolName {
     OpenaiCompat,
 }
 
+/// Primary CLI-backed tools surfaced by doctor and default tool listings.
+pub const PRIMARY_TOOL_NAMES: &[&str] = &["gemini-cli", "opencode", "codex", "claude-code"];
+
 impl ToolName {
     /// Returns the CLI-facing name for this tool
     pub fn as_str(&self) -> &'static str {

@@ -191,6 +191,10 @@ fn default_build_doctor_json_output_reports_codex_transport_details() {
             json["probed_binary"],
             Value::String("codex-acp".to_string())
         );
+        assert!(
+            json.get("acp_override_hint").is_none(),
+            "doctor JSON should omit ACP override hints when codex already uses ACP: {json}"
+        );
     });
 }
 
@@ -213,6 +217,34 @@ fn explicit_codex_acp_transport_reports_install_hint() {
         rendered.contains("@zed-industries/codex-acp"),
         "doctor text should surface the ACP adapter install hint: {rendered}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_cli_transport_json_matches_text_override_hint_visibility() {
+    with_stubbed_codex_on_path(|| {
+        let config = project_config_with_codex_transport(TransportKind::Cli);
+        let status = check_tool_status("codex", Some(&config));
+        let rendered = render_tool_status_lines(&status).join("\n");
+        let json = tool_status_json(&status);
+        let expected_hint = Value::String("set [tools.codex].transport = \"acp\"".to_string());
+
+        assert_eq!(json["transport_active"], Value::String("cli".to_string()));
+        assert_eq!(json["probed_binary"], Value::String("codex".to_string()));
+
+        if rendered.contains("ACP override: set [tools.codex].transport = \"acp\"") {
+            assert_eq!(
+                json.get("acp_override_hint"),
+                Some(&expected_hint),
+                "doctor JSON should include the same ACP override hint shown in text output: {json}"
+            );
+        } else {
+            assert!(
+                json.get("acp_override_hint").is_none(),
+                "doctor JSON should omit ACP override hints when text output has none: {json}"
+            );
+        }
+    });
 }
 
 #[cfg(unix)]
@@ -256,6 +288,10 @@ fn explicit_claude_code_cli_transport_reports_json_transport_details() {
         assert!(
             json.get("acp_compiled_in").is_none(),
             "claude-code JSON transport details should omit codex-only ACP build metadata: {json}"
+        );
+        assert!(
+            json.get("acp_override_hint").is_none(),
+            "claude-code JSON transport details should omit codex-only ACP override hints: {json}"
         );
     });
 }
