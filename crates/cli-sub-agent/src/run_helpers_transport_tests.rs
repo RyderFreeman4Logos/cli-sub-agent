@@ -1,5 +1,5 @@
 use super::{build_executor, is_tool_binary_available_for_config, resolve_tool_and_model};
-use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
+use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig, TransportKind};
 use csa_core::types::ToolName;
 use csa_executor::{CodexTransport, Executor};
 use std::collections::HashMap;
@@ -54,7 +54,7 @@ fn build_executor_codex_transport_defaults_to_build_setting_when_unset() {
 #[test]
 fn build_executor_codex_transport_respects_explicit_cli_override() {
     let config = project_config_with_codex_tool(ToolConfig {
-        transport: Some(ToolTransport::Cli),
+        transport: Some(TransportKind::Cli),
         ..Default::default()
     });
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
@@ -72,7 +72,7 @@ fn build_executor_codex_transport_respects_explicit_cli_override() {
 #[test]
 fn build_executor_codex_transport_respects_explicit_acp_override() {
     let config = project_config_with_codex_tool(ToolConfig {
-        transport: Some(ToolTransport::Acp),
+        transport: Some(TransportKind::Acp),
         ..Default::default()
     });
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();

@@ -29,11 +29,12 @@ pub use acp::AcpConfig;
 pub use config::{
     DEFAULT_COOLDOWN_SECS, EnforcementMode, ExecutionConfig, HooksSection, PostExecGateConfig,
     ProjectConfig, ProjectMeta, RunConfig, SessionConfig, TierConfig, TierStrategy, ToolConfig,
-    ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions, ToolTransport,
+    ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions,
 };
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
+pub use config_tool::{TransportKind, default_transport_for_tool};
 pub use gc::GcConfig;
 pub use global::{
     AiConfigSymlinkCheckConfig, DEFAULT_KV_CACHE_FREQUENT_POLL_SECS,

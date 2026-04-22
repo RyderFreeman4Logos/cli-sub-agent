@@ -96,6 +96,9 @@ fn exact_test_config_with_review_tier(
     models: &[&str],
 ) -> csa_config::ProjectConfig {
     let mut config = exact_test_project_config_with_enabled_tools(enabled_tools);
+    if enabled_tools.contains(&"codex") {
+        config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    }
     config.tiers.insert(
         "quality".to_string(),
         TierConfig {

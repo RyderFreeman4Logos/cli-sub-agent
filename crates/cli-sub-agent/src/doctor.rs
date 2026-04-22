@@ -1,7 +1,7 @@
 //! Environment diagnostics for CSA.
 
 use anyhow::Result;
-use csa_config::{ProjectConfig, ToolTransport, paths};
+use csa_config::{ProjectConfig, TransportKind, paths};
 use csa_core::types::OutputFormat;
 use csa_executor::{CodexRuntimeMetadata, CodexTransport};
 use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
@@ -24,7 +24,6 @@ pub use doctor_routing::run_doctor_routing;
 enum ToolAvailabilityState {
     Installed,
     Missing,
-    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,8 +198,9 @@ fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
     config
         .and_then(|cfg| cfg.tool_transport("codex"))
         .map(|transport| match transport {
-            ToolTransport::Cli => CodexTransport::Cli,
-            ToolTransport::Acp => CodexTransport::Acp,
+            TransportKind::Cli => CodexTransport::Cli,
+            TransportKind::Acp => CodexTransport::Acp,
+            TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
         })
         .unwrap_or_else(CodexTransport::default_for_build)
 }
@@ -468,14 +468,6 @@ fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) ->
             hint: Some(hint.into_owned()),
             codex_transport: codex_doctor_status(tool_name, config),
         },
-        crate::run_helpers::ToolBinaryAvailability::Unsupported { hint, .. } => ToolStatus {
-            name: tool_name,
-            availability: ToolAvailabilityState::Unsupported,
-            binary_name,
-            version: None,
-            hint: Some(hint.into_owned()),
-            codex_transport: codex_doctor_status(tool_name, config),
-        },
     }
 }
 
@@ -508,7 +500,6 @@ fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
             .map(|version| format!("installed ({version})"))
             .unwrap_or_else(|| "installed (version unknown)".to_string()),
         ToolAvailabilityState::Missing => "not found".to_string(),
-        ToolAvailabilityState::Unsupported => "unsupported".to_string(),
     };
 
     let mut lines = vec![format!(

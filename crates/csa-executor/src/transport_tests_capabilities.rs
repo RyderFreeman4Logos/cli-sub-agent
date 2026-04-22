@@ -64,9 +64,7 @@ fn test_create_with_mode_explicit_override() {
 }
 
 #[test]
-#[cfg(not(feature = "codex-acp"))]
-fn test_create_with_mode_rejects_unsupported_combo() {
-    // Requesting ACP for codex without the codex-acp feature must fail.
+fn test_create_with_mode_allows_codex_acp() {
     let executor = crate::executor::Executor::Codex {
         model_override: None,
         thinking_budget: None,
@@ -75,29 +73,7 @@ fn test_create_with_mode_rejects_unsupported_combo() {
 
     let result =
         super::TransportFactory::create_with_mode(&executor, super::TransportMode::Acp, None);
-    match result {
-        Ok(_) => panic!("should fail without codex-acp feature"),
-        Err(err) => {
-            assert!(
-                err.downcast_ref::<super::TransportFactoryError>().is_some(),
-                "expected TransportFactoryError, got: {err:#}"
-            );
-        }
-    }
-}
-
-#[test]
-#[cfg(feature = "codex-acp")]
-fn test_create_with_mode_allows_codex_acp_with_feature() {
-    let executor = crate::executor::Executor::Codex {
-        model_override: None,
-        thinking_budget: None,
-        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
-    };
-
-    let result =
-        super::TransportFactory::create_with_mode(&executor, super::TransportMode::Acp, None);
-    assert!(result.is_ok(), "should succeed with codex-acp feature");
+    assert!(result.is_ok(), "codex ACP transport should be supported");
 }
 
 // ---------------------------------------------------------------------------
@@ -238,19 +214,8 @@ fn test_matrix_codex_legacy_supported() {
 }
 
 #[test]
-#[cfg(feature = "codex-acp")]
-fn test_matrix_codex_acp_supported_with_feature() {
+fn test_matrix_codex_acp_supported() {
     assert_supported(&make_codex(), super::TransportMode::Acp);
-}
-
-#[test]
-#[cfg(not(feature = "codex-acp"))]
-fn test_matrix_codex_acp_rejected_without_feature() {
-    assert_unsupported(
-        &make_codex(),
-        super::TransportMode::Acp,
-        "codex-acp feature is not compiled in",
-    );
 }
 
 #[test]
@@ -335,8 +300,6 @@ fn test_matrix_openai_compat_acp_rejected() {
 
 #[test]
 fn test_create_feature_gate_structured_error() {
-    // The feature-gate check in create() (auto-infer path) should return a
-    // structured TransportFactoryError when codex-acp is not enabled.
     let executor = crate::executor::Executor::Codex {
         model_override: None,
         thinking_budget: None,
@@ -346,19 +309,7 @@ fn test_create_feature_gate_structured_error() {
     };
 
     let result = super::TransportFactory::create(&executor, None);
-
-    #[cfg(not(feature = "codex-acp"))]
-    match result {
-        Ok(_) => panic!("should fail without codex-acp feature"),
-        Err(err) => {
-            assert!(
-                err.downcast_ref::<super::TransportFactoryError>().is_some(),
-                "expected TransportFactoryError, got: {err:#}"
-            );
-        }
-    }
-    #[cfg(feature = "codex-acp")]
-    assert!(result.is_ok(), "should succeed with codex-acp feature");
+    assert!(result.is_ok(), "codex ACP transport should build in auto mode");
 }
 
 #[test]

@@ -18,7 +18,7 @@ impl CodexTransport {
     /// Current default transport for this build.
     #[must_use]
     pub const fn default_for_build() -> Self {
-        Self::Cli
+        Self::Acp
     }
 
     #[must_use]
@@ -119,23 +119,11 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "codex-acp")]
     #[test]
-    fn current_build_defaults_to_cli_when_feature_enabled() {
+    fn current_build_defaults_to_acp_when_feature_enabled() {
         let meta = codex_runtime_metadata();
 
-        assert!(CodexRuntimeMetadata::acp_compiled_in());
-        assert_eq!(meta.transport_mode(), CodexTransport::Cli);
-        assert_eq!(meta.runtime_binary_name(), "codex");
-    }
-
-    #[cfg(not(feature = "codex-acp"))]
-    #[test]
-    fn current_build_defaults_to_cli_when_feature_disabled() {
-        let meta = codex_runtime_metadata();
-
-        assert!(!CodexRuntimeMetadata::acp_compiled_in());
-        assert_eq!(meta.transport_mode(), CodexTransport::Cli);
-        assert_eq!(meta.runtime_binary_name(), "codex");
+        assert_eq!(meta.transport_mode(), CodexTransport::Acp);
+        assert_eq!(meta.runtime_binary_name(), "codex-acp");
     }
 }

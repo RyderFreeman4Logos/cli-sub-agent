@@ -10,11 +10,6 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
             model_override: None,
             thinking_budget: None,
         },
-        Executor::Codex {
-            model_override: None,
-            thinking_budget: None,
-            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
-        },
     ];
     for executor in legacy_tools {
         let transport = TransportFactory::create(&executor, None).expect("transport should build");
@@ -25,10 +20,17 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
         );
     }
 
-    let acp_tools = vec![Executor::ClaudeCode {
-        model_override: None,
-        thinking_budget: None,
-    }];
+    let acp_tools = vec![
+        Executor::ClaudeCode {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+        },
+    ];
     for executor in acp_tools {
         let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
             .expect("transport should build");
@@ -83,7 +85,6 @@ fn test_transport_factory_create_honors_codex_cli_runtime_transport_override() {
     );
 }
 
-#[cfg(feature = "codex-acp")]
 #[test]
 fn test_transport_factory_create_honors_codex_acp_runtime_transport_override() {
     let acp_executor = Executor::Codex {
@@ -98,31 +99,6 @@ fn test_transport_factory_create_honors_codex_acp_runtime_transport_override() {
     assert!(
         acp_transport.as_ref().as_any().is::<AcpTransport>(),
         "codex acp override should use AcpTransport"
-    );
-}
-
-#[cfg(not(feature = "codex-acp"))]
-#[test]
-fn test_transport_factory_create_rejects_codex_acp_runtime_transport_override() {
-    let acp_executor = Executor::Codex {
-        model_override: None,
-        thinking_budget: None,
-        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
-            crate::codex_runtime::CodexTransport::Acp,
-        ),
-    };
-
-    let err = TransportFactory::create(&acp_executor, Some(SessionConfig::default()))
-        .err()
-        .expect("codex ACP must fail closed when feature is disabled");
-    let rendered = format!("{err:#}");
-    assert!(
-        rendered.contains("codex-acp"),
-        "error should mention the required cargo feature: {rendered}"
-    );
-    assert!(
-        rendered.contains("not compiled in"),
-        "error should say feature is not compiled in: {rendered}"
     );
 }
 

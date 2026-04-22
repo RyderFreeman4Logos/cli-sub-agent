@@ -258,7 +258,7 @@ fn resolve_debate_tool_auto_skips_counterpart_without_configured_binary() {
     cfg.tools
         .get_mut("codex")
         .expect("codex tool config")
-        .transport = Some(ToolTransport::Cli);
+        .transport = Some(csa_config::TransportKind::Cli);
 
     let err = resolve_debate_tool(
         None,
@@ -312,7 +312,7 @@ fn resolve_debate_tool_same_model_fallback_skips_unavailable_configured_binary()
     cfg.tools
         .get_mut("codex")
         .expect("codex tool config")
-        .transport = Some(ToolTransport::Cli);
+        .transport = Some(csa_config::TransportKind::Cli);
 
     let err = resolve_debate_tool(
         None,
@@ -366,7 +366,7 @@ fn resolve_debate_tool_same_model_fallback_skips_unavailable_parent_binary() {
     cfg.tools
         .get_mut("codex")
         .expect("codex tool config")
-        .transport = Some(ToolTransport::Cli);
+        .transport = Some(csa_config::TransportKind::Cli);
 
     let err = resolve_debate_tool(
         None,
@@ -572,7 +572,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
-    config.tools.get_mut("codex").unwrap().transport = Some(ToolTransport::Cli);
+    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     config.tiers.insert(
         "quality".to_string(),
         csa_config::config::TierConfig {

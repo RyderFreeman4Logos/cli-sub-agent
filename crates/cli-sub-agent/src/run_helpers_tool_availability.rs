@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use csa_config::{ProjectConfig, ToolTransport};
+use csa_config::{ProjectConfig, TransportKind};
 use csa_executor::{CodexTransport, install_hint_for_known_tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,10 +9,6 @@ pub(crate) enum ToolBinaryAvailability {
         binary_name: String,
     },
     Missing {
-        binary_name: String,
-        hint: Cow<'static, str>,
-    },
-    Unsupported {
         binary_name: String,
         hint: Cow<'static, str>,
     },
@@ -42,8 +38,9 @@ pub(crate) fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexT
     config
         .and_then(|cfg| cfg.tool_transport("codex"))
         .map(|transport| match transport {
-            ToolTransport::Cli => CodexTransport::Cli,
-            ToolTransport::Acp => CodexTransport::Acp,
+            TransportKind::Cli => CodexTransport::Cli,
+            TransportKind::Acp => CodexTransport::Acp,
+            TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
         })
         .unwrap_or_else(CodexTransport::default_for_build)
 }
@@ -87,18 +84,6 @@ pub(crate) fn tool_binary_availability(
             hint: Cow::Borrowed("Unknown tool"),
         };
     };
-
-    if tool_name == "codex"
-        && matches!(resolved_codex_transport(config), CodexTransport::Acp)
-        && !csa_executor::CodexRuntimeMetadata::acp_compiled_in()
-    {
-        return ToolBinaryAvailability::Unsupported {
-            binary_name: binary_name.to_string(),
-            hint: Cow::Borrowed(
-                "Rebuild CSA with `cargo build --features codex-acp`, or remove `[tools.codex].transport = \"acp\"`.",
-            ),
-        };
-    }
 
     let installed = std::process::Command::new("which")
         .arg(binary_name)

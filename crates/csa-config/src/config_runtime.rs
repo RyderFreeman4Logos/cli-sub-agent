@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use crate::config::{EnforcementMode, ProjectConfig, ToolResourceProfile, ToolTransport};
+use crate::config::{EnforcementMode, ProjectConfig, ToolResourceProfile};
+use crate::config_tool::{TransportKind, default_transport_for_tool};
 
 /// Known tool-to-profile mapping based on runtime characteristics.
 ///
@@ -280,8 +281,11 @@ impl ProjectConfig {
     }
 
     /// Resolve the per-tool transport override.
-    pub fn tool_transport(&self, tool: &str) -> Option<ToolTransport> {
-        self.tools.get(tool).and_then(|t| t.transport)
+    pub fn tool_transport(&self, tool: &str) -> Option<TransportKind> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.resolve_transport(tool))
+            .or_else(|| default_transport_for_tool(tool))
     }
 
     /// Check if a tool is allowed to edit existing files.

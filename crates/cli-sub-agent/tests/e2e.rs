@@ -18,7 +18,8 @@ fn csa_cmd(tmp: &std::path::Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
-        .env("XDG_CONFIG_HOME", tmp.join(".config"));
+        .env("XDG_CONFIG_HOME", tmp.join(".config"))
+        .env("TOKIO_WORKER_THREADS", "1");
     cmd
 }
 

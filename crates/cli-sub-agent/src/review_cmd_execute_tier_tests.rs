@@ -9,6 +9,9 @@ use csa_session::{ReviewVerdictArtifact, state::ReviewSessionMeta};
 
 fn config_with_review_tier(enabled_tools: &[&str], models: &[&str]) -> csa_config::ProjectConfig {
     let mut config = project_config_with_enabled_tools(enabled_tools);
+    if enabled_tools.contains(&"codex") {
+        config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    }
     config.tiers.insert(
         "quality".to_string(),
         TierConfig {
@@ -166,14 +169,13 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         ),
     )
     .unwrap();
-    std::fs::write(
-        bin_dir.join("codex"),
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\ncount=0\nif [ -f \"{codex_invocation_log_str}\" ]; then\n  count=$(wc -l < \"{codex_invocation_log_str}\")\nfi\nnext=$((count + 1))\nprintf 'attempt-%s\\n' \"$next\" >> \"{codex_invocation_log_str}\"\nif [ \"$next\" -eq 1 ]; then\n  printf 'HTTP 429 rate limit\\n' >&2\n  exit 1\nfi\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS via fallback codex variant' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'No blocking issues found after falling back to the second codex tier candidate.' '<!-- CSA:SECTION:details:END -->'\n"
-        ),
-    )
-    .unwrap();
-    for binary in ["gemini", "codex"] {
+    let codex_stub = format!(
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\ncount=0\nif [ -f \"{codex_invocation_log_str}\" ]; then\n  count=$(wc -l < \"{codex_invocation_log_str}\")\nfi\nnext=$((count + 1))\nprintf 'attempt-%s\\n' \"$next\" >> \"{codex_invocation_log_str}\"\nif [ \"$next\" -eq 1 ]; then\n  printf 'HTTP 429 rate limit\\n' >&2\n  exit 1\nfi\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS via fallback codex variant' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'No blocking issues found after falling back to the second codex tier candidate.' '<!-- CSA:SECTION:details:END -->'\n"
+    );
+    for binary in ["codex", "codex-acp"] {
+        std::fs::write(bin_dir.join(binary), &codex_stub).unwrap();
+    }
+    for binary in ["gemini", "codex", "codex-acp"] {
         let path = bin_dir.join(binary);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
@@ -297,17 +299,19 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
     )
     .unwrap();
-    std::fs::write(
-        bin_dir.join("codex"),
-        "#!/bin/sh\nprintf 'HTTP 401 Invalid API key\\n' >&2\nexit 1\n",
-    )
-    .unwrap();
+    for binary in ["codex", "codex-acp"] {
+        std::fs::write(
+            bin_dir.join(binary),
+            "#!/bin/sh\nprintf 'HTTP 401 Invalid API key\\n' >&2\nexit 1\n",
+        )
+        .unwrap();
+    }
     std::fs::write(
         bin_dir.join("claude-code-acp"),
         "#!/bin/sh\nprintf 'HTTP 403 Forbidden\\n' >&2\nexit 1\n",
     )
     .unwrap();
-    for binary in ["gemini", "codex", "claude-code-acp"] {
+    for binary in ["gemini", "codex", "codex-acp", "claude-code-acp"] {
         let path = bin_dir.join(binary);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
@@ -449,12 +453,14 @@ async fn execute_review_does_not_advance_tier_on_http_5xx() {
         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'HTTP 500 Internal Server Error\\n' >&2\nexit 1\n",
     )
     .unwrap();
-    std::fs::write(
-        bin_dir.join("codex"),
-        "#!/bin/sh\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS' '<!-- CSA:SECTION:summary:END -->'\n",
-    )
-    .unwrap();
-    for binary in ["gemini", "codex"] {
+    for binary in ["codex", "codex-acp"] {
+        std::fs::write(
+            bin_dir.join(binary),
+            "#!/bin/sh\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS' '<!-- CSA:SECTION:summary:END -->'\n",
+        )
+        .unwrap();
+    }
+    for binary in ["gemini", "codex", "codex-acp"] {
         let path = bin_dir.join(binary);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
