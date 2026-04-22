@@ -8,6 +8,8 @@ use csa_core::types::ToolName;
 use csa_executor::{Executor, ModelSpec, ThinkingBudget};
 use csa_session::TokenUsage;
 
+#[path = "run_helpers_atomic_commit.rs"]
+mod atomic_commit;
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
 #[path = "run_helpers_inline_review_context.rs"]
@@ -19,6 +21,9 @@ mod routing_conflict;
 #[path = "run_helpers_tool_availability.rs"]
 mod tool_availability;
 
+#[cfg(test)]
+pub(crate) use atomic_commit::atomic_commit_discipline_preamble;
+pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 pub(crate) use inline_review_context::prepend_review_context_to_prompt;
 pub(crate) use prompt::{read_prompt, resolve_positional_stdin_sentinel};
@@ -27,37 +32,6 @@ pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_tool_binary_name,
     tool_binary_availability,
 };
-
-pub(crate) const ATOMIC_COMMIT_DISCIPLINE_PREAMBLE: &str = r#"<atomic-commit-discipline>
-When this task involves multiple independent logical changes (different
-files, different concerns, different issue references), finish each
-logical change with its own commit before starting the next. Never
-batch unrelated logical changes into one commit.
-
-For EACH logical change:
-  1. Make the code edits for that change only.
-  2. Invoke the `/commit` skill to handle staging, pre-commit gates,
-     two-layer review, and conventional-commit message generation.
-     Do NOT run manual Git staging, commit, or push commands —
-     those are forbidden by AGENTS.md rule 015. The `/commit`
-     skill is the only sanctioned commit path.
-  3. Verify the working tree is clean (post-skill) before starting
-     the next logical change.
-
-If a single logical change must touch multiple unrelated files,
-explain the grouping to `/commit` (it surfaces in the commit body).
-</atomic-commit-discipline>"#;
-
-pub(crate) fn prepend_atomic_commit_discipline_to_prompt(prompt: String) -> String {
-    if prompt.contains("<atomic-commit-discipline>")
-        || prompt.starts_with("# REVIEW:")
-        || prompt.starts_with("# DEBATE:")
-    {
-        return prompt;
-    }
-
-    format!("{ATOMIC_COMMIT_DISCIPLINE_PREAMBLE}\n\n{prompt}")
-}
 
 #[cfg(test)]
 pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
