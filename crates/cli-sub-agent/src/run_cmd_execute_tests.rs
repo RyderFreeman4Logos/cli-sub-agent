@@ -87,6 +87,60 @@ fn finalize_prompt_text_prepends_atomic_commit_preamble() {
 }
 
 #[test]
+fn intent_classifier_sees_original_prompt_not_preamble() {
+    let tmp = TempDir::new().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let original = "Review auth flow and report issues";
+    let classified = crate::run_helpers::resolve_task_edit_requirement(None, original);
+
+    assert_ne!(
+        classified,
+        Some(true),
+        "sanity: original prompt must not be treated as mutating before preamble injection"
+    );
+
+    let final_prompt =
+        finalize_prompt_text(tmp.path(), original.to_string(), None).expect("finalize");
+    assert!(
+        final_prompt.contains("<atomic-commit-discipline>"),
+        "preamble must still be in final prompt"
+    );
+    assert_eq!(
+        crate::run_helpers::resolve_task_edit_requirement(None, &final_prompt),
+        Some(true),
+        "sanity: classifying the finalized prompt would regress routing"
+    );
+    assert_eq!(
+        classified,
+        crate::run_helpers::resolve_task_edit_requirement(None, original),
+        "run flow must preserve pre-preamble classification for routing"
+    );
+}
+
+#[test]
+fn finalize_prompt_text_keeps_read_only_original_prompt_classification() {
+    let tmp = TempDir::new().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let original = "Review auth flow and report issues in read-only mode";
+    let final_prompt =
+        finalize_prompt_text(tmp.path(), original.to_string(), None).expect("finalize");
+
+    assert!(
+        final_prompt.contains("<atomic-commit-discipline>"),
+        "preamble must be present in finalized prompt"
+    );
+    assert!(
+        final_prompt.contains(original),
+        "finalized prompt must preserve original prompt text"
+    );
+    assert_eq!(
+        crate::run_helpers::resolve_task_edit_requirement(None, original),
+        Some(false),
+        "original prompt must stay read-only even when finalized prompt contains preamble"
+    );
+}
+
+#[test]
 fn finalize_prompt_text_prepends_review_context_for_skill_only_prompt() {
     let tmp = TempDir::new().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);

@@ -222,12 +222,16 @@ pub(crate) async fn handle_run(
         thinking,
         &project_root,
     )?;
+    let resolved_skill = skill_res.resolved_skill;
+    let task_needs_edit = crate::run_helpers::resolve_task_edit_requirement(
+        resolved_skill.as_ref(),
+        &skill_res.prompt_text,
+    );
     let prompt_text = finalize_prompt_text(
         &project_root,
         skill_res.prompt_text,
         inline_context_from_review_session.as_deref(),
     )?;
-    let resolved_skill = skill_res.resolved_skill;
     let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
     let thinking = skill_res.thinking;
     let model = skill_res.model;
@@ -303,8 +307,6 @@ pub(crate) async fn handle_run(
     };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
-    let task_needs_edit =
-        crate::run_helpers::resolve_task_edit_requirement(resolved_skill.as_ref(), &prompt_text);
     let needs_edit = task_needs_edit.unwrap_or(false);
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
