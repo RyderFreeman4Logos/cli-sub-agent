@@ -301,6 +301,41 @@ fn config_show_exits_zero_after_init_full() {
 }
 
 #[test]
+fn config_show_renders_project_session_wait_override() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+[project]
+name = "test-project"
+
+[session_wait]
+memory_warn_mb = 8192
+"#,
+    )
+    .expect("write config");
+
+    let project_root = tmp.path().display().to_string();
+    let output = csa_cmd(tmp.path())
+        .args(["config", "show", "--cd", &project_root])
+        .output()
+        .expect("failed to run csa config show --cd");
+
+    assert!(output.status.success(), "csa config show should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[session_wait]"),
+        "should contain [session_wait] section"
+    );
+    assert!(
+        stdout.contains("memory_warn_mb = 8192"),
+        "should contain rendered session_wait override"
+    );
+}
+
+#[test]
 fn config_get_resolves_nested_resource_keys_from_effective_display_tree() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = csa_config::ProjectConfig::config_path(tmp.path());
