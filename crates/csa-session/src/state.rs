@@ -132,14 +132,13 @@ pub struct MetaSessionState {
 
 impl Default for MetaSessionState {
     fn default() -> Self {
-        let now = Utc::now();
         Self {
             meta_session_id: String::new(),
             description: None,
             project_path: String::new(),
             branch: None,
-            created_at: now,
-            last_accessed: now,
+            created_at: DateTime::<Utc>::default(),
+            last_accessed: DateTime::<Utc>::default(),
             csa_version: None,
             genealogy: Genealogy::default(),
             tools: HashMap::new(),
