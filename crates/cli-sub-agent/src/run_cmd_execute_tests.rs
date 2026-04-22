@@ -95,6 +95,11 @@ fn finalize_prompt_text_prepends_atomic_commit_preamble() {
         "preamble must not instruct manual git add; got: {preamble_body}"
     );
     assert!(
+        preamble_body.contains("session output directory IS persisted")
+            && preamble_body.contains("$CSA_SESSION_DIR/output/<name>.md"),
+        "preamble must document persisted artifact location; got: {preamble_body}"
+    );
+    assert!(
         result.find("<atomic-commit-discipline>").unwrap() < result.find("user task").unwrap(),
         "preamble must come BEFORE the user prompt"
     );
@@ -127,6 +132,11 @@ fn finalize_prompt_text_uses_subprocess_atomic_commit_preamble_when_csa_depth_po
     assert!(
         !preamble_body.contains("/commit"),
         "subprocess preamble must not reference /commit; got: {preamble_body}"
+    );
+    assert!(
+        preamble_body.contains("session output directory IS persisted")
+            && preamble_body.contains("$CSA_SESSION_DIR/output/<name>.md"),
+        "subprocess preamble must document persisted artifact location; got: {preamble_body}"
     );
 }
 
