@@ -130,6 +130,39 @@ pub struct MetaSessionState {
     pub fork_call_timestamps: Vec<Instant>,
 }
 
+impl Default for MetaSessionState {
+    fn default() -> Self {
+        Self {
+            meta_session_id: String::new(),
+            description: None,
+            project_path: String::new(),
+            branch: None,
+            created_at: DateTime::<Utc>::default(),
+            last_accessed: DateTime::<Utc>::default(),
+            csa_version: None,
+            genealogy: Genealogy::default(),
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: None,
+            phase: SessionPhase::default(),
+            task_context: TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
+            pre_session_porcelain: None,
+            last_return_packet: None,
+            change_id: None,
+            spec_id: None,
+            vcs_identity: None,
+            identity_version: default_identity_version(),
+            fork_call_timestamps: Vec::new(),
+        }
+    }
+}
+
 /// Structured metadata about a review execution.
 ///
 /// Written to `{session_dir}/review_meta.json` after `csa review` completes,

@@ -90,9 +90,7 @@ mod tests {
     use crate::test_env_lock::{ScopedEnvVarRestore, ScopedTestEnvVar};
     use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
     use csa_executor::Executor;
-    use csa_session::state::{
-        ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext,
-    };
+    use csa_session::state::MetaSessionState;
     use std::collections::HashMap;
     use std::ffi::OsStr;
 
@@ -100,35 +98,10 @@ mod tests {
         let now = chrono::Utc::now();
         MetaSessionState {
             meta_session_id: "01HTEST000000000000000000".to_string(),
-            description: Some("test session".to_string()),
             project_path: "/tmp/test-project".to_string(),
-            branch: None,
             created_at: now,
             last_accessed: now,
-            csa_version: None,
-            genealogy: Genealogy {
-                parent_session_id: None,
-                depth: 0,
-                ..Default::default()
-            },
-            tools: HashMap::new(),
-            context_status: ContextStatus::default(),
-            total_token_usage: None,
-            phase: SessionPhase::Active,
-            task_context: TaskContext::default(),
-            turn_count: 0,
-            token_budget: None,
-            sandbox_info: None,
-            termination_reason: None,
-            is_seed_candidate: false,
-            git_head_at_creation: None,
-            pre_session_porcelain: None,
-            last_return_packet: None,
-            change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
+            ..MetaSessionState::default()
         }
     }
 
