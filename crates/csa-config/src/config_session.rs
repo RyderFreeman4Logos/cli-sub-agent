@@ -3,6 +3,64 @@ use serde::{Deserialize, Serialize};
 
 use crate::config_tool::default_true;
 
+const fn default_post_exec_gate_enabled() -> bool {
+    true
+}
+
+fn default_post_exec_gate_command() -> String {
+    "just pre-commit".to_string()
+}
+
+const fn default_post_exec_gate_timeout_seconds() -> u64 {
+    600
+}
+
+/// Post-execution quality gate for successful `csa run` sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostExecGateConfig {
+    #[serde(default = "default_post_exec_gate_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_post_exec_gate_command")]
+    pub command: String,
+    #[serde(default = "default_post_exec_gate_timeout_seconds")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_true")]
+    pub skip_on_no_changes: bool,
+}
+
+impl Default for PostExecGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_post_exec_gate_enabled(),
+            command: default_post_exec_gate_command(),
+            timeout_seconds: default_post_exec_gate_timeout_seconds(),
+            skip_on_no_changes: true,
+        }
+    }
+}
+
+impl PostExecGateConfig {
+    pub fn is_default(&self) -> bool {
+        self.enabled == default_post_exec_gate_enabled()
+            && self.command == default_post_exec_gate_command()
+            && self.timeout_seconds == default_post_exec_gate_timeout_seconds()
+            && self.skip_on_no_changes
+    }
+}
+
+/// Run-command behavior (`[run]` in config).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RunConfig {
+    #[serde(default)]
+    pub post_exec_gate: PostExecGateConfig,
+}
+
+impl RunConfig {
+    pub fn is_default(&self) -> bool {
+        self.post_exec_gate.is_default()
+    }
+}
+
 /// Session management configuration (`[session]` in config).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {

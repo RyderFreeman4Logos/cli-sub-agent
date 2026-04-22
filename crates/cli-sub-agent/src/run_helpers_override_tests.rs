@@ -21,6 +21,7 @@ fn resolve_tool_and_model_model_spec_preserves_explicit_model_override() {
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: Default::default(),

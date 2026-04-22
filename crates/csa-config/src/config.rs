@@ -139,6 +139,9 @@ pub struct ProjectConfig {
     /// as runtime overrides into the hook loading pipeline.
     #[serde(default, skip_serializing_if = "HooksSection::is_default")]
     pub hooks: HooksSection,
+    /// `csa run` behavior toggles and post-exec verification.
+    #[serde(default)]
+    pub run: RunConfig,
     /// Execution tuning knobs (timeout floors, etc.).
     #[serde(default, skip_serializing_if = "ExecutionConfig::is_default")]
     pub execution: ExecutionConfig,
@@ -193,7 +196,8 @@ fn default_recursion_depth() -> u32 {
 }
 
 pub use super::config_session::{
-    DEFAULT_COOLDOWN_SECS, ExecutionConfig, HooksSection, SessionConfig, VcsConfig,
+    DEFAULT_COOLDOWN_SECS, ExecutionConfig, HooksSection, PostExecGateConfig, RunConfig,
+    SessionConfig, VcsConfig,
 };
 pub use super::config_tool::{
     ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions, ToolTransport,

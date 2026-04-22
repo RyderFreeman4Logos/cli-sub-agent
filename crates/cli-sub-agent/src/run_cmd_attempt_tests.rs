@@ -51,6 +51,7 @@ fn make_named_failover_config(tier_name: &str, models: &[&str]) -> ProjectConfig
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: Default::default(),

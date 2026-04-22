@@ -2,10 +2,15 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::process::Stdio;
+use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use tokio::process::Command;
 use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
@@ -71,6 +76,180 @@ fn finalize_prompt_text(
     )?;
 
     Ok(crate::run_helpers::prepend_atomic_commit_discipline_to_prompt(prompt_with_review_context))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PostExecGateCommandOutcome {
+    Exited(Option<i32>),
+    TimedOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PostExecGateOutcome {
+    Passed,
+    Skipped,
+}
+
+type PostExecGateFuture = Pin<Box<dyn Future<Output = Result<PostExecGateCommandOutcome>> + Send>>;
+
+fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
+    let prompt = prompt_text.trim_start();
+    prompt.starts_with("# REVIEW:") || prompt.starts_with("# DEBATE:")
+}
+
+fn post_exec_gate_requires_changes(project_root: &Path, skip_on_no_changes: bool) -> Result<bool> {
+    if !skip_on_no_changes || !crate::run_cmd::is_git_worktree(project_root) {
+        return Ok(true);
+    }
+
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["status", "--porcelain"])
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to inspect git status for post-exec gate in {}",
+                project_root.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        return Ok(true);
+    }
+
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+fn current_branch_name(project_root: &Path) -> String {
+    csa_session::vcs_backends::create_vcs_backend(project_root)
+        .current_branch(project_root)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "(unknown)".to_string())
+}
+
+fn execute_post_exec_gate_command(
+    command: &str,
+    project_root: &Path,
+    timeout_seconds: u64,
+) -> PostExecGateFuture {
+    let command = command.to_string();
+    let project_root = project_root.to_path_buf();
+
+    Box::pin(async move {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&command)
+            .current_dir(&project_root)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+
+        #[cfg(unix)]
+        {
+            cmd.process_group(0);
+        }
+
+        let mut child = cmd.spawn().with_context(|| {
+            format!(
+                "failed to spawn post-exec gate command `{command}` in {}",
+                project_root.display()
+            )
+        })?;
+        let child_pid = child.id();
+
+        match tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await {
+            Ok(wait_result) => {
+                let status = wait_result.with_context(|| {
+                    format!(
+                        "failed while waiting for post-exec gate command `{command}` in {}",
+                        project_root.display()
+                    )
+                })?;
+                Ok(PostExecGateCommandOutcome::Exited(status.code()))
+            }
+            Err(_) => {
+                #[cfg(unix)]
+                {
+                    if let Some(pid) = child_pid {
+                        // SAFETY: kill() is async-signal-safe. Negative PID targets the process group.
+                        unsafe {
+                            libc::kill(-(pid as i32), libc::SIGKILL);
+                        }
+                    } else {
+                        let _ = child.start_kill();
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = child.start_kill();
+                }
+
+                let _ = child.wait().await;
+                Ok(PostExecGateCommandOutcome::TimedOut)
+            }
+        }
+    })
+}
+
+async fn maybe_run_post_exec_gate_with_runner<F>(
+    project_root: &Path,
+    prompt_text: &str,
+    session_id: Option<&str>,
+    config: Option<&ProjectConfig>,
+    runner: F,
+) -> Result<PostExecGateOutcome>
+where
+    F: FnOnce(&str, &Path, u64) -> PostExecGateFuture,
+{
+    let gate_config = config
+        .map(|cfg| cfg.run.post_exec_gate.clone())
+        .unwrap_or_default();
+
+    if !gate_config.enabled || is_post_exec_gate_exempt_prompt(prompt_text) {
+        return Ok(PostExecGateOutcome::Skipped);
+    }
+
+    if !post_exec_gate_requires_changes(project_root, gate_config.skip_on_no_changes)? {
+        return Ok(PostExecGateOutcome::Skipped);
+    }
+
+    let branch = current_branch_name(project_root);
+    match runner(
+        &gate_config.command,
+        project_root,
+        gate_config.timeout_seconds,
+    )
+    .await?
+    {
+        PostExecGateCommandOutcome::Exited(Some(0)) => Ok(PostExecGateOutcome::Passed),
+        PostExecGateCommandOutcome::Exited(code) => anyhow::bail!(
+            "csa: post-exec gate failed (exit={}).\n\
+             gate command: {}\n\
+             cwd: {}\n\
+             employee session: {}\n\
+             branch: {}\n\
+             next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
+            code.map_or_else(|| "signal".to_string(), |value| value.to_string()),
+            gate_config.command,
+            project_root.display(),
+            session_id.unwrap_or("(ephemeral)"),
+            branch,
+        ),
+        PostExecGateCommandOutcome::TimedOut => anyhow::bail!(
+            "csa: post-exec gate timed out after {} seconds.\n\
+             gate command: {}\n\
+             cwd: {}\n\
+             employee session: {}\n\
+             branch: {}\n\
+             next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
+            gate_config.timeout_seconds,
+            gate_config.command,
+            project_root.display(),
+            session_id.unwrap_or("(ephemeral)"),
+            branch,
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -223,6 +402,7 @@ pub(crate) async fn handle_run(
         &project_root,
     )?;
     let resolved_skill = skill_res.resolved_skill;
+    let gate_prompt_text = skill_res.prompt_text.clone();
     let task_needs_edit = crate::run_helpers::resolve_task_edit_requirement(
         resolved_skill.as_ref(),
         &skill_res.prompt_text,
@@ -522,6 +702,17 @@ pub(crate) async fn handle_run(
     let executed_session_id = loop_outcome.executed_session_id;
     let fork_resolution = loop_outcome.fork_resolution;
 
+    if result.exit_code == 0 {
+        maybe_run_post_exec_gate_with_runner(
+            &project_root,
+            &gate_prompt_text,
+            executed_session_id.as_deref(),
+            config.as_ref(),
+            execute_post_exec_gate_command,
+        )
+        .await?;
+    }
+
     if fork_call {
         let parent_session_id = fork_call_parent_session_id
             .clone()
@@ -598,3 +789,7 @@ mod pre_exec_tests;
 #[cfg(test)]
 #[path = "run_cmd_execute_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "run_cmd_execute_post_exec_tests.rs"]
+mod post_exec_tests;

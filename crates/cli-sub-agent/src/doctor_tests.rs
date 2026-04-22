@@ -36,6 +36,7 @@ fn project_config_with_codex_transport(transport: ToolTransport) -> ProjectConfi
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
+        run: Default::default(),
         execution: Default::default(),
         session_wait: None,
         preflight: Default::default(),

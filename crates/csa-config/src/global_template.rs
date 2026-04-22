@@ -96,6 +96,15 @@ long_poll_seconds = 240
 # show_command = "bat -l md"   # Pipe `csa todo show` output through bat
 # diff_command = "delta"       # Pipe `csa todo diff` output through delta
 
+# Post-exec quality gate for successful `csa run` employee sessions.
+# The merged project view inherits this section unless `.csa/config.toml`
+# overrides it.
+# [run.post_exec_gate]
+# enabled = true
+# command = "just pre-commit"
+# timeout_seconds = 600
+# skip_on_no_changes = true
+
 # MCP (Model Context Protocol) servers injected into all tool sessions.
 # Project-level .csa/mcp.toml servers override global ones with the same name.
 #

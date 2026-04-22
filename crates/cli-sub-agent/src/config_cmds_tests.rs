@@ -140,6 +140,44 @@ fn build_project_display_json_keeps_effective_execution_defaults_visible() {
 }
 
 #[test]
+fn build_project_display_toml_keeps_effective_post_exec_gate_defaults_visible() {
+    let config: ProjectConfig = toml::from_str("schema_version = 1\n").unwrap();
+    let rendered = toml::to_string_pretty(&build_project_display_toml(&config).unwrap()).unwrap();
+    assert!(rendered.contains("[run.post_exec_gate]"));
+    assert!(rendered.contains("enabled = true"));
+    assert!(rendered.contains("command = \"just pre-commit\""));
+    assert!(rendered.contains("timeout_seconds = 600"));
+    assert!(rendered.contains("skip_on_no_changes = true"));
+}
+
+#[test]
+fn build_project_display_json_keeps_effective_post_exec_gate_defaults_visible() {
+    let config: ProjectConfig = toml::from_str("schema_version = 1\n").unwrap();
+    let rendered = build_project_display_json(&config).unwrap();
+    let gate = rendered
+        .get("run")
+        .and_then(|value| value.get("post_exec_gate"))
+        .expect("run.post_exec_gate should be visible");
+    assert_eq!(
+        gate.get("enabled").and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        gate.get("command").and_then(|value| value.as_str()),
+        Some("just pre-commit")
+    );
+    assert_eq!(
+        gate.get("timeout_seconds").and_then(|value| value.as_u64()),
+        Some(600)
+    );
+    assert_eq!(
+        gate.get("skip_on_no_changes")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+}
+
+#[test]
 fn resolve_effective_execution_key_uses_compile_default_when_no_config_exists() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();

@@ -81,6 +81,7 @@ mod tests {
             preferences: None,
             memory: Default::default(),
             hooks: Default::default(),
+            run: Default::default(),
             execution: Default::default(),
             session_wait: None,
             preflight: Default::default(),
