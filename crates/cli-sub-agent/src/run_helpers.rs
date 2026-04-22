@@ -29,8 +29,8 @@ pub(crate) use inline_review_context::prepend_review_context_to_prompt;
 pub(crate) use prompt::{read_prompt, resolve_positional_stdin_sentinel};
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use tool_availability::{
-    ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_tool_binary_name,
-    tool_binary_availability,
+    ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_claude_code_transport,
+    resolved_codex_transport, resolved_tool_binary_name, tool_binary_availability,
 };
 
 #[cfg(test)]

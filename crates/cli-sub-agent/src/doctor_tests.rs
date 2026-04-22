@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
 
-fn project_config_with_codex_transport(transport: TransportKind) -> ProjectConfig {
+fn project_config_with_tool_transport(tool_name: &str, transport: TransportKind) -> ProjectConfig {
     let mut tools = HashMap::new();
     tools.insert(
-        "codex".to_string(),
+        tool_name.to_string(),
         ToolConfig {
             transport: Some(transport),
             ..Default::default()
@@ -39,6 +39,14 @@ fn project_config_with_codex_transport(transport: TransportKind) -> ProjectConfi
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
+}
+
+fn project_config_with_codex_transport(transport: TransportKind) -> ProjectConfig {
+    project_config_with_tool_transport("codex", transport)
+}
+
+fn project_config_with_claude_code_transport(transport: TransportKind) -> ProjectConfig {
+    project_config_with_tool_transport("claude-code", transport)
 }
 
 fn write_project_config(project_root: &Path, contents: &str) {
@@ -74,20 +82,20 @@ impl Drop for EnvVarGuard {
 }
 
 #[cfg(unix)]
-fn with_stubbed_codex_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
+fn with_stubbed_binaries_on_path<T>(binaries: &[&str], test_fn: impl FnOnce() -> T) -> T {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
     let td = tempfile::tempdir().expect("tempdir");
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
-    for binary in ["codex", "codex-acp"] {
+    for binary in binaries {
         let binary_path = bin_dir.join(binary);
         fs::write(&binary_path, format!("#!/bin/sh\necho '{binary} 1.2.3'\n"))
-            .expect("write codex stub");
+            .expect("write tool stub");
         let mut perms = fs::metadata(&binary_path).expect("metadata").permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&binary_path, perms).expect("chmod codex stub");
+        fs::set_permissions(&binary_path, perms).expect("chmod tool stub");
     }
 
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -97,6 +105,16 @@ fn with_stubbed_codex_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
     let _path_guard = ScopedTestEnvVar::set("PATH", joined);
 
     test_fn()
+}
+
+#[cfg(unix)]
+fn with_stubbed_codex_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
+    with_stubbed_binaries_on_path(&["codex", "codex-acp"], test_fn)
+}
+
+#[cfg(unix)]
+fn with_stubbed_claude_code_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
+    with_stubbed_binaries_on_path(&["claude", "claude-code-acp"], test_fn)
 }
 
 #[test]
@@ -195,6 +213,51 @@ fn explicit_codex_acp_transport_reports_install_hint() {
         rendered.contains("@zed-industries/codex-acp"),
         "doctor text should surface the ACP adapter install hint: {rendered}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_claude_code_cli_transport_reports_transport_details() {
+    with_stubbed_claude_code_on_path(|| {
+        let config = project_config_with_claude_code_transport(TransportKind::Cli);
+        let status = check_tool_status("claude-code", Some(&config));
+        let rendered = render_tool_status_lines(&status).join("\n");
+
+        assert!(
+            status.is_ready(),
+            "doctor should accept the requested claude-code CLI transport"
+        );
+        assert_eq!(status.binary_name, "claude");
+        assert!(
+            rendered.contains("Active transport: cli"),
+            "doctor text should report active claude-code transport: {rendered}"
+        );
+        assert!(
+            rendered.contains("Probed binary: claude"),
+            "doctor text should report the probed claude-code CLI binary: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ACP compiled in:"),
+            "claude-code transport details should not print a codex-only ACP build line: {rendered}"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_claude_code_cli_transport_reports_json_transport_details() {
+    with_stubbed_claude_code_on_path(|| {
+        let config = project_config_with_claude_code_transport(TransportKind::Cli);
+        let status = check_tool_status("claude-code", Some(&config));
+        let json = tool_status_json(&status);
+
+        assert_eq!(json["transport_active"], Value::String("cli".to_string()));
+        assert_eq!(json["probed_binary"], Value::String("claude".to_string()));
+        assert!(
+            json.get("acp_compiled_in").is_none(),
+            "claude-code JSON transport details should omit codex-only ACP build metadata: {json}"
+        );
+    });
 }
 
 #[test]

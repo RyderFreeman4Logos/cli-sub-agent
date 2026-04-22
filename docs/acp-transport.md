@@ -1,11 +1,12 @@
 # ACP Transport
 
 CSA uses the **Agent Communication Protocol (ACP)** for precise context
-window control when communicating with claude-code. Codex defaults to the
-direct CLI path and can opt into ACP when CSA is built with the
-`codex-acp` feature and `[tools.codex].transport = "acp"` is set. For ACP
-sessions, this replaces the CLI non-interactive mode which auto-loads 60K+
-tokens of project context.
+window control when communicating with `claude-code` and other ACP-backed
+tools. `claude-code` defaults to ACP today, but you can opt into the native
+CLI path with `[tools.claude-code].transport = "cli"`. Codex keeps its
+codex-specific transport controls and can opt into ACP when CSA is built with
+the `codex-acp` feature. For ACP sessions, this replaces the CLI
+non-interactive mode which auto-loads 60K+ tokens of project context.
 
 ## Why ACP?
 
@@ -25,18 +26,29 @@ context precisely:
 
 | Tool | Default Transport | ACP Binary |
 |------|-------------------|------------|
-| claude-code | ACP | `claude-code-acp` |
+| claude-code | ACP (`cli` opt-in) | `claude-code-acp` |
 | codex | Legacy CLI (`codex`) | `codex-acp` (opt-in) |
 | gemini-cli | Legacy CLI | N/A |
 | opencode | Legacy CLI | N/A |
 
 The `Transport` trait abstracts both execution modes. `TransportFactory`
 routes automatically based on tool type and configuration. `claude-code`
-remains ACP-only. `codex` resolves transport from `CodexRuntimeMetadata`
-plus `[tools.codex].transport`, defaulting to `LegacyTransport` and the
-`codex` binary; ACP is selected only when the binary was compiled with
-`codex-acp` support and config explicitly requests it. `gemini-cli` and
-`opencode` remain direct CLI tools.
+resolves transport from the build default plus `[tools.claude-code].transport`,
+probing `claude-code-acp` in ACP mode and `claude` in CLI mode. `codex`
+resolves transport from `CodexRuntimeMetadata` plus `[tools.codex].transport`,
+defaulting to `LegacyTransport` and the `codex` binary; ACP is selected only
+when the binary was compiled with `codex-acp` support and config explicitly
+requests it. `gemini-cli` and `opencode` remain direct CLI tools.
+
+To force Claude Code onto the native CLI runtime:
+
+```toml
+[tools.claude-code]
+transport = "cli"
+```
+
+`csa doctor` reports the active transport and probed runtime binary so you can
+verify which path CSA will use before running a session.
 
 **Fallback rules:**
 

@@ -1,9 +1,9 @@
 //! Environment diagnostics for CSA.
 
 use anyhow::Result;
-use csa_config::{ProjectConfig, TransportKind, paths};
+use csa_config::{ProjectConfig, paths};
 use csa_core::types::OutputFormat;
-use csa_executor::{CodexRuntimeMetadata, CodexTransport};
+use csa_executor::{ClaudeCodeTransport, CodexRuntimeMetadata, CodexTransport};
 use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
@@ -27,9 +27,9 @@ enum ToolAvailabilityState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CodexDoctorStatus {
-    transport_active: CodexTransport,
-    acp_compiled_in: bool,
+struct ToolTransportDoctorStatus {
+    transport_active: &'static str,
+    acp_compiled_in: Option<bool>,
     probed_binary: String,
     acp_override_hint: Option<&'static str>,
 }
@@ -41,7 +41,7 @@ struct ToolStatus {
     binary_name: String,
     version: Option<String>,
     hint: Option<String>,
-    codex_transport: Option<CodexDoctorStatus>,
+    transport: Option<ToolTransportDoctorStatus>,
 }
 
 impl ToolStatus {
@@ -192,17 +192,6 @@ fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {
     crate::run_helpers::resolved_tool_binary_name(tool_name, config)
         .unwrap_or(tool_name)
         .to_string()
-}
-
-fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
-    config
-        .and_then(|cfg| cfg.tool_transport("codex"))
-        .map(|transport| match transport {
-            TransportKind::Cli => CodexTransport::Cli,
-            TransportKind::Acp => CodexTransport::Acp,
-            TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
-        })
-        .unwrap_or_else(CodexTransport::default_for_build)
 }
 
 fn load_doctor_project_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
@@ -458,7 +447,7 @@ fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) ->
             binary_name: binary_name.clone(),
             version: check_tool_version(&binary_name),
             hint: None,
-            codex_transport: codex_doctor_status(tool_name, config),
+            transport: tool_transport_doctor_status(tool_name, config),
         },
         crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } => ToolStatus {
             name: tool_name,
@@ -466,7 +455,7 @@ fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) ->
             binary_name,
             version: None,
             hint: Some(hint.into_owned()),
-            codex_transport: codex_doctor_status(tool_name, config),
+            transport: tool_transport_doctor_status(tool_name, config),
         },
     }
 }
@@ -509,20 +498,22 @@ fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
         status_msg
     )];
 
-    if let Some(codex_status) = status.codex_transport.as_ref() {
+    if let Some(transport_status) = status.transport.as_ref() {
         lines.push(format!(
             "             Active transport: {}",
-            codex_transport_label(codex_status.transport_active)
+            transport_status.transport_active
         ));
-        lines.push(format!(
-            "             ACP compiled in: {}",
-            yes_no(codex_status.acp_compiled_in)
-        ));
+        if let Some(acp_compiled_in) = transport_status.acp_compiled_in {
+            lines.push(format!(
+                "             ACP compiled in: {}",
+                yes_no(acp_compiled_in)
+            ));
+        }
         lines.push(format!(
             "             Probed binary: {}",
-            codex_status.probed_binary
+            transport_status.probed_binary
         ));
-        if let Some(acp_override_hint) = codex_status.acp_override_hint {
+        if let Some(acp_override_hint) = transport_status.acp_override_hint {
             lines.push(format!("             ACP override: {acp_override_hint}"));
         }
     }
@@ -549,40 +540,46 @@ fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
         "hint": status.hint,
     });
 
-    if let Some(codex_status) = status.codex_transport.as_ref()
+    if let Some(transport_status) = status.transport.as_ref()
         && let Some(object) = entry.as_object_mut()
     {
         object.insert(
             "transport_active".to_string(),
-            serde_json::json!(codex_transport_label(codex_status.transport_active)),
+            serde_json::json!(transport_status.transport_active),
         );
-        object.insert(
-            "acp_compiled_in".to_string(),
-            serde_json::json!(codex_status.acp_compiled_in),
-        );
+        if let Some(acp_compiled_in) = transport_status.acp_compiled_in {
+            object.insert(
+                "acp_compiled_in".to_string(),
+                serde_json::json!(acp_compiled_in),
+            );
+        }
         object.insert(
             "probed_binary".to_string(),
-            serde_json::json!(codex_status.probed_binary),
+            serde_json::json!(transport_status.probed_binary),
         );
     }
 
     entry
 }
 
-fn codex_doctor_status(
+fn tool_transport_doctor_status(
     tool_name: &str,
     config: Option<&ProjectConfig>,
-) -> Option<CodexDoctorStatus> {
-    if tool_name != "codex" {
-        return None;
+) -> Option<ToolTransportDoctorStatus> {
+    match tool_name {
+        "codex" => codex_doctor_status(config),
+        "claude-code" => claude_code_doctor_status(config),
+        _ => None,
     }
+}
 
-    let transport_active = resolved_codex_transport(config);
+fn codex_doctor_status(config: Option<&ProjectConfig>) -> Option<ToolTransportDoctorStatus> {
+    let transport_active = crate::run_helpers::resolved_codex_transport(config);
     let acp_compiled_in = CodexRuntimeMetadata::acp_compiled_in();
 
-    Some(CodexDoctorStatus {
-        transport_active,
-        acp_compiled_in,
+    Some(ToolTransportDoctorStatus {
+        transport_active: codex_transport_label(transport_active),
+        acp_compiled_in: Some(acp_compiled_in),
         probed_binary: transport_active.runtime_binary_name().to_string(),
         acp_override_hint: if acp_compiled_in && transport_active != CodexTransport::Acp {
             Some("set [tools.codex].transport = \"acp\"")
@@ -596,6 +593,24 @@ fn codex_transport_label(transport: CodexTransport) -> &'static str {
     match transport {
         CodexTransport::Cli => "cli",
         CodexTransport::Acp => "acp",
+    }
+}
+
+fn claude_code_doctor_status(config: Option<&ProjectConfig>) -> Option<ToolTransportDoctorStatus> {
+    let transport_active = crate::run_helpers::resolved_claude_code_transport(config);
+
+    Some(ToolTransportDoctorStatus {
+        transport_active: claude_code_transport_label(transport_active),
+        acp_compiled_in: None,
+        probed_binary: transport_active.runtime_binary_name().to_string(),
+        acp_override_hint: None,
+    })
+}
+
+fn claude_code_transport_label(transport: ClaudeCodeTransport) -> &'static str {
+    match transport {
+        ClaudeCodeTransport::Cli => "cli",
+        ClaudeCodeTransport::Acp => "acp",
     }
 }
 

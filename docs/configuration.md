@@ -47,12 +47,13 @@ require_heterogeneous = false    # Warn on narrowing; set true to fail fast
 
 [tools.codex]
 max_concurrent = 5
-transport = "cli"                # Default; "acp" requires a codex-acp build
+transport = "acp"                # See tool-specific transport notes below
 [tools.codex.env]
 OPENAI_API_KEY = "sk-..."
 
 [tools.claude-code]
 max_concurrent = 3
+transport = "auto"               # Accepted: "auto", "acp", or "cli"
 
 [todo]
 show_command = "bat -l md --paging=always"
@@ -102,7 +103,11 @@ enabled = true
 
 [tools.codex]
 enabled = true
-transport = "cli"                 # or "acp" in a codex-acp build
+transport = "acp"                 # See codex-specific note below
+
+[tools.claude-code]
+enabled = true
+transport = "auto"                # Accepted: "auto", "acp", or "cli"
 
 [tools.gemini-cli.restrictions]
 allow_edit_existing_files = false    # Inject read-only restriction into prompt
@@ -111,15 +116,35 @@ allow_edit_existing_files = false    # Inject read-only restriction into prompt
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | Boolean | `true` | Whether this tool is available |
-| `transport` | String | `cli` for `codex` | Codex-only transport override: `cli` or `acp` |
+| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, and `cli`; other tools keep their existing transport-specific rules |
 | `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
 Unconfigured tools default to enabled with no restrictions. Setting
 `enabled = false` excludes the tool from tier resolution and auto mode.
 
-`transport` is currently valid only for `codex`. Legal values are `cli` and
-`acp`. The default is `cli`, so codex runs through `LegacyTransport` and
-probes the `codex` binary unless you opt into ACP explicitly.
+`transport` is validated per tool.
+
+- `claude-code` accepts `auto`, `acp`, and `cli`. `auto` resolves to the
+  build default, `acp` probes `claude-code-acp`, and `cli` probes `claude`.
+- `codex` keeps its codex-specific transport rules and ACP build requirement;
+  see below.
+- `gemini-cli` and `opencode` stay on their direct CLI runtimes.
+
+When you change a tool transport, `csa doctor` reports the active transport
+and probed binary for that tool.
+
+#### Claude Code transport override
+
+Use `[tools.claude-code].transport` when you need to force Claude Code onto
+the native CLI path or back onto ACP explicitly:
+
+```toml
+[tools.claude-code]
+transport = "cli"
+```
+
+With that override, CSA probes `claude` instead of `claude-code-acp`, and
+`csa doctor` prints the effective transport under the `claude-code` block.
 
 #### Codex transport override
 
@@ -229,8 +254,9 @@ CSA validates on load:
 2. **Tier references:** All `tier_mapping` values must reference existing tiers
 3. **Tool names:** Must be one of `gemini-cli`, `codex`, `opencode`, `claude-code`
 4. **Thinking budget:** Must be `low`, `medium`, `high`, `xhigh`, or a number
-5. **Codex transport override:** `[tools.codex].transport` must be `cli` or
-   `acp`, and `acp` is rejected unless CSA was compiled with `codex-acp`
+5. **Tool transport overrides:** validated per tool. In particular,
+   `[tools.claude-code].transport` accepts `auto`, `acp`, or `cli`, and
+   codex ACP requests are rejected unless CSA was compiled with `codex-acp`
 
 ## Migrations
 
@@ -307,6 +333,6 @@ default = "primary"
 ## Related
 
 - [Getting Started](getting-started.md) -- initial setup
-- [ACP Transport](acp-transport.md) -- codex ACP opt-in and transport behavior
+- [ACP Transport](acp-transport.md) -- per-tool transport behavior and ACP notes
 - [Resource Control](resource-control.md) -- memory limits and P95 estimation
 - [Commands](commands.md) -- `csa config` reference
