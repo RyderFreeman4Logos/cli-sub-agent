@@ -101,7 +101,7 @@ impl TransportFactory {
     /// | Executor     | Legacy | Acp                      | OpenaiCompat |
     /// |--------------|--------|--------------------------| -------------|
     /// | ClaudeCode   | No     | Yes                      | No           |
-    /// | Codex        | Yes    | Yes (feature `codex-acp`)| No           |
+    /// | Codex        | Yes    | Yes                      | No           |
     /// | GeminiCli    | Yes    | Yes                      | No           |
     /// | Opencode     | Yes    | No                       | No           |
     /// | OpenaiCompat | No     | No                       | Yes          |
@@ -127,18 +127,9 @@ impl TransportFactory {
                 err("claude-code only supports ACP transport")
             }
 
-            // Codex: Legacy always, ACP behind feature gate
+            // Codex: Legacy and ACP are both supported
             (Executor::Codex { .. }, TransportMode::Legacy) => Ok(()),
-            (Executor::Codex { .. }, TransportMode::Acp) => {
-                #[cfg(feature = "codex-acp")]
-                {
-                    Ok(())
-                }
-                #[cfg(not(feature = "codex-acp"))]
-                {
-                    err("codex-acp feature is not compiled in")
-                }
-            }
+            (Executor::Codex { .. }, TransportMode::Acp) => Ok(()),
             (Executor::Codex { .. }, TransportMode::OpenaiCompat) => {
                 err("codex only supports Legacy or ACP transport")
             }

@@ -26,8 +26,6 @@ fn install_pattern(project_root: &Path, name: &str) {
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
-    use csa_config::ToolTransport;
-
     if which::which("bwrap").is_err() {
         eprintln!("skipping: bwrap not installed (CI gap, see #987)");
         return;
@@ -38,22 +36,22 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
 
-    let codex_invocation_log = project_dir.path().join("codex-invocations.log");
     let gemini_invocation_log = project_dir.path().join("gemini-invocations.log");
-    let codex_invocation_log_str = codex_invocation_log.display().to_string();
+    let codex_invocation_log = project_dir.path().join("codex-invocations.log");
     let gemini_invocation_log_str = gemini_invocation_log.display().to_string();
+    let codex_invocation_log_str = codex_invocation_log.display().to_string();
 
     for (binary, body) in [
         (
-            "codex",
+            "gemini",
             format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\ncount=0\nif [ -f \"{codex_invocation_log_str}\" ]; then\n  count=$(wc -l < \"{codex_invocation_log_str}\")\nfi\nnext=$((count + 1))\nprintf 'attempt-%s\\n' \"$next\" >> \"{codex_invocation_log_str}\"\nif [ \"$next\" -eq 1 ]; then\n  printf 'HTTP 429 rate limit\\n' >&2\n  exit 1\nfi\nprintf '%s\\n' 'Verdict: APPROVE' 'Confidence: high' 'Summary: Debate succeeded via second codex tier candidate.' '- Fallback stayed within the codex whitelist.'\n"
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\ncount=0\nif [ -f \"{gemini_invocation_log_str}\" ]; then\n  count=$(wc -l < \"{gemini_invocation_log_str}\")\nfi\nnext=$((count + 1))\nprintf 'attempt-%s\\n' \"$next\" >> \"{gemini_invocation_log_str}\"\nif [ \"$next\" -eq 1 ]; then\n  printf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\n  exit 1\nfi\nprintf '%s\\n' 'Verdict: APPROVE' 'Confidence: high' 'Summary: Debate succeeded via second gemini tier candidate.' '- Fallback stayed within the gemini whitelist.'\n"
             ),
         ),
         (
-            "gemini",
+            "codex-acp",
             format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'gemini should not be invoked\\n' >> \"{gemini_invocation_log_str}\"\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n"
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-acp 1.0.0\\n'\n  exit 0\nfi\nprintf 'codex should not be invoked\\n' >> \"{codex_invocation_log_str}\"\nexit 1\n"
             ),
         ),
     ] {
@@ -71,7 +69,6 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
 
     let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
-    config.tools.get_mut("codex").unwrap().transport = Some(ToolTransport::Cli);
     config.review = Some(csa_config::ReviewConfig {
         gate_command: Some("true".to_string()),
         ..Default::default()
@@ -81,9 +78,9 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
         csa_config::config::TierConfig {
             description: "quality".to_string(),
             models: vec![
-                "codex/openai/gpt-5.4/medium".to_string(),
-                "codex/openai/gpt-5/high".to_string(),
+                "gemini-cli/google/gemini-3.1-pro-preview/medium".to_string(),
                 "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "codex/openai/gpt-5/high".to_string(),
             ],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
@@ -97,7 +94,7 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
         project_dir.path(),
         Some("debate explicit-tool tier fallback"),
         None,
-        Some("codex"),
+        Some("gemini-cli"),
     )
     .unwrap();
 
@@ -108,7 +105,7 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
         "--cd",
         &cd,
         "--tool",
-        "codex",
+        "gemini-cli",
         "--tier",
         "quality",
         "--session",
@@ -118,14 +115,14 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
 
     let exit_code = handle_debate(args, 0, csa_core::types::OutputFormat::Json)
         .await
-        .expect("explicit codex debate tier fallback should succeed");
+        .expect("explicit gemini debate tier fallback should succeed");
     assert_eq!(exit_code, 0);
 
-    let codex_invocations = std::fs::read_to_string(&codex_invocation_log).unwrap();
-    assert_eq!(codex_invocations.lines().count(), 2);
+    let gemini_invocations = std::fs::read_to_string(&gemini_invocation_log).unwrap();
+    assert_eq!(gemini_invocations.lines().count(), 2);
     assert!(
-        !gemini_invocation_log.exists(),
-        "gemini should not be invoked when --tool codex whitelists codex-only candidates"
+        !codex_invocation_log.exists(),
+        "codex should not be invoked when --tool gemini-cli whitelists gemini-only candidates"
     );
 
     let session_dir =
@@ -138,16 +135,16 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
     assert_eq!(parsed["verdict"], "APPROVE");
     assert_eq!(
         parsed["summary"],
-        "Debate succeeded via second codex tier candidate."
+        "Debate succeeded via second gemini tier candidate."
     );
     assert!(parsed["failure_reason"].is_null());
 
     let result = csa_session::load_result(project_dir.path(), &session.meta_session_id)
         .unwrap()
         .expect("result.toml should exist");
-    assert_eq!(result.tool, "codex");
+    assert_eq!(result.tool, "gemini-cli");
     assert_eq!(
         result.summary,
-        "Debate succeeded via second codex tier candidate."
+        "Debate succeeded via second gemini tier candidate."
     );
 }

@@ -542,7 +542,7 @@ mod tests {
         let config: ProjectConfig = toml::from_str("").unwrap();
 
         assert_eq!(tool_exe_name("gemini-cli", &config), "gemini");
-        assert_eq!(tool_exe_name("codex", &config), "codex");
+        assert_eq!(tool_exe_name("codex", &config), "codex-acp");
         assert_eq!(tool_exe_name("claude-code", &config), "claude-code-acp");
         assert_eq!(tool_exe_name("opencode", &config), "opencode");
         assert_eq!(tool_exe_name("unknown-tool", &config), "unknown-tool");
@@ -709,7 +709,7 @@ transport = "cli"
             td.path(),
             r#"
 [tools.codex]
-transport = "cli"
+transport = "acp"
 
 [tiers.tier-1]
 description = "Test"
@@ -736,7 +736,7 @@ default = "tier-1"
         assert!(
             report.diagnostics[0]
                 .message
-                .contains("[tools.claude-code].transport"),
+                .contains("tools.claude-code.transport"),
             "diagnostic should surface the merged-config key: {:?}",
             report.diagnostics[0]
         );
@@ -766,7 +766,7 @@ default = "tier-1"
             json["diagnostics"][0]["message"]
                 .as_str()
                 .expect("routing json diagnostic message")
-                .contains("[tools.claude-code].transport"),
+                .contains("tools.claude-code.transport"),
             "json output should surface the merged-config key: {json}"
         );
         assert_eq!(json["context"]["vcs_backend"], serde_json::json!("git"));

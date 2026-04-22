@@ -10,9 +10,18 @@ pub(crate) fn default_true() -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ToolTransport {
+pub enum TransportKind {
+    Auto,
     Cli,
     Acp,
+}
+
+pub fn default_transport_for_tool(tool_name: &str) -> Option<TransportKind> {
+    match tool_name {
+        "claude-code" | "codex" => Some(TransportKind::Acp),
+        "gemini-cli" | "opencode" => Some(TransportKind::Cli),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +85,7 @@ pub struct ToolConfig {
     ///
     /// Currently meaningful for codex only. `None` means use the build default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transport: Option<ToolTransport>,
+    pub transport: Option<TransportKind>,
     /// Codex-only: auto-approve trust dialog during PTY native fork flow.
     /// Defaults to false for explicit safety.
     #[serde(default)]
@@ -114,6 +123,16 @@ impl Default for ToolConfig {
             base_url: None,
             api_key: None,
             filesystem_sandbox: None,
+        }
+    }
+}
+
+impl ToolConfig {
+    #[must_use]
+    pub fn resolve_transport(&self, tool_name: &str) -> Option<TransportKind> {
+        match self.transport.unwrap_or(TransportKind::Auto) {
+            TransportKind::Auto => default_transport_for_tool(tool_name),
+            transport => Some(transport),
         }
     }
 }
@@ -272,6 +291,34 @@ transport = "cli"
         let wrapper: Wrapper = toml::from_str(toml_str).expect("should parse TOML");
         let tool = wrapper.tools.get("codex").expect("codex missing");
 
-        assert_eq!(tool.transport, Some(ToolTransport::Cli));
+        assert_eq!(tool.transport, Some(TransportKind::Cli));
+    }
+
+    #[test]
+    fn test_resolve_transport_maps_auto_to_tool_default() {
+        let config = ToolConfig {
+            transport: Some(TransportKind::Auto),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.resolve_transport("claude-code"),
+            Some(TransportKind::Acp)
+        );
+        assert_eq!(
+            config.resolve_transport("gemini-cli"),
+            Some(TransportKind::Cli)
+        );
+    }
+
+    #[test]
+    fn test_resolve_transport_uses_default_when_unset() {
+        let config = ToolConfig::default();
+
+        assert_eq!(config.resolve_transport("codex"), Some(TransportKind::Acp));
+        assert_eq!(
+            config.resolve_transport("opencode"),
+            Some(TransportKind::Cli)
+        );
     }
 }

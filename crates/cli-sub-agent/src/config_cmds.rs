@@ -11,6 +11,9 @@ use csa_core::types::OutputFormat;
 #[path = "config_cmds_helpers.rs"]
 mod helpers;
 use helpers::{format_missing_key_message, format_toml_value, resolve_key, suggest_key_paths};
+#[path = "config_cmds_display.rs"]
+mod display;
+use display::{inject_resolved_tool_transports_json, inject_resolved_tool_transports_toml};
 
 pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
@@ -685,26 +688,30 @@ fn build_execution_toml(execution: &csa_config::ExecutionConfig) -> toml::Value 
 
 fn build_project_display_toml(config: &ProjectConfig) -> Result<toml::Value> {
     let mut root = toml::Value::try_from(config.clone())?;
-    root.as_table_mut()
-        .expect("serialized project config should be a TOML table")
-        .insert(
-            "execution".to_string(),
-            build_execution_toml(&config.execution),
-        );
+    let root_table = root
+        .as_table_mut()
+        .expect("serialized project config should be a TOML table");
+    root_table.insert(
+        "execution".to_string(),
+        build_execution_toml(&config.execution),
+    );
+    inject_resolved_tool_transports_toml(root_table, config);
     Ok(root)
 }
 
 fn build_project_display_json(config: &ProjectConfig) -> Result<serde_json::Value> {
     let mut root = serde_json::to_value(config)?;
-    root.as_object_mut()
-        .expect("serialized project config should be a JSON object")
-        .insert(
-            "execution".to_string(),
-            serde_json::json!({
-                "min_timeout_seconds": config.execution.min_timeout_seconds,
-                "auto_weave_upgrade": config.execution.auto_weave_upgrade,
-            }),
-        );
+    let root_object = root
+        .as_object_mut()
+        .expect("serialized project config should be a JSON object");
+    root_object.insert(
+        "execution".to_string(),
+        serde_json::json!({
+            "min_timeout_seconds": config.execution.min_timeout_seconds,
+            "auto_weave_upgrade": config.execution.auto_weave_upgrade,
+        }),
+    );
+    inject_resolved_tool_transports_json(root_object, config);
     Ok(root)
 }
 
@@ -766,6 +773,10 @@ pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
 #[cfg(test)]
 #[path = "config_cmds_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_cmds_transport_display_tests.rs"]
+mod transport_display_tests;
 
 #[cfg(test)]
 #[path = "config_cmds_lookup_tests.rs"]

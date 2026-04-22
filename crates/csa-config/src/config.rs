@@ -200,7 +200,7 @@ pub use super::config_session::{
     SessionConfig, VcsConfig,
 };
 pub use super::config_tool::{
-    ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions, ToolTransport,
+    ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions, TransportKind,
 };
 
 impl ProjectConfig {

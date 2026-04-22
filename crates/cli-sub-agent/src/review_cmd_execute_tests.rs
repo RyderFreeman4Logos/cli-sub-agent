@@ -126,12 +126,9 @@ async fn execute_review_preserves_codex_default_target_when_project_target_exist
 
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let fake_codex = bin_dir.join("codex");
     let cargo_target_log = project_dir.path().join("cargo-target-dir.log");
-    std::fs::write(
-        &fake_codex,
-        format!(
-            "#!/bin/sh\n\
+    let codex_stub = format!(
+        "#!/bin/sh\n\
 printf '%s' \"${{CARGO_TARGET_DIR:-}}\" > \"{}\"\n\
 printf '%s\\n' \
 '<!-- CSA:SECTION:summary -->' \
@@ -141,20 +138,23 @@ printf '%s\\n' \
 '<!-- CSA:SECTION:details -->' \
 'Review used default cargo target behavior.' \
 '<!-- CSA:SECTION:details:END -->'\n",
-            cargo_target_log.display()
-        ),
-    )
-    .unwrap();
-    let mut perms = std::fs::metadata(&fake_codex).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&fake_codex, perms).unwrap();
+        cargo_target_log.display()
+    );
+    for binary in ["codex", "codex-acp"] {
+        let fake_codex = bin_dir.join(binary);
+        std::fs::write(&fake_codex, &codex_stub).unwrap();
+        let mut perms = std::fs::metadata(&fake_codex).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, perms).unwrap();
+    }
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
     let _bwrap_preflight_guard = ScopedEnvVarRestore::set("CSA_SKIP_BWRAP_PREFLIGHT", "1");
 
-    let config = project_config_with_enabled_tools(&["codex"]);
+    let mut config = project_config_with_enabled_tools(&["codex"]);
+    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     let global = GlobalConfig::default();
     let result = execute_review(
         ToolName::Codex,

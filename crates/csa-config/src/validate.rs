@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 use std::path::Path;
 
+use crate::TransportKind;
 use crate::config::ProjectConfig;
-use crate::config_tool::ToolTransport;
 use crate::global::ToolSelection;
 
 const KNOWN_TOOLS: &[&str] = &[
@@ -12,7 +12,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "claude-code",
     "openai-compat",
 ];
-const LEGAL_TRANSPORT_VALUES: &str = "cli, acp";
+const LEGAL_TRANSPORT_VALUES: &str = "auto, acp, cli";
 
 /// Validate a project configuration file.
 /// Returns Ok(()) if valid, or Err with descriptive messages.
@@ -233,8 +233,9 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
 
 fn validate_tool_transport_override_value(tool_name: &str, raw_transport: &str) -> Result<()> {
     let transport = match raw_transport {
-        "cli" => ToolTransport::Cli,
-        "acp" => ToolTransport::Acp,
+        "auto" => TransportKind::Auto,
+        "cli" => TransportKind::Cli,
+        "acp" => TransportKind::Acp,
         _ => {
             let key = transport_key(tool_name);
             bail!(
@@ -243,33 +244,59 @@ fn validate_tool_transport_override_value(tool_name: &str, raw_transport: &str) 
         }
     };
 
-    validate_tool_transport_override(tool_name, transport)
+    validate_tool_transport_override_with_raw(tool_name, transport, raw_transport)
 }
 
-fn validate_tool_transport_override(tool_name: &str, transport: ToolTransport) -> Result<()> {
+fn validate_tool_transport_override_with_raw(
+    tool_name: &str,
+    transport: TransportKind,
+    raw_transport: &str,
+) -> Result<()> {
     let key = transport_key(tool_name);
 
-    if tool_name != "codex" {
-        bail!(
-            "Invalid {key}: tool \"{tool_name}\" does not support transport override; this field is only valid for codex."
-        );
+    match tool_name {
+        "claude-code" => match transport {
+            TransportKind::Auto | TransportKind::Acp => Ok(()),
+            TransportKind::Cli => bail!(
+                "Invalid {key} = \"{raw_transport}\": claude-code does not yet support CLI transport — will be added in #643 Phase 3."
+            ),
+        },
+        "codex" => match transport {
+            TransportKind::Auto | TransportKind::Acp => Ok(()),
+            TransportKind::Cli => bail!(
+                "Invalid {key} = \"{raw_transport}\": codex does not yet support CLI transport — will be added in #643 Phase 4."
+            ),
+        },
+        "gemini-cli" | "opencode" => match transport {
+            TransportKind::Auto | TransportKind::Cli => Ok(()),
+            TransportKind::Acp => bail!(
+                "Invalid {key} = \"{raw_transport}\": {tool_name} does not support ACP transport."
+            ),
+        },
+        "openai-compat" => {
+            bail!(
+                "Invalid {key} = \"{raw_transport}\": {tool_name} does not support configurable transport."
+            )
+        }
+        _ => {
+            // Unknown tool names are rejected earlier by validate_tools; keep this
+            // branch defensive for raw config validation paths.
+            bail!("Invalid {key} = \"{raw_transport}\": unknown tool \"{tool_name}\".")
+        }
     }
-
-    if matches!(transport, ToolTransport::Acp) && !codex_acp_compiled_in() {
-        bail!(
-            "Invalid {key}: transport = \"acp\" requires the `codex-acp` feature, but this CSA build was compiled without it. Rebuild with `cargo build --features codex-acp` or `cargo install --path crates/cli-sub-agent --features codex-acp`, or set [tools.codex].transport = \"cli\" (or remove the field)."
-        );
-    }
-
-    Ok(())
 }
 
-const fn codex_acp_compiled_in() -> bool {
-    cfg!(feature = "codex-acp")
+fn validate_tool_transport_override(tool_name: &str, transport: TransportKind) -> Result<()> {
+    let raw_transport = match transport {
+        TransportKind::Auto => "auto",
+        TransportKind::Cli => "cli",
+        TransportKind::Acp => "acp",
+    };
+    validate_tool_transport_override_with_raw(tool_name, transport, raw_transport)
 }
 
 fn transport_key(tool_name: &str) -> String {
-    format!("[tools.{tool_name}].transport")
+    format!("tools.{tool_name}.transport")
 }
 
 /// Validate a `ToolSelection` value for review/debate config.

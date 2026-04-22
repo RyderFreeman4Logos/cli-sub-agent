@@ -11,82 +11,143 @@ fn write_raw_project_config(dir: &Path, config_toml: &str) -> PathBuf {
     config_path
 }
 
-#[cfg(not(feature = "codex-acp"))]
 #[test]
-fn test_validate_codex_acp_transport_requires_compiled_feature() {
-    let dir = tempdir().unwrap();
-    let config_path = write_raw_project_config(
-        dir.path(),
-        r#"
-[tools.codex]
-transport = "acp"
+fn validate_tool_transport_matrix_matches_phase_2_contract() {
+    struct Case {
+        tool: &'static str,
+        value: &'static str,
+        should_pass: bool,
+        expected_message: Option<&'static str>,
+    }
+
+    let cases = [
+        Case {
+            tool: "claude-code",
+            value: "auto",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "claude-code",
+            value: "acp",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "claude-code",
+            value: "cli",
+            should_pass: false,
+            expected_message: Some(
+                "claude-code does not yet support CLI transport — will be added in #643 Phase 3",
+            ),
+        },
+        Case {
+            tool: "codex",
+            value: "auto",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "codex",
+            value: "acp",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "codex",
+            value: "cli",
+            should_pass: false,
+            expected_message: Some(
+                "codex does not yet support CLI transport — will be added in #643 Phase 4",
+            ),
+        },
+        Case {
+            tool: "gemini-cli",
+            value: "auto",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "gemini-cli",
+            value: "cli",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "gemini-cli",
+            value: "acp",
+            should_pass: false,
+            expected_message: Some("gemini-cli does not support ACP transport"),
+        },
+        Case {
+            tool: "opencode",
+            value: "auto",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "opencode",
+            value: "cli",
+            should_pass: true,
+            expected_message: None,
+        },
+        Case {
+            tool: "opencode",
+            value: "acp",
+            should_pass: false,
+            expected_message: Some("opencode does not support ACP transport"),
+        },
+    ];
+
+    for case in cases {
+        let dir = tempdir().unwrap();
+        let config_path = write_raw_project_config(
+            dir.path(),
+            &format!(
+                r#"
+[tools.{}]
+transport = "{}"
 "#,
-    );
+                case.tool, case.value
+            ),
+        );
 
-    let err = validate_config_with_paths(None, &config_path).unwrap_err();
-    let message = format!("{err:#}");
+        let result = validate_config_with_paths(None, &config_path);
+        if case.should_pass {
+            assert!(
+                result.is_ok(),
+                "{}={} should validate, got: {result:?}",
+                case.tool,
+                case.value
+            );
+            continue;
+        }
 
-    assert!(
-        message.contains("[tools.codex].transport"),
-        "error should point to the exact config key: {message}"
-    );
-    assert!(
-        message.contains("codex-acp"),
-        "error should mention the missing cargo feature: {message}"
-    );
-    assert!(
-        message.contains("cargo"),
-        "error should include a rebuild command: {message}"
-    );
-    assert!(
-        message.contains("cargo install --path crates/cli-sub-agent --features codex-acp"),
-        "error should point to the repo-local install command: {message}"
-    );
-    assert!(
-        message.contains("transport = \"acp\" requires"),
-        "error should explain why ACP is rejected: {message}"
-    );
+        let err = result.expect_err("invalid transport should fail validation");
+        let message = format!("{err:#}");
+        let key = format!("tools.{}.transport", case.tool);
+        let value = format!("\"{}\"", case.value);
+
+        assert!(
+            message.contains(&key),
+            "error should name the offending key path: {message}"
+        );
+        assert!(
+            message.contains(&value),
+            "error should include the offending value: {message}"
+        );
+        assert!(
+            message.contains(
+                case.expected_message
+                    .expect("expected transport error text")
+            ),
+            "error should explain the phase-2 transport contract: {message}"
+        );
+    }
 }
 
-#[cfg(feature = "codex-acp")]
 #[test]
-fn test_validate_codex_acp_transport_accepts_feature_build() {
-    let dir = tempdir().unwrap();
-    let config_path = write_raw_project_config(
-        dir.path(),
-        r#"
-[tools.codex]
-transport = "acp"
-"#,
-    );
-
-    let result = validate_config_with_paths(None, &config_path);
-    assert!(
-        result.is_ok(),
-        "feature build should accept codex ACP transport: {result:?}"
-    );
-}
-
-#[test]
-fn test_validate_codex_cli_transport_override_accepts_all_builds() {
-    let dir = tempdir().unwrap();
-    let config_path = write_raw_project_config(
-        dir.path(),
-        r#"
-[tools.codex]
-transport = "cli"
-"#,
-    );
-
-    let result = validate_config_with_paths(None, &config_path);
-    assert!(
-        result.is_ok(),
-        "CLI transport should validate in every build: {result:?}"
-    );
-}
-
-#[test]
-fn test_validate_codex_transport_rejects_unknown_value() {
+fn validate_tool_transport_rejects_unknown_value() {
     let dir = tempdir().unwrap();
     let config_path = write_raw_project_config(
         dir.path(),
@@ -100,43 +161,15 @@ transport = "stdio"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("[tools.codex].transport"),
+        message.contains("tools.codex.transport"),
         "error should point to the exact config key: {message}"
     );
     assert!(
-        message.contains("unknown transport \"stdio\" for tool \"codex\""),
-        "error should name the bad transport value and tool: {message}"
+        message.contains("\"stdio\""),
+        "error should name the bad transport value: {message}"
     );
     assert!(
-        message.contains("legal values are: cli, acp"),
+        message.contains("legal values are: auto, acp, cli"),
         "error should list the accepted transport values: {message}"
-    );
-}
-
-#[test]
-fn test_validate_non_codex_transport_override_rejected() {
-    let dir = tempdir().unwrap();
-    let config_path = write_raw_project_config(
-        dir.path(),
-        r#"
-[tools.gemini-cli]
-transport = "cli"
-"#,
-    );
-
-    let err = validate_config_with_paths(None, &config_path).unwrap_err();
-    let message = format!("{err:#}");
-
-    assert!(
-        message.contains("[tools.gemini-cli].transport"),
-        "error should point to the exact config key: {message}"
-    );
-    assert!(
-        message.contains("does not support transport override"),
-        "error should reject non-codex transport overrides: {message}"
-    );
-    assert!(
-        message.contains("only valid for codex"),
-        "error should explain the allowed scope: {message}"
     );
 }

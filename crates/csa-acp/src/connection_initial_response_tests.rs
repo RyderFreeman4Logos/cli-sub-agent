@@ -284,7 +284,12 @@ fn stream_new_agent_messages_reports_initial_response_progress_only_for_eligible
 #[tokio::test]
 async fn initial_response_timeout_stays_alive_for_stderr_only() {
     let connection = build_test_connection(
-        spawn_test_child("while :; do printf 'starting codex auth\\n' >&2; sleep 0.05; done"),
+        // Use a single long-lived process for stderr heartbeats. A shell loop with
+        // `sleep 0.05` forks repeatedly and can trip EAGAIN under `nextest` load,
+        // causing the child to exit before `new_session()`.
+        spawn_test_child(
+            "python3 -c 'import sys,time\nwhile True:\n sys.stderr.write(\"starting codex auth\\\\n\")\n sys.stderr.flush()\n time.sleep(0.05)'",
+        ),
         Duration::from_secs(5),
         PromptBehavior::Silent,
     )

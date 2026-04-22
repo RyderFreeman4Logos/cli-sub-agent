@@ -91,7 +91,6 @@ fn load_and_validate_within_depth_returns_some() {
     );
 }
 
-#[cfg(not(feature = "codex-acp"))]
 #[test]
 fn load_and_validate_rejects_invalid_codex_transport_override() {
     let tmp = tempfile::tempdir().unwrap();
@@ -102,7 +101,7 @@ fn load_and_validate_rejects_invalid_codex_transport_override() {
         config_dir.join("config.toml"),
         r#"
 [tools.codex]
-transport = "acp"
+transport = "cli"
 "#,
     )
     .unwrap();
@@ -111,12 +110,12 @@ transport = "acp"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("[tools.codex].transport"),
+        message.contains("tools.codex.transport"),
         "pipeline should surface the exact config key: {message}"
     );
     assert!(
-        message.contains("codex-acp"),
-        "pipeline should surface the missing feature guidance: {message}"
+        message.contains("#643 Phase 4"),
+        "pipeline should surface the codex CLI phase guidance: {message}"
     );
 }
 

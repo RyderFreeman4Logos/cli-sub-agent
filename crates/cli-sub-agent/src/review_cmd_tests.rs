@@ -6,7 +6,7 @@ use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use crate::review_consensus::build_reviewer_tools;
 use crate::test_env_lock::TEST_ENV_LOCK;
 use clap::{Parser, error::ErrorKind};
-use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
+use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::{collections::HashMap, process::Command};
 use tempfile::TempDir;

@@ -9,7 +9,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
         "1",
     );
     let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
-    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::ToolTransport::Cli);
+    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     config.tiers.insert(
         "quality".to_string(),
         csa_config::config::TierConfig {

@@ -50,6 +50,7 @@ Rust edition 2024, rust-version 1.88. `anyhow` (app) + `thiserror` (lib). `tokio
 ## Configuration
 
 Project: `.csa/config.toml` (project metadata, tiers, resources, MCP). Global: `~/.config/cli-sub-agent/config.toml` (API keys, concurrency, defaults). Project overrides global via merge. Key sections: `[tools]`, `[tiers]`, `[resources]`, `[review]`, `[debate]`, `[session]`, `[mcp_servers]`, `[setting_sources]`, `[pr_review]`, `[gc]`.
+Per-tool transport: `[tools.<name>].transport = "auto" | "acp" | "cli"`; currently `claude-code`/`codex` accept `auto|acp`, `gemini-cli`/`opencode` accept `auto|cli`.
 → `.agents/project-rules-ref/config.md`
 
 **tier-routing** — When `[tiers]` are configured, direct `--tool`/`--model`/`--thinking` is blocked by default across `csa run`, `csa review`, and `csa debate`. Callers must use `--tier <name>` to select a tier by name, which resolves tool/model/thinking from the tier definition. Override with `--force-ignore-tier-setting` (alias: `--force-tier`) to bypass. The existing `--force` flag also bypasses tier enforcement. When no tiers are configured (empty `[tiers]`), all existing behavior is preserved. Priority chain: CLI `--tier` > config tier > CLI `--tool` (with force) > config tool > auto-select.

@@ -9,7 +9,7 @@ use std::process::Command;
 
 use csa_config::ProjectConfig;
 #[cfg(not(test))]
-use csa_config::ToolTransport;
+use csa_config::TransportKind;
 use csa_config::global::GlobalConfig;
 use csa_core::consensus::{
     AgentResponse, ConsensusResult, ConsensusStrategy, resolve_majority, resolve_unanimous,
@@ -57,8 +57,11 @@ fn reviewer_tool_binary_available(tool_name: &str, config: Option<&ProjectConfig
             let transport = config
                 .and_then(|cfg| cfg.tool_transport("codex"))
                 .map(|transport| match transport {
-                    ToolTransport::Cli => CodexTransport::Cli,
-                    ToolTransport::Acp => CodexTransport::Acp,
+                    TransportKind::Cli => CodexTransport::Cli,
+                    TransportKind::Acp => CodexTransport::Acp,
+                    TransportKind::Auto => {
+                        unreachable!("tool_transport() returns resolved transports")
+                    }
                 })
                 .unwrap_or_else(CodexTransport::default_for_build);
             if matches!(transport, CodexTransport::Acp) && !CodexRuntimeMetadata::acp_compiled_in()

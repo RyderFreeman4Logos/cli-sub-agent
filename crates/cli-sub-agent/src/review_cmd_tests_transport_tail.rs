@@ -38,7 +38,7 @@ fn resolve_review_tool_auto_skips_counterpart_without_configured_binary() {
     cfg.tools
         .get_mut("codex")
         .expect("codex tool config")
-        .transport = Some(ToolTransport::Cli);
+        .transport = Some(csa_config::TransportKind::Cli);
 
     let err = resolve_review_tool(
         None,

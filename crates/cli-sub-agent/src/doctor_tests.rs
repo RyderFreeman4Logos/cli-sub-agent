@@ -1,16 +1,12 @@
 use super::*;
 use crate::test_env_lock::{ScopedTestEnvVar, TEST_ENV_LOCK};
-#[cfg(not(feature = "codex-acp"))]
-use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, ToolTransport};
-#[cfg(not(feature = "codex-acp"))]
+use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig, TransportKind};
 use serde_json::Value;
-#[cfg(not(feature = "codex-acp"))]
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
 
-#[cfg(not(feature = "codex-acp"))]
-fn project_config_with_codex_transport(transport: ToolTransport) -> ProjectConfig {
+fn project_config_with_codex_transport(transport: TransportKind) -> ProjectConfig {
     let mut tools = HashMap::new();
     tools.insert(
         "codex".to_string(),
@@ -85,11 +81,14 @@ fn with_stubbed_codex_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
     let td = tempfile::tempdir().expect("tempdir");
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
-    let codex_path = bin_dir.join("codex");
-    fs::write(&codex_path, "#!/bin/sh\necho 'codex 1.2.3'\n").expect("write codex stub");
-    let mut perms = fs::metadata(&codex_path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&codex_path, perms).expect("chmod codex");
+    for binary in ["codex", "codex-acp"] {
+        let binary_path = bin_dir.join(binary);
+        fs::write(&binary_path, format!("#!/bin/sh\necho '{binary} 1.2.3'\n"))
+            .expect("write codex stub");
+        let mut perms = fs::metadata(&binary_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&binary_path, perms).expect("chmod codex stub");
+    }
 
     let path = std::env::var_os("PATH").unwrap_or_default();
     let joined =
@@ -122,21 +121,21 @@ fn test_check_tool_status_nonexistent() {
     assert!(status.version.is_none());
 }
 
-#[cfg(all(unix, not(feature = "codex-acp")))]
+#[cfg(unix)]
 #[test]
-fn default_build_doctor_accepts_codex_cli_runtime() {
+fn default_build_doctor_accepts_codex_acp_runtime() {
     with_stubbed_codex_on_path(|| {
         let status = check_tool_status("codex", None);
         assert!(
             status.is_ready(),
-            "doctor should accept the default codex CLI"
+            "doctor should accept the default codex ACP transport"
         );
-        assert_eq!(status.binary_name, "codex");
+        assert_eq!(status.binary_name, "codex-acp");
         assert!(status.hint.is_none());
     });
 }
 
-#[cfg(all(unix, not(feature = "codex-acp")))]
+#[cfg(unix)]
 #[test]
 fn default_build_doctor_text_output_reports_codex_transport_details() {
     with_stubbed_codex_on_path(|| {
@@ -144,57 +143,60 @@ fn default_build_doctor_text_output_reports_codex_transport_details() {
         let rendered = render_tool_status_lines(&status).join("\n");
 
         assert!(
-            rendered.contains("Active transport: cli"),
+            rendered.contains("Active transport: acp"),
             "doctor text should report active codex transport: {rendered}"
         );
         assert!(
-            rendered.contains("ACP compiled in: no"),
-            "doctor text should report that ACP is not compiled in by default: {rendered}"
+            rendered.contains("ACP compiled in:"),
+            "doctor text should report ACP compile status: {rendered}"
         );
         assert!(
-            rendered.contains("Probed binary: codex"),
-            "doctor text should report the probed codex binary: {rendered}"
+            rendered.contains("Probed binary: codex-acp"),
+            "doctor text should report the probed codex ACP binary: {rendered}"
         );
     });
 }
 
-#[cfg(all(unix, not(feature = "codex-acp")))]
+#[cfg(unix)]
 #[test]
 fn default_build_doctor_json_output_reports_codex_transport_details() {
     with_stubbed_codex_on_path(|| {
         let status = check_tool_status("codex", None);
         let json = tool_status_json(&status);
 
-        assert_eq!(json["transport_active"], Value::String("cli".to_string()));
-        assert_eq!(json["acp_compiled_in"], Value::Bool(false));
-        assert_eq!(json["probed_binary"], Value::String("codex".to_string()));
+        assert_eq!(json["transport_active"], Value::String("acp".to_string()));
+        assert_eq!(
+            json["acp_compiled_in"],
+            Value::Bool(csa_executor::CodexRuntimeMetadata::acp_compiled_in())
+        );
+        assert_eq!(
+            json["probed_binary"],
+            Value::String("codex-acp".to_string())
+        );
     });
 }
 
-#[cfg(all(unix, not(feature = "codex-acp")))]
+#[cfg(unix)]
 #[test]
-fn explicit_codex_acp_transport_reports_rebuild_hint() {
+fn explicit_codex_acp_transport_reports_install_hint() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let config = project_config_with_codex_transport(ToolTransport::Acp);
+    let td = tempfile::tempdir().expect("tempdir");
+    let _path_guard = EnvVarGuard::set("PATH", td.path().join("bin"));
+    let config = project_config_with_codex_transport(TransportKind::Acp);
     let status = check_tool_status("codex", Some(&config));
     let rendered = render_tool_status_lines(&status).join("\n");
 
-    assert_eq!(status.availability, ToolAvailabilityState::Unsupported);
+    assert_eq!(status.availability, ToolAvailabilityState::Missing);
     assert!(
         rendered.contains("Active transport: acp"),
         "doctor text should report the requested ACP transport: {rendered}"
     );
     assert!(
-        rendered.contains("ACP compiled in: no"),
-        "doctor text should report missing ACP compile support: {rendered}"
-    );
-    assert!(
-        rendered.contains("cargo build --features codex-acp"),
-        "doctor text should surface the rebuild hint from tool availability plumbing: {rendered}"
+        rendered.contains("@zed-industries/codex-acp"),
+        "doctor text should surface the ACP adapter install hint: {rendered}"
     );
 }
 
-#[cfg(not(feature = "codex-acp"))]
 #[test]
 fn doctor_load_rejects_invalid_codex_transport_override() {
     let td = tempfile::tempdir().expect("tempdir");
@@ -202,7 +204,7 @@ fn doctor_load_rejects_invalid_codex_transport_override() {
         td.path(),
         r#"
 [tools.codex]
-transport = "acp"
+transport = "cli"
 "#,
     );
 
@@ -210,12 +212,12 @@ transport = "acp"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("[tools.codex].transport"),
+        message.contains("tools.codex.transport"),
         "doctor should surface the exact config key: {message}"
     );
     assert!(
-        message.contains("codex-acp"),
-        "doctor should surface the missing feature guidance: {message}"
+        message.contains("#643 Phase 4"),
+        "doctor should surface the codex CLI phase guidance: {message}"
     );
 }
 
@@ -247,7 +249,7 @@ transport = "stdio"
         "doctor text should use the existing invalid config branch: {rendered}"
     );
     assert!(
-        rendered.contains("Invalid [tools.codex].transport"),
+        rendered.contains("Invalid tools.codex.transport"),
         "doctor text should surface the exact invalid transport key: {rendered}"
     );
     assert!(
@@ -276,7 +278,7 @@ transport = "stdio"
     assert_eq!(config["found"], serde_json::json!(true));
     assert_eq!(config["valid"], serde_json::json!(false));
     assert!(
-        error.contains("Invalid [tools.codex].transport"),
+        error.contains("Invalid tools.codex.transport"),
         "doctor JSON should surface the exact invalid transport key: {error}"
     );
     assert!(
@@ -310,13 +312,13 @@ transport = "cli"
         td.path(),
         r#"
 [tools.codex]
-transport = "cli"
+transport = "acp"
 "#,
     );
 
     let merged_error = ProjectConfig::load(td.path()).expect_err("merged load should fail");
     assert!(
-        format!("{merged_error:#}").contains("[tools.claude-code].transport"),
+        format!("{merged_error:#}").contains("tools.claude-code.transport"),
         "test fixture should exercise an invalid user-level transport override: {merged_error}"
     );
 
@@ -358,7 +360,7 @@ transport = "cli"
         td.path(),
         r#"
 [tools.codex]
-transport = "cli"
+transport = "acp"
 "#,
     );
 
@@ -380,7 +382,7 @@ transport = "cli"
         "doctor text should surface the invalid effective-config branch: {rendered}"
     );
     assert!(
-        rendered.contains("[tools.claude-code].transport"),
+        rendered.contains("tools.claude-code.transport"),
         "doctor text should surface the exact merged-config key: {rendered}"
     );
     assert!(
@@ -419,7 +421,7 @@ transport = "cli"
         td.path(),
         r#"
 [tools.codex]
-transport = "cli"
+transport = "acp"
 "#,
     );
 
@@ -435,7 +437,7 @@ transport = "cli"
     assert_eq!(report["config"]["valid"], serde_json::json!(true));
     assert_eq!(effective["valid"], serde_json::json!(false));
     assert!(
-        effective_error.contains("[tools.claude-code].transport"),
+        effective_error.contains("tools.claude-code.transport"),
         "doctor JSON should surface the exact merged-config key: {effective_error}"
     );
     assert!(
@@ -457,8 +459,8 @@ fn feature_build_doctor_text_output_reports_acp_compile_status() {
             "feature build should report that ACP support is compiled in: {rendered}"
         );
         assert!(
-            rendered.contains("ACP override: set [tools.codex].transport = \"acp\""),
-            "feature build should surface the opt-in override when active transport is CLI: {rendered}"
+            rendered.contains("Active transport: acp"),
+            "feature build should report the default ACP transport: {rendered}"
         );
     });
 }

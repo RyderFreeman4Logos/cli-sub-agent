@@ -61,25 +61,18 @@ fn assert_non_codex_transport_defaults() {
 }
 
 #[test]
-fn codex_cli_project_config_builds_legacy_transport_end_to_end() {
-    let config = load_project_config(
-        r#"
-[tools.codex]
-transport = "cli"
-"#,
-    );
-    let executor = build_executor(&ToolName::Codex, None, None, None, Some(&config), true)
-        .expect("build codex executor");
+fn codex_defaults_to_acp_transport_end_to_end() {
+    let executor = build_executor(&ToolName::Codex, None, None, None, None, true)
+        .expect("build default codex executor");
     let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
         .expect("create codex transport");
 
-    assert_eq!(transport.mode(), TransportMode::Legacy);
-    assert_eq!(executor.runtime_binary_name(), "codex");
+    assert_eq!(transport.mode(), TransportMode::Acp);
+    assert_eq!(executor.runtime_binary_name(), "codex-acp");
 
     assert_non_codex_transport_defaults();
 }
 
-#[cfg(feature = "codex-acp")]
 #[test]
 fn codex_acp_project_config_builds_acp_transport_end_to_end() {
     let config = load_project_config(
@@ -99,15 +92,14 @@ transport = "acp"
     assert_non_codex_transport_defaults();
 }
 
-#[cfg(not(feature = "codex-acp"))]
 #[test]
-fn codex_acp_project_config_is_rejected_before_executor_build() {
+fn codex_cli_project_config_is_rejected_before_executor_build() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_project_config(
         dir.path(),
         r#"
 [tools.codex]
-transport = "acp"
+transport = "cli"
 "#,
     );
 
@@ -115,11 +107,11 @@ transport = "acp"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("[tools.codex].transport"),
+        message.contains("tools.codex.transport"),
         "error should point to the codex transport key: {message}"
     );
     assert!(
-        message.contains("codex-acp"),
-        "error should mention the missing codex-acp feature: {message}"
+        message.contains("#643 Phase 4"),
+        "error should mention the codex CLI follow-up phase: {message}"
     );
 }
