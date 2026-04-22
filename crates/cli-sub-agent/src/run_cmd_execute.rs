@@ -2,7 +2,7 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -56,6 +56,18 @@ fn resolve_run_tier_context(
         tier_auto_select,
         failover_on_crash_enabled,
         resolved_tier_name,
+    )
+}
+
+fn finalize_prompt_text(
+    project_root: &Path,
+    prompt_text: String,
+    inline_context_from_review_session: Option<&str>,
+) -> Result<String> {
+    crate::run_helpers::prepend_review_context_to_prompt(
+        project_root,
+        prompt_text,
+        inline_context_from_review_session,
     )
 }
 
@@ -199,20 +211,6 @@ pub(crate) async fn handle_run(
     } else {
         prompt
     };
-    let prompt = if inline_context_from_review_session.is_some() && skill.is_none() {
-        Some(crate::run_helpers::read_prompt(prompt)?)
-    } else {
-        prompt
-    };
-    let prompt = prompt
-        .map(|prompt| {
-            crate::run_helpers::prepend_review_context_to_prompt(
-                &project_root,
-                prompt,
-                inline_context_from_review_session.as_deref(),
-            )
-        })
-        .transpose()?;
 
     let skill_res = resolve_skill_and_prompt(
         skill.as_deref(),
@@ -222,7 +220,11 @@ pub(crate) async fn handle_run(
         thinking,
         &project_root,
     )?;
-    let prompt_text = skill_res.prompt_text;
+    let prompt_text = finalize_prompt_text(
+        &project_root,
+        skill_res.prompt_text,
+        inline_context_from_review_session.as_deref(),
+    )?;
     let resolved_skill = skill_res.resolved_skill;
     let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
     let thinking = skill_res.thinking;
@@ -591,10 +593,14 @@ mod pre_exec_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_run_tier_context;
+    use super::{finalize_prompt_text, resolve_run_tier_context};
+    use crate::run_cmd_tool_selection::resolve_skill_and_prompt;
+    use crate::test_session_sandbox::ScopedSessionSandbox;
     use chrono::Utc;
     use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
     use std::collections::HashMap;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn make_test_config() -> ProjectConfig {
         let mut tiers = HashMap::new();
@@ -638,6 +644,40 @@ mod tests {
             vcs: Default::default(),
             filesystem_sandbox: Default::default(),
         }
+    }
+
+    #[test]
+    fn finalize_prompt_text_prepends_review_context_for_skill_only_prompt() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+        let skill_dir = tmp.path().join(".csa").join("skills").join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "demo skill body").expect("write SKILL.md");
+
+        let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R4";
+        let session_dir =
+            csa_session::get_session_dir(tmp.path(), session_id).expect("session dir");
+        fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+        fs::write(
+            session_dir.join("output").join("summary.md"),
+            "Summary line\n",
+        )
+        .expect("write summary");
+
+        let skill_resolution =
+            resolve_skill_and_prompt(Some("demo"), None, None, None, None, tmp.path())
+                .expect("resolve skill prompt");
+
+        let prompt_text =
+            finalize_prompt_text(tmp.path(), skill_resolution.prompt_text, Some(session_id))
+                .expect("finalize prompt text");
+
+        assert!(prompt_text.starts_with(&format!(
+            "<csa-review-context session=\"{session_id}\">\n<!-- summary.md -->\nSummary line\n"
+        )));
+        assert!(prompt_text.contains("<original-prompt>\n<skill-mode>executor</skill-mode>\n"));
+        assert!(prompt_text.contains("demo skill body"));
+        assert!(prompt_text.ends_with("</original-prompt>\n"));
     }
 
     #[test]
