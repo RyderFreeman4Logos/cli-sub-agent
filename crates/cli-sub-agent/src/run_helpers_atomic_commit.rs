@@ -14,6 +14,12 @@ For EACH logical change:
   3. Verify the working tree is clean (post-skill) before starting
      the next logical change.
 
+Filesystem persistence: when the bwrap filesystem sandbox is active,
+writes to host paths like `/tmp/`, `/var/tmp/`, and `$TMPDIR` are NOT
+persisted outside this session. For deliverables the caller must read
+after session end, write to `$CSA_SESSION_DIR/output/<name>.md` — the
+session output directory IS persisted.
+
 If a single logical change must touch multiple unrelated files,
 explain the grouping to `/commit` (it surfaces in the commit body).
 </atomic-commit-discipline>"#;
@@ -37,6 +43,12 @@ NOTE: In interactive Claude Code sessions the commit skill handles
 staging, pre-commit gates, two-layer review, and message generation.
 That skill is NOT available in this CSA subprocess context, so direct
 `git add` + `git commit -m` is the sanctioned path here.
+
+Filesystem persistence: when the bwrap filesystem sandbox is active,
+writes to host paths like `/tmp/`, `/var/tmp/`, and `$TMPDIR` are NOT
+persisted outside this session. For deliverables the caller must read
+after session end, write to `$CSA_SESSION_DIR/output/<name>.md` — the
+session output directory IS persisted.
 
 If a single logical change must touch multiple unrelated files,
 mention the grouping in the commit body.
