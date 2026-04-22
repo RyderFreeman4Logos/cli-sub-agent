@@ -16,9 +16,9 @@ For EACH logical change:
 
 Filesystem persistence: when the bwrap filesystem sandbox is active,
 writes to host paths like `/tmp/`, `/var/tmp/`, and `$TMPDIR` are NOT
-persisted outside this session. For deliverables the caller must read
-after session end, write to `$CSA_SESSION_DIR/output/<name>.md` — the
-session output directory IS persisted.
+persisted outside this session. Write deliverables the caller must read after session end
+to `$CSA_SESSION_DIR/output/<name>.md` — the session output directory IS persisted
+and is the canonical location for cross-session artifacts.
 
 If a single logical change must touch multiple unrelated files,
 explain the grouping to `/commit` (it surfaces in the commit body).
@@ -46,9 +46,9 @@ That skill is NOT available in this CSA subprocess context, so direct
 
 Filesystem persistence: when the bwrap filesystem sandbox is active,
 writes to host paths like `/tmp/`, `/var/tmp/`, and `$TMPDIR` are NOT
-persisted outside this session. For deliverables the caller must read
-after session end, write to `$CSA_SESSION_DIR/output/<name>.md` — the
-session output directory IS persisted.
+persisted outside this session. Write deliverables the caller must read after session end
+to `$CSA_SESSION_DIR/output/<name>.md` — the session output directory IS persisted
+and is the canonical location for cross-session artifacts.
 
 If a single logical change must touch multiple unrelated files,
 mention the grouping in the commit body.
@@ -88,6 +88,49 @@ pub(crate) fn prepend_atomic_commit_discipline_to_prompt(prompt: String) -> Stri
 mod tests {
     use super::is_csa_subprocess;
     use crate::test_env_lock::{ScopedEnvVarRestore, ScopedTestEnvVar};
+    use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
+    use csa_executor::Executor;
+    use csa_session::state::{
+        ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext,
+    };
+    use std::collections::HashMap;
+    use std::ffi::OsStr;
+
+    fn make_test_session() -> MetaSessionState {
+        let now = chrono::Utc::now();
+        MetaSessionState {
+            meta_session_id: "01HTEST000000000000000000".to_string(),
+            description: Some("test session".to_string()),
+            project_path: "/tmp/test-project".to_string(),
+            branch: None,
+            created_at: now,
+            last_accessed: now,
+            csa_version: None,
+            genealogy: Genealogy {
+                parent_session_id: None,
+                depth: 0,
+                ..Default::default()
+            },
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: None,
+            phase: SessionPhase::Active,
+            task_context: TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
+            pre_session_porcelain: None,
+            last_return_packet: None,
+            change_id: None,
+            spec_id: None,
+            fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
+        }
+    }
 
     #[test]
     fn run_helpers_atomic_commit_daemon_session_id_alone_marks_csa_subprocess() {
@@ -97,5 +140,54 @@ mod tests {
         let _session_guard = ScopedEnvVarRestore::unset("CSA_SESSION_ID");
 
         assert!(is_csa_subprocess());
+    }
+
+    #[test]
+    fn run_helpers_atomic_commit_preamble_uses_exported_canonical_session_output_path() {
+        let exec = Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        };
+        let session = make_test_session();
+        let (cmd, _stdin_data) = exec.build_command("hello", None, &session, None);
+
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        let env_map: HashMap<&OsStr, Option<&OsStr>> = envs.into_iter().collect();
+        let session_dir = env_map
+            .get(OsStr::new(CSA_SESSION_DIR_ENV_KEY))
+            .expect("CSA_SESSION_DIR should be present")
+            .expect("CSA_SESSION_DIR should have a value")
+            .to_string_lossy();
+
+        for preamble in [
+            super::ATOMIC_COMMIT_DISCIPLINE_PREAMBLE,
+            super::ATOMIC_COMMIT_DISCIPLINE_SUBPROCESS_PREAMBLE,
+        ] {
+            assert!(
+                preamble.contains("Write deliverables the caller must read after session end"),
+                "preamble should use the complete deliverable-persistence sentence"
+            );
+            assert!(
+                preamble.contains("$CSA_SESSION_DIR/output/<name>.md"),
+                "preamble should point to the canonical session output artifact path"
+            );
+            assert!(
+                preamble.contains("session output directory IS persisted"),
+                "preamble should retain the persisted-output anchor phrase"
+            );
+            assert!(
+                preamble.contains("canonical location for cross-session artifacts"),
+                "preamble should clarify that the persisted output path is canonical"
+            );
+        }
+
+        assert!(
+            session_dir.contains("/sessions/"),
+            "CSA_SESSION_DIR should contain the session path segment, got: {session_dir}"
+        );
+        assert!(
+            session_dir.contains("01HTEST000000000000000000"),
+            "CSA_SESSION_DIR should include the session ID, got: {session_dir}"
+        );
     }
 }
