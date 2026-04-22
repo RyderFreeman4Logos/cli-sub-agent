@@ -44,6 +44,8 @@ Each step below is annotated with its execution layer.
 
 ## Assumed Fork Convention
 
+Tool: bash
+
 pr-bot assumes the GitHub-common fork convention:
 
 - `origin` = your personal fork (push target and PR source)
