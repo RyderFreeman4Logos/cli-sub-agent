@@ -60,6 +60,47 @@ pub(super) fn contains_clean_phrase(output: &str) -> bool {
         || contains_positive_no_issue_clause(&lower)
 }
 
+/// Check whether review output contains substantive content beyond prompt guards.
+///
+/// Returns `true` when the raw output is empty or contains only CSA prompt
+/// injection markers / hook output and whitespace — indicating the review tool
+/// produced no actual findings.
+pub(in crate::review_cmd) fn is_review_output_empty(raw_output: &str) -> bool {
+    strip_prompt_guards(raw_output).trim().is_empty()
+}
+
+/// Remove non-review content: prompt injection blocks, hook markers, and section wrappers.
+pub(super) fn strip_prompt_guards(text: &str) -> String {
+    let mut result = String::new();
+    let mut in_guard = false;
+    for line in text.lines() {
+        if line.contains("<csa-caller-prompt-injection") {
+            in_guard = true;
+            continue;
+        }
+        if line.contains("</csa-caller-prompt-injection>") {
+            in_guard = false;
+            continue;
+        }
+        if in_guard {
+            continue;
+        }
+        if line.trim_start().starts_with("[csa-hook]") {
+            continue;
+        }
+        if line.trim_start().starts_with("[csa-heartbeat]") {
+            continue;
+        }
+        // Strip CSA section markers (empty wrappers are not substantive content)
+        if line.trim_start().starts_with("<!-- CSA:SECTION:") {
+            continue;
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
 fn contains_positive_no_issue_clause(lower: &str) -> bool {
     const NOUNS: &[&str] = &[
         "issue", "issues", "finding", "findings", "concern", "concerns",

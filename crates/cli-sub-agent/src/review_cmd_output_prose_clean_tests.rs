@@ -71,7 +71,9 @@ fn persist_review_verdict_empty_findings_with_chinese_prose_clean_summary_emits_
 }
 
 #[test]
-fn persist_review_verdict_empty_findings_without_prose_clean_marker_stays_fail_closed() {
+fn persist_review_verdict_empty_findings_without_prose_clean_marker_emits_pass() {
+    // #1045: zero findings + zero severity_counts MUST yield Pass regardless
+    // of whether the summary contains a prose-clean phrase.
     let session_id = "01TESTNOPROSECLEAN000000000";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("persist-review-verdict-no-prose-clean", session_id);
@@ -98,8 +100,8 @@ fn persist_review_verdict_empty_findings_without_prose_clean_marker_stays_fail_c
     let artifact: ReviewVerdictArtifact =
         serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
             .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Fail);
-    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

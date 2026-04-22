@@ -15,14 +15,6 @@ pub(super) struct PersistedReviewArtifact {
     pub(super) overall_risk: Option<String>,
 }
 
-impl PersistedReviewArtifact {
-    pub(super) fn overall_risk_is_severe(&self) -> bool {
-        self.overall_risk.as_deref().is_some_and(|risk| {
-            risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
-        })
-    }
-}
-
 pub(super) fn load_review_artifact_from_output(
     session_dir: &Path,
 ) -> Result<Option<PersistedReviewArtifact>, anyhow::Error> {

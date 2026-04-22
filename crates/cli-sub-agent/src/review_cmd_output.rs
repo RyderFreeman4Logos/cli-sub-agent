@@ -29,7 +29,9 @@ use artifacts::{
     load_findings_toml_from_output, load_review_artifact_from_output, severity_counts_for_artifact,
     severity_counts_for_findings_toml,
 };
-use clean_detection::{contains_clean_phrase, review_contains_prose_clean_conclusion};
+use clean_detection::{
+    contains_clean_phrase, review_contains_prose_clean_conclusion, strip_prompt_guards,
+};
 pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
@@ -277,6 +279,47 @@ pub(crate) fn persist_review_verdict_for_tests(
     persist_review_verdict(project_root, meta, findings, prior_round_refs);
 }
 
+/// Build a [`ReviewVerdictArtifact`] from meta fields + computed decision/counts.
+fn verdict_from_meta(
+    meta: &ReviewSessionMeta,
+    decision: ReviewDecision,
+    severity_counts: std::collections::BTreeMap<Severity, u32>,
+) -> ReviewVerdictArtifact {
+    build_review_verdict_artifact(
+        meta.session_id.clone(),
+        decision,
+        legacy_verdict_for_decision(decision, &meta.verdict),
+        severity_counts,
+        meta.routed_to.clone(),
+        meta.primary_failure.clone(),
+        meta.failure_reason.clone(),
+        Vec::new(),
+    )
+}
+
+/// Cross-check review-findings.json when findings.toml shows zero counts.
+/// Returns `Some(artifact)` if JSON has blocking findings; `None` otherwise.
+fn cross_check_json_for_blocking(
+    session_dir: &Path,
+    meta: &ReviewSessionMeta,
+) -> Result<Option<ReviewVerdictArtifact>, anyhow::Error> {
+    let Some(json_artifact) = load_review_artifact_from_output(session_dir)? else {
+        return Ok(None);
+    };
+    let json_counts = severity_counts_for_artifact(&json_artifact, zero_severity_counts);
+    if !has_blocking_severity(&json_counts) {
+        return Ok(None);
+    }
+    let decision = derive_decision_from_severity_counts(
+        &json_counts,
+        json_artifact.findings.is_empty(),
+        json_artifact.overall_risk.as_deref(),
+        ReviewDecision::from_str(&meta.decision).ok(),
+        || review_contains_prose_clean_conclusion(session_dir),
+    )?;
+    Ok(Some(verdict_from_meta(meta, decision, json_counts)))
+}
+
 fn derive_review_verdict_artifact(
     session_dir: &Path,
     meta: &ReviewSessionMeta,
@@ -285,55 +328,58 @@ fn derive_review_verdict_artifact(
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
         let severity_counts =
             severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
-        let decision = if findings_file.findings.is_empty()
+
+        // Detect synthetic-empty findings.toml: the sidecar marker is written by
+        // persist_review_findings_toml when TOML extraction failed (#1045 round 3).
+        let synthetic_marker = session_dir
+            .join("output")
+            .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
+        let is_synthetic = synthetic_marker.exists();
+
+        // Synthetic-empty + zero counts → fall through to full.md chain (#1045 r3).
+        if is_synthetic
+            && findings_file.findings.is_empty()
             && severity_counts_are_zero(&severity_counts)
-            && review_contains_prose_clean_conclusion(session_dir)?
         {
-            ReviewDecision::Pass
+            if let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)? {
+                return Ok(artifact);
+            }
+            // Synthetic-empty + no blocking JSON → fall through to full.md chain.
+            debug!(
+                session_id = %meta.session_id,
+                "Synthetic-empty findings.toml detected; falling through to full.md fallback chain"
+            );
         } else {
-            derive_decision_from_findings(
+            // Non-synthetic (trusted) or non-empty findings.toml: cross-check
+            // review-findings.json for the empty case (round 2 logic), then return.
+            if findings_file.findings.is_empty()
+                && severity_counts_are_zero(&severity_counts)
+                && let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)?
+            {
+                return Ok(artifact);
+            }
+
+            let decision = derive_decision_from_severity_counts(
+                &severity_counts,
                 findings_file.findings.is_empty(),
                 None,
                 ReviewDecision::from_str(&meta.decision).ok(),
-            )
-        };
-        return Ok(build_review_verdict_artifact(
-            meta.session_id.clone(),
-            decision,
-            legacy_verdict_for_decision(decision, &meta.verdict),
-            severity_counts,
-            meta.routed_to.clone(),
-            meta.primary_failure.clone(),
-            meta.failure_reason.clone(),
-            Vec::new(),
-        ));
+                || review_contains_prose_clean_conclusion(session_dir),
+            )?;
+            return Ok(verdict_from_meta(meta, decision, severity_counts));
+        }
     }
 
     if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
         let severity_counts = severity_counts_for_artifact(&artifact, zero_severity_counts);
-        let decision = if artifact.findings.is_empty()
-            && severity_counts_are_zero(&severity_counts)
-            && !artifact.overall_risk_is_severe()
-            && review_contains_prose_clean_conclusion(session_dir)?
-        {
-            ReviewDecision::Pass
-        } else {
-            derive_decision_from_findings(
-                artifact.findings.is_empty(),
-                artifact.overall_risk.as_deref(),
-                ReviewDecision::from_str(&meta.decision).ok(),
-            )
-        };
-        return Ok(build_review_verdict_artifact(
-            meta.session_id.clone(),
-            decision,
-            legacy_verdict_for_decision(decision, &meta.verdict),
-            severity_counts,
-            meta.routed_to.clone(),
-            meta.primary_failure.clone(),
-            meta.failure_reason.clone(),
-            Vec::new(),
-        ));
+        let decision = derive_decision_from_severity_counts(
+            &severity_counts,
+            artifact.findings.is_empty(),
+            artifact.overall_risk.as_deref(),
+            ReviewDecision::from_str(&meta.decision).ok(),
+            || review_contains_prose_clean_conclusion(session_dir),
+        )?;
+        return Ok(verdict_from_meta(meta, decision, severity_counts));
     }
 
     if let Some(artifact) = infer_review_verdict_from_full_output(session_dir, meta)? {
@@ -382,16 +428,7 @@ fn infer_review_verdict_from_full_output(
     let counts = severity_counts_from_text(&review_text);
     let overall_risk = parse_overall_risk_from_text(&review_text);
     let decision = derive_decision_from_text(&review_text, &counts, overall_risk.as_deref());
-    Ok(Some(build_review_verdict_artifact(
-        meta.session_id.clone(),
-        decision,
-        legacy_verdict_for_decision(decision, &meta.verdict),
-        counts,
-        meta.routed_to.clone(),
-        meta.primary_failure.clone(),
-        meta.failure_reason.clone(),
-        Vec::new(),
-    )))
+    Ok(Some(verdict_from_meta(meta, decision, counts)))
 }
 
 fn full_output_is_effectively_empty(session_dir: &Path) -> Result<bool, anyhow::Error> {
@@ -512,35 +549,75 @@ fn parse_overall_risk_from_text(text: &str) -> Option<String> {
         .map(|level| level.as_str().to_ascii_lowercase())
 }
 
-fn derive_decision_from_findings(
+/// Whether the severity counts contain any blocking findings (critical, high, or medium).
+fn has_blocking_severity(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
+    counts
+        .iter()
+        .any(|(severity, count)| *count > 0 && *severity > Severity::Low)
+}
+
+/// Derive the review decision from structured severity counts.
+///
+/// Core invariant (#1045): the decision is derived from `severity_counts`, not from
+/// summary-text keywords or stale `meta.decision` values.
+///
+/// - critical > 0 or high > 0 or medium > 0 → `Fail` / `HAS_ISSUES`
+/// - low > 0 only → `Pass` / `CLEAN` (LOWs don't block merge)
+/// - all zero + findings empty → `Pass` / `CLEAN`
+fn derive_decision_from_severity_counts(
+    severity_counts: &std::collections::BTreeMap<Severity, u32>,
     findings_empty: bool,
     overall_risk: Option<&str>,
     meta_decision: Option<ReviewDecision>,
-) -> ReviewDecision {
-    if findings_empty {
-        match meta_decision {
-            Some(
-                meta_decision @ (ReviewDecision::Skip
-                | ReviewDecision::Uncertain
-                | ReviewDecision::Unavailable
-                | ReviewDecision::Fail),
-            ) => {
-                return meta_decision;
-            }
-            Some(ReviewDecision::Pass)
-                if overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) =>
-            {
-                return ReviewDecision::Pass;
-            }
-            Some(ReviewDecision::Pass) => return ReviewDecision::Fail,
-            None if overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low")) => {
-                return ReviewDecision::Uncertain;
-            }
-            None => return ReviewDecision::Fail,
-        }
+    prose_clean_check: impl FnOnce() -> Result<bool, anyhow::Error>,
+) -> Result<ReviewDecision, anyhow::Error> {
+    // Blocking findings (critical/high/medium) always fail.
+    if has_blocking_severity(severity_counts) {
+        return Ok(ReviewDecision::Fail);
     }
 
-    ReviewDecision::Fail
+    // Non-blocking findings (low only) → pass.
+    // Zero severity counts but non-empty findings list → fail-closed (parsing anomaly).
+    if !findings_empty && !severity_counts_are_zero(severity_counts) {
+        // Only low-severity findings present — non-blocking.
+        return Ok(ReviewDecision::Pass);
+    }
+    if !findings_empty && severity_counts_are_zero(severity_counts) {
+        // Findings exist but severity counts are zero (unrecognized severities).
+        // Fail-closed.
+        return Ok(ReviewDecision::Fail);
+    }
+
+    // From here: findings list is empty AND severity_counts are all zero.
+
+    // Honour overall_risk as a fail-closed signal when it's severe.
+    if overall_risk.is_some_and(|risk| {
+        risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
+    }) {
+        return Ok(ReviewDecision::Fail);
+    }
+
+    // Preserve non-fail meta decisions (skip, uncertain, unavailable) as-is:
+    // these represent infrastructure/scope signals, not finding-based verdicts.
+    if let Some(
+        meta @ (ReviewDecision::Skip | ReviewDecision::Uncertain | ReviewDecision::Unavailable),
+    ) = meta_decision
+    {
+        return Ok(meta);
+    }
+
+    // At this point: zero severity counts, empty findings, non-severe overall_risk,
+    // and meta_decision is either Pass, Fail, or None. Prose clean check is a tiebreaker
+    // only when meta_decision is None (no verdict token was parsed from output).
+    if meta_decision == Some(ReviewDecision::Pass) || prose_clean_check()? {
+        return Ok(ReviewDecision::Pass);
+    }
+
+    // No findings, no prose clean marker, meta_decision is Fail or None.
+    // Zero findings + meta_decision=fail is the exact bug scenario (#1045):
+    // the caller parsed "fail" from summary prose, but there are no actual findings.
+    // The invariant says: zero severity_counts → pass.
+    Ok(ReviewDecision::Pass)
 }
 
 fn derive_decision_from_text(
@@ -697,46 +774,7 @@ pub(super) fn print_reviewer_outcomes(outcomes: &[ReviewerOutcome]) {
     }
 }
 
-/// Check whether review output contains substantive content beyond prompt guards.
-///
-/// Returns `true` when the raw output is empty or contains only CSA prompt
-/// injection markers / hook output and whitespace — indicating the review tool
-/// produced no actual findings.
-pub(super) fn is_review_output_empty(raw_output: &str) -> bool {
-    strip_prompt_guards(raw_output).trim().is_empty()
-}
-
-/// Remove non-review content: prompt injection blocks, hook markers, and section wrappers.
-fn strip_prompt_guards(text: &str) -> String {
-    let mut result = String::new();
-    let mut in_guard = false;
-    for line in text.lines() {
-        if line.contains("<csa-caller-prompt-injection") {
-            in_guard = true;
-            continue;
-        }
-        if line.contains("</csa-caller-prompt-injection>") {
-            in_guard = false;
-            continue;
-        }
-        if in_guard {
-            continue;
-        }
-        if line.trim_start().starts_with("[csa-hook]") {
-            continue;
-        }
-        if line.trim_start().starts_with("[csa-heartbeat]") {
-            continue;
-        }
-        // Strip CSA section markers (empty wrappers are not substantive content)
-        if line.trim_start().starts_with("<!-- CSA:SECTION:") {
-            continue;
-        }
-        result.push_str(line);
-        result.push('\n');
-    }
-    result
-}
+pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
 
 fn contains_verdict_token(haystack: &str, token: &str) -> bool {
     haystack
