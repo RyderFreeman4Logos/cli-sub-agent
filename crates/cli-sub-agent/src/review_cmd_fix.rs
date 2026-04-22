@@ -244,6 +244,19 @@ fn persist_fix_final_artifacts(
                         "Failed to write output/findings.toml after CLEAN convergence"
                     );
                 }
+                // Clear stale review-findings.json so the cross-check in
+                // derive_review_verdict_artifact does not override the
+                // cleanly-converged empty findings.toml (#1045 round 4).
+                let stale_json = session_dir.join("review-findings.json");
+                if stale_json.exists()
+                    && let Err(error) = std::fs::remove_file(&stale_json)
+                {
+                    warn!(
+                        session_id = %review_meta.session_id,
+                        error = %error,
+                        "Failed to remove stale review-findings.json after CLEAN convergence"
+                    );
+                }
             }
             Err(error) => {
                 warn!(
@@ -408,6 +421,191 @@ mod tests {
                 .expect("parse verdict");
         assert_eq!(artifact.decision, ReviewDecision::Pass);
         assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    }
+
+    /// Round 4 repro (#1045): stale review-findings.json with a HIGH finding
+    /// left over from the pre-fix review round. Fix loop converges clean →
+    /// both findings.toml and review-findings.json must be cleared, and the
+    /// final verdict must report decision=pass / severity_counts.high=0.
+    #[test]
+    fn persist_fix_final_artifacts_clears_stale_review_findings_json_on_clean() {
+        let project_root = temp_project_root("persist-fix-stale-json");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXSTALEJSON");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        // Seed stale review-findings.json with a HIGH finding (from pre-fix round).
+        let stale_json = serde_json::json!({
+            "findings": [{
+                "severity": "high",
+                "fid": "stale-high",
+                "file": "src/lib.rs",
+                "line": 42,
+                "rule_id": "rule.stale",
+                "summary": "Stale high finding from pre-fix review",
+                "engine": "reviewer"
+            }],
+            "severity_summary": { "critical": 0, "high": 1, "medium": 0, "low": 0 },
+            "overall_risk": "high"
+        });
+        fs::write(
+            session_dir.join("review-findings.json"),
+            serde_json::to_vec_pretty(&stale_json).expect("serialize stale json"),
+        )
+        .expect("write stale review-findings.json");
+
+        // No stale findings.toml — persist_fix_final_artifacts will create a clean one.
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+        // findings.toml must be empty.
+        let findings_path = session_dir.join("output").join("findings.toml");
+        let parsed: FindingsFile =
+            toml::from_str(&fs::read_to_string(&findings_path).expect("read findings.toml"))
+                .expect("parse findings.toml");
+        assert_eq!(parsed, FindingsFile::default());
+
+        // review-findings.json must be removed.
+        assert!(
+            !session_dir.join("review-findings.json").exists(),
+            "review-findings.json should be removed after clean convergence"
+        );
+
+        // Verdict must report pass.
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: csa_session::ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.decision, ReviewDecision::Pass);
+        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    }
+
+    /// Mixed staleness (#1045 round 4): stale findings.toml with a MEDIUM finding
+    /// + stale review-findings.json with a HIGH finding. Converge clean → both
+    /// must be cleared, verdict must be pass.
+    #[test]
+    fn persist_fix_final_artifacts_clears_both_stale_artifacts_on_clean() {
+        let project_root = temp_project_root("persist-fix-both-stale");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXBOTHSTALE");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        // Stale findings.toml with a MEDIUM finding.
+        write_findings_toml(
+            &session_dir,
+            &FindingsFile {
+                findings: vec![sample_stale_finding()],
+            },
+        )
+        .expect("write stale findings.toml");
+
+        // Stale review-findings.json with a HIGH finding.
+        let stale_json = serde_json::json!({
+            "findings": [{
+                "severity": "high",
+                "fid": "stale-high-json",
+                "file": "src/main.rs",
+                "line": 10,
+                "rule_id": "rule.stale-json",
+                "summary": "Stale high from JSON",
+                "engine": "reviewer"
+            }],
+            "severity_summary": { "critical": 0, "high": 1, "medium": 0, "low": 0 },
+            "overall_risk": "high"
+        });
+        fs::write(
+            session_dir.join("review-findings.json"),
+            serde_json::to_vec_pretty(&stale_json).expect("serialize stale json"),
+        )
+        .expect("write stale review-findings.json");
+
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+        // findings.toml must be empty.
+        let findings_path = session_dir.join("output").join("findings.toml");
+        let parsed: FindingsFile =
+            toml::from_str(&fs::read_to_string(&findings_path).expect("read findings.toml"))
+                .expect("parse findings.toml");
+        assert_eq!(parsed, FindingsFile::default());
+
+        // review-findings.json must be removed.
+        assert!(
+            !session_dir.join("review-findings.json").exists(),
+            "review-findings.json should be removed after clean convergence"
+        );
+
+        // Verdict must report pass with zero blocking counts.
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: csa_session::ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.decision, ReviewDecision::Pass);
+        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+        assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
+    }
+
+    /// Non-converged fix (exhausted rounds): stale artifacts must be PRESERVED
+    /// — this is the existing contract per decision #820 Option A.
+    #[test]
+    fn fix_loop_exhausted_preserves_stale_review_findings_json() {
+        let project_root = temp_project_root("persist-fix-exhausted-json");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXEXHAUSTEDJSON");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        // Stale review-findings.json with a HIGH finding.
+        let stale_json = serde_json::json!({
+            "findings": [{
+                "severity": "high",
+                "fid": "stale-high-exhausted",
+                "file": "src/lib.rs",
+                "line": 99,
+                "rule_id": "rule.stale-exhausted",
+                "summary": "Stale high finding persisted on exhaustion",
+                "engine": "reviewer"
+            }],
+            "severity_summary": { "critical": 0, "high": 1, "medium": 0, "low": 0 },
+            "overall_risk": "high"
+        });
+        fs::write(
+            session_dir.join("review-findings.json"),
+            serde_json::to_vec_pretty(&stale_json).expect("serialize stale json"),
+        )
+        .expect("write stale review-findings.json");
+
+        // Stale findings.toml too.
+        write_findings_toml(
+            &session_dir,
+            &FindingsFile {
+                findings: vec![sample_stale_finding()],
+            },
+        )
+        .expect("write stale findings.toml");
+
+        let mut exhausted_meta = make_clean_review_meta(&session_id);
+        exhausted_meta.decision = ReviewDecision::Fail.as_str().to_string();
+        exhausted_meta.verdict = "HAS_ISSUES".to_string();
+        exhausted_meta.exit_code = 1;
+        exhausted_meta.fix_rounds = 3;
+
+        persist_fix_final_artifacts(&project_root, &exhausted_meta, false);
+
+        // review-findings.json must still exist (not cleaned on non-convergence).
+        assert!(
+            session_dir.join("review-findings.json").exists(),
+            "review-findings.json should be preserved when fix loop is exhausted"
+        );
+
+        // findings.toml must still have the stale content.
+        let findings_path = session_dir.join("output").join("findings.toml");
+        let parsed: FindingsFile =
+            toml::from_str(&fs::read_to_string(&findings_path).expect("read findings.toml"))
+                .expect("parse findings.toml");
+        assert_eq!(
+            parsed,
+            FindingsFile {
+                findings: vec![sample_stale_finding()],
+            }
+        );
     }
 
     #[test]
