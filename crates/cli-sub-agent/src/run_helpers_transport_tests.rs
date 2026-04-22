@@ -89,7 +89,7 @@ fn build_executor_codex_transport_respects_explicit_acp_override() {
 
 #[cfg(unix)]
 #[test]
-fn auto_selection_uses_codex_cli_when_transport_is_unset() {
+fn auto_selection_uses_codex_acp_when_transport_is_unset() {
     use crate::test_env_lock::ScopedTestEnvVar;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -134,7 +134,7 @@ fn auto_selection_uses_codex_cli_when_transport_is_unset() {
 
     assert!(
         is_tool_binary_available_for_config("codex", Some(&config)),
-        "unset codex transport should probe `codex`, not `codex-acp`"
+        "unset codex transport should probe `codex-acp`, not `codex`"
     );
 
     let (tool, model_spec, model) = resolve_tool_and_model(
