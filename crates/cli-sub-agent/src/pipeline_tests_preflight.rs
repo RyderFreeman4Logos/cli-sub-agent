@@ -29,6 +29,7 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: csa_config::PreflightConfig {
             ai_config_symlink_check: csa_config::AiConfigSymlinkCheckConfig {
                 enabled: true,
@@ -110,6 +111,7 @@ async fn execute_with_session_and_meta_runs_preflight_for_fresh_spawn_override()
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: csa_config::PreflightConfig {
             ai_config_symlink_check: csa_config::AiConfigSymlinkCheckConfig {
                 enabled: true,
@@ -185,6 +187,7 @@ async fn execute_with_session_and_meta_skips_preflight_for_resume_session() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        session_wait: None,
         preflight: csa_config::PreflightConfig {
             ai_config_symlink_check: csa_config::AiConfigSymlinkCheckConfig {
                 enabled: true,

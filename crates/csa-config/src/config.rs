@@ -11,7 +11,7 @@ use crate::config_merge::{
     warn_deprecated_keys,
 };
 pub use crate::config_resources::ResourcesConfig;
-use crate::global::{PreferencesConfig, PreflightConfig, ReviewConfig};
+use crate::global::{PreferencesConfig, PreflightConfig, ReviewConfig, SessionWaitConfig};
 use crate::memory::MemoryConfig;
 use crate::paths;
 
@@ -142,6 +142,8 @@ pub struct ProjectConfig {
     /// Execution tuning knobs (timeout floors, etc.).
     #[serde(default, skip_serializing_if = "ExecutionConfig::is_default")]
     pub execution: ExecutionConfig,
+    #[serde(default)]
+    pub session_wait: Option<SessionWaitConfig>,
     #[serde(default, skip_serializing_if = "preflight_is_default")]
     pub preflight: PreflightConfig,
     #[serde(default, skip_serializing_if = "VcsConfig::is_default")]
@@ -696,7 +698,7 @@ fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Value> {
     match toml::from_str::<toml::Value>(&content) {
         Ok(raw) => Some(raw),
         Err(err) => {
-            tracing::warn!(
+            tracing::error!(
                 path = %path.display(),
                 source,
                 error = %err,
