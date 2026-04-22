@@ -71,7 +71,7 @@ PROJECT_RULES_REF=".agents/project-rules-ref"
 ###############################################################################
 
 COMMENTS_JSON="$(gh api "repos/${REPO_SLUG}/pulls/${PR_NUMBER}/comments" \
-  --paginate 2>/dev/null)" || {
+  --paginate 2>/dev/null | jq -s 'add // []')" || {
   echo "ERROR: Failed to fetch PR comments for ${REPO_SLUG}#${PR_NUMBER}" >&2
   exit 1
 }

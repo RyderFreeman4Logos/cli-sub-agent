@@ -210,7 +210,7 @@ fi
 echo ""
 echo "Test 3: Missing PR_NUMBER error handling"
 
-if ! (SESSION_DIR="${TMP_ROOT}/session-3" bash "${SCRIPT_PATH}" 2>/dev/null); then
+if ! (env -u PR_NUMBER SESSION_DIR="${TMP_ROOT}/session-3" PATH="${GH_SHIM_DIR}" bash "${SCRIPT_PATH}" 2>/dev/null); then
   pass "Exit 1 when PR_NUMBER is missing"
 else
   fail "Expected exit 1 when PR_NUMBER is missing"
