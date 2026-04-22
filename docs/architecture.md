@@ -159,16 +159,22 @@ User -> csa run "prompt"
 | Tool | Transport | Runtime Binary |
 |------|-----------|----------------|
 | claude-code | ACP by default, CLI opt-in | `claude-code-acp` / `claude` |
-| codex | Legacy by default, ACP opt-in | `codex` / `codex-acp` |
-| gemini-cli | Legacy | CLI process |
-| opencode | Legacy | CLI process |
+| codex | ACP by default; config currently accepts `auto` / `acp` | `codex-acp` |
+| gemini-cli | CLI only | `gemini` |
+| opencode | CLI only | `opencode` |
 
 The `Transport` trait abstracts both modes. `TransportFactory` routes based
 on tool type and config. For `claude-code`, CSA resolves
 `[tools.claude-code].transport`, routes `cli` to `LegacyTransport`, and routes
 `acp` to `AcpTransport`; without an override, the current build default stays
-on ACP. Codex keeps its codex-specific routing and ACP build requirements.
-ACP fallback to Legacy is allowed only during connection initialization;
+on ACP. For `codex`, CSA resolves `CodexRuntimeMetadata::default_for_build()`
+plus `[tools.codex].transport`; the current build default is ACP, so the
+default path probes `codex-acp`. Config validation currently accepts codex
+`auto` and `acp` without checking whether the adapter binary is installed, and
+`csa doctor` surfaces missing adapters plus install hints. Project config
+still rejects codex `cli` overrides today. `gemini-cli` and `opencode` stay
+on their direct CLI binaries. ACP fallback to Legacy is allowed only during
+connection initialization;
 during prompt execution, automatic fallback is forbidden.
 
 `csa doctor` makes this routing visible per tool by reporting the active

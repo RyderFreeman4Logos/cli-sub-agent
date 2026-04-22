@@ -3,21 +3,45 @@
 use anyhow::Result;
 use csa_config::{ProjectConfig, paths};
 use csa_core::types::OutputFormat;
-use csa_executor::{ClaudeCodeTransport, CodexRuntimeMetadata, CodexTransport};
-use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
+use csa_resource::filesystem_sandbox::detect_filesystem_capability;
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
 use std::env;
 use std::path::Path;
-use std::process::Command;
 use sysinfo::System;
 
+#[path = "doctor_config.rs"]
+mod doctor_config;
 #[path = "doctor_output_helpers.rs"]
 mod doctor_output_helpers;
+#[path = "doctor_resource.rs"]
+mod doctor_resource;
 #[path = "doctor_routing.rs"]
 mod doctor_routing;
+#[path = "doctor_sandbox.rs"]
+mod doctor_sandbox;
+#[path = "doctor_tools.rs"]
+mod doctor_tools;
+use doctor_config::{
+    inspect_doctor_effective_config_from, inspect_doctor_project_config_from,
+    project_config_tool_lists, render_effective_config_lines, render_project_config_lines,
+    render_tool_availability_error_lines,
+};
 use doctor_output_helpers::{print_effective_config, print_tool_availability_error};
+use doctor_resource::print_resource_status;
 pub use doctor_routing::run_doctor_routing;
+use doctor_sandbox::{
+    build_filesystem_sandbox_json, print_filesystem_sandbox_status, print_git_hook_status,
+    print_merge_guard_status, print_sandbox_status,
+};
+use doctor_tools::{check_tool_status, print_tool_availability, tool_status_json};
+
+#[cfg(test)]
+use doctor_config::load_doctor_project_config_from;
+#[cfg(test)]
+use doctor_resource::format_bytes;
+#[cfg(test)]
+use doctor_tools::{check_tool_version, render_tool_status_lines};
 
 /// Tool availability status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,104 +146,6 @@ impl DoctorEffectiveConfigStatus {
                 "error": error,
             }),
         }
-    }
-}
-
-fn project_config_tool_lists(config: &ProjectConfig) -> (Vec<&'static str>, Vec<&'static str>) {
-    let mut enabled = Vec::new();
-    let mut disabled = Vec::new();
-
-    for tool_name in &["gemini-cli", "opencode", "codex", "claude-code"] {
-        if config.is_tool_enabled(tool_name) {
-            enabled.push(*tool_name);
-        } else {
-            disabled.push(*tool_name);
-        }
-    }
-
-    (enabled, disabled)
-}
-
-fn render_project_config_lines(status: &DoctorProjectConfigStatus) -> Vec<String> {
-    match status {
-        DoctorProjectConfigStatus::Missing => vec![
-            "Config:      .csa/config.toml (missing)".to_string(),
-            "             Run 'csa init' to create configuration".to_string(),
-        ],
-        DoctorProjectConfigStatus::Valid(config) => {
-            let (enabled, disabled) = project_config_tool_lists(config);
-            let mut lines = vec!["Config:      .csa/config.toml (valid)".to_string()];
-
-            if !enabled.is_empty() {
-                lines.push(format!("Enabled:     {}", enabled.join(", ")));
-            }
-            if !disabled.is_empty() {
-                lines.push(format!("Disabled:    {}", disabled.join(", ")));
-            }
-
-            lines
-        }
-        DoctorProjectConfigStatus::Invalid(error) => vec![
-            "Config:      .csa/config.toml (invalid)".to_string(),
-            format!("             Error: {error}"),
-        ],
-    }
-}
-
-fn render_effective_config_lines(status: &DoctorEffectiveConfigStatus) -> Vec<String> {
-    match status {
-        DoctorEffectiveConfigStatus::Defaults => {
-            vec!["Effective:   merged config (defaults only)".to_string()]
-        }
-        DoctorEffectiveConfigStatus::Valid(_) => {
-            vec!["Effective:   merged config (valid)".to_string()]
-        }
-        DoctorEffectiveConfigStatus::Invalid(error) => vec![
-            "Effective:   merged config (invalid)".to_string(),
-            format!("             Error: {error}"),
-        ],
-    }
-}
-
-fn render_tool_availability_error_lines(error: &str) -> Vec<String> {
-    vec![
-        "Tool availability unknown (effective config invalid)".to_string(),
-        format!("Reason:      {error}"),
-    ]
-}
-
-fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {
-    crate::run_helpers::resolved_tool_binary_name(tool_name, config)
-        .unwrap_or(tool_name)
-        .to_string()
-}
-
-fn load_doctor_project_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
-    ProjectConfig::load_project_only(project_root)
-}
-
-fn load_doctor_effective_config_from(project_root: &Path) -> Result<Option<ProjectConfig>> {
-    ProjectConfig::load(project_root)
-}
-
-fn inspect_doctor_project_config_from(project_root: &Path) -> DoctorProjectConfigStatus {
-    let config_path = project_root.join(".csa").join("config.toml");
-    if !config_path.exists() {
-        return DoctorProjectConfigStatus::Missing;
-    }
-
-    match load_doctor_project_config_from(project_root) {
-        Ok(Some(config)) => DoctorProjectConfigStatus::Valid(Box::new(config)),
-        Ok(None) => DoctorProjectConfigStatus::Missing,
-        Err(error) => DoctorProjectConfigStatus::Invalid(format!("{error:#}")),
-    }
-}
-
-fn inspect_doctor_effective_config_from(project_root: &Path) -> DoctorEffectiveConfigStatus {
-    match load_doctor_effective_config_from(project_root) {
-        Ok(Some(config)) => DoctorEffectiveConfigStatus::Valid(Box::new(config)),
-        Ok(None) => DoctorEffectiveConfigStatus::Defaults,
-        Err(error) => DoctorEffectiveConfigStatus::Invalid(format!("{error:#}")),
     }
 }
 
@@ -417,383 +343,11 @@ fn print_state_dir() {
     }
 }
 
-/// Check and print tool availability for all 4 tools.
-async fn print_tool_availability(config: Option<&ProjectConfig>) {
-    let tools = ["gemini-cli", "opencode", "codex", "claude-code"];
-
-    let mut installed_count = 0;
-    let total_count = tools.len();
-
-    for tool_name in &tools {
-        let status = check_tool_status(tool_name, config);
-        if status.is_ready() {
-            installed_count += 1;
-        }
-        print_tool_status(&status);
-    }
-
-    // Print summary
-    println!();
-    println!("{installed_count}/{total_count} tools ready");
-}
-
-/// Check if a tool is installed and get its version.
-fn check_tool_status(tool_name: &'static str, config: Option<&ProjectConfig>) -> ToolStatus {
-    let binary_name = tool_exe_name(tool_name, config);
-    match crate::run_helpers::tool_binary_availability(tool_name, config) {
-        crate::run_helpers::ToolBinaryAvailability::Available { .. } => ToolStatus {
-            name: tool_name,
-            availability: ToolAvailabilityState::Installed,
-            binary_name: binary_name.clone(),
-            version: check_tool_version(&binary_name),
-            hint: None,
-            transport: tool_transport_doctor_status(tool_name, config),
-        },
-        crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } => ToolStatus {
-            name: tool_name,
-            availability: ToolAvailabilityState::Missing,
-            binary_name,
-            version: None,
-            hint: Some(hint.into_owned()),
-            transport: tool_transport_doctor_status(tool_name, config),
-        },
-    }
-}
-
-/// Try to get tool version by running `<exe> --version`.
-fn check_tool_version(exe_name: &str) -> Option<String> {
-    let output = Command::new(exe_name).arg("--version").output().ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Take first line and trim
-    stdout.lines().next().map(|s| s.trim().to_string())
-}
-
-/// Print a single tool's status.
-fn print_tool_status(status: &ToolStatus) {
-    for line in render_tool_status_lines(status) {
-        println!("{line}");
-    }
-}
-
-fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
-    let checkmark = if status.is_ready() { "✓" } else { "✗" };
-    let status_msg = match status.availability {
-        ToolAvailabilityState::Installed => status
-            .version
-            .as_ref()
-            .map(|version| format!("installed ({version})"))
-            .unwrap_or_else(|| "installed (version unknown)".to_string()),
-        ToolAvailabilityState::Missing => "not found".to_string(),
-    };
-
-    let mut lines = vec![format!(
-        "{:<12} {} {}",
-        format!("{}:", status.name),
-        checkmark,
-        status_msg
-    )];
-
-    if let Some(transport_status) = status.transport.as_ref() {
-        lines.push(format!(
-            "             Active transport: {}",
-            transport_status.transport_active
-        ));
-        if let Some(acp_compiled_in) = transport_status.acp_compiled_in {
-            lines.push(format!(
-                "             ACP compiled in: {}",
-                yes_no(acp_compiled_in)
-            ));
-        }
-        lines.push(format!(
-            "             Probed binary: {}",
-            transport_status.probed_binary
-        ));
-        if let Some(acp_override_hint) = transport_status.acp_override_hint {
-            lines.push(format!("             ACP override: {acp_override_hint}"));
-        }
-    }
-
-    if !status.is_ready()
-        && let Some(hint) = status.hint.as_deref()
-    {
-        lines.push(format!(
-            "             Expected runtime: {}",
-            status.binary_name
-        ));
-        lines.push(format!("             {hint}"));
-    }
-
-    lines
-}
-
-fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
-    let mut entry = serde_json::json!({
-        "name": status.name,
-        "binary": status.binary_name,
-        "installed": status.is_ready(),
-        "version": status.version,
-        "hint": status.hint,
-    });
-
-    if let Some(transport_status) = status.transport.as_ref()
-        && let Some(object) = entry.as_object_mut()
-    {
-        object.insert(
-            "transport_active".to_string(),
-            serde_json::json!(transport_status.transport_active),
-        );
-        if let Some(acp_compiled_in) = transport_status.acp_compiled_in {
-            object.insert(
-                "acp_compiled_in".to_string(),
-                serde_json::json!(acp_compiled_in),
-            );
-        }
-        object.insert(
-            "probed_binary".to_string(),
-            serde_json::json!(transport_status.probed_binary),
-        );
-    }
-
-    entry
-}
-
-fn tool_transport_doctor_status(
-    tool_name: &str,
-    config: Option<&ProjectConfig>,
-) -> Option<ToolTransportDoctorStatus> {
-    match tool_name {
-        "codex" => codex_doctor_status(config),
-        "claude-code" => claude_code_doctor_status(config),
-        _ => None,
-    }
-}
-
-fn codex_doctor_status(config: Option<&ProjectConfig>) -> Option<ToolTransportDoctorStatus> {
-    let transport_active = crate::run_helpers::resolved_codex_transport(config);
-    let acp_compiled_in = CodexRuntimeMetadata::acp_compiled_in();
-
-    Some(ToolTransportDoctorStatus {
-        transport_active: codex_transport_label(transport_active),
-        acp_compiled_in: Some(acp_compiled_in),
-        probed_binary: transport_active.runtime_binary_name().to_string(),
-        acp_override_hint: if acp_compiled_in && transport_active != CodexTransport::Acp {
-            Some("set [tools.codex].transport = \"acp\"")
-        } else {
-            None
-        },
-    })
-}
-
-fn codex_transport_label(transport: CodexTransport) -> &'static str {
-    match transport {
-        CodexTransport::Cli => "cli",
-        CodexTransport::Acp => "acp",
-    }
-}
-
-fn claude_code_doctor_status(config: Option<&ProjectConfig>) -> Option<ToolTransportDoctorStatus> {
-    let transport_active = crate::run_helpers::resolved_claude_code_transport(config);
-
-    Some(ToolTransportDoctorStatus {
-        transport_active: claude_code_transport_label(transport_active),
-        acp_compiled_in: None,
-        probed_binary: transport_active.runtime_binary_name().to_string(),
-        acp_override_hint: None,
-    })
-}
-
-fn claude_code_transport_label(transport: ClaudeCodeTransport) -> &'static str {
-    match transport {
-        ClaudeCodeTransport::Cli => "cli",
-        ClaudeCodeTransport::Acp => "acp",
-    }
-}
-
-fn yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
-}
-
 /// Print project config status.
 fn print_project_config(status: &DoctorProjectConfigStatus) {
     for line in render_project_config_lines(status) {
         println!("{line}");
     }
-}
-
-/// Print resource status (combined available physical + free swap memory).
-fn print_resource_status() {
-    let mut sys = System::new();
-    sys.refresh_memory();
-
-    let available_memory_bytes = sys.available_memory();
-    let free_swap_bytes = sys.free_swap();
-    let total_free = available_memory_bytes.saturating_add(free_swap_bytes);
-
-    println!(
-        "Available Memory: {} (physical {} + swap {})",
-        format_bytes(total_free),
-        format_bytes(available_memory_bytes),
-        format_bytes(free_swap_bytes),
-    );
-}
-
-/// Print sandbox capability status.
-fn print_sandbox_status() {
-    let cap = detect_resource_capability();
-    println!("Capability:  {cap}");
-
-    match cap {
-        ResourceCapability::CgroupV2 => {
-            if let Some(ver) = systemd_version() {
-                println!("Systemd:     {ver}");
-            }
-            println!("User scope:  supported");
-        }
-        ResourceCapability::Setrlimit => {
-            println!("Enforces:    PID limit only (RLIMIT_NPROC)");
-            match current_rlimit_nproc() {
-                Some(n) => println!("RLIMIT_NPROC: {n}"),
-                None => println!("RLIMIT_NPROC: unlimited"),
-            }
-            println!("Memory:      via MemoryBalloon (not setrlimit)");
-        }
-        ResourceCapability::None => {
-            println!("Warning:     No sandbox isolation available.");
-            println!("             Resource limits will not be enforced.");
-        }
-    }
-}
-
-/// Print filesystem sandbox capability status.
-fn print_filesystem_sandbox_status() {
-    let fs_cap = detect_filesystem_capability();
-    println!("Capability:  {fs_cap}");
-
-    match fs_cap {
-        FilesystemCapability::Bwrap => {
-            if let Some(ver) = bwrap_version() {
-                println!("bwrap:       {ver}");
-            }
-            println!("User NS:     available");
-        }
-        FilesystemCapability::Landlock => {
-            let abi = csa_resource::landlock::detect_abi();
-            println!("Landlock ABI: {abi:?}");
-        }
-        FilesystemCapability::None => {
-            println!("Warning:     No filesystem isolation available.");
-            // Print diagnostic details
-            if let Some(ver) = bwrap_version() {
-                println!("bwrap:       {ver} (installed but user namespaces blocked)");
-            } else {
-                println!("bwrap:       not installed");
-            }
-            if is_apparmor_userns_restricted() {
-                println!("AppArmor:    restricts unprivileged user namespaces");
-            }
-            if !has_usable_user_namespaces() {
-                println!("User NS:     unavailable");
-            }
-        }
-    }
-}
-
-/// Build JSON object for filesystem sandbox status.
-fn build_filesystem_sandbox_json(fs_cap: FilesystemCapability) -> serde_json::Value {
-    match fs_cap {
-        FilesystemCapability::Bwrap => {
-            serde_json::json!({
-                "capability": "Bwrap",
-                "bwrap_version": bwrap_version(),
-                "user_namespaces": true,
-                "apparmor_userns_restricted": is_apparmor_userns_restricted(),
-            })
-        }
-        FilesystemCapability::Landlock => {
-            let abi = csa_resource::landlock::detect_abi();
-            serde_json::json!({
-                "capability": "Landlock",
-                "landlock_abi": format!("{abi:?}"),
-                "user_namespaces": has_usable_user_namespaces(),
-                "apparmor_userns_restricted": is_apparmor_userns_restricted(),
-            })
-        }
-        FilesystemCapability::None => {
-            serde_json::json!({
-                "capability": "None",
-                "bwrap_installed": bwrap_version().is_some(),
-                "user_namespaces": has_usable_user_namespaces(),
-                "apparmor_userns_restricted": is_apparmor_userns_restricted(),
-            })
-        }
-    }
-}
-
-/// Get bwrap version string, if installed.
-fn bwrap_version() -> Option<String> {
-    let output = Command::new("bwrap").arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().next().map(|s| s.trim().to_string())
-}
-
-/// Check whether AppArmor restricts unprivileged user namespaces.
-fn is_apparmor_userns_restricted() -> bool {
-    let path = std::path::Path::new("/proc/sys/kernel/apparmor_restrict_unprivileged_userns");
-    std::fs::read_to_string(path)
-        .map(|content| content.trim() == "1")
-        .unwrap_or(false)
-}
-
-/// Check whether unprivileged user namespaces work.
-fn has_usable_user_namespaces() -> bool {
-    Command::new("unshare")
-        .args(["-U", "true"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
-/// Print merge guard installation status.
-fn print_merge_guard_status() {
-    match csa_hooks::detect_installed_guard() {
-        Some(path) => {
-            println!("merge guard: installed ({})", path.display());
-        }
-        None => {
-            println!("merge guard: not installed");
-            println!("  Hint: csa hooks install-merge-guard");
-        }
-    }
-}
-
-/// Print git hook installation status.
-fn print_git_hook_status(project_root: &Path) {
-    let hooks = [("pre-push", "Blocks push without csa review session")];
-    for (hook_name, description) in hooks {
-        let hook_path = project_root.join(".git/hooks").join(hook_name);
-        if hook_path.is_file() {
-            println!("{hook_name}:  installed ({description})");
-        } else {
-            println!("{hook_name}:  NOT INSTALLED — {description}");
-            println!("  Hint: ln -sf ../../scripts/hooks/{hook_name} .git/hooks/{hook_name}");
-        }
-    }
-}
-
-/// Format bytes as human-readable string (GB).
-fn format_bytes(bytes: u64) -> String {
-    let gb = bytes as f64 / 1024.0 / 1024.0 / 1024.0;
-    format!("{gb:.1} GB")
 }
 
 #[cfg(test)]

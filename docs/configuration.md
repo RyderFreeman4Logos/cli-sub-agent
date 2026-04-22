@@ -116,7 +116,7 @@ allow_edit_existing_files = false    # Inject read-only restriction into prompt
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | Boolean | `true` | Whether this tool is available |
-| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, and `cli`; other tools keep their existing transport-specific rules |
+| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, and `cli`; `codex` currently accepts `auto` and `acp`; `gemini-cli` and `opencode` accept `auto` and `cli` |
 | `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
 Unconfigured tools default to enabled with no restrictions. Setting
@@ -125,10 +125,15 @@ Unconfigured tools default to enabled with no restrictions. Setting
 `transport` is validated per tool.
 
 - `claude-code` accepts `auto`, `acp`, and `cli`. `auto` resolves to the
-  build default, `acp` probes `claude-code-acp`, and `cli` probes `claude`.
-- `codex` keeps its codex-specific transport rules and ACP build requirement;
-  see below.
-- `gemini-cli` and `opencode` stay on their direct CLI runtimes.
+  build default, which is ACP today; `acp` probes `claude-code-acp`, and
+  `cli` probes `claude`.
+- `codex` currently accepts `auto` and `acp`. `auto` resolves to the current
+  build default, which is ACP today, so both the default path and an explicit
+  `acp` override probe `codex-acp`. Config validation checks only whether the
+  value is legal for codex; missing binaries are surfaced separately by
+  `csa doctor`. `cli` remains rejected in project config today.
+- `gemini-cli` and `opencode` accept `auto` and `cli`, stay on their direct
+  CLI runtimes, and reject `acp`.
 
 When you change a tool transport, `csa doctor` reports the active transport
 and probed binary for that tool.
@@ -148,22 +153,21 @@ With that override, CSA probes `claude` instead of `claude-code-acp`, and
 
 #### Codex transport override
 
-Set `[tools.codex].transport = "acp"` only when CSA was built with the
-`codex-acp` cargo feature. Config validation is fail-closed: if the running
-binary was compiled without that feature, config load fails immediately with
-a rebuild hint instead of silently falling back.
+CSA currently defaults codex to ACP. Leaving `[tools.codex].transport`
+unset or setting it to `auto` probes `codex-acp`; setting it explicitly to
+`"acp"` keeps that same runtime path.
+
+Config validation accepts the ACP override regardless of whether
+`codex-acp` is installed. Binary presence is checked separately by
+`csa doctor`, which reports the active transport, probed binary, and
+install hint if the adapter is missing.
 
 ```toml
 [tools.codex]
 transport = "acp"
 ```
 
-Build or install a codex-ACP-enabled binary with:
-
-```bash
-cargo build --features codex-acp
-cargo install --path crates/cli-sub-agent --features codex-acp
-```
+`transport = "cli"` is still rejected for project config today.
 
 ### `[review]` -- Review Tool Selection
 
@@ -255,8 +259,11 @@ CSA validates on load:
 3. **Tool names:** Must be one of `gemini-cli`, `codex`, `opencode`, `claude-code`
 4. **Thinking budget:** Must be `low`, `medium`, `high`, `xhigh`, or a number
 5. **Tool transport overrides:** validated per tool. In particular,
-   `[tools.claude-code].transport` accepts `auto`, `acp`, or `cli`, and
-   codex ACP requests are rejected unless CSA was compiled with `codex-acp`
+   `[tools.claude-code].transport` accepts `auto`, `acp`, or `cli`;
+   `[tools.codex].transport` currently accepts `auto` or `acp` and defaults
+   to ACP; `gemini-cli` and `opencode` accept `auto` or `cli`. Missing
+   runtime binaries are reported by `csa doctor`, not by config-value
+   validation.
 
 ## Migrations
 
