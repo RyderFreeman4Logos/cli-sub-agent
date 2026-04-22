@@ -1698,169 +1698,43 @@ No issues found by bot. Proceed to merge.
 This step only runs when the cloud bot is enabled, reachable, has reported no
 issues, and the review loop has not hit the round limit.
 
-## Step 10.5: Rebase for Clean History (DISABLED)
+## Step 10.5: Rebase for Clean History
 
 > **Layer**: 0 (Orchestrator) -- git history cleanup before merge.
-> **Status**: Disabled. With `--merge` (not `--squash`), rebase destroys the
-> per-commit audit trail instead of cleaning it up.
-> Squash merges are forbidden for audit reasons.
 
 Tool: bash
-Condition: false
+Condition: (${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED}) && (${FIXES_ACCUMULATED})
 
 Reorganize accumulated fix commits into logical groups (source, patterns, other)
-before merging. Skip if <= 3 commits.
+before merging, but only when the branch meets the audit guard:
+- branch has 3+ commits since `${DEFAULT_BRANCH}`
+- every original commit carries explicit review metadata with `verdict=Pass`
+  (legacy `Review: ... summary=PASS|CLEAN` is also accepted)
 
-After rebase: backup branch, soft reset to merge-base, dynamic file grouping,
-force-push with lease, trigger final `@${CLOUD_BOT_NAME} review`, then delegate the long
-wait/fix/review loop to a single CSA-managed step.
+When the guard passes, Step 10.5:
+- creates/refreshes `backup-${PR_NUM}-pre-rebase`
+- soft-resets to the merge-base
+- rebuilds logical commits
+- preserves the current commit's `### AI Reviewer Metadata` block
+- appends an additive `## AI Reviewer Metadata Rollup` block naming the
+  original SHAs + verdict/tool/round metadata
+- force-pushes with `--force-with-lease`
+- triggers one final `@${CLOUD_BOT_NAME}` review on the rebased HEAD
+- blocks merge until the delegated post-rebase review gate returns
+  `REBASE_GATE=PASS`
 
-**Post-rebase review gate** (BLOCKING):
-- CSA delegated step handles both paths:
-  - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same configurable wait policy for each trigger (`cloud_bot_wait_seconds` quiet wait + `cloud_bot_poll_max_seconds` polling).
-  - Bot times out → CSA runs fallback `csa review --range "${DEFAULT_BRANCH}...HEAD"` and bounded fix/review retries (max 3 rounds).
-- CSA daemon + session wait (configured by `cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, defaults: `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`) enforces the hard timeout.
-- delegated execution failures are hard failures (no `|| true` silent downgrade).
-- On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
-- On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
-
-This step is disabled unconditionally. Keep the implementation text only as
-historical context; the workflow condition is `false` so the rebase path never
-executes.
+When the guard does not pass, the step logs the skip reason and the workflow
+falls back to the existing clean-branch path (Step 11 / Step 12).
 
 ```bash
 set -euo pipefail
 if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
-  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+  REBASE_SCRIPT="${CSA_WORKFLOW_DIR}/scripts/rebase-with-rollup.sh"
 else
-  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+  REBASE_SCRIPT="patterns/pr-bot/scripts/rebase-with-rollup.sh"
 fi
 
-COMMIT_COUNT=$(git rev-list --count "${DEFAULT_BRANCH}..HEAD")
-if [ "${COMMIT_COUNT}" -gt 3 ]; then
-  git branch -f "backup-${PR_NUM}-pre-rebase" HEAD
-
-  MERGE_BASE=$(git merge-base "${DEFAULT_BRANCH}" HEAD)
-  git reset --soft $MERGE_BASE
-
-  git reset HEAD .
-  git diff --name-only -z HEAD | { grep -zE '^(src/|crates/|lib/|bin/)' || true; } | xargs -0 --no-run-if-empty git add --
-  if ! git diff --cached --quiet; then
-    git commit -m "feat(scope): primary implementation changes"
-  fi
-
-  git diff --name-only -z HEAD | { grep -zE '^(patterns/|\.claude/)' || true; } | xargs -0 --no-run-if-empty git add --
-  if ! git diff --cached --quiet; then
-    git commit -m "fix(scope): pattern and skill updates"
-  fi
-
-  git add -A
-  if ! git diff --cached --quiet; then
-    git commit -m "chore(scope): config and documentation updates"
-  fi
-
-  NEW_COMMIT_COUNT=$(git rev-list --count ${MERGE_BASE}..HEAD)
-  if [ "${NEW_COMMIT_COUNT}" -eq 0 ]; then
-    echo "ERROR: No replacement commits after soft reset. Restoring backup."
-    git reset --hard "backup-${PR_NUM}-pre-rebase"
-    exit 1
-  fi
-
-  git push --force-with-lease
-  REBASE_CURRENT_SHA="$(git rev-parse HEAD)"
-  REBASE_TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  # ALWAYS trigger explicitly — force-push doesn't auto-review (#506)
-  REBASE_TRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
-
-<!-- csa-retrigger:post-rebase:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
-  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
-  echo "Triggered post-rebase review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${REBASE_CURRENT_SHA}."
-
-  # POST_REBASE_TIMEOUT is pre-computed in Step 4a.
-  set +e
-  GATE_SID="$(csa run --sa-mode true --tier tier-1 --timeout ${POST_REBASE_TIMEOUT} --idle-timeout ${POST_REBASE_TIMEOUT} "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each cloud bot trigger, wait ${CLOUD_BOT_WAIT_SECONDS} seconds quietly, then poll up to ${CLOUD_BOT_POLL_MAX_SECONDS} seconds for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same wait policy (max 3 rounds). If bot times out, abort and report to user; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
-  DAEMON_RC=$?
-  set -e
-  if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${GATE_SID}" ]; then
-    REBASE_REVIEW_HAS_ISSUES=true
-    FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Failed to launch daemon for post-rebase gate (rc=${DAEMON_RC})." >&2
-    exit 1
-  fi
-  set +e
-  GATE_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${GATE_SID}")"
-  GATE_RC=$?
-  set -e
-  if [ "${GATE_RC}" -ne 0 ]; then
-    REBASE_REVIEW_HAS_ISSUES=true
-    FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Post-rebase delegated gate failed (rc=${GATE_RC})." >&2
-    exit 1
-  fi
-
-  GATE_MARKER="$(
-    printf '%s\n' "${GATE_RESULT}" \
-      | grep -E '^[[:space:]]*REBASE_GATE=(PASS|FAIL)[[:space:]]*$' \
-      | tail -n 1 \
-      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
-      || true
-  )"
-  if [ "${GATE_MARKER}" != "REBASE_GATE=PASS" ]; then
-    REBASE_REVIEW_HAS_ISSUES=true
-    FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Post-rebase review gate failed."
-    exit 1
-  fi
-
-  BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
-  sleep "${BOT_SETTLE_SECS}"
-  set +e
-  LATE_ACTIONABLE_COUNT="$(
-    gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-      | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
-      2>/dev/null
-  )"
-  LATE_ACTIONABLE_RC=$?
-  set -e
-  if [ "${LATE_ACTIONABLE_RC}" -ne 0 ]; then
-    REBASE_REVIEW_HAS_ISSUES=true
-    FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Failed to query post-rebase actionable bot comments (rc=${LATE_ACTIONABLE_RC})." >&2
-    exit 1
-  fi
-  case "${LATE_ACTIONABLE_COUNT:-}" in
-    ''|*[!0-9]*)
-      REBASE_REVIEW_HAS_ISSUES=true
-      FALLBACK_REVIEW_HAS_ISSUES=true
-      echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-      echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-      echo "ERROR: Invalid post-rebase actionable comment count from GitHub API: '${LATE_ACTIONABLE_COUNT}'." >&2
-      exit 1
-      ;;
-  esac
-  if [ "${LATE_ACTIONABLE_COUNT}" -gt 0 ]; then
-    REBASE_REVIEW_HAS_ISSUES=true
-    FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Detected ${LATE_ACTIONABLE_COUNT} actionable bot comment(s) after post-rebase trigger window." >&2
-    exit 1
-  fi
-
-  REBASE_REVIEW_HAS_ISSUES=false
-  FALLBACK_REVIEW_HAS_ISSUES=false
-  echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
-  echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-  git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
-fi
+bash "${REBASE_SCRIPT}"
 ```
 
 ## IF !(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES}))
@@ -1960,7 +1834,7 @@ echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" requi
 
 ## IF !(${BOT_UNAVAILABLE})
 
-## IF ${FIXES_ACCUMULATED}
+## IF ${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})
 
 ## Step 11: Clean Resubmission (if needed)
 
@@ -2024,14 +1898,14 @@ echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false --
 
 ## ELSE
 
-## Step 12b: Final Merge (Direct)
+## Step 12b: Final Merge (Direct or Post-Rebase)
 
 > **Layer**: 0 (Orchestrator) -- direct merge, no code analysis needed.
 
 Tool: bash
 OnFail: abort
 
-First-pass clean review: merge the existing PR directly.
+First-pass clean review or Step 10.5 post-rebase success: merge the existing PR directly.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
