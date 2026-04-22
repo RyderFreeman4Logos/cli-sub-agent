@@ -2,6 +2,12 @@
 # Install: lefthook install
 # Docs: https://github.com/evilmartians/lefthook
 
+# Suppress interactive spinner in non-TTY contexts (CSA daemon sessions,
+# CI, piped invocations). Without this, lefthook renders ⠙/⠹ spinner
+# frames with \r that accumulate as literal bytes in output.log, ballooning
+# it to ~30 MB and causing "quality-gates" hang symptoms (#1040).
+no_tty: true
+
 pre-commit:
   commands:
     branch-protection:
