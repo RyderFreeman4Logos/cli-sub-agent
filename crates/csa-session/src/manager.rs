@@ -35,6 +35,7 @@ pub use manager_result::{
     SaveOptions, SessionResultView, clear_manager_sidecar, contract_result_path,
     legacy_user_result_path, list_artifacts, load_result, load_result_view,
     redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
+    save_result_with_options,
 };
 #[cfg(test)]
 pub(crate) use manager_result::{

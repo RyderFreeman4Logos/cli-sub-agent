@@ -254,6 +254,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
         csa_session::create_session(project_root, Some("resume target"), None, Some("opencode"))
             .expect("create resume session");
     let stale_summary = "stale prior result";
+    let stale_manager_summary = "stale sidecar manager summary";
     csa_session::save_result(
         project_root,
         &session.meta_session_id,
@@ -267,7 +268,15 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
             events_count: 0,
             artifacts: Vec::new(),
             peak_memory_mb: None,
-            manager_fields: Default::default(),
+            manager_fields: csa_session::SessionManagerFields {
+                report: Some(
+                    toml::toml! {
+                        summary = stale_manager_summary
+                    }
+                    .into(),
+                ),
+                ..Default::default()
+            },
         },
     )
     .expect("seed stale result");
@@ -316,5 +325,22 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
     assert_ne!(
         loaded.summary, stale_summary,
         "resume path must overwrite stale result.toml"
+    );
+    assert!(
+        loaded.manager_fields.as_sidecar().is_none(),
+        "cap-error overwrite must not rehydrate stale manager sidecar fields"
+    );
+    assert!(
+        loaded
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.path != csa_session::CONTRACT_RESULT_ARTIFACT_PATH),
+        "cap-error overwrite must not keep advertising the stale manager sidecar"
+    );
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    assert!(
+        !csa_session::contract_result_path(&session_dir).exists(),
+        "cap-error overwrite must clear the stale manager sidecar file"
     );
 }

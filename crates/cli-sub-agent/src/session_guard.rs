@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use csa_session::{SessionResult, create_session, save_result, save_session};
+use csa_session::{
+    SaveOptions, SessionResult, create_session, save_result_with_options, save_session,
+};
 
 /// RAII guard that cleans up a newly created session directory on failure.
 ///
@@ -91,7 +93,14 @@ pub(crate) fn write_pre_exec_error_result(
         peak_memory_mb: None,
         manager_fields: Default::default(),
     };
-    if let Err(e) = save_result(project_root, session_id, &result) {
+    if let Err(e) = save_result_with_options(
+        project_root,
+        session_id,
+        &result,
+        SaveOptions {
+            clear_stale_manager_sidecar: true,
+        },
+    ) {
         warn!("Failed to save pre-execution error result: {}", e);
     }
     // Best-effort cooldown marker
