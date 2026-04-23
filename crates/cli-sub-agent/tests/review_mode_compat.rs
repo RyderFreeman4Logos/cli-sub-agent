@@ -1,5 +1,7 @@
 #[path = "../src/cli.rs"]
 mod cli_defs;
+#[path = "../src/gc_args.rs"]
+mod gc;
 
 #[allow(dead_code)]
 #[path = "../src/bug_class.rs"]

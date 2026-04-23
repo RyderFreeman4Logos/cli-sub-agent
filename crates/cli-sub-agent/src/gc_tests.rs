@@ -1,6 +1,11 @@
 use super::*;
+use crate::session_cmds_result::{StructuredOutputOpts, handle_session_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_core::types::OutputFormat;
+use csa_session::{
+    SessionArtifact, SessionPhase, SessionResult, create_session, get_session_root, list_sessions,
+    save_result, save_session,
+};
 use std::os::unix::fs as unix_fs;
 use tempfile::tempdir;
 
@@ -263,7 +268,7 @@ scanned_at = 1
         );
     }
 
-    handle_gc_global(false, None, OutputFormat::Text).expect("global gc should succeed");
+    handle_gc_global(false, None, false, OutputFormat::Text).expect("global gc should succeed");
 
     for state_dir in [&canonical, &legacy] {
         let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
@@ -300,7 +305,8 @@ scanned_at = 1
         );
     }
 
-    handle_gc_global(true, None, OutputFormat::Text).expect("global dry-run gc should succeed");
+    handle_gc_global(true, None, false, OutputFormat::Text)
+        .expect("global dry-run gc should succeed");
 
     for state_dir in [&canonical, &legacy] {
         let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
@@ -310,6 +316,264 @@ scanned_at = 1
             cache_path.display()
         );
     }
+}
+
+fn legacy_session_root_for(project_root: &std::path::Path) -> std::path::PathBuf {
+    let normalized =
+        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let storage_key = normalized
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace('/', std::path::MAIN_SEPARATOR_STR);
+    csa_config::paths::legacy_state_dir()
+        .expect("legacy state dir")
+        .join(storage_key)
+}
+
+fn seed_runtime_session(
+    project_root: &std::path::Path,
+    phase: SessionPhase,
+    last_accessed: chrono::DateTime<chrono::Utc>,
+    runtime_bytes: u64,
+    store_in_legacy: bool,
+) -> (String, std::path::PathBuf, std::path::PathBuf) {
+    std::fs::create_dir_all(project_root).unwrap();
+
+    let mut session =
+        create_session(project_root, Some("gc runtime test"), None, Some("codex")).unwrap();
+    session.phase = phase;
+    session.last_accessed = last_accessed;
+    save_session(&session).unwrap();
+
+    let canonical_root = get_session_root(project_root).unwrap();
+    let mut session_dir = canonical_root
+        .join("sessions")
+        .join(&session.meta_session_id);
+    if store_in_legacy {
+        let legacy_root = legacy_session_root_for(project_root);
+        std::fs::create_dir_all(legacy_root.join("sessions")).unwrap();
+        let legacy_dir = legacy_root.join("sessions").join(&session.meta_session_id);
+        std::fs::rename(&session_dir, &legacy_dir).unwrap();
+        session_dir = legacy_dir;
+    }
+
+    let runtime_dir = session_dir
+        .join("runtime")
+        .join("gemini-home")
+        .join(".npm")
+        .join("_cacache");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+    let cache_blob = runtime_dir.join("blob.bin");
+    let file = std::fs::File::create(&cache_blob).unwrap();
+    file.set_len(runtime_bytes).unwrap();
+
+    let now = chrono::Utc::now();
+    save_result(
+        project_root,
+        &session.meta_session_id,
+        &SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "completed".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: vec![SessionArtifact::new("output/summary.md")],
+            peak_memory_mb: None,
+            manager_fields: Default::default(),
+        },
+    )
+    .unwrap();
+    std::fs::write(session_dir.join("stderr.log"), "stderr").unwrap();
+    std::fs::write(session_dir.join("output/summary.md"), "summary").unwrap();
+
+    (
+        session.meta_session_id,
+        session_dir.clone(),
+        session_dir.join("runtime"),
+    )
+}
+
+#[test]
+fn test_reap_runtime_basic_preserves_audit_files_and_session_result() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    let (session_id, session_dir, runtime_dir) = seed_runtime_session(
+        &project_root,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let session_root = get_session_root(&project_root).unwrap();
+    let sessions = list_sessions(&project_root, None).unwrap();
+
+    let stats = reap_runtime_payloads_in_root(&session_root, &sessions, false, 30, None).unwrap();
+
+    assert_eq!(stats.sessions_reaped, 1);
+    assert_eq!(stats.bytes_reclaimed, TWO_MIB);
+    assert!(!runtime_dir.exists(), "runtime/ should be removed");
+    assert!(session_dir.join("state.toml").exists());
+    assert!(session_dir.join("metadata.toml").exists());
+    assert!(session_dir.join("result.toml").exists());
+    assert!(session_dir.join("stderr.log").exists());
+    assert!(session_dir.join("output").exists());
+    handle_session_result(
+        session_id,
+        false,
+        Some(project_root.to_string_lossy().to_string()),
+        StructuredOutputOpts::default(),
+    )
+    .expect("csa session result should still work after runtime reap");
+}
+
+#[test]
+fn test_reap_runtime_skips_active_session() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    let (_, _, runtime_dir) = seed_runtime_session(
+        &project_root,
+        SessionPhase::Active,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let session_root = get_session_root(&project_root).unwrap();
+    let sessions = list_sessions(&project_root, None).unwrap();
+
+    let stats = reap_runtime_payloads_in_root(&session_root, &sessions, false, 30, None).unwrap();
+
+    assert_eq!(stats.sessions_reaped, 0);
+    assert!(
+        runtime_dir.exists(),
+        "active session runtime/ must be preserved"
+    );
+}
+
+#[test]
+fn test_reap_runtime_skips_current_session() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    sandbox.track_env("CSA_SESSION_ID");
+    let project_root = tmp.path().join("project");
+    let (session_id, _, runtime_dir) = seed_runtime_session(
+        &project_root,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let session_root = get_session_root(&project_root).unwrap();
+    let sessions = list_sessions(&project_root, None).unwrap();
+    // SAFETY: test-scoped env mutation while ScopedSessionSandbox holds TEST_ENV_LOCK.
+    unsafe {
+        std::env::set_var("CSA_SESSION_ID", &session_id);
+    }
+
+    let stats = reap_runtime_payloads_in_root(
+        &session_root,
+        &sessions,
+        false,
+        30,
+        std::env::var("CSA_SESSION_ID").ok().as_deref(),
+    )
+    .unwrap();
+
+    assert_eq!(stats.sessions_reaped, 0);
+    assert!(
+        runtime_dir.exists(),
+        "current session runtime/ must be preserved"
+    );
+}
+
+#[test]
+fn test_reap_runtime_respects_max_age_days() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    let (_, _, runtime_dir) = seed_runtime_session(
+        &project_root,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(5),
+        TWO_MIB,
+        false,
+    );
+    let session_root = get_session_root(&project_root).unwrap();
+    let sessions = list_sessions(&project_root, None).unwrap();
+
+    let stats = reap_runtime_payloads_in_root(&session_root, &sessions, false, 30, None).unwrap();
+
+    assert_eq!(stats.sessions_reaped, 0);
+    assert!(
+        runtime_dir.exists(),
+        "recent retired session should be skipped"
+    );
+}
+
+#[test]
+fn test_reap_runtime_dry_run_reports_bytes_without_deleting() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    let (_, _, runtime_dir) = seed_runtime_session(
+        &project_root,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let session_root = get_session_root(&project_root).unwrap();
+    let sessions = list_sessions(&project_root, None).unwrap();
+
+    let stats = reap_runtime_payloads_in_root(&session_root, &sessions, true, 30, None).unwrap();
+
+    assert_eq!(stats.sessions_reaped, 1);
+    assert_eq!(stats.bytes_reclaimed, TWO_MIB);
+    assert!(runtime_dir.exists(), "dry-run must not delete runtime/");
+}
+
+#[test]
+fn test_reap_runtime_global_covers_canonical_and_legacy_roots() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let canonical_project = tmp.path().join("canonical-project");
+    let legacy_project = tmp.path().join("legacy-project");
+    let (_, _, canonical_runtime) = seed_runtime_session(
+        &canonical_project,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let (_, _, legacy_runtime) = seed_runtime_session(
+        &legacy_project,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        true,
+    );
+
+    let stats = reap_runtime_payloads_global(false, 30).unwrap();
+
+    assert_eq!(stats.sessions_reaped, 2);
+    assert_eq!(stats.bytes_reclaimed, 2 * TWO_MIB);
+    assert!(!canonical_runtime.exists());
+    assert!(!legacy_runtime.exists());
 }
 
 // --- Retirement logic tests ---
