@@ -39,6 +39,23 @@ impl Transport for LegacyTransport {
             let mut prepared_attempt_env = api_key_env
                 .as_ref()
                 .map_or_else(|| extra_env.cloned().unwrap_or_default(), Clone::clone);
+            let (gemini_shared_npm_cache_raw_path, gemini_shared_npm_cache_source) =
+                if executor.tool_name() == "gemini-cli" {
+                    let source_home = prepared_attempt_env
+                        .get("HOME")
+                        .cloned()
+                        .or_else(|| std::env::var("HOME").ok())
+                        .map(PathBuf::from);
+                    (
+                        shared_npm_cache_dir(&prepared_attempt_env, source_home.as_deref()),
+                        resolve_gemini_shared_npm_cache_source(
+                            &prepared_attempt_env,
+                            source_home.as_deref(),
+                        ),
+                    )
+                } else {
+                    (None, None)
+                };
             let mut gemini_runtime_home = None;
             let mut mcp_diagnostic = None;
             let allow_degraded_mcp = if executor.tool_name() == "gemini-cli" {
@@ -71,7 +88,12 @@ impl Transport for LegacyTransport {
                         prompt,
                         tool_state,
                         session,
-                        Some(&prepared_attempt_env),
+                        LegacyAttemptEnv {
+                            extra_env: Some(&prepared_attempt_env),
+                            gemini_shared_npm_cache_raw_path: gemini_shared_npm_cache_raw_path
+                                .as_deref(),
+                            gemini_shared_npm_cache_source,
+                        },
                         options.clone(),
                     )
                     .await?;
@@ -180,7 +202,12 @@ impl Transport for LegacyTransport {
                                 prompt,
                                 tool_state,
                                 session,
-                                Some(&prepared_attempt_env),
+                                LegacyAttemptEnv {
+                                    extra_env: Some(&prepared_attempt_env),
+                                    gemini_shared_npm_cache_raw_path: gemini_shared_npm_cache_raw_path
+                                        .as_deref(),
+                                    gemini_shared_npm_cache_source,
+                                },
                                 retry_options,
                             )
                             .await?;

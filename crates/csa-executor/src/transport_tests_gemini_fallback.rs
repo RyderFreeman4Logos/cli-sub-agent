@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use tempfile::tempdir;
+
 #[test]
 fn test_gemini_should_use_api_key_by_phase() {
     // Phase 1: OAuth auth
@@ -497,7 +499,10 @@ fn test_ensure_gemini_runtime_home_writable_path_adds_runtime_home_under_tmp() {
         memory_monitor_interval_seconds: None,
     };
 
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(&runtime_home)
+    ));
 
     assert!(
         isolation_plan.writable_paths.contains(&runtime_home),
@@ -525,7 +530,10 @@ fn test_ensure_gemini_runtime_home_writable_path_skips_when_parent_is_bound() {
         memory_monitor_interval_seconds: None,
     };
 
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(&runtime_home)
+    ));
 
     assert_eq!(
         isolation_plan
@@ -556,7 +564,10 @@ fn test_ensure_gemini_runtime_home_writable_path_is_noop_without_runtime_home() 
         memory_monitor_interval_seconds: None,
     };
 
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, None);
+    assert!(!ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        None
+    ));
 
     assert_eq!(
         isolation_plan.writable_paths,
@@ -566,35 +577,39 @@ fn test_ensure_gemini_runtime_home_writable_path_is_noop_without_runtime_home() 
 
 #[test]
 fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears_api_key() {
-    let runtime_home = "/tmp/cli-sub-agent-gemini/01TEST/runtime-home";
+    let temp = tempdir().expect("tempdir");
+    let runtime_home = temp.path().join("runtime-home");
+    let xdg_cache_home = temp.path().join("xdg-cache-home");
+    std::fs::create_dir_all(&xdg_cache_home).expect("create xdg cache home");
+    let shared_npm_cache = xdg_cache_home.join("cli-sub-agent/npm");
+    let runtime_home_string = runtime_home.to_string_lossy().into_owned();
+    let runtime_config_home = runtime_home.join(".config").to_string_lossy().into_owned();
+    let runtime_state_home = runtime_home.join(".local/state").to_string_lossy().into_owned();
+    let runtime_mise_cache = runtime_home.join(".cache/mise").to_string_lossy().into_owned();
+    let runtime_mise_state = runtime_home
+        .join(".local/state/mise")
+        .to_string_lossy()
+        .into_owned();
+    let xdg_cache_home_string = xdg_cache_home.to_string_lossy().into_owned();
+    let shared_npm_cache_string = shared_npm_cache.to_string_lossy().into_owned();
+    assert!(
+        !shared_npm_cache.exists(),
+        "regression setup requires a cold-start shared npm cache path"
+    );
     let mut env = HashMap::new();
-    env.insert("HOME".to_string(), runtime_home.to_string());
+    env.insert("HOME".to_string(), runtime_home_string.clone());
     env.insert("TMPDIR".to_string(), "/tmp".to_string());
     env.insert(
         "PATH".to_string(),
         "/runtime/node/bin:/runtime/yarn/bin:/usr/local/bin".to_string(),
     );
-    env.insert("GEMINI_CLI_HOME".to_string(), runtime_home.to_string());
-    env.insert(
-        "XDG_CONFIG_HOME".to_string(),
-        format!("{runtime_home}/.config"),
-    );
-    env.insert(
-        "XDG_CACHE_HOME".to_string(),
-        format!("{runtime_home}/.cache"),
-    );
-    env.insert(
-        "XDG_STATE_HOME".to_string(),
-        format!("{runtime_home}/.local/state"),
-    );
-    env.insert(
-        "MISE_CACHE_DIR".to_string(),
-        format!("{runtime_home}/.cache/mise"),
-    );
-    env.insert(
-        "MISE_STATE_DIR".to_string(),
-        format!("{runtime_home}/.local/state/mise"),
-    );
+    env.insert("GEMINI_CLI_HOME".to_string(), runtime_home_string.clone());
+    env.insert("XDG_CONFIG_HOME".to_string(), runtime_config_home);
+    env.insert("XDG_CACHE_HOME".to_string(), xdg_cache_home_string);
+    env.insert("XDG_STATE_HOME".to_string(), runtime_state_home.clone());
+    env.insert("npm_config_cache".to_string(), shared_npm_cache_string.clone());
+    env.insert("MISE_CACHE_DIR".to_string(), runtime_mise_cache.clone());
+    env.insert("MISE_STATE_DIR".to_string(), runtime_mise_state.clone());
     env.insert("MISE_SHIM".to_string(), String::new());
     env.insert("MISE_SHIMS_DIR".to_string(), String::new());
     env.insert(
@@ -617,12 +632,38 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         memory_monitor_interval_seconds: None,
     };
 
+    let shared_npm_cache = PathBuf::from(
+        env.get("npm_config_cache")
+            .expect("sandbox env fixture must include npm_config_cache"),
+    );
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(runtime_home.as_path()),
+    ));
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(shared_npm_cache.as_path())
+    ));
     let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
     apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
 
+    assert!(
+        isolation_plan
+            .writable_paths
+            .contains(&runtime_home),
+        "sandbox should add the per-session Gemini runtime home as a writable bind"
+    );
+    assert!(
+        isolation_plan.writable_paths.contains(&shared_npm_cache),
+        "sandbox should add the shared npm cache as a writable bind under bwrap (#1047)"
+    );
+    assert!(
+        shared_npm_cache.is_dir(),
+        "sandbox-plan assembly must pre-create the shared npm cache dir before bwrap binds it (#1047)"
+    );
     assert_eq!(
         isolation_plan.env_overrides.get("HOME"),
-        Some(&runtime_home.to_string())
+        Some(&runtime_home_string)
     );
     // TMPDIR is set by IsolationPlanBuilder::with_tool_defaults(), not by
     // gemini sandbox overrides (which must NOT override it — see #704 review).
@@ -635,7 +676,7 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     );
     assert_eq!(
         isolation_plan.env_overrides.get("GEMINI_CLI_HOME"),
-        Some(&runtime_home.to_string())
+        Some(&runtime_home_string)
     );
     assert_eq!(
         isolation_plan.env_overrides.get("PATH"),
@@ -644,16 +685,21 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     );
     assert_eq!(
         isolation_plan.env_overrides.get("XDG_STATE_HOME"),
-        Some(&format!("{runtime_home}/.local/state"))
+        Some(&runtime_state_home)
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("npm_config_cache"),
+        Some(&shared_npm_cache_string),
+        "sandbox should preserve the shared npm cache override under bwrap (#1047)"
     );
     assert_eq!(
         isolation_plan.env_overrides.get("MISE_CACHE_DIR"),
-        Some(&format!("{runtime_home}/.cache/mise")),
+        Some(&runtime_mise_cache),
         "sandbox should pin mise cache inside the Gemini runtime home"
     );
     assert_eq!(
         isolation_plan.env_overrides.get("MISE_STATE_DIR"),
-        Some(&format!("{runtime_home}/.local/state/mise")),
+        Some(&runtime_mise_state),
         "sandbox should pin mise state inside the Gemini runtime home"
     );
     assert_eq!(

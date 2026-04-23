@@ -621,19 +621,16 @@ fn test_add_dir_or_creatable_parent_precreates_missing_dir() {
 }
 
 #[test]
-fn test_add_dir_or_creatable_parent_skips_when_parent_missing() {
+fn test_add_dir_or_creatable_parent_precreates_nested_dir_when_non_root_ancestor_exists() {
     let tmp = tempfile::tempdir().unwrap();
-    // Both parent and child are missing
     let deep = tmp.path().join("no_parent").join("no_child");
+    assert!(!deep.exists(), "precondition: nested dir must not exist");
 
     let mut paths = Vec::new();
     add_dir_or_creatable_parent(&mut paths, &deep);
 
-    assert!(!deep.exists());
-    assert!(
-        paths.is_empty(),
-        "should not add path when parent is missing"
-    );
+    assert!(deep.exists(), "nested dir should be pre-created");
+    assert_eq!(paths, vec![deep]);
 }
 
 #[test]

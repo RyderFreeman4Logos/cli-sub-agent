@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
+
 use crate::filesystem_sandbox::FilesystemCapability;
 use crate::sandbox::ResourceCapability;
 
@@ -62,6 +64,14 @@ pub struct IsolationPlan {
     pub soft_limit_percent: Option<u8>,
     /// Polling interval for the memory monitor in seconds.
     pub memory_monitor_interval_seconds: Option<u64>,
+}
+
+impl IsolationPlan {
+    /// Add a writable directory, pre-creating it when its parent exists so
+    /// bwrap bind sources are present on cold start.
+    pub fn add_writable_dir_or_creatable_parent(&mut self, dir: &Path) -> bool {
+        add_dir_or_creatable_parent(&mut self.writable_paths, dir)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +445,70 @@ pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
     )
 }
 
+/// Canonicalize `path` by resolving its deepest existing ancestor, then
+/// re-attaching any missing tail components.
+///
+/// This preserves symlink resolution for already-existing prefixes without
+/// requiring the full path to exist yet, which is important for writable
+/// directories that may be pre-created later via `create_dir_all()`.
+pub fn canonicalize_through_existing_ancestors(path: &Path) -> anyhow::Result<PathBuf> {
+    let mut candidate = path.to_path_buf();
+    let mut missing_suffix = Vec::new();
+
+    loop {
+        if candidate.as_os_str().is_empty() {
+            let mut resolved = std::env::current_dir().with_context(|| {
+                format!(
+                    "failed to resolve current directory while canonicalizing {}",
+                    path.display()
+                )
+            })?;
+            for component in missing_suffix.iter().rev() {
+                resolved.push(component);
+            }
+            return Ok(resolved);
+        }
+
+        match candidate.canonicalize() {
+            Ok(mut resolved) => {
+                for component in missing_suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) => match candidate.try_exists() {
+                Ok(true) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to canonicalize existing path {} while resolving {}",
+                            candidate.display(),
+                            path.display()
+                        )
+                    });
+                }
+                Ok(false) => {
+                    let component = candidate.file_name().with_context(|| {
+                        format!(
+                            "path {} has no existing ancestor to canonicalize through",
+                            path.display()
+                        )
+                    })?;
+                    missing_suffix.push(component.to_os_string());
+                    candidate.pop();
+                }
+                Err(exists_error) => {
+                    return Err(exists_error).with_context(|| {
+                        format!(
+                            "failed to probe path existence while resolving {}",
+                            path.display()
+                        )
+                    });
+                }
+            },
+        }
+    }
+}
+
 struct PathValidationOptions<'a> {
     kind: &'a str,
     require_absolute: bool,
@@ -525,35 +599,50 @@ fn canonicalize_or_fallback(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Add `dir` to `paths` if it exists, otherwise pre-create it when its
-/// parent exists (bwrap `--bind` requires the source path to exist).
+/// Add `dir` to `paths` if it exists, otherwise pre-create it when a
+/// non-root ancestor exists (bwrap `--bind` requires the source path to exist).
 ///
 /// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
 /// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
 /// escaping the sandbox boundary.
-fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
+fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) -> bool {
     if is_sensitive_system_path(dir) {
         tracing::warn!(
             path = %dir.display(),
             "rejecting writable path under sensitive system directory"
         );
-        return;
+        return false;
     }
 
     if dir.exists() {
         paths.push(dir.to_path_buf());
-    } else if dir.parent().is_some_and(|p| p.exists()) {
+        true
+    } else if dir
+        .ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.exists())
+        .is_some_and(|ancestor| ancestor != Path::new("/"))
+    {
         // Pre-create the directory so bwrap --bind can mount it.
-        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME) the dir won't
-        // exist yet; bwrap requires the source path to be present.
+        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME/shared npm cache) the
+        // dir or one of its intermediate parents won't exist yet; bwrap
+        // requires the source path to be present.
         match std::fs::create_dir_all(dir) {
-            Ok(()) => paths.push(dir.to_path_buf()),
-            Err(e) => tracing::warn!(
-                path = %dir.display(),
-                error = %e,
-                "failed to pre-create directory for sandbox writable mount, skipping"
-            ),
+            Ok(()) => {
+                paths.push(dir.to_path_buf());
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "failed to pre-create directory for sandbox writable mount, skipping"
+                );
+                false
+            }
         }
+    } else {
+        false
     }
 }
 

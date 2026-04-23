@@ -6,6 +6,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR;
+use csa_resource::isolation_plan::canonicalize_through_existing_ancestors;
 use serde_json::{Map, Value};
 use tracing::{debug, warn};
 
@@ -55,7 +56,16 @@ pub(crate) fn prepare_gemini_acp_runtime(
     // Capture original XDG_CACHE_HOME before env is overwritten with per-session paths.
     // Used to derive the shared npm cache so gemini-cli sessions reuse a single npm
     // _cacache instead of duplicating ~186 MiB per session. See #1047.
-    let shared_npm_cache = resolve_shared_npm_cache_dir(env, source_home.as_deref());
+    let shared_npm_cache = shared_npm_cache_dir(env, source_home.as_deref())
+        .map(|path| {
+            canonicalize_through_existing_ancestors(&path).with_context(|| {
+                format!(
+                    "failed to resolve shared npm cache path {} through existing ancestors",
+                    path.display()
+                )
+            })
+        })
+        .transpose()?;
     let runtime_session_dir = session_dir
         .map(Path::to_path_buf)
         .or_else(|| runtime_session_dir_from_env(env));
@@ -263,7 +273,7 @@ fn runtime_root_from_env(env: &HashMap<String, String>) -> PathBuf {
 ///
 /// Returns `None` when neither `XDG_CACHE_HOME` nor `HOME` is available (extremely
 /// rare; per rule 041, we fail open rather than autonomously picking `/tmp`).
-fn resolve_shared_npm_cache_dir(
+pub(crate) fn shared_npm_cache_dir(
     env: &HashMap<String, String>,
     source_home: Option<&Path>,
 ) -> Option<PathBuf> {
