@@ -156,6 +156,7 @@ struct ExecuteInAttempt<'a> {
 #[derive(Clone, Copy)]
 struct LegacyAttemptEnv<'a> {
     extra_env: Option<&'a HashMap<String, String>>,
+    gemini_shared_npm_cache_raw_path: Option<&'a Path>,
     gemini_shared_npm_cache_source: Option<transport_gemini_helpers::GeminiSharedNpmCacheSource>,
 }
 
@@ -277,6 +278,7 @@ impl LegacyTransport {
                         Path::new(&session.project_path),
                         runtime_home.as_deref(),
                         env,
+                        attempt_env.gemini_shared_npm_cache_raw_path,
                         attempt_env.gemini_shared_npm_cache_source,
                     )?;
                 }
@@ -451,7 +453,7 @@ impl AcpTransport {
             csa_session::manager::get_session_dir(&working_dir, &session.meta_session_id).ok();
 
         let mut gemini_runtime_home = None;
-        let (shared_gemini_npm_cache, shared_gemini_npm_cache_source) =
+        let (shared_gemini_npm_cache_raw_path, shared_gemini_npm_cache_source) =
             if self.tool_name == "gemini-cli" {
                 let source_home = env
                     .get("HOME")
@@ -480,6 +482,11 @@ impl AcpTransport {
         if self.tool_name == "codex" {
             sanitize_args_for_codex(&mut acp_args);
         }
+        let shared_gemini_npm_cache = if self.tool_name == "gemini-cli" {
+            env.get("npm_config_cache").map(PathBuf::from)
+        } else {
+            None
+        };
         let gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
 
@@ -493,17 +500,22 @@ impl AcpTransport {
                         gemini_runtime_home.as_deref(),
                     );
                     if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref() {
-                        validate_gemini_shared_npm_cache_writable_path(
-                            shared_npm_cache,
-                            working_dir.as_path(),
-                            shared_gemini_npm_cache_source,
-                        )?;
+                        let requested_shared_npm_cache = shared_gemini_npm_cache_raw_path
+                            .as_deref()
+                            .unwrap_or(shared_npm_cache);
+                        let resolved_shared_npm_cache =
+                            validate_gemini_shared_npm_cache_writable_path(
+                                requested_shared_npm_cache,
+                                working_dir.as_path(),
+                                shared_gemini_npm_cache_source,
+                            )?;
                         if !ensure_gemini_runtime_home_writable_path(
                             &mut isolation_plan,
-                            Some(shared_npm_cache),
+                            Some(resolved_shared_npm_cache.as_path()),
                         ) {
                             return Err(gemini_shared_npm_cache_bind_error(
-                                shared_npm_cache,
+                                requested_shared_npm_cache,
+                                Some(resolved_shared_npm_cache.as_path()),
                                 shared_gemini_npm_cache_source,
                                 None,
                             ));

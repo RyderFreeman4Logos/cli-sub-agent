@@ -307,6 +307,7 @@ pub(super) fn ensure_gemini_runtime_home_writable_path(
 
 pub(super) fn gemini_shared_npm_cache_bind_error(
     shared_npm_cache: &Path,
+    resolved_shared_npm_cache: Option<&Path>,
     source: Option<GeminiSharedNpmCacheSource>,
     cause: Option<&str>,
 ) -> anyhow::Error {
@@ -318,18 +319,33 @@ pub(super) fn gemini_shared_npm_cache_bind_error(
         "Set XDG_CACHE_HOME, or HOME/.cache fallback, to a writable location inside [filesystem_sandbox].writable_paths",
         GeminiSharedNpmCacheSource::remediation,
     );
+    let resolved_suffix = resolved_shared_npm_cache
+        .filter(|resolved| *resolved != shared_npm_cache)
+        .map(|resolved| format!(" (resolved to {})", resolved.display()))
+        .unwrap_or_default();
+    let canonical_target_hint = resolved_shared_npm_cache
+        .filter(|resolved| *resolved != shared_npm_cache)
+        .map(|resolved| {
+            format!(
+                " If this cache root resolves through a symlink, point it at a non-symlinked location or add the canonical target {} (or a writable parent) to [filesystem_sandbox].writable_paths or [tools.gemini-cli].filesystem_sandbox.writable_paths.",
+                resolved.display()
+            )
+        })
+        .unwrap_or_default();
     let cause_suffix = cause
         .map(|text| format!(" Validation error: {text}"))
         .unwrap_or_default();
 
     anyhow!(
-        "gemini-cli sandbox plan failed: denied path {} derived from {} for intent \
+        "gemini-cli sandbox plan failed: denied path {}{} derived from {} for intent \
          'bwrap writable bind for shared npm cache (#1047 Phase 1 optimization)'. \
          {} or add this path (or a writable parent) to [filesystem_sandbox].writable_paths or \
-         [tools.gemini-cli].filesystem_sandbox.writable_paths.{}",
+         [tools.gemini-cli].filesystem_sandbox.writable_paths.{}{}",
         shared_npm_cache.display(),
+        resolved_suffix,
         source_description,
         remediation,
+        canonical_target_hint,
         cause_suffix,
     )
 }
@@ -338,15 +354,45 @@ pub(super) fn validate_gemini_shared_npm_cache_writable_path(
     shared_npm_cache: &Path,
     project_root: &Path,
     source: Option<GeminiSharedNpmCacheSource>,
-) -> Result<()> {
+) -> Result<PathBuf> {
+    let resolved_shared_npm_cache =
+        csa_resource::isolation_plan::canonicalize_through_existing_ancestors(shared_npm_cache)
+            .map_err(|error| {
+                let error_text = format!(
+                    "failed to resolve the shared npm cache path {} through existing ancestors: {error:#}",
+                    shared_npm_cache.display()
+                );
+                gemini_shared_npm_cache_bind_error(
+                    shared_npm_cache,
+                    None,
+                    source,
+                    Some(error_text.as_str()),
+                )
+            })?;
+
     csa_resource::isolation_plan::validate_writable_paths(
-        &[PathBuf::from(shared_npm_cache)],
+        std::slice::from_ref(&resolved_shared_npm_cache),
         project_root,
     )
     .map_err(|error| {
-        let error_text = error.to_string();
-        gemini_shared_npm_cache_bind_error(shared_npm_cache, source, Some(error_text.as_str()))
-    })
+        let error_text = if resolved_shared_npm_cache == shared_npm_cache {
+            error.to_string()
+        } else {
+            format!(
+                "original path {} resolves to {}; {error}",
+                shared_npm_cache.display(),
+                resolved_shared_npm_cache.display()
+            )
+        };
+        gemini_shared_npm_cache_bind_error(
+            shared_npm_cache,
+            Some(resolved_shared_npm_cache.as_path()),
+            source,
+            Some(error_text.as_str()),
+        )
+    })?;
+
+    Ok(resolved_shared_npm_cache)
 }
 
 pub(super) fn gemini_sandbox_runtime_env_overrides(
@@ -415,18 +461,24 @@ pub(super) fn apply_gemini_sandbox_runtime_contract(
     project_root: &Path,
     runtime_home: Option<&Path>,
     env: &HashMap<String, String>,
+    shared_npm_cache_raw_path: Option<&Path>,
     shared_npm_cache_source: Option<GeminiSharedNpmCacheSource>,
 ) -> Result<()> {
     ensure_gemini_runtime_home_writable_path(isolation_plan, runtime_home);
     if let Some(shared_npm_cache) = env.get("npm_config_cache").map(Path::new) {
-        validate_gemini_shared_npm_cache_writable_path(
-            shared_npm_cache,
+        let requested_shared_npm_cache = shared_npm_cache_raw_path.unwrap_or(shared_npm_cache);
+        let resolved_shared_npm_cache = validate_gemini_shared_npm_cache_writable_path(
+            requested_shared_npm_cache,
             project_root,
             shared_npm_cache_source,
         )?;
-        if !ensure_gemini_runtime_home_writable_path(isolation_plan, Some(shared_npm_cache)) {
+        if !ensure_gemini_runtime_home_writable_path(
+            isolation_plan,
+            Some(resolved_shared_npm_cache.as_path()),
+        ) {
             return Err(gemini_shared_npm_cache_bind_error(
-                shared_npm_cache,
+                requested_shared_npm_cache,
+                Some(resolved_shared_npm_cache.as_path()),
                 shared_npm_cache_source,
                 None,
             ));

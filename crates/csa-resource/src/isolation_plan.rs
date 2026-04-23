@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
+
 use crate::filesystem_sandbox::FilesystemCapability;
 use crate::sandbox::ResourceCapability;
 
@@ -441,6 +443,70 @@ pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
             canonicalize_for_allowlist: true,
         },
     )
+}
+
+/// Canonicalize `path` by resolving its deepest existing ancestor, then
+/// re-attaching any missing tail components.
+///
+/// This preserves symlink resolution for already-existing prefixes without
+/// requiring the full path to exist yet, which is important for writable
+/// directories that may be pre-created later via `create_dir_all()`.
+pub fn canonicalize_through_existing_ancestors(path: &Path) -> anyhow::Result<PathBuf> {
+    let mut candidate = path.to_path_buf();
+    let mut missing_suffix = Vec::new();
+
+    loop {
+        if candidate.as_os_str().is_empty() {
+            let mut resolved = std::env::current_dir().with_context(|| {
+                format!(
+                    "failed to resolve current directory while canonicalizing {}",
+                    path.display()
+                )
+            })?;
+            for component in missing_suffix.iter().rev() {
+                resolved.push(component);
+            }
+            return Ok(resolved);
+        }
+
+        match candidate.canonicalize() {
+            Ok(mut resolved) => {
+                for component in missing_suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) => match candidate.try_exists() {
+                Ok(true) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to canonicalize existing path {} while resolving {}",
+                            candidate.display(),
+                            path.display()
+                        )
+                    });
+                }
+                Ok(false) => {
+                    let component = candidate.file_name().with_context(|| {
+                        format!(
+                            "path {} has no existing ancestor to canonicalize through",
+                            path.display()
+                        )
+                    })?;
+                    missing_suffix.push(component.to_os_string());
+                    candidate.pop();
+                }
+                Err(exists_error) => {
+                    return Err(exists_error).with_context(|| {
+                        format!(
+                            "failed to probe path existence while resolving {}",
+                            path.display()
+                        )
+                    });
+                }
+            },
+        }
+    }
 }
 
 struct PathValidationOptions<'a> {
