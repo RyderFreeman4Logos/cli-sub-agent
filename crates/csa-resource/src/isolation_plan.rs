@@ -64,6 +64,14 @@ pub struct IsolationPlan {
     pub memory_monitor_interval_seconds: Option<u64>,
 }
 
+impl IsolationPlan {
+    /// Add a writable directory, pre-creating it when its parent exists so
+    /// bwrap bind sources are present on cold start.
+    pub fn add_writable_dir_or_creatable_parent(&mut self, dir: &Path) {
+        add_dir_or_creatable_parent(&mut self.writable_paths, dir);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IsolationPlanBuilder
 // ---------------------------------------------------------------------------
@@ -525,8 +533,8 @@ fn canonicalize_or_fallback(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Add `dir` to `paths` if it exists, otherwise pre-create it when its
-/// parent exists (bwrap `--bind` requires the source path to exist).
+/// Add `dir` to `paths` if it exists, otherwise pre-create it when a
+/// non-root ancestor exists (bwrap `--bind` requires the source path to exist).
 ///
 /// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
 /// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
@@ -542,10 +550,16 @@ fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
 
     if dir.exists() {
         paths.push(dir.to_path_buf());
-    } else if dir.parent().is_some_and(|p| p.exists()) {
+    } else if dir
+        .ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.exists())
+        .is_some_and(|ancestor| ancestor != Path::new("/"))
+    {
         // Pre-create the directory so bwrap --bind can mount it.
-        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME) the dir won't
-        // exist yet; bwrap requires the source path to be present.
+        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME/shared npm cache) the
+        // dir or one of its intermediate parents won't exist yet; bwrap
+        // requires the source path to be present.
         match std::fs::create_dir_all(dir) {
             Ok(()) => paths.push(dir.to_path_buf()),
             Err(e) => tracing::warn!(

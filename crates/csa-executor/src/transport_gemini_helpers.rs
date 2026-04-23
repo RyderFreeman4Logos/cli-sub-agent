@@ -260,9 +260,7 @@ pub(super) fn ensure_gemini_runtime_home_writable_path(
         return;
     }
 
-    isolation_plan
-        .writable_paths
-        .push(runtime_home.to_path_buf());
+    isolation_plan.add_writable_dir_or_creatable_parent(runtime_home);
 }
 
 pub(super) fn gemini_sandbox_runtime_env_overrides(
