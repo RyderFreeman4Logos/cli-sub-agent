@@ -100,11 +100,8 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
 
     match config.on_exceed {
         csa_config::StateDirOnExceed::Error => StateDirCheckResult::Error(anyhow!(
-            "State directory is {} MB / {} MB cap exceeded.\n\
-                 To reclaim space: `csa gc --max-age-days 5 --global`\n\
-                 Or raise `state_dir.max_size_mb` in ~/.config/cli-sub-agent/config.toml.",
-            size_mb,
-            cap_mb,
+            "{}",
+            build_error_message(size_mb, cap_mb, size_bytes, cap_bytes)
         )),
         csa_config::StateDirOnExceed::AutoGc => {
             // Phase 3 will wire actual gc invocation. For now, fall back to warn.
@@ -116,6 +113,15 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
             StateDirCheckResult::Warn(build_warning_preamble(size_mb, cap_mb, false))
         }
     }
+}
+
+fn build_error_message(actual_mb: u64, cap_mb: u64, actual_bytes: u64, cap_bytes: u64) -> String {
+    format!(
+        "CSA state directory is {actual_mb} MB / {cap_mb} MB cap exceeded \
+         ({actual_bytes} bytes / {cap_bytes} bytes) with `on_exceed = \"error\"`.\n\
+         To reclaim space: `csa gc --max-age-days 5 --global`\n\
+         Or raise `state_dir.max_size_mb` in ~/.config/cli-sub-agent/config.toml."
+    )
 }
 
 fn build_warning_preamble(actual_mb: u64, cap_mb: u64, auto_gc_pending: bool) -> String {

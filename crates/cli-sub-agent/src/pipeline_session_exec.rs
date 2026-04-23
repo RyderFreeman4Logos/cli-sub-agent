@@ -275,20 +275,23 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
+    let mut persist_pre_exec_failure = |err: anyhow::Error| {
+        write_pre_exec_error_result(
+            project_root,
+            &session.meta_session_id,
+            executor.tool_name(),
+            &err,
+        );
+        if let Some(ref mut cg) = cleanup_guard {
+            cg.defuse();
+        }
+        err
+    };
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {
             let err = anyhow::anyhow!(e).context("Failed to create session log writer");
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
+            return Err(persist_pre_exec_failure(err));
         }
     };
     let lock_reason = truncate_prompt(prompt, 80);
@@ -299,16 +302,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 "Failed to acquire lock for session {}",
                 session.meta_session_id
             ));
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
+            return Err(persist_pre_exec_failure(err));
         }
     };
     let mut resource_guard = config.map(|cfg| {
@@ -319,16 +313,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     if let Some(ref mut guard) = resource_guard
         && let Err(e) = guard.check_availability(executor.tool_name())
     {
-        write_pre_exec_error_result(
-            project_root,
-            &session.meta_session_id,
-            executor.tool_name(),
-            &e,
-        );
-        if let Some(ref mut cg) = cleanup_guard {
-            cg.defuse();
-        }
-        return Err(e);
+        return Err(persist_pre_exec_failure(e));
     }
     if let (Some(guard), Some(cfg)) = (&mut resource_guard, config) {
         guard.check_health(
@@ -371,7 +356,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
-    crate::preflight_state_dir::enforce_state_dir_cap(global_config)?;
+    if let Err(err) = crate::preflight_state_dir::enforce_state_dir_cap(global_config) {
+        return Err(persist_pre_exec_failure(err));
+    }
     if (session_arg.is_none() || fresh_spawn_preflight_override)
         && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)
     {

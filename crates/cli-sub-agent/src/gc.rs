@@ -14,6 +14,7 @@ use transcript::{cleanup_project_transcripts, load_gc_config_for_sessions};
 
 /// Default age threshold (in days) for retiring stale Active sessions.
 const RETIRE_AFTER_DAYS: i64 = 7;
+const STATE_DIR_SIZE_CACHE_FILENAME: &str = ".size-cache.toml";
 
 pub(crate) fn handle_gc(
     dry_run: bool,
@@ -290,6 +291,8 @@ pub(crate) fn handle_gc(
             eprintln!("{prefix}  Orphan cgroup scopes cleaned: {orphan_scopes_cleaned}");
         }
     }
+
+    invalidate_state_dir_size_cache();
 
     Ok(())
 }
@@ -639,7 +642,27 @@ pub(crate) fn handle_gc_global(
         }
     }
 
+    invalidate_state_dir_size_cache();
+
     Ok(())
+}
+
+fn invalidate_state_dir_size_cache() {
+    let Ok(state_dir) = GlobalConfig::state_base_dir() else {
+        return;
+    };
+    let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+    // GC is the remediation path advertised by state-dir preflight; clear the
+    // cached aggregate so the next spawn always rescans current disk usage.
+    match fs::remove_file(&cache_path) {
+        Ok(()) => info!(path = %cache_path.display(), "Invalidated state directory size cache"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => warn!(
+            path = %cache_path.display(),
+            error = %err,
+            "Failed to invalidate state directory size cache"
+        ),
+    }
 }
 
 /// Discover project roots (dirs with `sessions/` containing ULID dirs with `state.toml`).
