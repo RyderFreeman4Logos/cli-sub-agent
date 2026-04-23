@@ -101,7 +101,7 @@ _post_merge_sync() {
     git fetch origin "${DEFAULT_BRANCH}" &&
     git checkout "${DEFAULT_BRANCH}" &&
     git merge "origin/${DEFAULT_BRANCH}" --ff-only
-  } 2>&1 || echo "NOTE: post-merge local sync failed (non-fatal). Run manually: git fetch origin && git checkout ${DEFAULT_BRANCH} && git merge origin/${DEFAULT_BRANCH} --ff-only" >&2
+  } >&2 || echo "NOTE: post-merge local sync failed (non-fatal). Run manually: git fetch origin && git checkout ${DEFAULT_BRANCH} && git merge origin/${DEFAULT_BRANCH} --ff-only" >&2
 }
 
 # Complete --help passthrough now that we have REAL_GH.
@@ -456,3 +456,5 @@ pub fn is_merge_guard_enabled(hooks_path: Option<&Path>) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_post_merge_sync;
