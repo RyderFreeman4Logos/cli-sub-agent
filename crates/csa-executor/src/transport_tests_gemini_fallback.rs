@@ -621,9 +621,34 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         memory_monitor_interval_seconds: None,
     };
 
+    let shared_npm_cache = PathBuf::from(
+        env.get("npm_config_cache")
+            .expect("sandbox env fixture must include npm_config_cache"),
+    );
+    ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(std::path::Path::new(runtime_home)),
+    );
+    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(shared_npm_cache.as_path()));
     let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
     apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
 
+    assert!(
+        isolation_plan
+            .writable_paths
+            .contains(&PathBuf::from(runtime_home)),
+        "sandbox should add the per-session Gemini runtime home as a writable bind"
+    );
+    assert_eq!(
+        shared_npm_cache,
+        PathBuf::from("/shared/cache/cli-sub-agent/npm")
+    );
+    assert!(
+        isolation_plan
+            .writable_paths
+            .contains(&PathBuf::from("/shared/cache/cli-sub-agent/npm")),
+        "sandbox should add the shared npm cache as a writable bind under bwrap (#1047)"
+    );
     assert_eq!(
         isolation_plan.env_overrides.get("HOME"),
         Some(&runtime_home.to_string())

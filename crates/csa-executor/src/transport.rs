@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::executor::Executor;
@@ -49,6 +49,7 @@ pub use transport_gemini_helpers::{
 mod transport_gemini_acp_runtime;
 use transport_gemini_acp_runtime::{
     gemini_runtime_home_from_env, prepare_gemini_acp_runtime, prepare_gemini_runtime_env,
+    shared_npm_cache_dir,
 };
 #[path = "transport_gemini_mcp_diagnostic.rs"]
 mod transport_gemini_mcp_diagnostic;
@@ -422,6 +423,16 @@ impl AcpTransport {
             csa_session::manager::get_session_dir(&working_dir, &session.meta_session_id).ok();
 
         let mut gemini_runtime_home = None;
+        let shared_gemini_npm_cache = if self.tool_name == "gemini-cli" {
+            let source_home = env
+                .get("HOME")
+                .cloned()
+                .or_else(|| std::env::var("HOME").ok())
+                .map(PathBuf::from);
+            shared_npm_cache_dir(&env, source_home.as_deref())
+        } else {
+            None
+        };
         if self.tool_name == "gemini-cli" {
             let launch = prepare_gemini_acp_runtime(
                 &mut env,
@@ -455,6 +466,10 @@ impl AcpTransport {
                 ensure_gemini_runtime_home_writable_path(
                     &mut isolation_plan,
                     gemini_runtime_home.as_deref(),
+                );
+                ensure_gemini_runtime_home_writable_path(
+                    &mut isolation_plan,
+                    shared_gemini_npm_cache.as_deref(),
                 );
                 apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, env_overrides);
             }
