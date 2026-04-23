@@ -3,11 +3,14 @@
 //! When enabled, CSA writes a `gh` wrapper script to a guard directory and
 //! prepends it to `PATH` in the tool subprocess environment.  The wrapper
 //! intercepts `gh pr merge` commands and verifies a pr-bot completion marker
-//! exists before forwarding to the real `gh` binary.
+//! exists before forwarding to the real `gh` binary.  Beyond gate-keeping,
+//! the wrapper automatically syncs the local default branch after a successful
+//! merge (best-effort, non-fatal).
 //!
 //! This enforcement is environment-level (PATH injection), not prompt-level,
 //! so it cannot be bypassed by the LLM rationalizing "this is simple enough
-//! to merge directly".
+//! to merge directly".  The post-merge sync is a side-effect that keeps the
+//! local checkout current across all CSA-invoked projects.
 //!
 //! ## Activation
 //!
@@ -90,6 +93,17 @@ if [ -z "${REAL_GH}" ]; then
   exit 1
 fi
 
+# Best-effort local sync of the default branch after a successful merge.
+# Non-fatal: sync failure does NOT change the wrapper's exit code.
+_post_merge_sync() {
+  DEFAULT_BRANCH="$("${REAL_GH}" repo view --json defaultBranchRef -q '.defaultBranchRef.name' 2>/dev/null || echo main)"
+  {
+    git fetch origin "${DEFAULT_BRANCH}" &&
+    git checkout "${DEFAULT_BRANCH}" &&
+    git merge "origin/${DEFAULT_BRANCH}" --ff-only
+  } >&2 || echo "NOTE: post-merge local sync failed (non-fatal). Run manually: git fetch origin && git checkout ${DEFAULT_BRANCH} && git merge origin/${DEFAULT_BRANCH} --ff-only" >&2
+}
+
 # Complete --help passthrough now that we have REAL_GH.
 if [ "${_NEED_HELP_PASSTHROUGH:-}" = "true" ]; then
   exec "${REAL_GH}" "$@"
@@ -119,7 +133,10 @@ for arg in "$@"; do
     for a in "$@"; do
       [ "$a" != "--force-skip-pr-bot" ] && ARGS+=("$a")
     done
-    exec "${REAL_GH}" "${ARGS[@]}"
+    MERGE_EXIT=0
+    "${REAL_GH}" "${ARGS[@]}" || MERGE_EXIT=$?
+    if [ "${MERGE_EXIT}" -eq 0 ]; then _post_merge_sync; fi
+    exit ${MERGE_EXIT}
   fi
 done
 
@@ -200,14 +217,20 @@ fi
 MARKER_FILE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}.done"
 
 if [ -f "${MARKER_FILE}" ]; then
-  # Exact SHA marker found — emit audit event and allow merge.
-  EVENTS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/events"
-  mkdir -p "${EVENTS_DIR}" 2>/dev/null || true
-  AUDIT_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")"
-  printf '{"event":"MergeCompleted","pr_number":%s,"head_sha":"%s","marker_path":"%s","timestamp":"%s"}\n' \
-    "${PR_NUMBER}" "${HEAD_SHA}" "${MARKER_FILE}" "${AUDIT_TS}" \
-    >> "${EVENTS_DIR}/merge-guard.jsonl" 2>/dev/null || true
-  exec "${REAL_GH}" "$@"
+  # Exact SHA marker found — allow merge.
+  MERGE_EXIT=0
+  "${REAL_GH}" "$@" || MERGE_EXIT=$?
+  if [ "${MERGE_EXIT}" -eq 0 ]; then
+    # Audit event: emitted AFTER successful merge, BEFORE sync.
+    EVENTS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/events"
+    mkdir -p "${EVENTS_DIR}" 2>/dev/null || true
+    AUDIT_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")"
+    printf '{"event":"MergeCompleted","pr_number":%s,"head_sha":"%s","marker_path":"%s","timestamp":"%s"}\n' \
+      "${PR_NUMBER}" "${HEAD_SHA}" "${MARKER_FILE}" "${AUDIT_TS}" \
+      >> "${EVENTS_DIR}/merge-guard.jsonl" 2>/dev/null || true
+    _post_merge_sync
+  fi
+  exit ${MERGE_EXIT}
 else
   echo "BLOCKED: pr-bot has not completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}." >&2
   echo "Run /pr-bot first, or add --force-skip-pr-bot to bypass." >&2
@@ -433,3 +456,5 @@ pub fn is_merge_guard_enabled(hooks_path: Option<&Path>) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_post_merge_sync;
