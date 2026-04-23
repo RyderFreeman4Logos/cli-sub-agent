@@ -3,17 +3,15 @@ use std::path::{Path, PathBuf};
 
 pub(super) const GEMINI_HOST_MISE_TRUST_DB_RELATIVE_PATH: &str = "mise/trusted-configs";
 
-/// Check if the mise config at `mise_toml_path` is trusted on the host by
-/// scanning the host mise filesystem trust DB.
+/// Check if the project root is trusted on the host by scanning the host mise
+/// filesystem trust DB.
 ///
-/// Returns `Some(mise_toml_path)` when the host trust DB contains a direct
+/// Returns the matched trust DB target path when the host trust DB contains a
 /// symlink entry that points at `project_root` or one of its ancestors.
-pub(super) fn probe_host_mise_trust_db(
-    project_root: &Path,
-    mise_toml_path: &Path,
-) -> Option<PathBuf> {
+/// Propagating the trusted target preserves directory-scoped trust for any mise
+/// config filename under that path.
+pub(super) fn probe_host_mise_trust_db(project_root: &Path) -> Option<PathBuf> {
     let canonical_project_root = project_root.canonicalize().ok()?;
-    let canonical_mise_toml_path = mise_toml_path.canonicalize().ok()?;
     let trust_db_dir = host_mise_trust_db_dir()?;
     let entries = fs::read_dir(trust_db_dir).ok()?;
 
@@ -24,7 +22,7 @@ pub(super) fn probe_host_mise_trust_db(
         };
         let resolved_target = resolve_trust_db_symlink_target(&entry_path, &link_target);
         if canonical_project_root.starts_with(&resolved_target) {
-            return Some(canonical_mise_toml_path);
+            return Some(resolved_target);
         }
     }
 

@@ -133,16 +133,13 @@ pub(crate) fn prepare_gemini_acp_runtime(
         let project_dir = project_dir
             .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok());
-        if let Some(project_dir) = project_dir {
-            let mise_toml_path = project_dir.join("mise.toml");
-            if let Some(trusted_config_path) =
-                probe_host_mise_trust_db(&project_dir, &mise_toml_path)
-            {
-                env.insert(
-                    "MISE_TRUSTED_CONFIG_PATHS".to_string(),
-                    trusted_config_path.to_string_lossy().into_owned(),
-                );
-            }
+        if let Some(project_dir) = project_dir
+            && let Some(trusted_config_path) = probe_host_mise_trust_db(&project_dir)
+        {
+            env.insert(
+                "MISE_TRUSTED_CONFIG_PATHS".to_string(),
+                trusted_config_path.to_string_lossy().into_owned(),
+            );
         }
     }
 
