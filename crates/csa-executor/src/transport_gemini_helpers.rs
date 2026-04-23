@@ -412,6 +412,7 @@ pub(super) fn gemini_sandbox_runtime_env_overrides(
         "npm_config_cache",
         "MISE_CACHE_DIR",
         "MISE_STATE_DIR",
+        "MISE_TRUSTED_CONFIG_PATHS",
         "MISE_SHIM",
         "MISE_SHIMS_DIR",
     ] {
