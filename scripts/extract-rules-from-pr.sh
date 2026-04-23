@@ -87,7 +87,7 @@ COMMENTS_JSON="$(gh api "repos/${REPO_SLUG}/pulls/${PR_NUMBER}/comments" \
 ###############################################################################
 
 # Extract qualifying comments as JSON array with metadata
-QUALIFYING="$(echo "${COMMENTS_JSON}" | jq -c '
+QUALIFYING="$(jq -c '
   [.[] | {
     body: .body,
     user: .user.login,
@@ -101,7 +101,7 @@ QUALIFYING="$(echo "${COMMENTS_JSON}" | jq -c '
       else null end
     )
   } | select(.severity != null)]
-')"
+' <<< "${COMMENTS_JSON}")"
 
 TOTAL_FINDINGS="$(echo "${COMMENTS_JSON}" | jq 'length')"
 QUALIFYING_COUNT="$(echo "${QUALIFYING}" | jq 'length')"
@@ -126,7 +126,7 @@ while IFS= read -r finding; do
   # for dedupe matching
   BODY="$(echo "${finding}" | jq -r '.body')"
   # Remove badge image markdown from first line
-  BODY_NO_BADGE="$(echo "${BODY}" | sed '1s/^!\['"${SEVERITY}"'\]([^)]*)[[:space:]]*//')"
+  BODY_NO_BADGE="$(sed '1s/^!\['"${SEVERITY}"'\]([^)]*)[[:space:]]*//' <<< "${BODY}")"
   # First non-empty line after badge removal = dedupe key
   FIRST_LINE="$(echo "${BODY_NO_BADGE}" | sed '/^[[:space:]]*$/d' | head -1)"
 
@@ -171,7 +171,7 @@ while IFS= read -r finding; do
     # Include the original finding text as context for Layer 0
     echo "### Original finding"
     echo ""
-    echo "${BODY_NO_BADGE}"
+    printf '%s\n' "${BODY_NO_BADGE}"
     echo ""
     echo "## Preferred primitives / patterns"
     echo ""
@@ -190,7 +190,7 @@ while IFS= read -r finding; do
     echo ""
   } > "${OUTFILE}"
 
-done < <(echo "${QUALIFYING}" | jq -c '.[]')
+done < <(jq -c '.[]' <<< "${QUALIFYING}")
 
 ###############################################################################
 # Summary
