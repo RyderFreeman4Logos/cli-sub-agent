@@ -128,7 +128,7 @@ while IFS= read -r finding; do
   # Remove badge image markdown from first line
   BODY_NO_BADGE="$(sed '1s/^!\['"${SEVERITY}"'\]([^)]*)[[:space:]]*//' <<< "${BODY}")"
   # First non-empty line after badge removal = dedupe key
-  FIRST_LINE="$(echo "${BODY_NO_BADGE}" | sed '/^[[:space:]]*$/d' | head -1)"
+  FIRST_LINE="$(sed '/^[[:space:]]*$/d' <<< "${BODY_NO_BADGE}" | head -1)"
 
   # --- Dedupe check ---
   DUPLICATE_CANDIDATE=""
