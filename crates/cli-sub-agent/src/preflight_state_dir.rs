@@ -89,8 +89,9 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
 
     let size_mb = size_bytes / (1024 * 1024);
     let cap_mb = config.max_size_mb;
+    let cap_bytes = cap_mb.saturating_mul(1024 * 1024);
 
-    if size_mb <= cap_mb {
+    if size_bytes <= cap_bytes {
         debug!(size_mb, cap_mb, "State directory within cap");
         return StateDirCheckResult::Ok;
     }
@@ -236,6 +237,7 @@ fn now_unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
     use csa_config::{StateDirConfig, StateDirOnExceed};
 
     #[test]
@@ -352,6 +354,49 @@ mod tests {
         assert_eq!(config.scan_interval_seconds, 3600);
         assert_eq!(config.on_exceed, StateDirOnExceed::Warn);
         assert!(config.is_default());
+    }
+
+    #[test]
+    fn cap_boundary_uses_raw_bytes_instead_of_floored_mib() {
+        const ONE_MIB: u64 = 1024 * 1024;
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let config = StateDirConfig {
+            max_size_mb: 1,
+            scan_interval_seconds: 0,
+            on_exceed: StateDirOnExceed::Error,
+        };
+
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let state_home = temp.path().join("xdg-state");
+            let _home_guard = ScopedEnvVarRestore::set("HOME", temp.path());
+            let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+            let state_dir = csa_config::paths::state_dir().unwrap();
+            std::fs::create_dir_all(&state_dir).unwrap();
+            let file = std::fs::File::create(state_dir.join("exact.bin")).unwrap();
+            file.set_len(ONE_MIB).unwrap();
+
+            assert!(matches!(
+                check_state_dir_size(&config),
+                StateDirCheckResult::Ok
+            ));
+        }
+
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let state_home = temp.path().join("xdg-state");
+            let _home_guard = ScopedEnvVarRestore::set("HOME", temp.path());
+            let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+            let state_dir = csa_config::paths::state_dir().unwrap();
+            std::fs::create_dir_all(&state_dir).unwrap();
+            let file = std::fs::File::create(state_dir.join("over.bin")).unwrap();
+            file.set_len(ONE_MIB + 1).unwrap();
+
+            assert!(matches!(
+                check_state_dir_size(&config),
+                StateDirCheckResult::Error(_)
+            ));
+        }
     }
 
     /// HIGH-1 regression: symlinks must not be followed during size walk.
