@@ -37,6 +37,7 @@ mod pipeline_transcript;
 mod plan_cmd;
 mod plan_condition;
 mod plan_display;
+mod preflight_state_dir;
 mod preflight_symlink;
 mod process_tree;
 mod review_cmd;

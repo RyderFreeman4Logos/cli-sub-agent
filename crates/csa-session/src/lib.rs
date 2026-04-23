@@ -88,8 +88,8 @@ pub use manager::{
     list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,
     load_metadata, load_result, load_result_view, load_session, load_session_global_exact,
     redact_result_sidecar_value, render_redacted_result_sidecar, resolve_fork_source,
-    resolve_resume_session, save_result, save_session, save_session_in, update_last_accessed,
-    validate_tool_access, write_audit_warning_artifact,
+    resolve_resume_session, save_result, save_result_with_options, save_session, save_session_in,
+    update_last_accessed, validate_tool_access, write_audit_warning_artifact,
 };
 
 pub use manager::ResumeSessionResolution;

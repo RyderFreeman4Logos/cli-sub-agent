@@ -368,7 +368,7 @@ struct LookupResolution {
 }
 
 fn is_global_only_key(key: &str) -> bool {
-    key.starts_with("kv_cache.")
+    key.starts_with("kv_cache.") || key.starts_with("state_dir.")
 }
 
 #[derive(Debug, Clone)]
@@ -604,7 +604,7 @@ fn prefers_effective_lookup(key: &str) -> Result<bool> {
 }
 
 fn global_key_prefers_raw_lookup(key: &str) -> bool {
-    key.starts_with("kv_cache.")
+    key.starts_with("kv_cache.") || key.starts_with("state_dir.")
 }
 
 fn known_effective_top_level_sections() -> Result<BTreeSet<String>> {

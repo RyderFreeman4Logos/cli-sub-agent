@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Canonical XDG app name used for all new path writes.
 pub const APP_NAME: &str = "cli-sub-agent";
@@ -101,6 +101,44 @@ pub fn legacy_config_dir() -> Option<PathBuf> {
 
 pub fn legacy_state_dir() -> Option<PathBuf> {
     project_state_dir(LEGACY_APP_NAME)
+}
+
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn push_existing_unique_path(paths: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if !candidate.exists() {
+        return;
+    }
+    if paths
+        .iter()
+        .any(|existing| paths_equivalent(existing, &candidate))
+    {
+        return;
+    }
+    paths.push(candidate);
+}
+
+/// Existing CSA state roots, in read priority order.
+///
+/// Includes the canonical root first and then any legacy roots that still
+/// exist, while de-duplicating symlink-equivalent paths.
+pub fn state_dir_all_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    push_existing_unique_path(&mut roots, state_dir_write());
+    push_existing_unique_path(&mut roots, legacy_state_dir());
+    roots
 }
 
 pub fn legacy_runtime_dir() -> PathBuf {

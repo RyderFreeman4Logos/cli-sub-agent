@@ -51,8 +51,18 @@ pub fn redact_result_sidecar_value(sidecar: &toml::Value) -> Result<toml::Value>
 
 /// Write a session result to disk
 pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
+    save_result_with_options(project_path, session_id, result, SaveOptions::default())
+}
+
+/// Write a session result to disk with explicit sidecar preservation semantics.
+pub fn save_result_with_options(
+    project_path: &Path,
+    session_id: &str,
+    result: &SessionResult,
+    options: SaveOptions,
+) -> Result<()> {
     let base_dir = super::resolve_write_base_dir(project_path, session_id)?;
-    save_result_in(&base_dir, session_id, result, SaveOptions::default())
+    save_result_in(&base_dir, session_id, result, options)
 }
 
 pub(crate) fn save_result_in(
