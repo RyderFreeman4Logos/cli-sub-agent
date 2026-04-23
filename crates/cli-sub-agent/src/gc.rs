@@ -298,24 +298,24 @@ pub(crate) fn handle_gc(
 
     Ok(())
 }
-
-/// Global GC: scan all project session roots under `~/.local/state/cli-sub-agent/`.
-///
-/// Discovers project roots by recursively finding directories that contain
-/// a `sessions/` subdirectory, then applies the same cleanup criteria as
-/// per-project GC plus cross-project slot cleanup.
+/// Global GC: scan all project session roots under all existing CSA state dirs.
+/// Applies the same cleanup criteria as per-project GC plus cross-project slot cleanup.
 pub(crate) fn handle_gc_global(
     dry_run: bool,
     max_age_days: Option<u64>,
     format: OutputFormat,
 ) -> Result<()> {
-    let state_base = GlobalConfig::state_base_dir()?;
-    if !state_base.exists() {
+    let state_bases = csa_config::paths::state_dir_all_roots();
+    if state_bases.is_empty() {
+        let state_base = GlobalConfig::state_base_dir()?;
         eprintln!("No CSA state directory found at {}", state_base.display());
         return Ok(());
     }
 
-    let project_roots = discover_project_roots(&state_base);
+    let mut project_roots = Vec::new();
+    for state_base in &state_bases {
+        project_roots.extend(discover_project_roots(state_base));
+    }
 
     let now = chrono::Utc::now();
     let mut total_stale_locks = 0u64;
@@ -652,25 +652,29 @@ pub(crate) fn handle_gc_global(
 }
 
 fn invalidate_state_dir_size_cache() {
-    let Ok(state_dir) = GlobalConfig::state_base_dir() else {
+    let state_roots = csa_config::paths::state_dir_all_roots();
+    if state_roots.is_empty() {
         return;
-    };
-    let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
-    // GC is the remediation path advertised by state-dir preflight; clear the
-    // cached aggregate so the next spawn always rescans current disk usage.
-    match fs::remove_file(&cache_path) {
-        Ok(()) => info!(path = %cache_path.display(), "Invalidated state directory size cache"),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => warn!(
-            path = %cache_path.display(),
-            error = %err,
-            "Failed to invalidate state directory size cache"
-        ),
+    }
+
+    // GC is the remediation path advertised by state-dir preflight; clear the cached aggregate.
+    for state_dir in state_roots {
+        let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+        match fs::remove_file(&cache_path) {
+            Ok(()) => {
+                info!(path = %cache_path.display(), "Invalidated state directory size cache")
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => warn!(
+                path = %cache_path.display(),
+                error = %err,
+                "Failed to invalidate state directory size cache"
+            ),
+        }
     }
 }
 
 /// Discover project roots (dirs with `sessions/` containing ULID dirs with `state.toml`).
-/// Skips symlinks, validates canonical paths, and skips `slots/`/`todos/` at top level.
 fn discover_project_roots(state_base: &std::path::Path) -> Vec<std::path::PathBuf> {
     let canonical_base = match state_base.canonicalize() {
         Ok(p) => p,
@@ -682,7 +686,6 @@ fn discover_project_roots(state_base: &std::path::Path) -> Vec<std::path::PathBu
 }
 
 /// Top-level CSA internal directories (not project paths) under the state base.
-/// Note: "tmp" is NOT skipped because `/tmp/...` project paths map to `<state>/csa/tmp/...`.
 const TOP_LEVEL_SKIP: &[&str] = &["slots", "todos"];
 
 fn discover_roots_recursive(
@@ -696,8 +699,7 @@ fn discover_roots_recursive(
         Err(_) => return,
     };
     for entry in entries.flatten() {
-        // Skip symlinks to prevent traversal outside state tree.
-        // Use file_type() which does NOT follow symlinks (unlike metadata()).
+        // Skip symlinks to prevent traversal outside state tree; file_type() does not follow them.
         let ft = match entry.file_type() {
             Ok(ft) => ft,
             Err(_) => continue,

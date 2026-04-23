@@ -242,58 +242,74 @@ fn test_discover_finds_rotation_only_roots() {
 fn test_gc_global_invalidates_state_dir_size_cache() {
     let tmp = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
-    let state_dir = csa_config::GlobalConfig::state_base_dir().expect("state base dir");
-    fs::create_dir_all(&state_dir).unwrap();
+    let canonical = csa_config::paths::state_dir_write().expect("canonical state dir");
+    let legacy = csa_config::paths::legacy_state_dir().expect("legacy state dir");
 
-    let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
-    fs::write(
-        &cache_path,
-        r#"
+    for state_dir in [&canonical, &legacy] {
+        fs::create_dir_all(state_dir).unwrap();
+        let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+        fs::write(
+            &cache_path,
+            r#"
 size_bytes = 999999999
 scanned_at = 1
 "#,
-    )
-    .unwrap();
-    assert!(
-        cache_path.exists(),
-        "test precondition: cache file must exist"
-    );
+        )
+        .unwrap();
+        assert!(
+            cache_path.exists(),
+            "test precondition: cache file must exist at {}",
+            cache_path.display()
+        );
+    }
 
     handle_gc_global(false, None, OutputFormat::Text).expect("global gc should succeed");
 
-    assert!(
-        !cache_path.exists(),
-        "gc must invalidate the cached state-dir size reading"
-    );
+    for state_dir in [&canonical, &legacy] {
+        let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+        assert!(
+            !cache_path.exists(),
+            "gc must invalidate the cached state-dir size reading at {}",
+            cache_path.display()
+        );
+    }
 }
 
 #[test]
 fn test_gc_global_dry_run_preserves_state_dir_size_cache() {
     let tmp = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
-    let state_dir = csa_config::GlobalConfig::state_base_dir().expect("state base dir");
-    fs::create_dir_all(&state_dir).unwrap();
+    let canonical = csa_config::paths::state_dir_write().expect("canonical state dir");
+    let legacy = csa_config::paths::legacy_state_dir().expect("legacy state dir");
 
-    let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
-    fs::write(
-        &cache_path,
-        r#"
+    for state_dir in [&canonical, &legacy] {
+        fs::create_dir_all(state_dir).unwrap();
+        let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+        fs::write(
+            &cache_path,
+            r#"
 size_bytes = 999999999
 scanned_at = 1
 "#,
-    )
-    .unwrap();
-    assert!(
-        cache_path.exists(),
-        "test precondition: cache file must exist"
-    );
+        )
+        .unwrap();
+        assert!(
+            cache_path.exists(),
+            "test precondition: cache file must exist at {}",
+            cache_path.display()
+        );
+    }
 
     handle_gc_global(true, None, OutputFormat::Text).expect("global dry-run gc should succeed");
 
-    assert!(
-        cache_path.exists(),
-        "dry-run gc must not invalidate the cached state-dir size reading"
-    );
+    for state_dir in [&canonical, &legacy] {
+        let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+        assert!(
+            cache_path.exists(),
+            "dry-run gc must not invalidate the cached state-dir size reading at {}",
+            cache_path.display()
+        );
+    }
 }
 
 // --- Retirement logic tests ---

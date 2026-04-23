@@ -67,25 +67,28 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
         return StateDirCheckResult::Ok;
     }
 
-    let state_dir = match csa_config::paths::state_dir() {
-        Some(d) => d,
-        None => {
-            debug!("State directory not resolvable; skipping size check");
-            return StateDirCheckResult::Ok;
-        }
-    };
-
-    if !state_dir.exists() {
+    let state_roots = csa_config::paths::state_dir_all_roots();
+    if state_roots.is_empty() {
+        debug!("No existing state directory roots found; skipping size check");
         return StateDirCheckResult::Ok;
     }
 
-    let size_bytes = match get_or_compute_size(&state_dir, config.scan_interval_seconds) {
-        Ok(size) => size,
-        Err(e) => {
-            warn!(error = %e, "Failed to compute state directory size; skipping check");
-            return StateDirCheckResult::Ok;
+    let mut size_bytes = 0u64;
+    for state_root in &state_roots {
+        match get_or_compute_size(state_root, config.scan_interval_seconds) {
+            Ok(size) => {
+                size_bytes = size_bytes.saturating_add(size);
+            }
+            Err(e) => {
+                warn!(
+                    path = %state_root.display(),
+                    error = %e,
+                    "Failed to compute state directory size; skipping check"
+                );
+                return StateDirCheckResult::Ok;
+            }
         }
-    };
+    }
 
     let size_mb = size_bytes / (1024 * 1024);
     let cap_mb = config.max_size_mb;
@@ -430,6 +433,59 @@ mod tests {
                 StateDirCheckResult::Error(_)
             ));
         }
+    }
+
+    fn run_dual_root_cap_check(canonical_bytes: u64, legacy_bytes: u64) -> StateDirCheckResult {
+        let temp = tempfile::tempdir().unwrap();
+        let state_home = temp.path().join("xdg-state");
+        let _home_guard = ScopedEnvVarRestore::set("HOME", temp.path());
+        let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+
+        let canonical = csa_config::paths::state_dir_write().expect("canonical state dir");
+        let legacy = csa_config::paths::legacy_state_dir().expect("legacy state dir");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+
+        if canonical_bytes > 0 {
+            let file = std::fs::File::create(canonical.join("canonical.bin")).unwrap();
+            file.set_len(canonical_bytes).unwrap();
+        }
+        if legacy_bytes > 0 {
+            let file = std::fs::File::create(legacy.join("legacy.bin")).unwrap();
+            file.set_len(legacy_bytes).unwrap();
+        }
+
+        check_state_dir_size(&StateDirConfig {
+            max_size_mb: 1,
+            scan_interval_seconds: 0,
+            on_exceed: StateDirOnExceed::Error,
+        })
+    }
+
+    fn assert_cap_error_size(result: StateDirCheckResult, actual_mb: u64) {
+        match result {
+            StateDirCheckResult::Error(err) => {
+                let message = err.to_string();
+                assert!(
+                    message.contains(&format!("{actual_mb} MB / 1 MB cap exceeded")),
+                    "unexpected error message: {message}"
+                );
+            }
+            StateDirCheckResult::Warn(message) => {
+                panic!("expected error result, got warning: {message}")
+            }
+            StateDirCheckResult::Ok => panic!("expected error result, got ok"),
+        }
+    }
+
+    #[test]
+    fn check_state_dir_size_sums_existing_canonical_and_legacy_roots() {
+        const ONE_MIB: u64 = 1024 * 1024;
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+
+        assert_cap_error_size(run_dual_root_cap_check(0, 2 * ONE_MIB), 2);
+        assert_cap_error_size(run_dual_root_cap_check(2 * ONE_MIB, 0), 2);
+        assert_cap_error_size(run_dual_root_cap_check(ONE_MIB, ONE_MIB), 2);
     }
 
     /// HIGH-1 regression: symlinks must not be followed during size walk.
