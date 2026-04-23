@@ -28,20 +28,21 @@ pub use transport_meta::PeakMemoryContext;
 use transport_meta::{build_summary, run_acp_sandboxed};
 #[path = "transport_gemini_helpers.rs"]
 mod transport_gemini_helpers;
-#[cfg(test)]
-use transport_gemini_helpers::format_gemini_retry_report;
 use transport_gemini_helpers::{
     GeminiAcpInitFailureClassification, GeminiRetryPhase, annotate_gemini_retry_error,
     append_gemini_retry_report, apply_gemini_acp_initial_stall_summary,
     apply_gemini_legacy_initial_stall_summary, apply_gemini_mcp_warning_summary,
-    apply_gemini_sandbox_runtime_contract, apply_gemini_sandbox_runtime_env_overrides,
-    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
-    classify_gemini_legacy_initial_stall, classify_gemini_oauth_prompt_result, classify_join_error,
-    ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
+    apply_gemini_sandbox_runtime_contract, classify_gemini_acp_init_failure,
+    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
+    classify_gemini_oauth_prompt_result, classify_join_error, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
-    gemini_sandbox_runtime_env_overrides, gemini_shared_npm_cache_bind_error,
-    is_gemini_acp_init_failure, is_gemini_mcp_issue_result, is_gemini_oauth_prompt_result,
-    resolve_gemini_shared_npm_cache_source, validate_gemini_shared_npm_cache_writable_path,
+    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure, is_gemini_mcp_issue_result,
+    is_gemini_oauth_prompt_result, resolve_gemini_shared_npm_cache_source,
+};
+#[cfg(test)]
+use transport_gemini_helpers::{
+    apply_gemini_sandbox_runtime_env_overrides, ensure_gemini_runtime_home_writable_path,
+    format_gemini_retry_report,
 };
 pub use transport_gemini_helpers::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
@@ -482,11 +483,6 @@ impl AcpTransport {
         if self.tool_name == "codex" {
             sanitize_args_for_codex(&mut acp_args);
         }
-        let shared_gemini_npm_cache = if self.tool_name == "gemini-cli" {
-            env.get("npm_config_cache").map(PathBuf::from)
-        } else {
-            None
-        };
         let gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
 
@@ -495,38 +491,14 @@ impl AcpTransport {
             .map(|s| -> Result<_> {
                 let mut isolation_plan = s.isolation_plan.clone();
                 if self.tool_name == "gemini-cli" {
-                    ensure_gemini_runtime_home_writable_path(
+                    apply_gemini_sandbox_runtime_contract(
                         &mut isolation_plan,
+                        working_dir.as_path(),
                         gemini_runtime_home.as_deref(),
-                    );
-                    if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref() {
-                        let requested_shared_npm_cache = shared_gemini_npm_cache_raw_path
-                            .as_deref()
-                            .unwrap_or(shared_npm_cache);
-                        let resolved_shared_npm_cache =
-                            validate_gemini_shared_npm_cache_writable_path(
-                                requested_shared_npm_cache,
-                                working_dir.as_path(),
-                                shared_gemini_npm_cache_source,
-                            )?;
-                        if !ensure_gemini_runtime_home_writable_path(
-                            &mut isolation_plan,
-                            Some(resolved_shared_npm_cache.as_path()),
-                        ) {
-                            return Err(gemini_shared_npm_cache_bind_error(
-                                requested_shared_npm_cache,
-                                Some(resolved_shared_npm_cache.as_path()),
-                                shared_gemini_npm_cache_source,
-                                None,
-                            ));
-                        }
-                    }
-                    if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
-                        apply_gemini_sandbox_runtime_env_overrides(
-                            &mut isolation_plan,
-                            env_overrides,
-                        );
-                    }
+                        &env,
+                        shared_gemini_npm_cache_raw_path.as_deref(),
+                        shared_gemini_npm_cache_source,
+                    )?;
                 }
                 Ok(isolation_plan)
             })
