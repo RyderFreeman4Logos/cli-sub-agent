@@ -730,6 +730,8 @@ fn prepare_gemini_acp_runtime_propagates_mise_trusted_config_paths_from_env() {
     );
 }
 
+include!("transport_gemini_mise_trust_tests_tail.rs");
+
 #[test]
 fn prepare_gemini_acp_runtime_sets_shared_npm_cache_from_source_home() {
     let temp = tempfile::tempdir().expect("tempdir");

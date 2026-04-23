@@ -586,10 +586,9 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     let runtime_config_home = runtime_home.join(".config").to_string_lossy().into_owned();
     let runtime_state_home = runtime_home.join(".local/state").to_string_lossy().into_owned();
     let runtime_mise_cache = runtime_home.join(".cache/mise").to_string_lossy().into_owned();
-    let runtime_mise_state = runtime_home
-        .join(".local/state/mise")
-        .to_string_lossy()
-        .into_owned();
+    let runtime_mise_state = runtime_home.join(".local/state/mise").to_string_lossy().into_owned();
+    let runtime_mise_trusted_config_paths =
+        runtime_home.join("mise.toml").to_string_lossy().into_owned();
     let xdg_cache_home_string = xdg_cache_home.to_string_lossy().into_owned();
     let shared_npm_cache_string = shared_npm_cache.to_string_lossy().into_owned();
     assert!(
@@ -610,6 +609,7 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     env.insert("npm_config_cache".to_string(), shared_npm_cache_string.clone());
     env.insert("MISE_CACHE_DIR".to_string(), runtime_mise_cache.clone());
     env.insert("MISE_STATE_DIR".to_string(), runtime_mise_state.clone());
+    env.insert("MISE_TRUSTED_CONFIG_PATHS".to_string(), runtime_mise_trusted_config_paths.clone());
     env.insert("MISE_SHIM".to_string(), String::new());
     env.insert("MISE_SHIMS_DIR".to_string(), String::new());
     env.insert(
@@ -665,10 +665,8 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         isolation_plan.env_overrides.get("HOME"),
         Some(&runtime_home_string)
     );
-    // TMPDIR is set by IsolationPlanBuilder::with_tool_defaults(), not by
-    // gemini sandbox overrides (which must NOT override it — see #704 review).
-    // The isolation plan fixture doesn't call with_tool_defaults(), so TMPDIR
-    // won't be present here. Verify gemini overrides did NOT inject a host TMPDIR.
+    // TMPDIR is owned by IsolationPlanBuilder::with_tool_defaults(), so Gemini overrides
+    // must not inject a host TMPDIR into this fixture (#704 review).
     assert!(
         !isolation_plan.env_overrides.contains_key("TMPDIR")
             || isolation_plan.env_overrides.get("TMPDIR") == Some(&"/tmp".to_string()),
@@ -701,6 +699,11 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         isolation_plan.env_overrides.get("MISE_STATE_DIR"),
         Some(&runtime_mise_state),
         "sandbox should pin mise state inside the Gemini runtime home"
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("MISE_TRUSTED_CONFIG_PATHS"),
+        Some(&runtime_mise_trusted_config_paths),
+        "sandbox must forward the resolved mise trust env so nested gemini-cli runs keep host-approved trust state"
     );
     assert_eq!(
         isolation_plan.env_overrides.get("MISE_SHIM"),

@@ -10,6 +10,12 @@ use csa_resource::isolation_plan::canonicalize_through_existing_ancestors;
 use serde_json::{Map, Value};
 use tracing::{debug, warn};
 
+#[path = "transport_gemini_mise_trust.rs"]
+mod transport_gemini_mise_trust;
+#[cfg(test)]
+use transport_gemini_mise_trust::GEMINI_HOST_MISE_TRUST_DB_RELATIVE_PATH;
+use transport_gemini_mise_trust::probe_host_mise_trust_db;
+
 const GEMINI_RUNTIME_ROOT_DIR: &str = "cli-sub-agent-gemini";
 const GEMINI_SESSION_RUNTIME_RELATIVE_PATH: &str = "runtime/gemini-home";
 const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
@@ -120,12 +126,21 @@ pub(crate) fn prepare_gemini_acp_runtime(
     // Preserve explicit trust state from the inherited environment only.
     // Do not synthesize trust from project-local mise.toml, because that would
     // elevate repo-controlled input into trusted execution state. See #972.
-    if std::env::var("MISE_TRUSTED_CONFIG_PATHS").is_ok() {
+    if let Ok(trusted_config_paths) = std::env::var("MISE_TRUSTED_CONFIG_PATHS") {
         env.entry("MISE_TRUSTED_CONFIG_PATHS".to_string())
-            .or_insert_with(|| {
-                std::env::var("MISE_TRUSTED_CONFIG_PATHS")
-                    .expect("MISE_TRUSTED_CONFIG_PATHS existence checked above")
-            });
+            .or_insert(trusted_config_paths);
+    } else if !env.contains_key("MISE_TRUSTED_CONFIG_PATHS") {
+        let project_dir = project_dir
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok());
+        if let Some(project_dir) = project_dir
+            && let Some(trusted_config_path) = probe_host_mise_trust_db(&project_dir)
+        {
+            env.insert(
+                "MISE_TRUSTED_CONFIG_PATHS".to_string(),
+                trusted_config_path.to_string_lossy().into_owned(),
+            );
+        }
     }
 
     let inherited_path = env
