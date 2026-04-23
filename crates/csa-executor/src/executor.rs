@@ -734,6 +734,7 @@ impl Executor {
                         ThinkingBudget::Medium => "medium",
                         ThinkingBudget::High => "high",
                         ThinkingBudget::Xhigh => "max",
+                        ThinkingBudget::Max => "max",
                         ThinkingBudget::Custom(_) => "max",
                     };
                     cmd.arg("--variant").arg(variant);

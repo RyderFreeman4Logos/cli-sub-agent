@@ -23,6 +23,7 @@ pub enum ThinkingBudget {
     Medium,
     High,
     Xhigh,
+    Max,
     Custom(u32),
 }
 
@@ -60,7 +61,7 @@ impl ThinkingBudget {
             // Only match named keywords, not numeric — numbers in model names are common
             // (e.g., "gpt-5.4" or version suffixes) and would cause false positives.
             match suffix.to_lowercase().as_str() {
-                "default" | "low" | "medium" | "med" | "high" | "xhigh" | "extra-high" => {
+                "default" | "low" | "medium" | "med" | "high" | "xhigh" | "extra-high" | "max" => {
                     // Safe to unwrap: we matched a known keyword above.
                     let budget = Self::parse(suffix).expect("matched keyword must parse");
                     (&model[..pos], Some(budget))
@@ -82,12 +83,13 @@ impl ThinkingBudget {
             "medium" | "med" => Ok(Self::Medium),
             "high" => Ok(Self::High),
             "xhigh" | "extra-high" => Ok(Self::Xhigh),
+            "max" => Ok(Self::Max),
             other => {
                 if let Ok(n) = other.parse::<u32>() {
                     Ok(Self::Custom(n))
                 } else {
                     bail!(
-                        "Invalid thinking budget '{other}': expected default/low/medium/high/xhigh or a number"
+                        "Invalid thinking budget '{other}': expected default/low/medium/high/xhigh/max or a number"
                     )
                 }
             }
@@ -102,6 +104,7 @@ impl ThinkingBudget {
             Self::Medium => 8192,
             Self::High => 32768,
             Self::Xhigh => 65536,
+            Self::Max => 131072,
             Self::Custom(n) => *n,
         }
     }
@@ -116,6 +119,7 @@ impl ThinkingBudget {
             Self::Medium => "medium",
             Self::High => "high",
             Self::Xhigh => "xhigh",
+            Self::Max => "xhigh",      // codex has no 'max', map to its ceiling
             Self::Custom(_) => "high", // custom values map to high
         }
     }
@@ -304,5 +308,52 @@ mod tests {
         let (model, budget) = ThinkingBudget::try_split_from_model("some-model/XHIGH");
         assert_eq!(model, "some-model");
         assert!(matches!(budget, Some(ThinkingBudget::Xhigh)));
+    }
+
+    #[test]
+    fn test_thinking_budget_parse_max() {
+        assert!(matches!(
+            ThinkingBudget::parse("max").unwrap(),
+            ThinkingBudget::Max
+        ));
+        assert!(matches!(
+            ThinkingBudget::parse("MAX").unwrap(),
+            ThinkingBudget::Max
+        ));
+    }
+
+    #[test]
+    fn test_thinking_budget_parse_error_mentions_max() {
+        let err = ThinkingBudget::parse("invalid").unwrap_err().to_string();
+        assert!(
+            err.contains("max"),
+            "error message should mention 'max': {err}"
+        );
+    }
+
+    #[test]
+    fn test_thinking_budget_max_token_count() {
+        assert_eq!(ThinkingBudget::Max.token_count(), 131072);
+    }
+
+    #[test]
+    fn test_thinking_budget_max_codex_effort() {
+        assert_eq!(ThinkingBudget::Max.codex_effort(), "xhigh");
+    }
+
+    #[test]
+    fn try_split_max_suffix() {
+        let (model, budget) = ThinkingBudget::try_split_from_model("some-model/max");
+        assert_eq!(model, "some-model");
+        assert!(matches!(budget, Some(ThinkingBudget::Max)));
+    }
+
+    #[test]
+    fn test_parse_spec_with_max_budget() {
+        let spec = ModelSpec::parse("claude-code/anthropic/default/max").unwrap();
+        assert_eq!(spec.tool, "claude-code");
+        assert_eq!(spec.provider, "anthropic");
+        assert_eq!(spec.model, "default");
+        assert!(matches!(spec.thinking_budget, ThinkingBudget::Max));
     }
 }
