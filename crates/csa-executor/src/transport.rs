@@ -448,8 +448,37 @@ impl AcpTransport {
         if self.tool_name == "codex" {
             sanitize_args_for_codex(&mut acp_args);
         }
-        let gemini_sandbox_env_overrides =
+        let mut gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
+
+        let sandbox_plan = options.sandbox.map(|s| {
+            let mut isolation_plan = s.isolation_plan.clone();
+            if self.tool_name == "gemini-cli" {
+                ensure_gemini_runtime_home_writable_path(
+                    &mut isolation_plan,
+                    gemini_runtime_home.as_deref(),
+                );
+                if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref()
+                    && !ensure_gemini_runtime_home_writable_path(
+                        &mut isolation_plan,
+                        Some(shared_npm_cache),
+                    )
+                {
+                    env.remove("npm_config_cache");
+                    if let Some(env_overrides) = gemini_sandbox_env_overrides.as_mut() {
+                        env_overrides.remove("npm_config_cache");
+                    }
+                    tracing::warn!(
+                        path = %shared_npm_cache.display(),
+                        "shared npm cache dir not writable under sandbox; falling back to default per-session npm cache"
+                    );
+                }
+                if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
+                    apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, env_overrides);
+                }
+            }
+            isolation_plan
+        });
         let gemini_env_allowlist_applied = gemini_sandbox_env_overrides
             .as_ref()
             .map(|overrides| {
@@ -459,22 +488,6 @@ impl AcpTransport {
             })
             .unwrap_or_else(|| "none".to_string());
         let gemini_classification_env = (self.tool_name == "gemini-cli").then(|| env.clone());
-
-        let sandbox_plan = options.sandbox.map(|s| {
-            let mut isolation_plan = s.isolation_plan.clone();
-            if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
-                ensure_gemini_runtime_home_writable_path(
-                    &mut isolation_plan,
-                    gemini_runtime_home.as_deref(),
-                );
-                ensure_gemini_runtime_home_writable_path(
-                    &mut isolation_plan,
-                    shared_gemini_npm_cache.as_deref(),
-                );
-                apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, env_overrides);
-            }
-            isolation_plan
-        });
         let sandbox_tool_name = options.sandbox.map(|s| s.tool_name.clone());
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);

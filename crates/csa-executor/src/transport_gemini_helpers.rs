@@ -247,9 +247,9 @@ pub(super) fn annotate_gemini_retry_error(
 pub(super) fn ensure_gemini_runtime_home_writable_path(
     isolation_plan: &mut IsolationPlan,
     runtime_home: Option<&Path>,
-) {
+) -> bool {
     let Some(runtime_home) = runtime_home else {
-        return;
+        return false;
     };
 
     let runtime_home_is_visible = isolation_plan.writable_paths.iter().any(|existing| {
@@ -257,10 +257,10 @@ pub(super) fn ensure_gemini_runtime_home_writable_path(
             || (existing != Path::new("/tmp") && runtime_home.starts_with(existing))
     });
     if runtime_home_is_visible {
-        return;
+        return true;
     }
 
-    isolation_plan.add_writable_dir_or_creatable_parent(runtime_home);
+    isolation_plan.add_writable_dir_or_creatable_parent(runtime_home)
 }
 
 pub(super) fn gemini_sandbox_runtime_env_overrides(

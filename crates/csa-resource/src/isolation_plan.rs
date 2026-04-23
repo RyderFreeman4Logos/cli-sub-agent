@@ -67,8 +67,8 @@ pub struct IsolationPlan {
 impl IsolationPlan {
     /// Add a writable directory, pre-creating it when its parent exists so
     /// bwrap bind sources are present on cold start.
-    pub fn add_writable_dir_or_creatable_parent(&mut self, dir: &Path) {
-        add_dir_or_creatable_parent(&mut self.writable_paths, dir);
+    pub fn add_writable_dir_or_creatable_parent(&mut self, dir: &Path) -> bool {
+        add_dir_or_creatable_parent(&mut self.writable_paths, dir)
     }
 }
 
@@ -539,17 +539,18 @@ fn canonicalize_or_fallback(path: &Path) -> PathBuf {
 /// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
 /// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
 /// escaping the sandbox boundary.
-fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
+fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) -> bool {
     if is_sensitive_system_path(dir) {
         tracing::warn!(
             path = %dir.display(),
             "rejecting writable path under sensitive system directory"
         );
-        return;
+        return false;
     }
 
     if dir.exists() {
         paths.push(dir.to_path_buf());
+        true
     } else if dir
         .ancestors()
         .skip(1)
@@ -561,13 +562,21 @@ fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
         // dir or one of its intermediate parents won't exist yet; bwrap
         // requires the source path to be present.
         match std::fs::create_dir_all(dir) {
-            Ok(()) => paths.push(dir.to_path_buf()),
-            Err(e) => tracing::warn!(
-                path = %dir.display(),
-                error = %e,
-                "failed to pre-create directory for sandbox writable mount, skipping"
-            ),
+            Ok(()) => {
+                paths.push(dir.to_path_buf());
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "failed to pre-create directory for sandbox writable mount, skipping"
+                );
+                false
+            }
         }
+    } else {
+        false
     }
 }
 

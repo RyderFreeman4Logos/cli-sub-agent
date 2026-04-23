@@ -499,7 +499,10 @@ fn test_ensure_gemini_runtime_home_writable_path_adds_runtime_home_under_tmp() {
         memory_monitor_interval_seconds: None,
     };
 
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(&runtime_home)
+    ));
 
     assert!(
         isolation_plan.writable_paths.contains(&runtime_home),
@@ -527,7 +530,10 @@ fn test_ensure_gemini_runtime_home_writable_path_skips_when_parent_is_bound() {
         memory_monitor_interval_seconds: None,
     };
 
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(&runtime_home)
+    ));
 
     assert_eq!(
         isolation_plan
@@ -558,7 +564,10 @@ fn test_ensure_gemini_runtime_home_writable_path_is_noop_without_runtime_home() 
         memory_monitor_interval_seconds: None,
     };
 
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, None);
+    assert!(!ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        None
+    ));
 
     assert_eq!(
         isolation_plan.writable_paths,
@@ -627,11 +636,14 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         env.get("npm_config_cache")
             .expect("sandbox env fixture must include npm_config_cache"),
     );
-    ensure_gemini_runtime_home_writable_path(
+    assert!(ensure_gemini_runtime_home_writable_path(
         &mut isolation_plan,
         Some(runtime_home.as_path()),
-    );
-    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(shared_npm_cache.as_path()));
+    ));
+    assert!(ensure_gemini_runtime_home_writable_path(
+        &mut isolation_plan,
+        Some(shared_npm_cache.as_path())
+    ));
     let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
     apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
 
