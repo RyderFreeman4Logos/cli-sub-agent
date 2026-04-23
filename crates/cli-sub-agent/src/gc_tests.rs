@@ -259,11 +259,40 @@ scanned_at = 1
         "test precondition: cache file must exist"
     );
 
-    handle_gc_global(true, None, OutputFormat::Text).expect("global gc should succeed");
+    handle_gc_global(false, None, OutputFormat::Text).expect("global gc should succeed");
 
     assert!(
         !cache_path.exists(),
         "gc must invalidate the cached state-dir size reading"
+    );
+}
+
+#[test]
+fn test_gc_global_dry_run_preserves_state_dir_size_cache() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let state_dir = csa_config::GlobalConfig::state_base_dir().expect("state base dir");
+    fs::create_dir_all(&state_dir).unwrap();
+
+    let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
+    fs::write(
+        &cache_path,
+        r#"
+size_bytes = 999999999
+scanned_at = 1
+"#,
+    )
+    .unwrap();
+    assert!(
+        cache_path.exists(),
+        "test precondition: cache file must exist"
+    );
+
+    handle_gc_global(true, None, OutputFormat::Text).expect("global dry-run gc should succeed");
+
+    assert!(
+        cache_path.exists(),
+        "dry-run gc must not invalidate the cached state-dir size reading"
     );
 }
 

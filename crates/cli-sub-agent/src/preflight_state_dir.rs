@@ -176,11 +176,11 @@ fn get_or_compute_size(state_dir: &Path, scan_interval_seconds: u64) -> Result<u
 /// Walk the state directory tree and sum all file sizes.
 pub(crate) fn compute_state_dir_size(state_dir: &Path) -> Result<u64> {
     let mut total: u64 = 0;
-    walk_dir_size(state_dir, &mut total)?;
+    walk_dir_size(state_dir, state_dir, &mut total)?;
     Ok(total)
 }
 
-fn walk_dir_size(dir: &Path, total: &mut u64) -> Result<()> {
+fn walk_dir_size(root: &Path, dir: &Path, total: &mut u64) -> Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -206,13 +206,21 @@ fn walk_dir_size(dir: &Path, total: &mut u64) -> Result<()> {
         if ft.is_symlink() {
             continue; // Skip symlinks: avoids external overcount + loop recursion
         } else if ft.is_file() {
+            if dir == root
+                && entry
+                    .path()
+                    .file_name()
+                    .is_some_and(|name| name == std::ffi::OsStr::new(SIZE_CACHE_FILENAME))
+            {
+                continue;
+            }
             // symlink_metadata() is equivalent to metadata() for non-symlinks,
             // but we've already excluded symlinks above so either call is safe.
             if let Ok(m) = entry.metadata() {
                 *total = total.saturating_add(m.len());
             }
         } else if ft.is_dir() {
-            walk_dir_size(&entry.path(), total)?;
+            walk_dir_size(root, &entry.path(), total)?;
         }
     }
     Ok(())
@@ -302,6 +310,25 @@ mod tests {
         // Should have rescanned — real size is 512 (data file)
         // The cache file itself also exists now but we don't count it as 999.
         assert_ne!(size, 999);
+    }
+
+    #[test]
+    fn repeated_rescans_ignore_root_size_cache_file() {
+        const ONE_MIB: u64 = 1024 * 1024;
+
+        let d = tempfile::tempdir().unwrap();
+        let file = std::fs::File::create(d.path().join("exact.bin")).unwrap();
+        file.set_len(ONE_MIB).unwrap();
+
+        let first = get_or_compute_size(d.path(), 0).unwrap();
+        assert_eq!(first, ONE_MIB);
+        assert!(
+            d.path().join(SIZE_CACHE_FILENAME).exists(),
+            "first scan should write the cache file"
+        );
+
+        let second = get_or_compute_size(d.path(), 0).unwrap();
+        assert_eq!(second, ONE_MIB);
     }
 
     #[test]

@@ -292,7 +292,9 @@ pub(crate) fn handle_gc(
         }
     }
 
-    invalidate_state_dir_size_cache();
+    if !dry_run {
+        invalidate_state_dir_size_cache();
+    }
 
     Ok(())
 }
@@ -642,7 +644,9 @@ pub(crate) fn handle_gc_global(
         }
     }
 
-    invalidate_state_dir_size_cache();
+    if !dry_run {
+        invalidate_state_dir_size_cache();
+    }
 
     Ok(())
 }
