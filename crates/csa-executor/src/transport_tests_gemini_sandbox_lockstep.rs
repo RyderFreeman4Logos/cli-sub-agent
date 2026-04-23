@@ -1,81 +1,99 @@
-#[test]
-fn test_apply_gemini_sandbox_runtime_env_overrides_retracts_unbound_shared_npm_cache() {
-    let temp = tempdir().expect("tempdir");
-    let session_dir = temp.path().join("session");
+#[tokio::test]
+async fn test_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_added() {
+    let (temp, mut env, model_log_path) = setup_fake_gemini_environment(99);
     let source_home = temp.path().join("source-home");
     std::fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
-
-    let mut env = HashMap::new();
     env.insert(
         "HOME".to_string(),
         source_home.to_string_lossy().into_owned(),
     );
     env.insert("XDG_CACHE_HOME".to_string(), "/proc/nonexistent".to_string());
 
-    prepare_gemini_acp_runtime(
-        &mut env,
-        None,
-        Some(session_dir.as_path()),
-        "01TESTGEMININPMLOCKSTEP0000001",
-        &["--acp".to_string()],
-    )
-    .expect("prepare runtime");
-
-    let runtime_home =
-        gemini_runtime_home_from_env(&env).expect("runtime home should be configured");
-    let shared_npm_cache = PathBuf::from(
-        env.get("npm_config_cache")
-            .expect("prepare runtime should set npm_config_cache before sandbox coupling"),
-    );
-    assert_eq!(
-        shared_npm_cache,
-        PathBuf::from("/proc/nonexistent").join("cli-sub-agent/npm")
-    );
-
-    let mut isolation_plan = IsolationPlan {
-        resource: csa_resource::sandbox::ResourceCapability::None,
-        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
-        writable_paths: Vec::new(),
-        readable_paths: Vec::new(),
-        env_overrides: HashMap::new(),
-        degraded_reasons: Vec::new(),
-        memory_max_mb: None,
-        memory_swap_max_mb: None,
-        pids_max: None,
-        readonly_project_root: false,
-        project_root: None,
-        soft_limit_percent: None,
-        memory_monitor_interval_seconds: None,
+    let transport = AcpTransport::new("gemini-cli", None);
+    let session = build_test_meta_session(temp.path().to_str().expect("utf8 temp path"));
+    let sandbox = SandboxTransportConfig {
+        isolation_plan: IsolationPlan {
+            resource: csa_resource::sandbox::ResourceCapability::None,
+            filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+            writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
+            env_overrides: HashMap::new(),
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
+        },
+        tool_name: "gemini-cli".to_string(),
+        best_effort: false,
+        session_id: "01HTESTGEMININPMLOCKSTEP0000001".to_string(),
+    };
+    let options = TransportOptions {
+        stream_mode: StreamMode::BufferOnly,
+        idle_timeout_seconds: 30,
+        acp_crash_max_attempts: 2,
+        initial_response_timeout: super::ResolvedTimeout(None),
+        liveness_dead_seconds: 30,
+        stdin_write_timeout_seconds: 30,
+        acp_init_timeout_seconds: 30,
+        termination_grace_period_seconds: 1,
+        output_spool: None,
+        output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+        output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+        setting_sources: None,
+        sandbox: Some(&sandbox),
     };
 
-    assert!(ensure_gemini_runtime_home_writable_path(
-        &mut isolation_plan,
-        Some(runtime_home.as_path())
-    ));
-    let shared_npm_cache_bound = ensure_gemini_runtime_home_writable_path(
-        &mut isolation_plan,
-        Some(shared_npm_cache.as_path()),
+    let error = transport
+        .execute(
+            "shared npm cache bind failure should fail fast",
+            None,
+            &session,
+            Some(&env),
+            options,
+        )
+        .await
+        .expect_err("sandbox plan assembly should fail fast");
+
+    let error_text = format!("{error:#}");
+    let denied_path = "/proc/nonexistent/cli-sub-agent/npm";
+    assert!(
+        error_text.contains(denied_path),
+        "error should name denied path, got: {error_text}"
     );
-    if !shared_npm_cache_bound {
-        env.remove("npm_config_cache");
-    }
-    let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
-    apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
+    assert!(
+        error_text.contains("filesystem_sandbox") || error_text.contains("writable_paths"),
+        "error should point at sandbox writable_paths config, got: {error_text}"
+    );
+    assert!(
+        error_text.contains("XDG_CACHE_HOME"),
+        "error should mention XDG_CACHE_HOME remediation, got: {error_text}"
+    );
 
     assert!(
-        !shared_npm_cache_bound,
-        "sensitive /proc path must not be accepted as a writable bind source"
-    );
-    assert!(
-        !isolation_plan.writable_paths.contains(&shared_npm_cache),
-        "sandbox must skip the shared npm cache bind when the host path cannot be prepared"
-    );
-    assert!(
         !env.contains_key("npm_config_cache"),
-        "spawn env must retract npm_config_cache when the writable bind cannot be added"
+        "caller env must not leak a partially-coupled npm_config_cache override"
     );
     assert!(
-        !isolation_plan.env_overrides.contains_key("npm_config_cache"),
-        "sandbox env overrides must stay in lockstep with writable binds (#1047)"
+        !sandbox.isolation_plan.env_overrides.contains_key("npm_config_cache"),
+        "base sandbox config must remain untouched when plan assembly aborts"
+    );
+    assert!(
+        !sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&PathBuf::from(denied_path)),
+        "base sandbox config must not accumulate failed writable binds"
+    );
+    assert!(
+        !model_log_path.exists(),
+        "gemini should not launch after sandbox plan failure"
+    );
+    assert!(
+        !model_log_path.with_file_name("attempts.txt").exists(),
+        "sandbox plan failure should abort before the fake gemini process runs"
     );
 }

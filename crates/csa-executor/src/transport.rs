@@ -448,37 +448,43 @@ impl AcpTransport {
         if self.tool_name == "codex" {
             sanitize_args_for_codex(&mut acp_args);
         }
-        let mut gemini_sandbox_env_overrides =
+        let gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
 
-        let sandbox_plan = options.sandbox.map(|s| {
-            let mut isolation_plan = s.isolation_plan.clone();
-            if self.tool_name == "gemini-cli" {
-                ensure_gemini_runtime_home_writable_path(
-                    &mut isolation_plan,
-                    gemini_runtime_home.as_deref(),
-                );
-                if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref()
-                    && !ensure_gemini_runtime_home_writable_path(
+        let sandbox_plan = options
+            .sandbox
+            .map(|s| -> Result<_> {
+                let mut isolation_plan = s.isolation_plan.clone();
+                if self.tool_name == "gemini-cli" {
+                    ensure_gemini_runtime_home_writable_path(
                         &mut isolation_plan,
-                        Some(shared_npm_cache),
-                    )
-                {
-                    env.remove("npm_config_cache");
-                    if let Some(env_overrides) = gemini_sandbox_env_overrides.as_mut() {
-                        env_overrides.remove("npm_config_cache");
-                    }
-                    tracing::warn!(
-                        path = %shared_npm_cache.display(),
-                        "shared npm cache dir not writable under sandbox; falling back to default per-session npm cache"
+                        gemini_runtime_home.as_deref(),
                     );
+                    if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref()
+                        && !ensure_gemini_runtime_home_writable_path(
+                            &mut isolation_plan,
+                            Some(shared_npm_cache),
+                        )
+                    {
+                        return Err(anyhow!(
+                            "gemini-cli sandbox plan failed: denied path {} for intent \
+                             'bwrap writable bind for shared npm cache (#1047 Phase 1 optimization)'. \
+                             Set XDG_CACHE_HOME to a writable location, or add this path \
+                             (or a writable parent) to [filesystem_sandbox].writable_paths or \
+                             [tools.gemini-cli].filesystem_sandbox.writable_paths.",
+                            shared_npm_cache.display(),
+                        ));
+                    }
+                    if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
+                        apply_gemini_sandbox_runtime_env_overrides(
+                            &mut isolation_plan,
+                            env_overrides,
+                        );
+                    }
                 }
-                if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
-                    apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, env_overrides);
-                }
-            }
-            isolation_plan
-        });
+                Ok(isolation_plan)
+            })
+            .transpose()?;
         let gemini_env_allowlist_applied = gemini_sandbox_env_overrides
             .as_ref()
             .map(|overrides| {
