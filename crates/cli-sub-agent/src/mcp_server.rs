@@ -131,8 +131,9 @@ fn get_tools() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "csa_gc".to_string(),
-            description: "Run garbage collection to clean stale locks and empty sessions"
-                .to_string(),
+            description:
+                "Run garbage collection to clean stale locks, old sessions, or runtime payloads"
+                    .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -142,7 +143,11 @@ fn get_tools() -> Vec<McpToolDef> {
                     },
                     "max_age_days": {
                         "type": "number",
-                        "description": "Remove sessions not accessed within N days"
+                        "description": "Age threshold in days for deleting whole sessions or reaping runtime/"
+                    },
+                    "reap_runtime": {
+                        "type": "boolean",
+                        "description": "Reap completed sessions' runtime/ payload instead of deleting the full session"
                     }
                 }
             }),
@@ -416,9 +421,18 @@ async fn handle_gc_tool(args: Value) -> Result<Value> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let max_age_days = args.get("max_age_days").and_then(|v| v.as_u64());
+    let reap_runtime = args
+        .get("reap_runtime")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Call gc logic (MCP server always uses Text format, response is wrapped in JSON-RPC)
-    crate::gc::handle_gc(dry_run, max_age_days, crate::OutputFormat::Text)?;
+    crate::gc::handle_gc(
+        dry_run,
+        max_age_days,
+        reap_runtime,
+        crate::OutputFormat::Text,
+    )?;
 
     let msg = if dry_run {
         "Garbage collection dry-run completed (see logs for details)"

@@ -3,6 +3,8 @@
 
 #[path = "../src/cli.rs"]
 mod cli_defs;
+#[path = "../src/gc_args.rs"]
+mod gc;
 
 use clap::Parser;
 use cli_defs::{AuditCommands, Cli, Commands, McpHubCommands, validate_command_args};

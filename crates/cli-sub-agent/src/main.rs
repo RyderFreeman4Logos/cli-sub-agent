@@ -461,15 +461,16 @@ async fn run() -> Result<()> {
         } => {
             config_cmds::handle_init(non_interactive, full, template)?;
         }
-        Commands::Gc {
+        Commands::Gc(gc::GcArgs {
             dry_run,
             max_age_days,
+            reap_runtime,
             global,
-        } => {
+        }) => {
             if global {
-                gc::handle_gc_global(dry_run, max_age_days, output_format)?;
+                gc::handle_gc_global(dry_run, max_age_days, reap_runtime, output_format)?;
             } else {
-                gc::handle_gc(dry_run, max_age_days, output_format)?;
+                gc::handle_gc(dry_run, max_age_days, reap_runtime, output_format)?;
             }
         }
         Commands::Config { cmd } => match cmd {

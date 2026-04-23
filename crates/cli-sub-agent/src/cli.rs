@@ -19,7 +19,6 @@ pub use cli_review::*;
 #[path = "cli_tokuin.rs"]
 mod cli_tokuin;
 pub use cli_tokuin::*;
-
 #[path = "cli_xurl.rs"]
 mod cli_xurl;
 pub use cli_xurl::*;
@@ -287,20 +286,8 @@ pub enum Commands {
         template: bool,
     },
 
-    /// Garbage collect expired locks and empty sessions
-    Gc {
-        /// Show what would be removed without actually removing
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Remove sessions not accessed within N days
-        #[arg(long)]
-        max_age_days: Option<u64>,
-
-        /// Scan all projects under ~/.local/state/cli-sub-agent/ (not just current project)
-        #[arg(long)]
-        global: bool,
-    },
+    /// Garbage collect stale session artifacts
+    Gc(crate::gc::GcArgs),
 
     /// Show/manage configuration
     Config {
@@ -443,11 +430,7 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum HooksCommands {
-    /// Install the merge guard `gh` wrapper to PATH
-    ///
-    /// Writes a `gh` wrapper script that intercepts `gh pr merge` and
-    /// enforces the pr-bot workflow.  The wrapper must appear before the
-    /// real `gh` in PATH.
+    /// Install a `gh` wrapper that intercepts `gh pr merge` before the real binary in PATH
     InstallMergeGuard {
         /// Custom install directory (default: ~/.local/bin/csa-gh-guard)
         #[arg(long, value_name = "DIR")]
@@ -465,19 +448,15 @@ pub struct ClaudeSubAgentArgs {
     /// Tool to use (overrides config-based selection)
     #[arg(long)]
     pub tool: Option<ToolArg>,
-
     /// Resume existing session
     #[arg(short, long)]
     pub session: Option<String>,
-
     /// Override model
     #[arg(short, long)]
     pub model: Option<String>,
-
     /// Model spec override
     #[arg(long)]
     pub model_spec: Option<String>,
-
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,

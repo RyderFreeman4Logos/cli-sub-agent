@@ -17,6 +17,14 @@ struct SizeCache {
 
 const SIZE_CACHE_FILENAME: &str = ".size-cache.toml";
 
+#[derive(Debug, Clone, Copy)]
+struct StateDirUsage {
+    size_bytes: u64,
+    size_mb: u64,
+    cap_bytes: u64,
+    cap_mb: u64,
+}
+
 /// Result of the state directory preflight check.
 pub(crate) enum StateDirCheckResult {
     /// No cap configured or size is within limits.
@@ -67,10 +75,93 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
         return StateDirCheckResult::Ok;
     }
 
+    let Some(usage) = compute_state_dir_usage(config) else {
+        return StateDirCheckResult::Ok;
+    };
+
+    match config.on_exceed {
+        csa_config::StateDirOnExceed::Error => StateDirCheckResult::Error(anyhow!(
+            "{}",
+            build_error_message(
+                usage.size_mb,
+                usage.cap_mb,
+                usage.size_bytes,
+                usage.cap_bytes
+            )
+        )),
+        csa_config::StateDirOnExceed::AutoGc => {
+            match crate::gc::reap_runtime_payloads_global(
+                false,
+                crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS,
+            ) {
+                Ok(stats) => {
+                    crate::gc::invalidate_state_dir_size_cache();
+                    info!(
+                        sessions_reaped = stats.sessions_reaped,
+                        bytes_reclaimed = stats.bytes_reclaimed,
+                        max_age_days = crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS,
+                        "State-dir auto-gc reaped runtime payloads"
+                    );
+                    let Some(post_gc_usage) = compute_state_dir_usage(config) else {
+                        return StateDirCheckResult::Ok;
+                    };
+                    if post_gc_usage.size_bytes <= post_gc_usage.cap_bytes {
+                        StateDirCheckResult::Ok
+                    } else {
+                        StateDirCheckResult::Warn(build_warning_preamble(
+                            post_gc_usage.size_mb,
+                            post_gc_usage.cap_mb,
+                            Some(&format!(
+                                "Auto-gc reaped runtime/ for {} session(s), reclaiming {} bytes, but the cap is still exceeded.",
+                                stats.sessions_reaped, stats.bytes_reclaimed
+                            )),
+                        ))
+                    }
+                }
+                Err(err) => StateDirCheckResult::Warn(build_warning_preamble(
+                    usage.size_mb,
+                    usage.cap_mb,
+                    Some(&format!("Auto-gc failed: {err}")),
+                )),
+            }
+        }
+        csa_config::StateDirOnExceed::Warn => {
+            StateDirCheckResult::Warn(build_warning_preamble(usage.size_mb, usage.cap_mb, None))
+        }
+    }
+}
+
+fn build_error_message(actual_mb: u64, cap_mb: u64, actual_bytes: u64, cap_bytes: u64) -> String {
+    format!(
+        "CSA state directory is {actual_mb} MB / {cap_mb} MB cap exceeded \
+         ({actual_bytes} bytes / {cap_bytes} bytes) with `on_exceed = \"error\"`.\n\
+         To reclaim space: `csa gc --reap-runtime --max-age-days 30 --global`\n\
+         Or raise `state_dir.max_size_mb` in ~/.config/cli-sub-agent/config.toml."
+    )
+}
+
+fn build_warning_preamble(actual_mb: u64, cap_mb: u64, note: Option<&str>) -> String {
+    let note_block = note
+        .map(|note| format!("\nNote: {note}\n"))
+        .unwrap_or_default();
+    format!(
+        "\n<state-dir-warning>\n\
+         CSA state directory is {actual_mb} MB / {cap_mb} MB cap exceeded.\n\
+         To reclaim space: `csa gc --reap-runtime --max-age-days 30 --global`\n\
+         or raise `state_dir.max_size_mb` in\n\
+         ~/.config/cli-sub-agent/config.toml.\n\
+         Common large consumers: runtime/gemini-home/.npm (~186 MB each) -- if\n\
+         you're on csa >= 0.1.514, Phase 1 of #1047 should have mitigated this.\
+         {note_block}\n\
+         </state-dir-warning>\n"
+    )
+}
+
+fn compute_state_dir_usage(config: &StateDirConfig) -> Option<StateDirUsage> {
     let state_roots = csa_config::paths::state_dir_all_roots();
     if state_roots.is_empty() {
         debug!("No existing state directory roots found; skipping size check");
-        return StateDirCheckResult::Ok;
+        return None;
     }
 
     let mut size_bytes = 0u64;
@@ -85,66 +176,26 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
                     error = %e,
                     "Failed to compute state directory size; skipping check"
                 );
-                return StateDirCheckResult::Ok;
+                return None;
             }
         }
     }
 
-    let size_mb = size_bytes / (1024 * 1024);
     let cap_mb = config.max_size_mb;
     let cap_bytes = cap_mb.saturating_mul(1024 * 1024);
-
+    let size_mb = size_bytes / (1024 * 1024);
     if size_bytes <= cap_bytes {
         debug!(size_mb, cap_mb, "State directory within cap");
-        return StateDirCheckResult::Ok;
+        return None;
     }
 
     info!(size_mb, cap_mb, on_exceed = ?config.on_exceed, "State directory exceeds cap");
-
-    match config.on_exceed {
-        csa_config::StateDirOnExceed::Error => StateDirCheckResult::Error(anyhow!(
-            "{}",
-            build_error_message(size_mb, cap_mb, size_bytes, cap_bytes)
-        )),
-        csa_config::StateDirOnExceed::AutoGc => {
-            // Phase 3 will wire actual gc invocation. For now, fall back to warn.
-            StateDirCheckResult::Warn(build_warning_preamble(
-                size_mb, cap_mb, true, // auto_gc_note
-            ))
-        }
-        csa_config::StateDirOnExceed::Warn => {
-            StateDirCheckResult::Warn(build_warning_preamble(size_mb, cap_mb, false))
-        }
-    }
-}
-
-fn build_error_message(actual_mb: u64, cap_mb: u64, actual_bytes: u64, cap_bytes: u64) -> String {
-    format!(
-        "CSA state directory is {actual_mb} MB / {cap_mb} MB cap exceeded \
-         ({actual_bytes} bytes / {cap_bytes} bytes) with `on_exceed = \"error\"`.\n\
-         To reclaim space: `csa gc --max-age-days 5 --global`\n\
-         Or raise `state_dir.max_size_mb` in ~/.config/cli-sub-agent/config.toml."
-    )
-}
-
-fn build_warning_preamble(actual_mb: u64, cap_mb: u64, auto_gc_pending: bool) -> String {
-    let auto_gc_note = if auto_gc_pending {
-        "\nNote: `on_exceed = \"auto-gc\"` is configured but not yet implemented (Phase 3).\n\
-         Falling back to warning mode.\n"
-    } else {
-        ""
-    };
-    format!(
-        "\n<state-dir-warning>\n\
-         CSA state directory is {actual_mb} MB / {cap_mb} MB cap exceeded.\n\
-         To reclaim space: `csa gc --max-age-days 5 --global` (removes sessions\n\
-         older than 5 days) or raise `state_dir.max_size_mb` in\n\
-         ~/.config/cli-sub-agent/config.toml.\n\
-         Common large consumers: runtime/gemini-home/.npm (~186 MB each) -- if\n\
-         you're on csa >= 0.1.514, Phase 1 of #1047 should have mitigated this.\
-         {auto_gc_note}\n\
-         </state-dir-warning>\n"
-    )
+    Some(StateDirUsage {
+        size_bytes,
+        size_mb,
+        cap_bytes,
+        cap_mb,
+    })
 }
 
 /// Get the cached size or recompute if stale.
@@ -255,7 +306,11 @@ fn now_unix_secs() -> u64 {
 mod tests {
     use super::*;
     use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
+    use crate::test_session_sandbox::ScopedSessionSandbox;
     use csa_config::{StateDirConfig, StateDirOnExceed};
+    use csa_session::{
+        SessionArtifact, SessionPhase, SessionResult, create_session, save_result, save_session,
+    };
 
     #[test]
     fn compute_size_of_temp_dir() {
@@ -348,18 +403,17 @@ mod tests {
 
     #[test]
     fn on_exceed_warn_produces_preamble() {
-        let preamble = build_warning_preamble(500, 100, false);
+        let preamble = build_warning_preamble(500, 100, None);
         assert!(preamble.contains("500 MB"));
         assert!(preamble.contains("100 MB"));
         assert!(preamble.contains("csa gc"));
-        assert!(!preamble.contains("auto-gc"));
+        assert!(preamble.contains("reap-runtime"));
     }
 
     #[test]
-    fn on_exceed_auto_gc_shows_note() {
-        let preamble = build_warning_preamble(500, 100, true);
-        assert!(preamble.contains("auto-gc"));
-        assert!(preamble.contains("not yet implemented"));
+    fn warning_preamble_includes_optional_note() {
+        let preamble = build_warning_preamble(500, 100, Some("auto-gc ran"));
+        assert!(preamble.contains("Note: auto-gc ran"));
     }
 
     #[test]
@@ -608,6 +662,94 @@ mod tests {
         assert!(
             result.is_ok(),
             "Warn mode must not return Err from enforce_state_dir_cap"
+        );
+    }
+
+    fn seed_retired_session_with_runtime(
+        project_root: &std::path::Path,
+        last_accessed: chrono::DateTime<chrono::Utc>,
+        runtime_bytes: u64,
+    ) -> std::path::PathBuf {
+        std::fs::create_dir_all(project_root).unwrap();
+
+        let mut session = create_session(project_root, Some("auto-gc"), None, Some("codex"))
+            .expect("create session");
+        session.phase = SessionPhase::Retired;
+        session.last_accessed = last_accessed;
+        save_session(&session).expect("persist retired session");
+
+        let session_root = csa_session::get_session_root(project_root).expect("session root");
+        let session_dir = session_root.join("sessions").join(&session.meta_session_id);
+        let runtime_blob = session_dir
+            .join("runtime")
+            .join("gemini-home")
+            .join(".npm")
+            .join("_cacache")
+            .join("blob.bin");
+        std::fs::create_dir_all(runtime_blob.parent().unwrap()).unwrap();
+        let file = std::fs::File::create(&runtime_blob).unwrap();
+        file.set_len(runtime_bytes).unwrap();
+
+        let now = chrono::Utc::now();
+        save_result(
+            project_root,
+            &session.meta_session_id,
+            &SessionResult {
+                status: "success".to_string(),
+                exit_code: 0,
+                summary: "completed".to_string(),
+                tool: "codex".to_string(),
+                started_at: now,
+                completed_at: now,
+                events_count: 0,
+                artifacts: vec![SessionArtifact::new("output/summary.md")],
+                peak_memory_mb: None,
+                manager_fields: Default::default(),
+            },
+        )
+        .expect("save result");
+        std::fs::write(session_dir.join("stderr.log"), "stderr").unwrap();
+        std::fs::write(session_dir.join("output/summary.md"), "summary").unwrap();
+
+        session_dir.join("runtime")
+    }
+
+    #[test]
+    fn auto_gc_default_runtime_reap_age_is_30_days() {
+        assert_eq!(crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS, 30);
+    }
+
+    #[test]
+    fn auto_gc_reaps_runtime_and_next_check_is_ok() {
+        const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+        let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
+        let project_root = temp.path().join("project");
+        let runtime_dir = seed_retired_session_with_runtime(
+            &project_root,
+            chrono::Utc::now()
+                - chrono::Duration::days(crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS as i64 + 10),
+            TWO_MIB,
+        );
+
+        let config = StateDirConfig {
+            max_size_mb: 1,
+            scan_interval_seconds: 0,
+            on_exceed: StateDirOnExceed::AutoGc,
+        };
+
+        assert!(
+            matches!(check_state_dir_size(&config), StateDirCheckResult::Ok),
+            "auto-gc should reap old runtime payloads until the cap check passes"
+        );
+        assert!(
+            !runtime_dir.exists(),
+            "runtime/ should be removed by auto-gc when the session is old enough"
+        );
+        assert!(
+            matches!(check_state_dir_size(&config), StateDirCheckResult::Ok),
+            "subsequent checks should stay within the cap after auto-gc"
         );
     }
 }
