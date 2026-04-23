@@ -459,3 +459,107 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_uncertain
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+// ─── #1048 MEDIUM regression tests ──────────────────────────────────────
+
+/// #1048 M1: empty findings.toml + review-findings.json with ONLY low
+/// findings → verdict must report severity_counts.low = 1 and decision = pass.
+///
+/// Bug: cross_check_json_for_blocking() returned None for low-only JSON,
+/// so the caller rebuilt from zero TOML counts, dropping the low count.
+#[test]
+fn issue_1048_m1_low_only_json_preserves_severity_counts_low() {
+    let session_id = "01TEST1048M1LOWONLYJSON0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1048-m1-low-only-json", session_id);
+
+    // True-empty findings.toml (no synthetic marker).
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+
+    // review-findings.json with ONLY a low-severity finding.
+    let json_findings = vec![make_finding(Severity::Low, "advisory-low")];
+    let json_artifact = json!({
+        "findings": json_findings,
+        "severity_summary": SeveritySummary { critical: 0, high: 0, medium: 0, low: 1 },
+        "overall_risk": "low"
+    });
+    fs::write(
+        session_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&json_artifact).expect("serialize"),
+    )
+    .expect("write review-findings.json");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1048 M1: low-only JSON must not block"
+    );
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(
+        artifact.severity_counts.get(&Severity::Low),
+        Some(&1),
+        "#1048 M1: low count from JSON must be preserved in verdict"
+    );
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+/// #1048 M2: full.md transcript with only [info]/[p4] advisory findings
+/// → decision = pass, not fail.
+///
+/// Bug: derive_decision_from_text() treated any non-zero count as blocking.
+#[test]
+fn issue_1048_m2_info_only_full_md_transcript_emits_pass() {
+    let session_id = "01TEST1048M2INFOONLYFULLMD0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1048-m2-info-only-full-md", session_id);
+
+    // No findings.toml, no review-findings.json — only full.md.
+    let full_output = [json!({"type":"item.completed","item":{
+        "id":"item_1",
+        "type":"agent_message",
+        "text":"<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nFindings\n1. [Info][style] Minor formatting inconsistency.\n2. [P4][nit] Extra whitespace.\n\nNo blocking issues found in this scope.\nOverall risk: low\n<!-- CSA:SECTION:details:END -->"
+    }})]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).expect("serialize transcript line"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write full output transcript");
+
+    let meta = make_review_meta(session_id);
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1048 M2: [info]/[p4]-only transcript must not block"
+    );
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(
+        artifact.severity_counts.get(&Severity::Low),
+        Some(&2),
+        "#1048 M2: two advisory findings should map to low count"
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}

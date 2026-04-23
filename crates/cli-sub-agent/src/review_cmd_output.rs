@@ -10,9 +10,7 @@ use csa_executor::{
 };
 use csa_session::output_parser::parse_sections;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
-use csa_session::{
-    Finding, OutputSection, ReviewVerdictArtifact, Severity, SeveritySummary, write_review_verdict,
-};
+use csa_session::{Finding, OutputSection, ReviewVerdictArtifact, Severity, write_review_verdict};
 use regex::Regex;
 use serde::Deserialize;
 use tracing::{debug, warn};
@@ -26,7 +24,8 @@ mod diagnostics;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
 use artifacts::{
-    load_findings_toml_from_output, load_review_artifact_from_output, severity_counts_for_artifact,
+    has_blocking_severity, json_severity_counts_if_present, load_findings_toml_from_output,
+    load_review_artifact_from_output, severity_counts_are_zero, severity_counts_for_artifact,
     severity_counts_for_findings_toml,
 };
 use clean_detection::{
@@ -352,11 +351,24 @@ fn derive_review_verdict_artifact(
         } else {
             // Non-synthetic (trusted) or non-empty findings.toml: cross-check
             // review-findings.json for the empty case (round 2 logic), then return.
-            if findings_file.findings.is_empty()
-                && severity_counts_are_zero(&severity_counts)
-                && let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)?
-            {
-                return Ok(artifact);
+            if findings_file.findings.is_empty() && severity_counts_are_zero(&severity_counts) {
+                if let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)? {
+                    return Ok(artifact);
+                }
+                // No blocking JSON findings, but JSON may have low-only counts.
+                // Preserve them so downstream telemetry sees the low count (#1048 M1).
+                if let Some(json_counts) =
+                    json_severity_counts_if_present(session_dir, zero_severity_counts)?
+                {
+                    let decision = derive_decision_from_severity_counts(
+                        &json_counts,
+                        false, // JSON has findings (low-only)
+                        None,
+                        ReviewDecision::from_str(&meta.decision).ok(),
+                        || review_contains_prose_clean_conclusion(session_dir),
+                    )?;
+                    return Ok(verdict_from_meta(meta, decision, json_counts));
+                }
             }
 
             let decision = derive_decision_from_severity_counts(
@@ -495,25 +507,15 @@ fn looks_like_review_message(text: &str) -> bool {
         })
 }
 
-fn severity_counts_from_summary(
-    summary: &SeveritySummary,
-) -> std::collections::BTreeMap<Severity, u32> {
+fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
     [
-        (Severity::Critical, summary.critical),
-        (Severity::High, summary.high),
-        (Severity::Medium, summary.medium),
-        (Severity::Low, summary.low),
+        (Severity::Critical, 0),
+        (Severity::High, 0),
+        (Severity::Medium, 0),
+        (Severity::Low, 0),
     ]
     .into_iter()
     .collect()
-}
-
-fn severity_counts_are_zero(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
-    counts.values().all(|count| *count == 0)
-}
-
-fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
-    severity_counts_from_summary(&SeveritySummary::default())
 }
 
 fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity, u32> {
@@ -547,13 +549,6 @@ fn parse_overall_risk_from_text(text: &str) -> Option<String> {
         .captures(text)
         .and_then(|captures| captures.get(1))
         .map(|level| level.as_str().to_ascii_lowercase())
-}
-
-/// Whether the severity counts contain any blocking findings (critical, high, or medium).
-fn has_blocking_severity(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
-    counts
-        .iter()
-        .any(|(severity, count)| *count > 0 && *severity > Severity::Low)
 }
 
 /// Derive the review decision from structured severity counts.
@@ -625,7 +620,9 @@ fn derive_decision_from_text(
     counts: &std::collections::BTreeMap<Severity, u32>,
     overall_risk: Option<&str>,
 ) -> ReviewDecision {
-    if counts.values().any(|count| *count > 0) {
+    // Only blocking severities (critical/high/medium) cause fail.
+    // Low-only findings are advisory and do not block (#1048 M2).
+    if has_blocking_severity(counts) {
         return ReviewDecision::Fail;
     }
     if contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES") {

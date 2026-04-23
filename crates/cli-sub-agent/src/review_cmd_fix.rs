@@ -257,6 +257,21 @@ fn persist_fix_final_artifacts(
                         "Failed to remove stale review-findings.json after CLEAN convergence"
                     );
                 }
+                // Clear the synthetic-empty sidecar marker so
+                // derive_review_verdict_artifact does not fall through to
+                // full.md after clean convergence (#1048 M3).
+                let synthetic_marker = session_dir
+                    .join("output")
+                    .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
+                if let Err(error) = std::fs::remove_file(&synthetic_marker)
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    warn!(
+                        session_id = %review_meta.session_id,
+                        error = %error,
+                        "Failed to remove synthetic marker after CLEAN convergence"
+                    );
+                }
             }
             Err(error) => {
                 warn!(
@@ -606,6 +621,77 @@ mod tests {
                 findings: vec![sample_stale_finding()],
             }
         );
+    }
+
+    /// #1048 M3: --fix session that started from synthetic-empty initial
+    /// review, converges clean → synthetic marker must be removed alongside
+    /// findings.toml and review-findings.json.
+    ///
+    /// Bug: persist_fix_final_artifacts(converged_clean=true) cleared
+    /// findings.toml + review-findings.json but left the synthetic sidecar
+    /// marker in place, causing derive_review_verdict_artifact to fall
+    /// through to full.md on subsequent reads.
+    #[test]
+    fn persist_fix_final_artifacts_clears_synthetic_marker_on_clean_convergence() {
+        let project_root = temp_project_root("persist-fix-synthetic-marker-clean");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXSYNTHETICMARKERCLEAN");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        // Create the synthetic marker (simulates a fix session that started
+        // from a synthetic-empty initial review).
+        let marker_path = session_dir
+            .join("output")
+            .join(super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
+        fs::write(&marker_path, b"").expect("write synthetic marker");
+
+        // Seed stale review-findings.json to verify it's also removed.
+        let stale_json = serde_json::json!({
+            "findings": [{
+                "severity": "medium",
+                "fid": "stale-medium-synth",
+                "file": "src/lib.rs",
+                "line": 10,
+                "rule_id": "rule.stale",
+                "summary": "Stale finding from pre-fix review",
+                "engine": "reviewer"
+            }],
+            "severity_summary": { "critical": 0, "high": 0, "medium": 1, "low": 0 },
+            "overall_risk": "medium"
+        });
+        fs::write(
+            session_dir.join("review-findings.json"),
+            serde_json::to_vec_pretty(&stale_json).expect("serialize stale json"),
+        )
+        .expect("write stale review-findings.json");
+
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+        // findings.toml must be empty.
+        let findings_path = session_dir.join("output").join("findings.toml");
+        let parsed: FindingsFile =
+            toml::from_str(&fs::read_to_string(&findings_path).expect("read findings.toml"))
+                .expect("parse findings.toml");
+        assert_eq!(parsed, FindingsFile::default());
+
+        // review-findings.json must be removed.
+        assert!(
+            !session_dir.join("review-findings.json").exists(),
+            "review-findings.json should be removed after clean convergence"
+        );
+
+        // Synthetic marker must be removed (#1048 M3).
+        assert!(
+            !marker_path.exists(),
+            "#1048 M3: synthetic marker must be removed after clean convergence"
+        );
+
+        // Verdict must report pass.
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: csa_session::ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.decision, ReviewDecision::Pass);
     }
 
     #[test]

@@ -68,6 +68,38 @@ pub(super) fn severity_counts_for_artifact(
     counts
 }
 
+/// Load severity counts from review-findings.json when present.
+///
+/// Returns `Some(counts)` if JSON exists and has any non-zero counts (even
+/// low-only). Returns `None` if JSON is absent, unparseable, or all-zero.
+///
+/// Used to preserve informational low-severity counts in the final verdict
+/// when findings.toml is empty but JSON recorded low findings (#1048 M1).
+pub(super) fn json_severity_counts_if_present(
+    session_dir: &Path,
+    zero_severity_counts: impl Fn() -> std::collections::BTreeMap<Severity, u32>,
+) -> Result<Option<std::collections::BTreeMap<Severity, u32>>, anyhow::Error> {
+    let Some(json_artifact) = load_review_artifact_from_output(session_dir)? else {
+        return Ok(None);
+    };
+    let json_counts = severity_counts_for_artifact(&json_artifact, zero_severity_counts);
+    if json_counts.values().all(|count| *count == 0) {
+        return Ok(None);
+    }
+    Ok(Some(json_counts))
+}
+
+/// Whether the severity counts contain any blocking findings (critical, high, or medium).
+pub(super) fn has_blocking_severity(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
+    counts
+        .iter()
+        .any(|(severity, count)| *count > 0 && *severity > Severity::Low)
+}
+
+pub(super) fn severity_counts_are_zero(counts: &std::collections::BTreeMap<Severity, u32>) -> bool {
+    counts.values().all(|count| *count == 0)
+}
+
 pub(super) fn severity_counts_for_findings_toml(
     artifact: &FindingsFile,
     zero_severity_counts: impl Fn() -> std::collections::BTreeMap<Severity, u32>,
