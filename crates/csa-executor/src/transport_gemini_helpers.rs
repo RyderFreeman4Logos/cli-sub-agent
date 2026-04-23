@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 
 use csa_process::ExecutionResult;
 use csa_resource::isolation_plan::IsolationPlan;
@@ -322,6 +322,29 @@ pub(super) fn apply_gemini_sandbox_runtime_env_overrides(
             .iter()
             .map(|(key, value)| (key.clone(), value.clone())),
     );
+}
+
+pub(super) fn apply_gemini_sandbox_runtime_contract(
+    isolation_plan: &mut IsolationPlan,
+    runtime_home: Option<&Path>,
+    env: &HashMap<String, String>,
+) -> Result<()> {
+    ensure_gemini_runtime_home_writable_path(isolation_plan, runtime_home);
+    if let Some(shared_npm_cache) = env.get("npm_config_cache").map(Path::new)
+        && !ensure_gemini_runtime_home_writable_path(isolation_plan, Some(shared_npm_cache))
+    {
+        return Err(anyhow!(
+            "gemini-cli sandbox plan failed: denied path {} for intent \
+             'bwrap writable bind for shared npm cache (#1047 Phase 1 optimization)'. \
+             Set XDG_CACHE_HOME to a writable location, or add this path \
+             (or a writable parent) to [filesystem_sandbox].writable_paths or \
+             [tools.gemini-cli].filesystem_sandbox.writable_paths.",
+            shared_npm_cache.display(),
+        ));
+    }
+    let env_overrides = gemini_sandbox_runtime_env_overrides(env);
+    apply_gemini_sandbox_runtime_env_overrides(isolation_plan, &env_overrides);
+    Ok(())
 }
 
 pub(crate) fn is_gemini_oauth_prompt_result(execution: &ExecutionResult) -> bool {

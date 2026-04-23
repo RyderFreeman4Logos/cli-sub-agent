@@ -1,5 +1,5 @@
-/// Redirect session I/O into a tempdir so tests work in sandboxed CI environments
-/// (avoids "Read-only file system" on the real XDG_STATE_HOME).
+/// Redirect session state/cache I/O into a tempdir so tests work in sandboxed
+/// CI environments (avoids read-only host XDG paths leaking into test runs).
 ///
 /// Also clears `CSA_DAEMON_*` env vars to prevent daemon session ID leaking
 /// into fresh test sessions.
@@ -34,16 +34,22 @@ impl ScopedSessionSandbox {
 
     fn from_guard(tmp: &tempfile::TempDir, lock: OwnedMutexGuard<()>) -> Self {
         let keys: &[&'static str] = &[
+            "HOME",
             "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
             "CSA_DAEMON_SESSION_ID",
             "CSA_DAEMON_SESSION_DIR",
             "CSA_DAEMON_PROJECT_ROOT",
         ];
         let originals: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+        let home_path = tmp.path();
         let state_path = tmp.path().join("state");
+        let cache_path = tmp.path().join("cache");
         // SAFETY: test-scoped env mutation protected by TEST_ENV_LOCK.
         unsafe {
+            std::env::set_var("HOME", home_path);
             std::env::set_var("XDG_STATE_HOME", state_path.to_str().unwrap());
+            std::env::set_var("XDG_CACHE_HOME", cache_path.to_str().unwrap());
             std::env::remove_var("CSA_DAEMON_SESSION_ID");
             std::env::remove_var("CSA_DAEMON_SESSION_DIR");
             std::env::remove_var("CSA_DAEMON_PROJECT_ROOT");

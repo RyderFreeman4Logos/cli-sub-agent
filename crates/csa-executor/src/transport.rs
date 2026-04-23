@@ -34,9 +34,9 @@ use transport_gemini_helpers::{
     GeminiAcpInitFailureClassification, GeminiRetryPhase, annotate_gemini_retry_error,
     append_gemini_retry_report, apply_gemini_acp_initial_stall_summary,
     apply_gemini_legacy_initial_stall_summary, apply_gemini_mcp_warning_summary,
-    apply_gemini_sandbox_runtime_env_overrides, classify_gemini_acp_init_failure,
-    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
-    classify_gemini_oauth_prompt_result, classify_join_error,
+    apply_gemini_sandbox_runtime_contract, apply_gemini_sandbox_runtime_env_overrides,
+    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall,
+    classify_gemini_legacy_initial_stall, classify_gemini_oauth_prompt_result, classify_join_error,
     ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
     gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure, is_gemini_mcp_issue_result,
@@ -257,7 +257,25 @@ impl LegacyTransport {
     ) -> Result<TransportResult> {
         let (cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
 
-        let isolation_plan = options.sandbox.map(|s| &s.isolation_plan);
+        let gemini_sandbox_plan = options
+            .sandbox
+            .filter(|_| executor.tool_name() == "gemini-cli")
+            .map(|s| -> Result<_> {
+                let mut isolation_plan = s.isolation_plan.clone();
+                if let Some(env) = extra_env {
+                    let runtime_home = gemini_runtime_home_from_env(env);
+                    apply_gemini_sandbox_runtime_contract(
+                        &mut isolation_plan,
+                        runtime_home.as_deref(),
+                        env,
+                    )?;
+                }
+                Ok(isolation_plan)
+            })
+            .transpose()?;
+        let isolation_plan = gemini_sandbox_plan
+            .as_ref()
+            .or_else(|| options.sandbox.map(|s| &s.isolation_plan));
         let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let (tool_name, session_id) = options
             .sandbox

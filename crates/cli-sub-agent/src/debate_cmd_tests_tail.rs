@@ -470,6 +470,10 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
     unsafe {
         std::env::remove_var("CSA_SESSION_ID");
     }
+    let cache_home = project_dir.path().join("xdg-cache");
+    std::fs::create_dir_all(&cache_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", project_dir.path());
+    let _cache_guard = EnvVarGuard::set("XDG_CACHE_HOME", &cache_home);
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
 
