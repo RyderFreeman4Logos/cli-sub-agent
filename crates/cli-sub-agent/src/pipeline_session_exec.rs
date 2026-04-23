@@ -371,8 +371,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
+    crate::preflight_state_dir::enforce_state_dir_cap(global_config)?;
     if (session_arg.is_none() || fresh_spawn_preflight_override)
-        && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)?
+        && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)
     {
         effective_prompt = format!("{w}{effective_prompt}");
     }
@@ -504,7 +505,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         ("CHANGED_CRATES_FLAGS".to_string(), String::new()),
     ]);
     run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
-
     // New-file guard captured AFTER PreRun hooks (baseline includes hook-created files).
     let new_file_guard = if !can_write_new {
         crate::edit_restriction_guard::maybe_capture_new_file_guard(project_root)?
