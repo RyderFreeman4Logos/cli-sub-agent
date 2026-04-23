@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
@@ -50,6 +50,48 @@ pub(super) struct GeminiAcpInitialStallClassification {
 pub(super) struct GeminiLegacyInitialStallClassification {
     pub(super) code: &'static str,
     pub(super) timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GeminiSharedNpmCacheSource {
+    XdgCacheHome,
+    HomeCacheFallback,
+}
+
+impl GeminiSharedNpmCacheSource {
+    fn description(self) -> &'static str {
+        match self {
+            Self::XdgCacheHome => "XDG_CACHE_HOME",
+            Self::HomeCacheFallback => "HOME/.cache fallback",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::XdgCacheHome => {
+                "Set XDG_CACHE_HOME to a writable location inside [filesystem_sandbox].writable_paths"
+            }
+            Self::HomeCacheFallback => {
+                "Set HOME so HOME/.cache resolves to a writable location inside [filesystem_sandbox].writable_paths"
+            }
+        }
+    }
+}
+
+pub(super) fn resolve_gemini_shared_npm_cache_source(
+    env: &HashMap<String, String>,
+    source_home: Option<&Path>,
+) -> Option<GeminiSharedNpmCacheSource> {
+    if env
+        .get("XDG_CACHE_HOME")
+        .is_some_and(|value| !value.is_empty())
+    {
+        Some(GeminiSharedNpmCacheSource::XdgCacheHome)
+    } else if source_home.is_some() {
+        Some(GeminiSharedNpmCacheSource::HomeCacheFallback)
+    } else {
+        None
+    }
 }
 
 pub(super) fn gemini_acp_initial_response_timeout_seconds(
@@ -263,6 +305,50 @@ pub(super) fn ensure_gemini_runtime_home_writable_path(
     isolation_plan.add_writable_dir_or_creatable_parent(runtime_home)
 }
 
+pub(super) fn gemini_shared_npm_cache_bind_error(
+    shared_npm_cache: &Path,
+    source: Option<GeminiSharedNpmCacheSource>,
+    cause: Option<&str>,
+) -> anyhow::Error {
+    let source_description = source.map_or(
+        "XDG_CACHE_HOME or HOME/.cache fallback",
+        GeminiSharedNpmCacheSource::description,
+    );
+    let remediation = source.map_or(
+        "Set XDG_CACHE_HOME, or HOME/.cache fallback, to a writable location inside [filesystem_sandbox].writable_paths",
+        GeminiSharedNpmCacheSource::remediation,
+    );
+    let cause_suffix = cause
+        .map(|text| format!(" Validation error: {text}"))
+        .unwrap_or_default();
+
+    anyhow!(
+        "gemini-cli sandbox plan failed: denied path {} derived from {} for intent \
+         'bwrap writable bind for shared npm cache (#1047 Phase 1 optimization)'. \
+         {} or add this path (or a writable parent) to [filesystem_sandbox].writable_paths or \
+         [tools.gemini-cli].filesystem_sandbox.writable_paths.{}",
+        shared_npm_cache.display(),
+        source_description,
+        remediation,
+        cause_suffix,
+    )
+}
+
+pub(super) fn validate_gemini_shared_npm_cache_writable_path(
+    shared_npm_cache: &Path,
+    project_root: &Path,
+    source: Option<GeminiSharedNpmCacheSource>,
+) -> Result<()> {
+    csa_resource::isolation_plan::validate_writable_paths(
+        &[PathBuf::from(shared_npm_cache)],
+        project_root,
+    )
+    .map_err(|error| {
+        let error_text = error.to_string();
+        gemini_shared_npm_cache_bind_error(shared_npm_cache, source, Some(error_text.as_str()))
+    })
+}
+
 pub(super) fn gemini_sandbox_runtime_env_overrides(
     env: &HashMap<String, String>,
 ) -> HashMap<String, String> {
@@ -326,21 +412,25 @@ pub(super) fn apply_gemini_sandbox_runtime_env_overrides(
 
 pub(super) fn apply_gemini_sandbox_runtime_contract(
     isolation_plan: &mut IsolationPlan,
+    project_root: &Path,
     runtime_home: Option<&Path>,
     env: &HashMap<String, String>,
+    shared_npm_cache_source: Option<GeminiSharedNpmCacheSource>,
 ) -> Result<()> {
     ensure_gemini_runtime_home_writable_path(isolation_plan, runtime_home);
-    if let Some(shared_npm_cache) = env.get("npm_config_cache").map(Path::new)
-        && !ensure_gemini_runtime_home_writable_path(isolation_plan, Some(shared_npm_cache))
-    {
-        return Err(anyhow!(
-            "gemini-cli sandbox plan failed: denied path {} for intent \
-             'bwrap writable bind for shared npm cache (#1047 Phase 1 optimization)'. \
-             Set XDG_CACHE_HOME to a writable location, or add this path \
-             (or a writable parent) to [filesystem_sandbox].writable_paths or \
-             [tools.gemini-cli].filesystem_sandbox.writable_paths.",
-            shared_npm_cache.display(),
-        ));
+    if let Some(shared_npm_cache) = env.get("npm_config_cache").map(Path::new) {
+        validate_gemini_shared_npm_cache_writable_path(
+            shared_npm_cache,
+            project_root,
+            shared_npm_cache_source,
+        )?;
+        if !ensure_gemini_runtime_home_writable_path(isolation_plan, Some(shared_npm_cache)) {
+            return Err(gemini_shared_npm_cache_bind_error(
+                shared_npm_cache,
+                shared_npm_cache_source,
+                None,
+            ));
+        }
     }
     let env_overrides = gemini_sandbox_runtime_env_overrides(env);
     apply_gemini_sandbox_runtime_env_overrides(isolation_plan, &env_overrides);

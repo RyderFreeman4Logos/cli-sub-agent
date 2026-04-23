@@ -39,8 +39,9 @@ use transport_gemini_helpers::{
     classify_gemini_legacy_initial_stall, classify_gemini_oauth_prompt_result, classify_join_error,
     ensure_gemini_runtime_home_writable_path, format_gemini_acp_init_failure,
     gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
-    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure, is_gemini_mcp_issue_result,
-    is_gemini_oauth_prompt_result,
+    gemini_sandbox_runtime_env_overrides, gemini_shared_npm_cache_bind_error,
+    is_gemini_acp_init_failure, is_gemini_mcp_issue_result, is_gemini_oauth_prompt_result,
+    resolve_gemini_shared_npm_cache_source, validate_gemini_shared_npm_cache_writable_path,
 };
 pub use transport_gemini_helpers::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
@@ -152,6 +153,12 @@ struct ExecuteInAttempt<'a> {
     resolved_initial_response_timeout: ResolvedTimeout,
 }
 
+#[derive(Clone, Copy)]
+struct LegacyAttemptEnv<'a> {
+    extra_env: Option<&'a HashMap<String, String>>,
+    gemini_shared_npm_cache_source: Option<transport_gemini_helpers::GeminiSharedNpmCacheSource>,
+}
+
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
@@ -252,22 +259,25 @@ impl LegacyTransport {
         prompt: &str,
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
-        extra_env: Option<&HashMap<String, String>>,
+        attempt_env: LegacyAttemptEnv<'_>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
-        let (cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
+        let (cmd, stdin_data) =
+            executor.build_command(prompt, tool_state, session, attempt_env.extra_env);
 
         let gemini_sandbox_plan = options
             .sandbox
             .filter(|_| executor.tool_name() == "gemini-cli")
             .map(|s| -> Result<_> {
                 let mut isolation_plan = s.isolation_plan.clone();
-                if let Some(env) = extra_env {
+                if let Some(env) = attempt_env.extra_env {
                     let runtime_home = gemini_runtime_home_from_env(env);
                     apply_gemini_sandbox_runtime_contract(
                         &mut isolation_plan,
+                        Path::new(&session.project_path),
                         runtime_home.as_deref(),
                         env,
+                        attempt_env.gemini_shared_npm_cache_source,
                     )?;
                 }
                 Ok(isolation_plan)
@@ -310,7 +320,7 @@ impl LegacyTransport {
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
                 let fallback_cmd = executor
-                    .build_command(prompt, tool_state, session, extra_env)
+                    .build_command(prompt, tool_state, session, attempt_env.extra_env)
                     .0;
                 let child =
                     spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options).await?;
@@ -441,16 +451,20 @@ impl AcpTransport {
             csa_session::manager::get_session_dir(&working_dir, &session.meta_session_id).ok();
 
         let mut gemini_runtime_home = None;
-        let shared_gemini_npm_cache = if self.tool_name == "gemini-cli" {
-            let source_home = env
-                .get("HOME")
-                .cloned()
-                .or_else(|| std::env::var("HOME").ok())
-                .map(PathBuf::from);
-            shared_npm_cache_dir(&env, source_home.as_deref())
-        } else {
-            None
-        };
+        let (shared_gemini_npm_cache, shared_gemini_npm_cache_source) =
+            if self.tool_name == "gemini-cli" {
+                let source_home = env
+                    .get("HOME")
+                    .cloned()
+                    .or_else(|| std::env::var("HOME").ok())
+                    .map(PathBuf::from);
+                (
+                    shared_npm_cache_dir(&env, source_home.as_deref()),
+                    resolve_gemini_shared_npm_cache_source(&env, source_home.as_deref()),
+                )
+            } else {
+                (None, None)
+            };
         if self.tool_name == "gemini-cli" {
             let launch = prepare_gemini_acp_runtime(
                 &mut env,
@@ -478,20 +492,22 @@ impl AcpTransport {
                         &mut isolation_plan,
                         gemini_runtime_home.as_deref(),
                     );
-                    if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref()
-                        && !ensure_gemini_runtime_home_writable_path(
+                    if let Some(shared_npm_cache) = shared_gemini_npm_cache.as_deref() {
+                        validate_gemini_shared_npm_cache_writable_path(
+                            shared_npm_cache,
+                            working_dir.as_path(),
+                            shared_gemini_npm_cache_source,
+                        )?;
+                        if !ensure_gemini_runtime_home_writable_path(
                             &mut isolation_plan,
                             Some(shared_npm_cache),
-                        )
-                    {
-                        return Err(anyhow!(
-                            "gemini-cli sandbox plan failed: denied path {} for intent \
-                             'bwrap writable bind for shared npm cache (#1047 Phase 1 optimization)'. \
-                             Set XDG_CACHE_HOME to a writable location, or add this path \
-                             (or a writable parent) to [filesystem_sandbox].writable_paths or \
-                             [tools.gemini-cli].filesystem_sandbox.writable_paths.",
-                            shared_npm_cache.display(),
-                        ));
+                        ) {
+                            return Err(gemini_shared_npm_cache_bind_error(
+                                shared_npm_cache,
+                                shared_gemini_npm_cache_source,
+                                None,
+                            ));
+                        }
                     }
                     if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
                         apply_gemini_sandbox_runtime_env_overrides(
