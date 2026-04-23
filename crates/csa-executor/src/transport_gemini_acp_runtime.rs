@@ -19,6 +19,7 @@ const GEMINI_RUNTIME_PINNED_PATH_BINARIES: &[&str] = &["node", "yarn", "gemini"]
 const GEMINI_RUNTIME_SHIM_ENV_VARS: &[&str] = &["MISE_SHIM", "MISE_SHIMS_DIR"];
 const GEMINI_RUNTIME_MISE_CACHE_RELATIVE_PATH: &str = ".cache/mise";
 const GEMINI_RUNTIME_MISE_STATE_RELATIVE_PATH: &str = ".local/state/mise";
+const SHARED_NPM_CACHE_RELATIVE_PATH: &str = "cli-sub-agent/npm";
 const GEMINI_MIRROR_FILES: &[&str] = &[
     "oauth_creds.json",
     "google_accounts.json",
@@ -51,6 +52,10 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .map(PathBuf::from);
+    // Capture original XDG_CACHE_HOME before env is overwritten with per-session paths.
+    // Used to derive the shared npm cache so gemini-cli sessions reuse a single npm
+    // _cacache instead of duplicating ~186 MiB per session. See #1047.
+    let shared_npm_cache = resolve_shared_npm_cache_dir(env, source_home.as_deref());
     let runtime_session_dir = session_dir
         .map(Path::to_path_buf)
         .or_else(|| runtime_session_dir_from_env(env));
@@ -92,6 +97,15 @@ pub(crate) fn prepare_gemini_acp_runtime(
             .to_string_lossy()
             .into_owned(),
     );
+
+    // Share npm cache across sessions to avoid per-session ~186 MiB duplication.
+    // See #1047.
+    if let Some(npm_cache) = shared_npm_cache {
+        env.insert(
+            "npm_config_cache".to_string(),
+            npm_cache.to_string_lossy().into_owned(),
+        );
+    }
 
     // Preserve explicit trust state from the inherited environment only.
     // Do not synthesize trust from project-local mise.toml, because that would
@@ -237,6 +251,29 @@ fn runtime_root_from_env(env: &HashMap<String, String>) -> PathBuf {
         .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_TMPDIR))
         .join(GEMINI_RUNTIME_ROOT_DIR)
+}
+
+/// Resolves a shared npm cache directory from the **original** (pre-sandbox)
+/// environment so gemini-cli sessions reuse a single npm `_cacache` instead of
+/// duplicating ~186 MiB into each per-session `runtime/gemini-home/.npm`.
+///
+/// Resolution order:
+/// 1. `XDG_CACHE_HOME` from `env` (pre-override snapshot) → `$XDG_CACHE_HOME/cli-sub-agent/npm`
+/// 2. `HOME` from `source_home` → `$HOME/.cache/cli-sub-agent/npm`
+///
+/// Returns `None` when neither `XDG_CACHE_HOME` nor `HOME` is available (extremely
+/// rare; per rule 041, we fail open rather than autonomously picking `/tmp`).
+fn resolve_shared_npm_cache_dir(
+    env: &HashMap<String, String>,
+    source_home: Option<&Path>,
+) -> Option<PathBuf> {
+    let cache_base = env
+        .get("XDG_CACHE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| source_home.map(|h| h.join(".cache")));
+
+    cache_base.map(|base| base.join(SHARED_NPM_CACHE_RELATIVE_PATH))
 }
 
 fn tmpdir_probe_writable(path: &Path) -> Result<()> {

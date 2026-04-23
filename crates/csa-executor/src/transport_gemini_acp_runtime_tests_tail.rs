@@ -729,3 +729,67 @@ fn prepare_gemini_acp_runtime_propagates_mise_trusted_config_paths_from_env() {
         "parent MISE_TRUSTED_CONFIG_PATHS must propagate through the Gemini ACP runtime env"
     );
 }
+
+#[test]
+fn prepare_gemini_acp_runtime_sets_shared_npm_cache_from_source_home() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01TESTGEMININPMCACHE00000000001";
+    let source_home = temp.path().join("source-home");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+
+    prepare_gemini_acp_runtime(&mut env, None, None, session_id, &["--acp".to_string()])
+        .expect("prepare runtime");
+
+    let expected_npm_cache = source_home
+        .join(".cache")
+        .join(SHARED_NPM_CACHE_RELATIVE_PATH);
+    assert_eq!(
+        env.get("npm_config_cache"),
+        Some(&expected_npm_cache.to_string_lossy().into_owned()),
+        "gemini runtime must set npm_config_cache to a shared path outside the per-session \
+         runtime home to avoid ~186 MiB per-session npm _cacache duplication (#1047)"
+    );
+
+    let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
+    assert_ne!(
+        PathBuf::from(env.get("npm_config_cache").expect("npm_config_cache")),
+        runtime_home.join(".npm"),
+        "npm_config_cache must NOT point inside the per-session runtime home"
+    );
+}
+
+#[test]
+fn prepare_gemini_acp_runtime_prefers_xdg_cache_home_for_shared_npm_cache() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01TESTGEMININPMXDG000000000001";
+    let source_home = temp.path().join("source-home");
+    let custom_cache = temp.path().join("custom-cache");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "XDG_CACHE_HOME".to_string(),
+        custom_cache.to_string_lossy().into_owned(),
+    );
+
+    prepare_gemini_acp_runtime(&mut env, None, None, session_id, &["--acp".to_string()])
+        .expect("prepare runtime");
+
+    let expected_npm_cache = custom_cache.join(SHARED_NPM_CACHE_RELATIVE_PATH);
+    assert_eq!(
+        env.get("npm_config_cache"),
+        Some(&expected_npm_cache.to_string_lossy().into_owned()),
+        "when XDG_CACHE_HOME is set, npm_config_cache should derive from it, \
+         not from $HOME/.cache (#1047)"
+    );
+}
