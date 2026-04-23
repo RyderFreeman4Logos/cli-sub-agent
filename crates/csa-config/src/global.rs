@@ -59,6 +59,9 @@ pub struct GlobalConfig {
     /// Pre-flight repository integrity checks before session spawn.
     #[serde(default)]
     pub preflight: PreflightConfig,
+    /// State directory size cap and monitoring configuration.
+    #[serde(default, skip_serializing_if = "StateDirConfig::is_default")]
+    pub state_dir: StateDirConfig,
     /// ACP transport overrides; project-level `[acp]` takes precedence.
     #[serde(default, skip_serializing_if = "crate::AcpConfig::is_default")]
     pub acp: crate::AcpConfig,
@@ -125,6 +128,58 @@ impl AiConfigSymlinkCheckConfig {
     pub fn is_default(&self) -> bool {
         !self.enabled && self.paths.is_none() && self.treat_broken_symlink_as_error
     }
+}
+
+/// State directory size monitoring and cap enforcement.
+///
+/// When `max_size_mb > 0`, CSA scans the state directory on preflight and
+/// takes action when the size exceeds the cap (warn, error, or auto-gc).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateDirConfig {
+    /// Maximum size in MB. `0` (default) = unlimited.
+    #[serde(default)]
+    pub max_size_mb: u64,
+    /// How often to recompute the size (seconds). `0` = every invocation.
+    #[serde(default = "default_scan_interval_seconds")]
+    pub scan_interval_seconds: u64,
+    /// What to do when size exceeds `max_size_mb`.
+    #[serde(default)]
+    pub on_exceed: StateDirOnExceed,
+}
+
+const fn default_scan_interval_seconds() -> u64 {
+    3600
+}
+
+impl Default for StateDirConfig {
+    fn default() -> Self {
+        Self {
+            max_size_mb: 0,
+            scan_interval_seconds: default_scan_interval_seconds(),
+            on_exceed: StateDirOnExceed::default(),
+        }
+    }
+}
+
+impl StateDirConfig {
+    pub fn is_default(&self) -> bool {
+        self.max_size_mb == 0
+            && self.scan_interval_seconds == default_scan_interval_seconds()
+            && self.on_exceed == StateDirOnExceed::Warn
+    }
+}
+
+/// Action taken when the state directory exceeds `max_size_mb`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StateDirOnExceed {
+    /// Inject a warning preamble into the spawned session (non-blocking).
+    #[default]
+    Warn,
+    /// Refuse to spawn the session with a clear error.
+    Error,
+    /// Run `csa gc` before spawning (Phase 3 — currently falls back to warn).
+    AutoGc,
 }
 
 /// User preferences for tool selection and routing.
@@ -599,3 +654,7 @@ mod tests_priority;
 #[cfg(test)]
 #[path = "global_tests_review_batch.rs"]
 mod tests_review_batch;
+
+#[cfg(test)]
+#[path = "global_tests_state_dir.rs"]
+mod tests_state_dir;

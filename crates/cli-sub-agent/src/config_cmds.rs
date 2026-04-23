@@ -368,7 +368,7 @@ struct LookupResolution {
 }
 
 fn is_global_only_key(key: &str) -> bool {
-    key.starts_with("kv_cache.")
+    key.starts_with("kv_cache.") || key.starts_with("state_dir.")
 }
 
 #[derive(Debug, Clone)]

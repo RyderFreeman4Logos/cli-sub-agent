@@ -371,6 +371,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
+    if (session_arg.is_none() || fresh_spawn_preflight_override)
+        && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)?
+    {
+        effective_prompt = format!("{w}{effective_prompt}");
+    }
     let is_first_turn = session
         .tools
         .get(executor.tool_name())
@@ -457,7 +462,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             ..Default::default()
         }
     });
-
     let mut merged_env = crate::pipeline_env::build_merged_env(
         extra_env,
         config,
@@ -539,7 +543,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         info!("Injecting structured output instructions into prompt");
         effective_prompt.push_str(instructions);
     }
-
     // Resolve sandbox configuration from project config and enforcement mode.
     let liveness_dead_seconds = resolve_liveness_dead_seconds(config);
     let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
@@ -582,7 +585,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
     apply_transport_failover_overrides(&mut execute_options, merged_env_ref);
-
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
     crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
     if let Err(err) = session_exec_metadata::persist_session_runtime_binary(&session_dir, executor)
@@ -593,7 +595,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             "Failed to persist session runtime binary metadata"
         );
     }
-
     let pre_exec_snapshot = session_exec_audit::capture_pre_execution_snapshot(project_root);
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,
