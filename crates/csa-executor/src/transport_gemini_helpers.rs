@@ -279,6 +279,7 @@ pub(super) fn gemini_sandbox_runtime_env_overrides(
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
+        "npm_config_cache",
         "MISE_CACHE_DIR",
         "MISE_STATE_DIR",
         "MISE_SHIM",

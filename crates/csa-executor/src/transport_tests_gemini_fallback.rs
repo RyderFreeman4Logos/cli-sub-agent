@@ -588,6 +588,10 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         format!("{runtime_home}/.local/state"),
     );
     env.insert(
+        "npm_config_cache".to_string(),
+        "/shared/cache/cli-sub-agent/npm".to_string(),
+    );
+    env.insert(
         "MISE_CACHE_DIR".to_string(),
         format!("{runtime_home}/.cache/mise"),
     );
@@ -645,6 +649,11 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     assert_eq!(
         isolation_plan.env_overrides.get("XDG_STATE_HOME"),
         Some(&format!("{runtime_home}/.local/state"))
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("npm_config_cache"),
+        Some(&"/shared/cache/cli-sub-agent/npm".to_string()),
+        "sandbox should preserve the shared npm cache override under bwrap (#1047)"
     );
     assert_eq!(
         isolation_plan.env_overrides.get("MISE_CACHE_DIR"),
