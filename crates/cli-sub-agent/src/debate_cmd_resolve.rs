@@ -75,6 +75,7 @@ pub(crate) fn resolve_debate_selection(
         anyhow::bail!(
             "Direct --tool is restricted when tiers are configured. \
              Use --tier <name> to specify which tier's model/thinking config to use, \
+             --hint-difficulty <label> to route through [tier_mapping], \
              or add --force-ignore-tier-setting to override. \
              Available tiers: [{}]{alias_hint}",
             available.join(", ")

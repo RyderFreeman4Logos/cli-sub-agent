@@ -89,11 +89,12 @@ pub enum Commands {
         /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
         #[arg(long)]
         tool: Option<ToolArg>,
-
         /// Intent-based auto-routing through `[tier_mapping]` or a tier selector while keeping tool choice automatic.
         #[arg(long, value_name = "INTENT", conflicts_with = "tier")]
         auto_route: Option<String>,
-
+        /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
+        #[arg(long, value_name = "LABEL", conflicts_with_all = ["tier", "auto_route"])]
+        hint_difficulty: Option<String>,
         /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
         #[arg(long)]
         skill: Option<String>,
@@ -131,7 +132,6 @@ pub enum Commands {
         /// Incompatible with --session, --last, --ephemeral.
         #[arg(long, conflicts_with_all = ["session", "last", "ephemeral"])]
         fork_call: bool,
-
         /// Session to return results to after fork-call completion.
         /// Values: "last" (most recent session), "auto" (auto-detect parent), or a session ID.
         #[arg(
@@ -144,11 +144,9 @@ pub enum Commands {
         /// Parent session ULID (defaults to CSA_SESSION_ID env var)
         #[arg(long, hide = true)]
         parent: Option<String>,
-
         /// Ephemeral session (no session persistence, auto-cleanup; tool runs in project dir)
         #[arg(long, conflicts_with = "session")]
         ephemeral: bool,
-
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,

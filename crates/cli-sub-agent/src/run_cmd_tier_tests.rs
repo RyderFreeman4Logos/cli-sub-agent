@@ -5,6 +5,37 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::tempdir;
 
+#[test]
+fn test_cli_hint_difficulty_conflicts_with_tier() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--hint-difficulty",
+        "quick_question",
+        "--tier",
+        "tier-1-quick",
+        "prompt",
+    ]);
+    assert!(result.is_err(), "hint-difficulty and tier should conflict");
+}
+
+#[test]
+fn test_cli_hint_difficulty_conflicts_with_auto_route() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--hint-difficulty",
+        "quick_question",
+        "--auto-route",
+        "code",
+        "prompt",
+    ]);
+    assert!(
+        result.is_err(),
+        "hint-difficulty and auto-route should conflict"
+    );
+}
+
 fn run_config_with_tier(
     tier_name: &str,
     models: Vec<&str>,
@@ -81,6 +112,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
 
     let err = handle_run(
         Some(ToolArg::Specific(ToolName::Codex)),
+        None,
         None,
         None,
         Some("inspect the repository".to_string()),

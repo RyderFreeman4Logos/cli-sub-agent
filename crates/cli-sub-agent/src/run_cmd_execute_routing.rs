@@ -41,6 +41,7 @@ pub(super) struct RunModelSelectionFlags {
     pub(super) model: bool,
     pub(super) thinking: bool,
     pub(super) tier: bool,
+    pub(super) hint_difficulty: bool,
 }
 
 impl RunModelSelectionFlags {
@@ -52,6 +53,7 @@ impl RunModelSelectionFlags {
             || self.model
             || self.thinking
             || self.tier
+            || self.hint_difficulty
     }
 }
 
@@ -64,4 +66,21 @@ pub(super) fn resolve_primary_writer_spec_for_run(
         .then(|| csa_config::global::effective_primary_writer_spec(config, global_config))
         .flatten()
         .map(ToOwned::to_owned)
+}
+
+pub(super) fn resolve_run_effective_tier(
+    config: Option<&ProjectConfig>,
+    tier: Option<&str>,
+    auto_route: Option<&str>,
+    model_spec: Option<&str>,
+    hint_difficulty: Option<&str>,
+    frontmatter_difficulty: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
+        config,
+        tier.or(auto_route),
+        model_spec,
+        hint_difficulty,
+        frontmatter_difficulty,
+    )
 }

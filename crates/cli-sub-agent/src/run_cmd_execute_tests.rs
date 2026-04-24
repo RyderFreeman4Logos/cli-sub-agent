@@ -529,6 +529,10 @@ fn primary_writer_spec_is_suppressed_by_any_model_selecting_flag() {
             tier: true,
             ..Default::default()
         },
+        RunModelSelectionFlags {
+            hint_difficulty: true,
+            ..Default::default()
+        },
     ];
 
     for flags in cases {

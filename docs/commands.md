@@ -16,6 +16,7 @@ csa run --sa-mode false [OPTIONS] [PROMPT]
 | `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
 | `--tool <TOOL>` | Tool selection: `auto` (default), `any-available`, or specific name |
 | `--auto-route <INTENT>` | Resolve routing intent through `[tier_mapping]` or a tier selector while keeping tool choice automatic |
+| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier`/`--model-spec` is set |
 | `--skill <NAME>` | Run a named skill as a sub-agent |
 | `--session <ID>` | Resume existing session (ULID or prefix) |
 | `--last` | Resume the most recent session |
@@ -40,6 +41,7 @@ If `PROMPT` is omitted, reads from stdin.
 ```bash
 csa run --sa-mode false "fix the login bug"
 csa run --sa-mode false --tool codex --thinking high "refactor error handling"
+csa run --sa-mode false --tool claude --hint-difficulty quick_question "answer briefly"
 csa run --sa-mode false --auto-route analysis "trace the auth flow"
 csa run --sa-mode false --model-spec "codex/openai/gpt-5.3-codex/xhigh" "complex task"
 csa run --sa-mode false --last "continue where I left off"
@@ -63,6 +65,7 @@ csa review --sa-mode false [OPTIONS]
 | `--files <PATHSPEC>` | Review specific files |
 | `--branch <BRANCH>` | Compare against branch (default: main) |
 | `--tool <TOOL>` | Override tool selection |
+| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier`/`--model-spec` is set |
 | `--model <MODEL>` | Override model |
 | `--fix` | Review-and-fix mode (apply fixes directly) |
 | `--security-mode <MODE>` | `auto`, `on`, or `off` |
@@ -78,6 +81,7 @@ csa review --sa-mode false [OPTIONS]
 
 ```bash
 csa review --sa-mode false --diff
+csa review --sa-mode false --tool claude-code --hint-difficulty code_review --diff
 csa review --sa-mode false --range main...HEAD
 csa review --sa-mode false --diff --reviewers 3 --consensus majority
 csa review --sa-mode false --diff --fix --security-mode on
@@ -95,6 +99,7 @@ csa debate --sa-mode false [OPTIONS] [QUESTION]
 |------|-------------|
 | `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
 | `--tool <TOOL>` | Override tool selection |
+| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier`/`--model-spec` is set |
 | `--session <ID>` | Resume existing debate session |
 | `--model <MODEL>` | Override model |
 | `--thinking <LEVEL>` | Thinking budget |
@@ -106,6 +111,7 @@ csa debate --sa-mode false [OPTIONS] [QUESTION]
 
 ```bash
 csa debate --sa-mode false "Should we use anyhow or thiserror?"
+csa debate --sa-mode false --tool claude-code --hint-difficulty architecture_design "Pick the storage boundary"
 csa debate --sa-mode false --session 01JK "reconsider with performance data"
 csa debate --sa-mode false --rounds 5 "Redis vs Memcached for session storage"
 ```

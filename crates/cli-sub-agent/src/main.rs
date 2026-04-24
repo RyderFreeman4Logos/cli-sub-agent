@@ -14,6 +14,7 @@ mod debate_cmd;
 mod debate_cmd_output;
 mod debate_cmd_resolve;
 mod debate_errors;
+mod difficulty_routing;
 mod doctor;
 mod edit_restriction_guard;
 mod error_hints;
@@ -333,6 +334,7 @@ async fn run() -> Result<()> {
         Commands::Run {
             tool,
             auto_route,
+            hint_difficulty,
             skill,
             sa_mode: _,
             prompt,
@@ -389,10 +391,7 @@ async fn run() -> Result<()> {
                 ),
             )?;
 
-            // Daemon child path: continue with normal run logic.
-            // --stream-stdout forces streaming intent; --no-stream-stdout forces buffering.
-            // The ACP transport may still suppress stderr mirroring in daemon mode because
-            // output.log is the canonical progressive output channel there.
+            // Daemon child path: continue with normal run logic and resolve stream mode.
             let stream_mode = if no_stream_stdout {
                 csa_process::StreamMode::BufferOnly
             } else if stream_stdout || matches!(output_format, OutputFormat::Text) {
@@ -404,6 +403,7 @@ async fn run() -> Result<()> {
             let result = run_cmd::handle_run(
                 tool,
                 auto_route,
+                hint_difficulty,
                 skill,
                 prompt,
                 prompt_flag,

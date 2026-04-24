@@ -219,12 +219,29 @@ tool is enabled.
 ```toml
 [tier_mapping]
 default = "tier-2-standard"
-quick = "tier-1-quick"
-analysis = "tier-2-standard"
-code-review = "tier-2-standard"
-complex-reasoning = "tier-3-complex"
-security = "tier-3-complex"
+quick_question = "tier-1-quick"
+documentation = "tier-1-quick"
+bug_fix = "tier-2-standard"
+feature_implementation = "tier-2-standard"
+code_review = "tier-2-standard"
+architecture_design = "tier-3-complex"
+security_audit = "tier-3-complex"
 ```
+
+`csa run`, `csa review`, and `csa debate` can select these mappings with
+`--hint-difficulty <LABEL>` when no explicit `--tier` or `--model-spec` is set.
+For `csa run` and `csa debate`, the prompt may also start with YAML frontmatter:
+
+```text
+---
+difficulty: quick_question
+---
+Explain the failing command.
+```
+
+The frontmatter block is stripped before forwarding the prompt to the selected
+tool. CLI `--hint-difficulty` wins over prompt frontmatter; explicit `--tier` or
+`--model-spec` wins over both.
 
 ### `[aliases]` -- Model Aliases
 
