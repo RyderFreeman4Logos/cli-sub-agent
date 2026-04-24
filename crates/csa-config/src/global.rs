@@ -185,6 +185,12 @@ pub enum StateDirOnExceed {
 /// User preferences for tool selection and routing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PreferencesConfig {
+    /// Default exact model selector for `csa run` when no model-selecting CLI
+    /// flag is present.
+    ///
+    /// Format matches `csa run --model-spec`: `tool/provider/model/thinking_budget`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_writer_spec: Option<String>,
     /// Tool priority order for auto-selection. First = most preferred.
     ///
     /// Affects: heterogeneous candidate ordering, reviewer allocation,
@@ -570,6 +576,19 @@ pub fn effective_tool_priority<'a>(
         .map(|p| p.tool_priority.as_slice())
         .filter(|p| !p.is_empty())
         .unwrap_or(&global_config.preferences.tool_priority)
+}
+
+/// Resolve the default exact writer model spec for `csa run`.
+///
+/// Project-level preferences override global preferences.
+pub fn effective_primary_writer_spec<'a>(
+    project_config: Option<&'a crate::ProjectConfig>,
+    global_config: &'a GlobalConfig,
+) -> Option<&'a str> {
+    project_config
+        .and_then(|p| p.preferences.as_ref())
+        .and_then(|p| p.primary_writer_spec.as_deref())
+        .or(global_config.preferences.primary_writer_spec.as_deref())
 }
 
 /// Sort tools using effective priority from project (if set) or global config.

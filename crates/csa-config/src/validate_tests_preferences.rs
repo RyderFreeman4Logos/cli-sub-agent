@@ -23,6 +23,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
         tool_aliases: HashMap::new(),
         preferences: Some(crate::global::PreferencesConfig {
             tool_priority: vec!["codexx".into(), "codex".into()],
+            ..Default::default()
         }),
         session: Default::default(),
         memory: Default::default(),

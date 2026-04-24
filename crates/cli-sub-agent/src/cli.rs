@@ -583,6 +583,28 @@ pub enum ConfigCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+    /// Set a scalar config value by dotted key path.
+    ///
+    /// Defaults to the global config. Use --project to write `.csa/config.toml`.
+    Set {
+        /// Dotted key path (e.g., "preferences.primary_writer_spec")
+        key: String,
+
+        /// String value to write
+        value: String,
+
+        /// Write project config instead of global config
+        #[arg(long, conflicts_with = "global")]
+        project: bool,
+
+        /// Write global config (default)
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+
+        /// Working directory for --project (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

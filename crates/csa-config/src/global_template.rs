@@ -34,8 +34,11 @@ max_concurrent = 3  # Default max parallel instances per tool
 
 # Tool priority for auto-selection (heterogeneous routing, review, debate).
 # First = most preferred. Tools not listed keep their default order.
+# Optional: primary_writer_spec seeds `csa run` when no model-selecting
+# flag is given. Format matches --model-spec: tool/provider/model/thinking_budget.
 # Example: prefer Claude Code for worker tasks, then Codex.
 # [preferences]
+# primary_writer_spec = "codex/openai/gpt-5.4/high"
 # tool_priority = ["claude-code", "codex", "gemini-cli", "opencode"]
 
 # Review workflow: which tool to use for code review.

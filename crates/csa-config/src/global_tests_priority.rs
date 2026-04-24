@@ -82,9 +82,14 @@ fn sort_by_priority_method_uses_preferences() {
 fn preferences_deserialize() {
     let toml_str = r#"
 [preferences]
+primary_writer_spec = "codex/openai/gpt-5.4/high"
 tool_priority = ["claude-code", "codex"]
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        config.preferences.primary_writer_spec.as_deref(),
+        Some("codex/openai/gpt-5.4/high")
+    );
     assert_eq!(config.preferences.tool_priority.len(), 2);
     assert_eq!(config.preferences.tool_priority[0], "claude-code");
     assert_eq!(config.preferences.tool_priority[1], "codex");
@@ -93,6 +98,10 @@ tool_priority = ["claude-code", "codex"]
 #[test]
 fn preferences_default_empty() {
     let config = GlobalConfig::default();
+    assert!(
+        config.preferences.primary_writer_spec.is_none(),
+        "default primary_writer_spec should be unset"
+    );
     assert!(
         config.preferences.tool_priority.is_empty(),
         "default tool_priority should be empty"
@@ -109,6 +118,10 @@ fn default_template_contains_preferences_section() {
     assert!(
         template.contains("tool_priority"),
         "template should contain tool_priority key"
+    );
+    assert!(
+        template.contains("primary_writer_spec"),
+        "template should contain primary_writer_spec key"
     );
 }
 
@@ -159,6 +172,7 @@ fn effective_tool_priority_uses_project_override() {
     gc.preferences.tool_priority = vec!["codex".into(), "claude-code".into()];
     let pc = project_config_with_preferences(Some(PreferencesConfig {
         tool_priority: vec!["gemini-cli".into(), "opencode".into()],
+        ..Default::default()
     }));
     let result = effective_tool_priority(Some(&pc), &gc);
     assert_eq!(result, &["gemini-cli", "opencode"]);
@@ -170,6 +184,7 @@ fn effective_tool_priority_falls_back_when_project_empty() {
     gc.preferences.tool_priority = vec!["codex".into()];
     let pc = project_config_with_preferences(Some(PreferencesConfig {
         tool_priority: vec![],
+        ..Default::default()
     }));
     let result = effective_tool_priority(Some(&pc), &gc);
     assert_eq!(result, &["codex"]);
@@ -180,9 +195,60 @@ fn sort_tools_by_effective_priority_project_override() {
     let gc = GlobalConfig::default(); // empty global priority
     let pc = project_config_with_preferences(Some(PreferencesConfig {
         tool_priority: vec!["opencode".into(), "codex".into()],
+        ..Default::default()
     }));
     let tools = all_known_tools();
     let sorted = sort_tools_by_effective_priority(tools, Some(&pc), &gc);
     assert_eq!(sorted[0], ToolName::Opencode);
     assert_eq!(sorted[1], ToolName::Codex);
+}
+
+#[test]
+fn effective_primary_writer_spec_uses_global_when_no_project() {
+    let mut gc = GlobalConfig::default();
+    gc.preferences.primary_writer_spec = Some("codex/openai/gpt-5.4/high".into());
+
+    let result = effective_primary_writer_spec(None, &gc);
+
+    assert_eq!(result, Some("codex/openai/gpt-5.4/high"));
+}
+
+#[test]
+fn effective_primary_writer_spec_uses_project_override() {
+    let mut gc = GlobalConfig::default();
+    gc.preferences.primary_writer_spec = Some("codex/openai/gpt-5.4/high".into());
+    let pc = project_config_with_preferences(Some(PreferencesConfig {
+        primary_writer_spec: Some("claude-code/anthropic/default/xhigh".into()),
+        ..Default::default()
+    }));
+
+    let result = effective_primary_writer_spec(Some(&pc), &gc);
+
+    assert_eq!(result, Some("claude-code/anthropic/default/xhigh"));
+}
+
+#[test]
+fn effective_primary_writer_spec_falls_back_when_project_empty() {
+    let mut gc = GlobalConfig::default();
+    gc.preferences.primary_writer_spec = Some("codex/openai/gpt-5.4/high".into());
+    let pc = project_config_with_preferences(Some(PreferencesConfig {
+        primary_writer_spec: None,
+        ..Default::default()
+    }));
+
+    let result = effective_primary_writer_spec(Some(&pc), &gc);
+
+    assert_eq!(result, Some("codex/openai/gpt-5.4/high"));
+}
+
+#[test]
+fn primary_writer_spec_can_be_set_on_preferences() {
+    let mut config = GlobalConfig::default();
+
+    config.preferences.primary_writer_spec = Some("openai-compat/openai/gpt-5/high".into());
+
+    assert_eq!(
+        config.preferences.primary_writer_spec.as_deref(),
+        Some("openai-compat/openai/gpt-5/high")
+    );
 }
