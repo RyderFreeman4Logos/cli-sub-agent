@@ -268,6 +268,112 @@ async fn no_op_gate_preserves_original_summary_as_suffix() {
 }
 
 #[tokio::test]
+async fn no_op_gate_does_not_trigger_when_changed_paths_present() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let mut ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        false,
+        true,
+    );
+    ctx.changed_paths = vec!["src/foo.rs".to_string()];
+    let mut result = build_test_result("Applied the fix.");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(0));
+    assert!(
+        !persisted.summary.starts_with("no-op exit detected"),
+        "gate must not fire when changed_paths is non-empty, got: {}",
+        persisted.summary
+    );
+}
+
+#[tokio::test]
+async fn no_op_gate_syncs_tool_state_last_exit_code_and_summary() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
+    // Pre-seed the tool state entry so we can verify it gets overwritten.
+    session.tools.insert(
+        "claude-code".to_string(),
+        csa_session::ToolState {
+            provider_session_id: None,
+            last_action_summary: "original".to_string(),
+            last_exit_code: 0,
+            updated_at: chrono::Utc::now(),
+            tool_version: None,
+            token_usage: None,
+        },
+    );
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(10);
+    let ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        false,
+        true,
+    );
+    let mut result = build_test_result("I'll start by exploring the codebase.");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let tool_state = session
+        .tools
+        .get("claude-code")
+        .expect("tool state must exist after process_execution_result");
+    assert_eq!(
+        tool_state.last_exit_code, 1,
+        "tool_state.last_exit_code must be synced to 1 after gate fires"
+    );
+    assert!(
+        tool_state
+            .last_action_summary
+            .starts_with("no-op exit detected"),
+        "tool_state.last_action_summary must reflect gate rewrite, got: {}",
+        tool_state.last_action_summary
+    );
+}
+
+#[tokio::test]
 async fn no_op_gate_does_not_trigger_when_turn_count_exceeds_one() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;

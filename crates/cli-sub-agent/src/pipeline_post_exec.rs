@@ -173,6 +173,7 @@ pub(crate) async fn process_execution_result(
         && result.exit_code == 0
         && session.turn_count <= 1
         && !ctx.has_tool_calls
+        && ctx.changed_paths.is_empty()
         && elapsed_secs < NO_OP_ELAPSED_THRESHOLD_SECS
     {
         let original_summary = session_result.summary.clone();
@@ -189,8 +190,13 @@ pub(crate) async fn process_execution_result(
         session_result.exit_code = 1;
         session_result.status = SessionResult::status_from_exit_code(1);
         session_result.summary = no_op_summary.clone();
-        result.summary = no_op_summary;
+        result.summary = no_op_summary.clone();
         result.exit_code = 1;
+        // Sync tool_state so state.toml agrees with result.toml after rewrite.
+        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+            tool_state.last_exit_code = 1;
+            tool_state.last_action_summary = no_op_summary;
+        }
     }
     audit::maybe_record_repo_write_audit(&ctx, session, &mut session_result);
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
