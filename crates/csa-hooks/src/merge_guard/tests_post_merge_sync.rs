@@ -294,6 +294,30 @@ fn post_merge_sync_uses_upstream_remote_for_head_fetch_and_merge() {
 }
 
 #[test]
+fn post_merge_sync_ignores_local_branch_upstream_for_primary_remote() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (gd, gh, mb, gl) = setup_post_merge_env_with_git_remote(
+        tmp.path(),
+        0,
+        None,
+        GitMockConfig {
+            upstream_ref: Some("main"),
+            remotes: &["origin"],
+            remote_head: Some("origin/main"),
+            current_branch: Some("feature"),
+            merge_exit: 0,
+        },
+    );
+    create_test_marker(tmp.path());
+    let (code, _, _) = run_wrapper_with_mock_git(&gd, &gh, &mb, &["pr", "merge", "42"]);
+    assert_eq!(code, 0);
+    assert_refspec_sync_log_with_remote(&gl, "origin", "main");
+    let lines = git_log_lines(&gl);
+    assert_log_lacks_prefix(&lines, "fetch main ");
+    assert_log_lacks_prefix(&lines, "merge main/");
+}
+
+#[test]
 fn post_merge_sync_skips_when_all_default_detection_fails() {
     let tmp = tempfile::tempdir().unwrap();
     let (gd, gh, mb, gl) =

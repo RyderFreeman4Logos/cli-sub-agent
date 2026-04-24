@@ -97,7 +97,7 @@ fi
 # Non-fatal: sync failure does NOT change the wrapper's exit code.
 _post_merge_sync() {
   local PRIMARY_REMOTE
-  PRIMARY_REMOTE="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's!/.*!!' || true)"
+  PRIMARY_REMOTE="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | grep / | sed 's!/.*!!' || true)"
   if [ -z "${PRIMARY_REMOTE}" ]; then
     PRIMARY_REMOTE="$(git remote 2>/dev/null | head -n1 || true)"
   fi
@@ -108,7 +108,8 @@ _post_merge_sync() {
   local DEFAULT_BRANCH
   DEFAULT_BRANCH="$("${REAL_GH}" repo view --json defaultBranchRef -q '.defaultBranchRef.name' 2>/dev/null || true)"
   if [ -z "${DEFAULT_BRANCH}" ]; then
-    DEFAULT_BRANCH="$(git rev-parse --abbrev-ref "${PRIMARY_REMOTE}/HEAD" 2>/dev/null | sed "s!^${PRIMARY_REMOTE}/!!" || true)"
+    DEFAULT_BRANCH="$(git rev-parse --abbrev-ref "${PRIMARY_REMOTE}/HEAD" 2>/dev/null || true)"
+    DEFAULT_BRANCH="${DEFAULT_BRANCH#${PRIMARY_REMOTE}/}"
   fi
   if [ -z "${DEFAULT_BRANCH}" ]; then
     printf 'NOTE: post-merge sync skipped — could not determine default branch (gh repo view failed, %s/HEAD not set)\n' "${PRIMARY_REMOTE}" >&2
