@@ -50,6 +50,37 @@ Findings sharing a primary file go into the same bucket.
 Findings with no `file_ranges` go into a catch-all bucket.
 Each bucket gets an independent RECON employee.
 
+```bash
+# Parse STEP_1_OUTPUT (findings text) and group by primary file.
+# The parsing is best-effort: extract file paths from "file:" or path-like tokens.
+# Each unique primary file becomes one bucket.
+FINDINGS="${STEP_1_OUTPUT}"
+if [ -z "$FINDINGS" ]; then
+  echo "ERROR: No findings from Step 1"
+  exit 1
+fi
+
+# Extract unique primary file paths from findings
+# (Heuristic: lines matching common path patterns from review output)
+FILES=$(echo "$FINDINGS" | grep -oE '[a-zA-Z0-9_./-]+\.(rs|toml|md|sh|py|ts|js|go)' | sort -u)
+BUCKET_COUNT=$(echo "$FILES" | grep -c . || echo 0)
+if [ "$BUCKET_COUNT" -eq 0 ]; then
+  BUCKET_COUNT=1
+fi
+
+if [ "$BUCKET_COUNT" -gt 1 ]; then
+  MULTI_BUCKET="yes"
+  SINGLE_BUCKET=""
+else
+  MULTI_BUCKET=""
+  SINGLE_BUCKET="yes"
+fi
+
+echo "BUCKET_COUNT=$BUCKET_COUNT"
+echo "MULTI_BUCKET=$MULTI_BUCKET"
+echo "SINGLE_BUCKET=$SINGLE_BUCKET"
+```
+
 The bucketing must produce:
 - `${BUCKET_COUNT}`: Number of independent buckets (workflow variable).
 - `${MULTI_BUCKET}`: Set to `"yes"` when `BUCKET_COUNT > 1`, empty string `""` otherwise (workflow variable). Used as the Step 3/5/6 condition.
@@ -140,7 +171,28 @@ csa session wait --session "$EDIT_SID"
 Tool: bash
 Condition: ${MULTI_BUCKET}
 
-Collect fix-plan artifacts from all RECON sessions.
+Collect fix-plan artifacts from all RECON sessions and merge into a single plan.
+
+```bash
+# Collect fix-plan outputs from RECON sessions (Step 3 output contains session IDs)
+RECON_OUTPUT="${STEP_3_OUTPUT}"
+MERGED=""
+for SID in $RECON_OUTPUT; do
+  PLAN=$(csa session result --session "$SID" --full 2>/dev/null || true)
+  if [ -n "$PLAN" ]; then
+    MERGED="${MERGED}
+${PLAN}"
+  fi
+done
+
+if [ -z "$MERGED" ]; then
+  echo "ERROR: No fix plans collected from RECON sessions"
+  exit 1
+fi
+
+echo "$MERGED"
+```
+
 Detect conflicts: if two plans propose edits to the same file:line range,
 flag as conflicting and merge into a single sequential fix instruction.
 

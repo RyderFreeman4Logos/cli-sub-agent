@@ -54,12 +54,36 @@ Group findings by their primary file path (`file_ranges[0].path`).
 Findings sharing a primary file go into the same bucket.
 Each bucket gets an independent RECON employee.
 
-The bucketing must produce:
-- `${BUCKET_COUNT}`: Number of independent buckets.
-- `${MULTI_BUCKET}`: Set to "yes" when BUCKET_COUNT > 1, empty string "" otherwise.
-- `${SINGLE_BUCKET}`: Set to "yes" when BUCKET_COUNT == 1, empty string "" otherwise.
-  (plan_condition only supports truthiness checks and !(expr) negation, not bare
-  !VAR or numeric comparisons — use separate boolean variables for each branch.)
+```bash
+# Parse STEP_1_OUTPUT (findings text) and group by primary file.
+# The parsing is best-effort: extract file paths from "file:" or path-like tokens.
+# Each unique primary file becomes one bucket.
+FINDINGS="${STEP_1_OUTPUT}"
+if [ -z "$FINDINGS" ]; then
+  echo "ERROR: No findings from Step 1"
+  exit 1
+fi
+
+# Extract unique primary file paths from findings
+# (Heuristic: lines matching common path patterns from review output)
+FILES=$(echo "$FINDINGS" | grep -oE '[a-zA-Z0-9_./-]+\.(rs|toml|md|sh|py|ts|js|go)' | sort -u)
+BUCKET_COUNT=$(echo "$FILES" | grep -c . || echo 0)
+if [ "$BUCKET_COUNT" -eq 0 ]; then
+  BUCKET_COUNT=1
+fi
+
+if [ "$BUCKET_COUNT" -gt 1 ]; then
+  MULTI_BUCKET="yes"
+  SINGLE_BUCKET=""
+else
+  MULTI_BUCKET=""
+  SINGLE_BUCKET="yes"
+fi
+
+echo "BUCKET_COUNT=$BUCKET_COUNT"
+echo "MULTI_BUCKET=$MULTI_BUCKET"
+echo "SINGLE_BUCKET=$SINGLE_BUCKET"
+```
 
 If `${BUCKET_COUNT}` == 1, skip parallel RECON — fall back to standard
 single-employee fix (no benefit from parallelism)."""
@@ -73,8 +97,27 @@ prompt = """
 Dispatch one read-only CSA employee per bucket concurrently.
 Each employee analyzes findings in its bucket and produces a fix-plan artifact.
 
-Launch all RECON employees before waiting for any.
-Wait for employees sequentially (no parallel waits).
+```bash
+# Launch RECON employees — one per bucket, all before any wait.
+# BUCKET_N_FILE / BUCKET_N_IDS are shell-local from Step 2 output parsing.
+SIDS=""
+for N in $(seq 1 "$BUCKET_COUNT"); do
+  BFILE_VAR="BUCKET_${N}_FILE"
+  BIDS_VAR="BUCKET_${N}_IDS"
+  BFILE="${!BFILE_VAR}"
+  BIDS="${!BIDS_VAR}"
+  SID=$(csa run --sa-mode true --tier tier-1-quick \
+    --description "recon-fix: ${BFILE}" \
+    "Analyze finding ${BIDS} in ${BFILE}. Read-only: do NOT edit files or modify git state. Produce a fix-plan artifact.")
+  SIDS="$SIDS $SID"
+done
+
+# Wait sequentially (AGENTS.md rules 026/032: no parallel waits)
+for SID in $SIDS; do
+  csa session wait --session "$SID"
+done
+echo "RECON sessions: $SIDS"
+```
 
 RECON employees are read-only — they MUST NOT edit files or modify git state."""
 on_fail = "skip"
@@ -89,6 +132,18 @@ Single-bucket path: only one file-bucket exists, so parallel RECON has
 no benefit. Dispatch a standard single-employee fix session that
 combines RECON + EDIT in one pass.
 
+```bash
+EDIT_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "fix: single-bucket" \
+  "Analyze and fix the following findings.
+   Apply each fix in order. After all fixes, run 'just fmt' and
+   stage the changed files. Do NOT create any commits.
+
+   Findings: ${STEP_1_OUTPUT}")
+csa session wait --session "$EDIT_SID"
+echo "$EDIT_SID"
+```
+
 The employee receives all findings from the single bucket, analyzes
 root causes, applies fixes, runs `just fmt`, and stages changed files.
 Does NOT create commits — the caller handles commit creation."""
@@ -100,10 +155,30 @@ id = 5
 title = "Merge Fix Plans"
 tool = "bash"
 prompt = """
-Collect fix-plan artifacts from all RECON sessions.
+Collect fix-plan artifacts from all RECON sessions and merge into a single plan.
+
+```bash
+# Collect fix-plan outputs from RECON sessions (Step 3 output contains session IDs)
+RECON_OUTPUT="${STEP_3_OUTPUT}"
+MERGED=""
+for SID in $RECON_OUTPUT; do
+  PLAN=$(csa session result --session "$SID" --full 2>/dev/null || true)
+  if [ -n "$PLAN" ]; then
+    MERGED="${MERGED}
+${PLAN}"
+  fi
+done
+
+if [ -z "$MERGED" ]; then
+  echo "ERROR: No fix plans collected from RECON sessions"
+  exit 1
+fi
+
+echo "$MERGED"
+```
+
 Detect conflicts: if two plans propose edits to the same file:line range,
 merge into a single sequential fix instruction.
-
 Produce a merged fix-plan ordered by severity then file path."""
 on_fail = "abort"
 condition = "${MULTI_BUCKET}"
@@ -113,9 +188,23 @@ id = 6
 title = "Serial EDIT Phase"
 tool = "bash"
 prompt = """
-Dispatch a single CSA employee with write permissions to apply all
-fix plans serially. The employee applies each fix in order, runs
-`just fmt`, and stages changed files. Does NOT create commits."""
+Dispatch a single CSA employee with write permissions to apply all fix plans serially.
+
+```bash
+# STEP_5_OUTPUT contains the merged fix plan from the Merge step
+EDIT_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "apply-fixes: ${BUCKET_COUNT} findings" \
+  "Apply the following fix plans to the codebase. Apply each fix in order.
+   After all fixes, run 'just fmt' and stage the changed files.
+   Do NOT create any commits.
+
+   ${STEP_5_OUTPUT}")
+csa session wait --session "$EDIT_SID"
+echo "$EDIT_SID"
+```
+
+The employee applies each fix in order, runs `just fmt`, and stages changed files.
+Does NOT create commits — the caller handles commit creation."""
 on_fail = "abort"
 condition = "${MULTI_BUCKET}"
 
