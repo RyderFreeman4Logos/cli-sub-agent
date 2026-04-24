@@ -216,6 +216,27 @@ impl Executor {
         }
     }
 
+    /// Returns the current thinking budget, if any.
+    pub fn thinking_budget(&self) -> Option<&ThinkingBudget> {
+        match self {
+            Self::GeminiCli {
+                thinking_budget, ..
+            }
+            | Self::Opencode {
+                thinking_budget, ..
+            }
+            | Self::Codex {
+                thinking_budget, ..
+            }
+            | Self::ClaudeCode {
+                thinking_budget, ..
+            }
+            | Self::OpenaiCompat {
+                thinking_budget, ..
+            } => thinking_budget.as_ref(),
+        }
+    }
+
     /// Override the thinking budget (thinking_lock replaces whatever was set).
     pub fn override_thinking_budget(&mut self, budget: ThinkingBudget) {
         match self {
@@ -346,6 +367,7 @@ impl Executor {
             output_spool_keep_rotated: options.output_spool_keep_rotated,
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),
+            thinking_budget: self.thinking_budget().cloned(),
         };
         let transport = self.transport(session_config)?;
         let effective_prompt = self.apply_pre_session_hook(prompt, session, &options).await;

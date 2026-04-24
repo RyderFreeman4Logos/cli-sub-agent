@@ -270,6 +270,7 @@ echo "ok persistent"
                     output_spool_keep_rotated: false,
                     setting_sources: None,
                     sandbox: None,
+                    thinking_budget: None,
                 },
             )
             .await

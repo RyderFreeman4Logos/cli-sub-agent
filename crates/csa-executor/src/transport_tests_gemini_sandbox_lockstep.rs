@@ -78,6 +78,7 @@ async fn test_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_added() {
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
+        thinking_budget: None,
     };
 
     let error = transport
@@ -181,6 +182,7 @@ async fn test_legacy_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_add
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
+        thinking_budget: None,
     };
 
     let error = transport
@@ -284,6 +286,7 @@ async fn test_execute_fails_fast_when_shared_npm_cache_path_violates_writable_al
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
+        thinking_budget: None,
     };
 
     let error = transport
@@ -394,6 +397,7 @@ async fn test_legacy_execute_fails_fast_when_shared_npm_cache_path_violates_writ
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
+        thinking_budget: None,
     };
 
     let error = transport
@@ -514,6 +518,7 @@ async fn test_execute_fails_fast_when_symlinked_shared_npm_cache_resolves_outsid
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
+        thinking_budget: None,
     };
 
     let error = transport
@@ -647,6 +652,7 @@ async fn test_legacy_execute_fails_fast_when_symlinked_shared_npm_cache_resolves
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
+        thinking_budget: None,
     };
 
     let error = transport

@@ -116,6 +116,21 @@ impl ThinkingBudget {
         }
     }
 
+    /// One-level downshift target when an ACP idle disconnect is detected.
+    ///
+    /// Steps down one tier: Max→Xhigh, Xhigh→High, High→Medium, Medium→Low.
+    /// Returns `None` for Low/DefaultBudget/Custom (already minimal; downshifting
+    /// further would not help and the idle disconnect should propagate as-is).
+    pub fn idle_disconnect_downshift(&self) -> Option<ThinkingBudget> {
+        match self {
+            Self::Max => Some(ThinkingBudget::Xhigh),
+            Self::Xhigh => Some(ThinkingBudget::High),
+            Self::High => Some(ThinkingBudget::Medium),
+            Self::Medium => Some(ThinkingBudget::Low),
+            Self::Low | Self::DefaultBudget | Self::Custom(_) => None,
+        }
+    }
+
     /// Returns the reasoning effort level for codex-style tools.
     ///
     /// Maps thinking budget levels to codex's `-c model_reasoning_effort=` values.
