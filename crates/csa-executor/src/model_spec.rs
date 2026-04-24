@@ -58,14 +58,11 @@ impl ThinkingBudget {
     pub fn try_split_from_model(model: &str) -> (&str, Option<Self>) {
         if let Some(pos) = model.rfind('/') {
             let suffix = &model[pos + 1..];
-            // Only match named keywords, not numeric — numbers in model names are common
-            // (e.g., "gpt-5.4" or version suffixes) and would cause false positives.
-            match suffix.to_lowercase().as_str() {
-                "default" | "low" | "medium" | "med" | "high" | "xhigh" | "extra-high" | "max" => {
-                    // Safe to unwrap: we matched a known keyword above.
-                    let budget = Self::parse(suffix).expect("matched keyword must parse");
-                    (&model[..pos], Some(budget))
-                }
+            // Delegate keyword validation to parse() so the valid-keyword set is defined
+            // in exactly one place. Only match named keywords, not Custom(n) — numbers in
+            // model names are common (e.g., "gpt-5.4") and would cause false positives.
+            match Self::parse(suffix) {
+                Ok(budget) if !matches!(budget, Self::Custom(_)) => (&model[..pos], Some(budget)),
                 _ => (model, None),
             }
         } else {
@@ -106,6 +103,16 @@ impl ThinkingBudget {
             Self::Xhigh => 65536,
             Self::Max => 131072,
             Self::Custom(n) => *n,
+        }
+    }
+
+    /// One-shot downgrade target when a codex run at this budget stalls on the
+    /// initial response. `None` means no retry — the budget is already low
+    /// enough that stalling suggests a real failure, not an over-thinking stall.
+    pub fn codex_stall_retry_downgrade(&self) -> Option<ThinkingBudget> {
+        match self {
+            Self::Xhigh | Self::Max => Some(ThinkingBudget::High),
+            _ => None,
         }
     }
 
@@ -346,6 +353,42 @@ mod tests {
         let (model, budget) = ThinkingBudget::try_split_from_model("some-model/max");
         assert_eq!(model, "some-model");
         assert!(matches!(budget, Some(ThinkingBudget::Max)));
+    }
+
+    #[test]
+    fn try_split_from_model_handles_max() {
+        let (model, budget) = ThinkingBudget::try_split_from_model("gpt-5.4/max");
+        assert_eq!(model, "gpt-5.4");
+        assert!(matches!(budget, Some(ThinkingBudget::Max)));
+    }
+
+    #[test]
+    fn codex_stall_retry_downgrade_covers_max() {
+        assert!(matches!(
+            ThinkingBudget::Max.codex_stall_retry_downgrade(),
+            Some(ThinkingBudget::High)
+        ));
+        assert!(matches!(
+            ThinkingBudget::Xhigh.codex_stall_retry_downgrade(),
+            Some(ThinkingBudget::High)
+        ));
+        assert!(ThinkingBudget::High.codex_stall_retry_downgrade().is_none());
+        assert!(
+            ThinkingBudget::Medium
+                .codex_stall_retry_downgrade()
+                .is_none()
+        );
+        assert!(ThinkingBudget::Low.codex_stall_retry_downgrade().is_none());
+        assert!(
+            ThinkingBudget::DefaultBudget
+                .codex_stall_retry_downgrade()
+                .is_none()
+        );
+        assert!(
+            ThinkingBudget::Custom(50000)
+                .codex_stall_retry_downgrade()
+                .is_none()
+        );
     }
 
     #[test]

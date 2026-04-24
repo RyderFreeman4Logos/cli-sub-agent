@@ -88,7 +88,7 @@ pub fn classify_codex_exec_initial_stall(
     Some(CodexExecInitialStallClassification {
         effort: budget.codex_effort(),
         timeout_seconds: timeout_seconds.unwrap_or(DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS),
-        retry_effort: matches!(budget, ThinkingBudget::Xhigh).then_some(ThinkingBudget::High),
+        retry_effort: budget.codex_stall_retry_downgrade(),
     })
 }
 
