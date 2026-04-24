@@ -191,7 +191,7 @@ printf '%s\n' "${MKTD_OUTPUT}"
 print_mktd_failure_context() {
   echo "mktd exit code: ${MKTD_EXIT}" >&2
   echo "mktd failure context (step/exit lines):" >&2
-  MKTD_FAILURE_CONTEXT="$(printf '%s\n' "${MKTD_OUTPUT}" | rg -i '(^error:|failed|failure|exit status|Step [0-9]+|step [0-9]+|Phase [0-9]|User Approval)' | tail -40 || true)"
+  MKTD_FAILURE_CONTEXT="$(printf '%s\n' "${MKTD_OUTPUT}" | grep -Ei '(error|Step [0-9]+|timeout|fail)' | tail -40 || true)"
   if [ -n "${MKTD_FAILURE_CONTEXT}" ]; then
     printf '%s\n' "${MKTD_FAILURE_CONTEXT}" >&2
   else
