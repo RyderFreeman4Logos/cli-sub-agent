@@ -25,19 +25,21 @@ and analyzed together — their fixes may interact.
 
 Tool: bash
 
-Read the review session's `output/findings.toml` and extract per-finding metadata.
+Read the review session's findings and extract per-finding metadata.
 
 ```bash
-REVIEW_SESSION_DIR=$(csa session result --session "${REVIEW_SID}" --field session_dir 2>/dev/null)
-FINDINGS_TOML="${REVIEW_SESSION_DIR}/output/findings.toml"
+# Read structured review output (contains finding IDs, severity, file ranges)
+csa session result --session "${REVIEW_SID}" --section details
 
-if [ ! -f "$FINDINGS_TOML" ]; then
-  echo "ERROR: findings.toml not found at $FINDINGS_TOML"
-  exit 1
-fi
-
-cat "$FINDINGS_TOML"
+# If the details section is unavailable, fall back to full output
+csa session result --session "${REVIEW_SID}" --full
 ```
+
+> **Note**: Session directories are managed by CSA and may reside in sandboxed
+> temp paths. There is no `--field session_dir` flag on `csa session result`.
+> Use `--section details` or `--full` to read finding metadata. If raw
+> `findings.toml` file access is needed, resolve the session directory via
+> `csa_session::get_session_dir()` internally.
 
 ## Step 2: Bucket Findings by Primary File
 
@@ -45,12 +47,17 @@ Tool: bash
 
 Group findings by their primary file path (`file_ranges[0].path`).
 Findings sharing a primary file go into the same bucket.
+Findings with no `file_ranges` go into a catch-all bucket.
 Each bucket gets an independent RECON employee.
 
 The bucketing must produce:
-- `${BUCKET_COUNT}`: Number of independent buckets.
-- `${BUCKET_N_IDS}`: Finding IDs in bucket N (space-separated).
-- `${BUCKET_N_FILE}`: Primary file for bucket N.
+- `${BUCKET_COUNT}`: Number of independent buckets (workflow variable).
+- `BUCKET_N_IDS`: Finding IDs in bucket N, space-separated (shell-local, N = 1..BUCKET_COUNT).
+- `BUCKET_N_FILE`: Primary file for bucket N (shell-local, N = 1..BUCKET_COUNT).
+
+> `BUCKET_N_IDS` and `BUCKET_N_FILE` are shell-local variables created dynamically
+> during bucketing — they are NOT workflow template variables (the count N varies
+> at runtime and cannot be statically declared in workflow.toml).
 
 If `${BUCKET_COUNT}` == 1, skip parallel RECON — fall back to standard
 single-employee fix (no benefit from parallelism).
@@ -93,7 +100,7 @@ SID_2=$(csa run --sa-mode true --tier tier-1-quick \
   "Analyze finding ${BUCKET_2_IDS} in ${BUCKET_2_FILE}. ...")
 # ... repeat for each bucket
 
-# Wait for all RECON employees sequentially (AGENTS.md rule: no parallel waits)
+# Wait for all RECON employees sequentially (AGENTS.md rules 026/032: no parallel waits)
 csa session wait --session "$SID_1"
 csa session wait --session "$SID_2"
 # ... repeat for each bucket
@@ -152,9 +159,14 @@ just test
 
 ## Variables
 
+### Workflow template variables (declared in workflow.toml)
+
 - `${REVIEW_SID}`: Session ID of the review that produced findings.
 - `${BUCKET_COUNT}`: Number of independent finding buckets.
-- `${BUCKET_N_IDS}`: Finding IDs in bucket N.
-- `${BUCKET_N_FILE}`: Primary file for bucket N.
 - `${MERGED_FIX_PLAN}`: Merged fix-plan document from all RECON outputs.
 - `${EDIT_SID}`: Session ID of the EDIT employee.
+
+### Shell-local variables (created dynamically during bucketing, N = 1..BUCKET_COUNT)
+
+- `BUCKET_N_IDS`: Finding IDs in bucket N (space-separated).
+- `BUCKET_N_FILE`: Primary file for bucket N.

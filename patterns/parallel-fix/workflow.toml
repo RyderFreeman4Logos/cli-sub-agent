@@ -2,6 +2,11 @@
 name = "parallel-fix"
 description = "Parallel RECON / serial EDIT for multi-finding fix rounds"
 
+# Workflow template variables (static, declared here).
+# Per-bucket variables (BUCKET_N_IDS, BUCKET_N_FILE where N = 1..BUCKET_COUNT)
+# are shell-local and created dynamically during Step 2 bucketing — they cannot
+# be statically declared and are intentionally omitted from this section.
+
 [[workflow.variables]]
 name = "REVIEW_SID"
 
@@ -19,19 +24,19 @@ id = 1
 title = "Parse Findings"
 tool = "bash"
 prompt = """
-Read the review session's `output/findings.toml` and extract per-finding metadata.
+Read the review session's findings and extract per-finding metadata.
 
 ```bash
-REVIEW_SESSION_DIR=$(csa session result --session "${REVIEW_SID}" --field session_dir 2>/dev/null)
-FINDINGS_TOML="${REVIEW_SESSION_DIR}/output/findings.toml"
+# Read structured review output (contains finding IDs, severity, file ranges)
+csa session result --session "${REVIEW_SID}" --section details
 
-if [ ! -f "$FINDINGS_TOML" ]; then
-  echo "ERROR: findings.toml not found at $FINDINGS_TOML"
-  exit 1
-fi
+# If the details section is unavailable, fall back to full output
+csa session result --session "${REVIEW_SID}" --full
+```
 
-cat "$FINDINGS_TOML"
-```"""
+Note: Session directories are managed by CSA and may reside in sandboxed temp paths.
+There is no `--field session_dir` flag. Use `--section details` or `--full` to read
+finding metadata directly."""
 on_fail = "abort"
 
 [[workflow.steps]]

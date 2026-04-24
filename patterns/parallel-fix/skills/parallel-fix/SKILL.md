@@ -43,7 +43,7 @@ breaks prompt-guard propagation.
 
 ### Step-by-Step
 
-1. **Parse findings**: Read `$REVIEW_SESSION_DIR/output/findings.toml`.
+1. **Parse findings**: Read review output via `csa session result --session "$REVIEW_SID" --section details`.
 2. **Bucket by primary file**: Group findings by `file_ranges[0].path`.
    Findings with no `file_ranges` go into a catch-all bucket.
 3. **Check bucket count**: If only 1 bucket, fall back to standard fix.
@@ -70,7 +70,7 @@ breaks prompt-guard propagation.
    ```
    Launch ALL employees before waiting for any.
 5. **Wait for RECON employees**: Wait sequentially (no parallel waits,
-   per AGENTS.md session-wait rules):
+   per AGENTS.md rules 026 and 032):
    ```bash
    csa session wait --session "$SID_1"
    csa session wait --session "$SID_2"
