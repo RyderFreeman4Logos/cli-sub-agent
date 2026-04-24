@@ -138,7 +138,9 @@ fn classify_diagnostic_hint(stderr_tail: &str) -> Option<&'static str> {
         return Some("empty_stdin_before_session_execution");
     }
     if lowered.contains("out of memory")
-        || lowered.contains("oom")
+        || lowered
+            .split_whitespace()
+            .any(|word| word.trim_matches(|c: char| !c.is_alphanumeric()) == "oom")
         || lowered.contains("sigkill")
         || lowered.contains("exit code 137")
     {
@@ -192,4 +194,22 @@ fn format_optional_file_mtime(path: &Path) -> Option<String> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     let modified = chrono::DateTime::<chrono::Utc>::from(modified);
     Some(modified.to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_hint_matches_oom_as_punctuated_word() {
+        assert_eq!(
+            classify_diagnostic_hint("kernel killed process: OOM."),
+            Some("possible_oom_or_sigkill")
+        );
+    }
+
+    #[test]
+    fn diagnostic_hint_ignores_oom_substrings() {
+        assert_eq!(classify_diagnostic_hint("room broom zoom"), None);
+    }
 }
