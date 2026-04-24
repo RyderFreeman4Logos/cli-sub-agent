@@ -88,20 +88,12 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 2
 title = "Classify Bug Class vs Isolated Mistake"
-tool = "csa"
+tool = "bash"
 prompt = """
 For each HIGH/CRITICAL finding from Step 1, classify as BUG_CLASS or ISOLATED_MISTAKE.
 
-Criteria for BUG_CLASS:
-- The anti-pattern is reproducible in other code
-- The fix required a structural change, not just a line edit
-- Two or more examples exist or could exist
-
-Criteria for ISOLATED_MISTAKE:
-- Single-line fix, unique to this code path
-- Cannot generalize to other locations
-
 ```bash
+set -euo pipefail
 CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
   --description "classify-finding: bug-class-or-isolated" \
   "Classify the following review finding as BUG_CLASS or ISOLATED_MISTAKE.
@@ -112,13 +104,29 @@ CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
    Fix commit: ${FIX_COMMIT_SHA}
    Fix diff summary: ${FIX_DIFF_SUMMARY}
 
+   Criteria for BUG_CLASS:
+   - The anti-pattern is reproducible in other code
+   - The fix required a structural change, not just a line edit
+   - Two or more examples exist or could exist
+
+   Criteria for ISOLATED_MISTAKE:
+   - Single-line fix, unique to this code path
+   - Cannot generalize to other locations
+
    Output: CLASSIFICATION=BUG_CLASS or CLASSIFICATION=ISOLATED_MISTAKE
    Then: RATIONALE: <one paragraph>")
 csa session wait --session "$CLASSIFY_SID"
+
+# Read classifier result and emit CSA_VAR
+CLASSIFY_OUTPUT=$(csa session result --session "$CLASSIFY_SID" --section summary 2>/dev/null || true)
+if echo "$CLASSIFY_OUTPUT" | grep -q "CLASSIFICATION=BUG_CLASS"; then
+  echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS=yes"
+else
+  echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS="
+fi
 ```
 
-Set HAS_BUG_CLASS_FINDINGS to "yes" if any finding classified as BUG_CLASS,
-empty string otherwise. Only BUG_CLASS findings proceed to Step 3."""
+Only BUG_CLASS findings proceed to Step 3."""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -130,14 +138,7 @@ Check whether an existing rule already covers this bug class.
 
 ```bash
 set -euo pipefail
-SHARED_RULES_DIR="${HOME}/project/github/t4nature/s/llm/coding/rules"
 PROJECT_RULES_DIR=".agents/project-rules-ref"
-
-# Keyword grep across shared rules
-SHARED_MATCHES=""
-if [ -d "${SHARED_RULES_DIR}" ]; then
-  SHARED_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS}" "${SHARED_RULES_DIR}/" 2>/dev/null || true)
-fi
 
 # Keyword grep across project-local rules
 PROJECT_MATCHES=""
@@ -145,27 +146,25 @@ if [ -d "${PROJECT_RULES_DIR}" ]; then
   PROJECT_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS}" "${PROJECT_RULES_DIR}/" 2>/dev/null || true)
 fi
 
-ALL_MATCHES="${SHARED_MATCHES}${PROJECT_MATCHES}"
-if [ -z "${ALL_MATCHES}" ]; then
+if [ -z "${PROJECT_MATCHES}" ]; then
   echo "EXISTING_RULE_MATCH=none"
+  echo "CSA_VAR:EXISTING_RULE_MATCH=none"
 else
   echo "Potential matches found:"
-  echo "${ALL_MATCHES}"
+  echo "${PROJECT_MATCHES}"
   echo "EXISTING_RULE_MATCH=potential"
+  echo "CSA_VAR:EXISTING_RULE_MATCH=potential"
+
+  # Dispatch semantic deduplication for potential matches
+  DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
+    --description "dedupe-check: ${BUG_CLASS_NAME}" \
+    "Compare this bug class against the existing rule.
+     Bug class: ${BUG_CLASS_DESCRIPTION}
+     Existing rule content: (read from matched file)
+     Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
+     If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
+  csa session wait --session "$DEDUPE_SID"
 fi
-```
-
-If keyword grep finds potential matches, dispatch semantic deduplication:
-
-```bash
-DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
-  --description "dedupe-check: ${BUG_CLASS_NAME}" \
-  "Compare this bug class against the existing rule.
-   Bug class: ${BUG_CLASS_DESCRIPTION}
-   Existing rule content: (read from matched file)
-   Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
-   If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
-csa session wait --session "$DEDUPE_SID"
 ```
 
 EXACT_MATCH: skip rule generation.
@@ -218,15 +217,21 @@ title = "Propose via PR"
 tool = "bash"
 prompt = """
 Create a proposal PR with the rule draft. NEVER auto-commit to main rules.
+Rules are written to project-local .agents/project-rules-ref/ (fork-only, rule 030).
 
 ```bash
 set -euo pipefail
-SHARED_RULES_DIR="${HOME}/project/github/t4nature/s/llm/coding/rules"
-RULE_DIR="${SHARED_RULES_DIR}/${LANG}"
+RULE_DIR=".agents/project-rules-ref/${LANG}"
+mkdir -p "${RULE_DIR}"
 
-# Determine next rule number
-NEXT_NUM=$(ls "${RULE_DIR}/" 2>/dev/null | grep -E '^[0-9]{3}-' | sort -n | tail -1 | cut -c1-3)
-NEXT_NUM=$(printf '%03d' $((10#${NEXT_NUM:-0} + 1)))
+# Determine next rule number (safe for empty directory)
+EXISTING=$(ls "${RULE_DIR}/" 2>/dev/null | grep -E '^[0-9]{3}-' || true)
+if [ -n "${EXISTING}" ]; then
+  LAST_NUM=$(echo "${EXISTING}" | sort -n | tail -1 | cut -c1-3)
+else
+  LAST_NUM="000"
+fi
+NEXT_NUM=$(printf '%03d' $((10#${LAST_NUM} + 1)))
 RULE_FILE="${NEXT_NUM}-${BUG_CLASS_SLUG}.md"
 
 # Create proposal branch

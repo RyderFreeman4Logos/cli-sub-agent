@@ -54,8 +54,7 @@ Output: structured list of HIGH/CRITICAL findings with:
 
 ## Step 2: Classify Bug Class vs Isolated Mistake
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 
 For each HIGH/CRITICAL finding, dispatch an LLM classifier to determine
 whether the finding represents a **bug class** (structural anti-pattern
@@ -73,6 +72,7 @@ Classification criteria:
 Only bug classes proceed to Step 3. Isolated mistakes are logged and skipped.
 
 ```bash
+set -euo pipefail
 CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
   --description "classify-finding: bug-class-or-isolated" \
   "Classify the following review finding as either BUG_CLASS or ISOLATED_MISTAKE.
@@ -96,49 +96,52 @@ CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
    Output exactly one line: CLASSIFICATION=BUG_CLASS or CLASSIFICATION=ISOLATED_MISTAKE
    Then output RATIONALE: <one paragraph explaining why>")
 csa session wait --session "$CLASSIFY_SID"
+
+# Read classifier result and emit CSA_VAR for condition gating
+CLASSIFY_OUTPUT=$(csa session result --session "$CLASSIFY_SID" --section summary 2>/dev/null || true)
+if echo "$CLASSIFY_OUTPUT" | grep -q "CLASSIFICATION=BUG_CLASS"; then
+  echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS=yes"
+else
+  echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS="
+fi
 ```
 
 ## Step 3: Deduplicate Against Existing Rules
 
 Tool: bash
 
-Check whether an existing rule already covers this bug class. Search both
-the shared rules repository and project-local rules.
+Check whether an existing rule already covers this bug class. Search
+project-local rules (`.agents/project-rules-ref/`).
 
 ```bash
-# Search shared rules
-SHARED_RULES_DIR="${HOME}/project/github/t4nature/s/llm/coding/rules"
-if [ -d "${SHARED_RULES_DIR}" ]; then
-  grep -rl "${BUG_CLASS_KEYWORDS}" "${SHARED_RULES_DIR}/" || true
-fi
-
-# Search project-local rules
+set -euo pipefail
 PROJECT_RULES_DIR=".agents/project-rules-ref"
+
+# Keyword grep across project-local rules
+PROJECT_MATCHES=""
 if [ -d "${PROJECT_RULES_DIR}" ]; then
-  grep -rl "${BUG_CLASS_KEYWORDS}" "${PROJECT_RULES_DIR}/" || true
+  PROJECT_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS}" "${PROJECT_RULES_DIR}/" 2>/dev/null || true)
 fi
-```
 
-If a matching rule is found:
-- **Exact match**: Skip rule generation. Log "already covered by rule NNN".
-- **Partial match**: Propose an UPDATE to the existing rule (add new case study
-  section) instead of creating a new rule.
-- **No match**: Proceed to Step 4 to generate a new rule.
+if [ -z "${PROJECT_MATCHES}" ]; then
+  echo "EXISTING_RULE_MATCH=none"
+  echo "CSA_VAR:EXISTING_RULE_MATCH=none"
+else
+  echo "Potential matches found:"
+  echo "${PROJECT_MATCHES}"
+  echo "EXISTING_RULE_MATCH=potential"
+  echo "CSA_VAR:EXISTING_RULE_MATCH=potential"
 
-For semantic deduplication beyond keyword grep, dispatch an LLM comparison:
-
-```bash
-DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
-  --description "dedupe-check: ${BUG_CLASS_NAME}" \
-  "Compare this bug class description against the existing rule below.
-   Are they covering the same anti-pattern?
-
-   Bug class: ${BUG_CLASS_DESCRIPTION}
-   Existing rule: ${EXISTING_RULE_CONTENT}
-
-   Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
-   If PARTIAL_MATCH, output UPDATE_SUGGESTION: <what to add to existing rule>")
-csa session wait --session "$DEDUPE_SID"
+  # Dispatch semantic deduplication for potential matches
+  DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
+    --description "dedupe-check: ${BUG_CLASS_NAME}" \
+    "Compare this bug class against the existing rule.
+     Bug class: ${BUG_CLASS_DESCRIPTION}
+     Existing rule content: (read from matched file)
+     Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
+     If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
+  csa session wait --session "$DEDUPE_SID"
+fi
 ```
 
 ## Step 4: Generate Rule Draft
@@ -203,10 +206,19 @@ Create a proposal PR with the rule draft. NEVER auto-commit rules to
 the main rules repository. Human review is mandatory.
 
 ```bash
-# Determine target directory and next rule number
-RULE_DIR="${SHARED_RULES_DIR}/${LANG}"
-NEXT_NUM=$(ls "${RULE_DIR}/" 2>/dev/null | grep -E '^[0-9]{3}-' | sort -n | tail -1 | cut -c1-3)
-NEXT_NUM=$(printf '%03d' $((10#${NEXT_NUM:-0} + 1)))
+set -euo pipefail
+# Determine target directory (project-local, fork-only per rule 030)
+RULE_DIR=".agents/project-rules-ref/${LANG}"
+mkdir -p "${RULE_DIR}"
+
+# Determine next rule number (safe for empty directory)
+EXISTING=$(ls "${RULE_DIR}/" 2>/dev/null | grep -E '^[0-9]{3}-' || true)
+if [ -n "${EXISTING}" ]; then
+  LAST_NUM=$(echo "${EXISTING}" | sort -n | tail -1 | cut -c1-3)
+else
+  LAST_NUM="000"
+fi
+NEXT_NUM=$(printf '%03d' $((10#${LAST_NUM} + 1)))
 RULE_FILE="${NEXT_NUM}-${BUG_CLASS_SLUG}.md"
 
 # Create proposal branch
@@ -214,8 +226,7 @@ SHORT_SHA=$(echo "${FIX_COMMIT_SHA}" | cut -c1-7)
 PROPOSAL_BRANCH="chore/rules-propose-${SHORT_SHA}"
 git checkout -b "${PROPOSAL_BRANCH}"
 
-# Write rule file
-# (RULE_CONTENT extracted from Step 4 output between markers)
+# Write rule file (RULE_CONTENT extracted from Step 4 output between markers)
 echo "${RULE_CONTENT}" > "${RULE_DIR}/${RULE_FILE}"
 
 git add "${RULE_DIR}/${RULE_FILE}"
@@ -234,8 +245,7 @@ Source PR: #${PR_NUM}
 Severity: ${SEVERITY}
 Bug class: ${BUG_CLASS_NAME}
 
-This rule was auto-extracted from a verified HIGH/CRITICAL finding by the
-rule-extractor pattern (issue #661). Human review required before merge.
+Auto-extracted by rule-extractor pattern (issue #661). Human review required.
 
 ### Checklist
 - [ ] Rule accurately describes the bug class
@@ -285,7 +295,7 @@ NNN|bug-class-slug|one-line summary of the rule
 
 - **Invoked by**: pr-bot (post-merge, opt-in) via `csa plan run patterns/rule-extractor/workflow.toml`
 - **Depends on**: pr-bot review artifacts (findings, debate verdicts, fix commits)
-- **Outputs to**: `~/project/github/t4nature/s/llm/coding/rules/<lang>/` (shared rules) or `.agents/project-rules-ref/` (project-local)
+- **Outputs to**: `.agents/project-rules-ref/<lang>/` (project-local, fork-only per rule 030)
 - **Constraint**: NEVER auto-commits. Always proposes via PR for human review.
 - **Constraint**: AGENTS.md rule 030 (fork-only) — PRs target user's fork.
 

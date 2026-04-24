@@ -48,14 +48,15 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
    findings from `findings.toml` (via `csa session result`) or PR comments
    (via `gh api`).
 
-2. **Classify each finding**: Dispatch LLM classifier to determine BUG_CLASS vs
-   ISOLATED_MISTAKE. Only bug classes proceed.
+2. **Classify each finding** (bash step): Dispatch LLM classifier via `csa run`
+   to determine BUG_CLASS vs ISOLATED_MISTAKE. Emits
+   `CSA_VAR:HAS_BUG_CLASS_FINDINGS=yes` when bug classes found. Only bug classes proceed.
    - **BUG_CLASS**: Reproducible anti-pattern, structural fix, 2+ examples possible.
    - **ISOLATED_MISTAKE**: Single-line fix, unique to code path, no precedent.
 
-3. **Deduplicate against existing rules**: Search both shared rules
-   (`~/project/github/t4nature/s/llm/coding/rules/<lang>/`) and project-local
-   rules (`.agents/project-rules-ref/`). Use keyword grep + semantic LLM comparison.
+3. **Deduplicate against existing rules**: Search project-local rules
+   (`.agents/project-rules-ref/`). Use keyword grep + semantic LLM comparison
+   (both in a single bash block).
    - EXACT_MATCH → skip.
    - PARTIAL_MATCH → propose update (add case study to existing rule).
    - NO_MATCH → proceed to draft.
@@ -111,8 +112,7 @@ Two-layer dedup prevents rule proliferation:
 
 - **Invoked by**: pr-bot (post-merge, opt-in)
 - **Depends on**: pr-bot review artifacts (findings, debate verdicts, fix commits)
-- **Outputs to**: `~/project/github/t4nature/s/llm/coding/rules/<lang>/` (shared)
-  or `.agents/project-rules-ref/` (project-local)
+- **Outputs to**: `.agents/project-rules-ref/<lang>/` (project-local, fork-only per rule 030)
 - **Constraint**: NEVER auto-commits. Always proposes via PR.
 - **Constraint**: AGENTS.md rule 030 (fork-only) — PRs target user's fork.
 
