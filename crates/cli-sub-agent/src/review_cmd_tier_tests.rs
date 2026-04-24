@@ -7,6 +7,25 @@ fn assume_tier_tools_available() -> ScopedTestEnvVar {
     ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
 }
 
+#[test]
+fn review_cli_hint_difficulty_conflicts_with_tier() {
+    use clap::Parser;
+
+    let err = match Cli::try_parse_from([
+        "csa",
+        "review",
+        "--hint-difficulty",
+        "code_review",
+        "--tier",
+        "tier-2-standard",
+        "--diff",
+    ]) {
+        Ok(_) => panic!("hint-difficulty and tier should conflict"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
     for tool in csa_config::global::all_known_tools() {

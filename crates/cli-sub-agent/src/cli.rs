@@ -93,7 +93,7 @@ pub enum Commands {
         #[arg(long, value_name = "INTENT", conflicts_with = "tier")]
         auto_route: Option<String>,
         /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
-        #[arg(long, value_name = "LABEL")]
+        #[arg(long, value_name = "LABEL", conflicts_with_all = ["tier", "auto_route"])]
         hint_difficulty: Option<String>,
         /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
         #[arg(long)]

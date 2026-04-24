@@ -727,6 +727,25 @@ fn debate_cli_parses_hint_difficulty_flag() {
 }
 
 #[test]
+fn debate_cli_hint_difficulty_conflicts_with_tier() {
+    use clap::Parser;
+
+    let err = match crate::cli::Cli::try_parse_from([
+        "csa",
+        "debate",
+        "--hint-difficulty",
+        "architecture_design",
+        "--tier",
+        "tier-2-standard",
+        "question",
+    ]) {
+        Ok(_) => panic!("hint-difficulty and tier should conflict"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn debate_cli_parses_no_stream_stdout_flag() {
     let args = parse_debate_args(&["csa", "debate", "--no-stream-stdout", "question"]);
     assert!(!args.stream_stdout);

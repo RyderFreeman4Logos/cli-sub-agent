@@ -60,7 +60,7 @@ pub struct ReviewArgs {
     pub model_spec: Option<String>,
 
     /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
-    #[arg(long, value_name = "LABEL")]
+    #[arg(long, value_name = "LABEL", conflicts_with = "tier")]
     pub hint_difficulty: Option<String>,
 
     /// Thinking budget (accepted for CLI compatibility but not used by review;
@@ -353,7 +353,7 @@ pub struct DebateArgs {
     pub model_spec: Option<String>,
 
     /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
-    #[arg(long, value_name = "LABEL")]
+    #[arg(long, value_name = "LABEL", conflicts_with = "tier")]
     pub hint_difficulty: Option<String>,
 
     /// Thinking budget (low, medium, high, xhigh, max)

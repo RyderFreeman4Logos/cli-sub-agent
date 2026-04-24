@@ -18,7 +18,7 @@ pub(crate) fn strip_difficulty_frontmatter(prompt: String) -> Result<ParsedPromp
     let mut line_start = body_start;
     for line in prompt[body_start..].split_inclusive('\n') {
         let line_end = line_start + line.len();
-        if line.trim_end_matches(['\r', '\n']) == "---" {
+        if line.trim_end() == "---" {
             let frontmatter = &prompt[body_start..line_start];
             let difficulty = parse_frontmatter_difficulty(frontmatter)?;
             return Ok(ParsedPromptDifficulty {
@@ -29,21 +29,13 @@ pub(crate) fn strip_difficulty_frontmatter(prompt: String) -> Result<ParsedPromp
         line_start = line_end;
     }
 
-    if prompt[body_start..].trim_end_matches('\r') == "---" {
-        return Ok(ParsedPromptDifficulty {
-            difficulty: None,
-            prompt: String::new(),
-        });
-    }
-
     anyhow::bail!("Malformed YAML frontmatter: opening '---' has no closing '---' delimiter")
 }
 
 fn frontmatter_body_start(prompt: &str) -> Option<usize> {
-    if prompt.starts_with("---\n") {
-        Some(4)
-    } else if prompt.starts_with("---\r\n") {
-        Some(5)
+    let first_line = prompt.split_inclusive('\n').next().unwrap_or(prompt);
+    if first_line.trim_end() == "---" {
+        Some(first_line.len())
     } else {
         None
     }
@@ -51,16 +43,13 @@ fn frontmatter_body_start(prompt: &str) -> Option<usize> {
 
 fn parse_frontmatter_difficulty(frontmatter: &str) -> Result<Option<String>> {
     let mut difficulty = None;
-    for (index, raw_line) in frontmatter.lines().enumerate() {
+    for raw_line in frontmatter.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let Some((key, value)) = line.split_once(':') else {
-            anyhow::bail!(
-                "Malformed YAML frontmatter: expected `key: value` on line {}",
-                index + 2
-            );
+            continue;
         };
         if key.trim() != "difficulty" {
             continue;
@@ -240,13 +229,45 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_parse_malformed_errors() {
-        let err =
-            strip_difficulty_frontmatter("---\ndifficulty quick_question\n---\nbody".to_string())
-                .expect_err("malformed key/value must error");
+    fn frontmatter_parse_ignores_yaml_sequence_lines() {
+        let parsed = strip_difficulty_frontmatter(
+            "---\ntags:\n- foo\n- bar\ndifficulty: quick_question\n---\nbody".to_string(),
+        )
+        .expect("sequence frontmatter should be accepted");
+
+        assert_eq!(parsed.difficulty.as_deref(), Some("quick_question"));
+        assert_eq!(parsed.prompt, "body");
+    }
+
+    #[test]
+    fn frontmatter_parse_ignores_unknown_lines() {
+        let parsed = strip_difficulty_frontmatter(
+            "---\nowner: docs\nfreeform owner line\ndifficulty: bug_fix\n---\nbody".to_string(),
+        )
+        .expect("unknown frontmatter lines should be accepted");
+
+        assert_eq!(parsed.difficulty.as_deref(), Some("bug_fix"));
+        assert_eq!(parsed.prompt, "body");
+    }
+
+    #[test]
+    fn frontmatter_parse_allows_delimiter_trailing_space_and_crlf() {
+        let parsed = strip_difficulty_frontmatter(
+            "---  \r\ndifficulty: quick_question\r\n--- \t\r\nbody".to_string(),
+        )
+        .expect("frontmatter delimiters may have trailing whitespace");
+
+        assert_eq!(parsed.difficulty.as_deref(), Some("quick_question"));
+        assert_eq!(parsed.prompt, "body");
+    }
+
+    #[test]
+    fn frontmatter_parse_empty_difficulty_errors() {
+        let err = strip_difficulty_frontmatter("---\ndifficulty:\n---\nbody".to_string())
+            .expect_err("empty difficulty must error");
 
         assert!(
-            err.to_string().contains("expected `key: value`"),
+            err.to_string().contains("difficulty value cannot be empty"),
             "unexpected error: {err:#}"
         );
     }

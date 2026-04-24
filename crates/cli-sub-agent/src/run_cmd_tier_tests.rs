@@ -5,6 +5,37 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::tempdir;
 
+#[test]
+fn test_cli_hint_difficulty_conflicts_with_tier() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--hint-difficulty",
+        "quick_question",
+        "--tier",
+        "tier-1-quick",
+        "prompt",
+    ]);
+    assert!(result.is_err(), "hint-difficulty and tier should conflict");
+}
+
+#[test]
+fn test_cli_hint_difficulty_conflicts_with_auto_route() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--hint-difficulty",
+        "quick_question",
+        "--auto-route",
+        "code",
+        "prompt",
+    ]);
+    assert!(
+        result.is_err(),
+        "hint-difficulty and auto-route should conflict"
+    );
+}
+
 fn run_config_with_tier(
     tier_name: &str,
     models: Vec<&str>,
