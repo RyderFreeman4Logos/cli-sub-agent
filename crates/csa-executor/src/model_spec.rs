@@ -372,23 +372,18 @@ mod tests {
             ThinkingBudget::Xhigh.codex_stall_retry_downgrade(),
             Some(ThinkingBudget::High)
         ));
-        assert!(ThinkingBudget::High.codex_stall_retry_downgrade().is_none());
-        assert!(
-            ThinkingBudget::Medium
-                .codex_stall_retry_downgrade()
-                .is_none()
-        );
-        assert!(ThinkingBudget::Low.codex_stall_retry_downgrade().is_none());
-        assert!(
-            ThinkingBudget::DefaultBudget
-                .codex_stall_retry_downgrade()
-                .is_none()
-        );
-        assert!(
-            ThinkingBudget::Custom(50000)
-                .codex_stall_retry_downgrade()
-                .is_none()
-        );
+        for budget in [
+            ThinkingBudget::High,
+            ThinkingBudget::Medium,
+            ThinkingBudget::Low,
+            ThinkingBudget::DefaultBudget,
+            ThinkingBudget::Custom(50000),
+        ] {
+            assert!(
+                budget.codex_stall_retry_downgrade().is_none(),
+                "expected no downgrade for {budget:?}"
+            );
+        }
     }
 
     #[test]
