@@ -683,6 +683,8 @@ mod contract_tests;
 mod initial_response_tests;
 #[path = "pipeline_tests_locking.rs"]
 mod locking_tests;
+#[path = "pipeline_tests_pre_session_hook.rs"]
+mod pre_session_hook_tests;
 #[path = "pipeline_tests_review_target.rs"]
 mod review_target_tests;
 #[path = "pipeline_tests_run_target.rs"]

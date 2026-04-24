@@ -1,6 +1,7 @@
 //! Hook system for CSA lifecycle events.
 //!
 //! Hooks allow customizing behavior at key lifecycle events:
+//! - `PreSession`: Before the first user message is sent to a resolved transport
 //! - `SessionComplete`: After a session execution completes
 //! - `TodoCreate`: After a new TODO plan is created
 //! - `TodoSave`: After a TODO plan is saved/updated
@@ -11,11 +12,14 @@
 //!
 //! ## Configuration Priority
 //!
-//! Hook configuration is loaded with 4-tier priority:
+//! Most hook configuration is loaded with 4-tier priority:
 //! 1. Runtime overrides (CLI params) — highest
 //! 2. Project config (`~/.local/state/cli-sub-agent/{project}/hooks.toml`)
 //! 3. Global config (`~/.config/cli-sub-agent/hooks.toml`)
 //! 4. Built-in defaults — lowest
+//!
+//! `PreSession` is global-only and is loaded from
+//! `~/.config/cli-sub-agent/config.toml` under `[hooks.pre_session]`.
 //!
 //! ## Example Config
 //!
@@ -51,6 +55,7 @@ pub mod event_bus;
 pub mod guard;
 pub mod merge_guard;
 pub mod policy;
+pub mod pre_session;
 pub mod runner;
 pub mod waiver;
 
@@ -73,6 +78,12 @@ pub use merge_guard::{
     inject_merge_guard_env, install_merge_guard, is_merge_guard_enabled, verify_pr_bot_marker,
 };
 pub use policy::FailPolicy;
+pub use pre_session::{
+    PreSessionHookConfig, PreSessionHookContext, format_pre_session_reminder,
+    global_pre_session_config_path, load_global_pre_session_hook_config,
+    load_pre_session_hook_config_from_path, parse_pre_session_hook_config,
+    prepend_pre_session_stdout, run_pre_session_hook,
+};
 pub use runner::{run_hook, run_hook_capturing, run_hooks_for_event};
 pub use waiver::{Waiver, WaiverSet};
 

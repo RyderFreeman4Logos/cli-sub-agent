@@ -31,8 +31,12 @@ use arg_helpers::{
     effective_gemini_model_override, gemini_include_directories,
 };
 
+#[path = "executor_pre_session.rs"]
+mod pre_session;
 #[path = "executor_prompt_helpers.rs"]
 mod prompt_helpers;
+#[path = "executor_restrictions.rs"]
+mod restrictions;
 
 pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 
@@ -248,39 +252,6 @@ impl Executor {
         }
     }
 
-    /// Apply restrictions by modifying the prompt to include restriction instructions.
-    /// Returns the modified prompt.
-    ///
-    /// `allow_edit`: when false, tool must not modify existing files.
-    /// `allow_write_new`: when false, tool must not create new files either.
-    pub fn apply_restrictions(
-        &self,
-        prompt: &str,
-        allow_edit: bool,
-        allow_write_new: bool,
-    ) -> String {
-        if !allow_edit && !allow_write_new {
-            format!(
-                "IMPORTANT RESTRICTION: You are in READ-ONLY mode. \
-                 You MUST NOT edit existing files, create new files, or run commands \
-                 that modify the filesystem. You may ONLY perform read-only analysis, \
-                 search, and reporting.\n\n{prompt}"
-            )
-        } else if !allow_edit {
-            format!(
-                "IMPORTANT RESTRICTION: You MUST NOT edit or modify any existing files. \
-                 You may only create new files or perform read-only analysis.\n\n{prompt}"
-            )
-        } else if !allow_write_new {
-            format!(
-                "IMPORTANT RESTRICTION: You MUST NOT create new files. \
-                 You may only edit existing files or perform read-only analysis.\n\n{prompt}"
-            )
-        } else {
-            prompt.to_string()
-        }
-    }
-
     /// Inject environment variables from global config into a Command.
     pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
         for (key, value) in env_vars {
@@ -377,8 +348,15 @@ impl Executor {
             sandbox: sandbox_transport.as_ref(),
         };
         let transport = self.transport(session_config)?;
+        let effective_prompt = self.apply_pre_session_hook(prompt, session, &options);
         let mut result = transport
-            .execute(prompt, tool_state, session, extra_env, transport_options)
+            .execute(
+                &effective_prompt,
+                tool_state,
+                session,
+                extra_env,
+                transport_options,
+            )
             .await?;
         result.execution.consolidate_stderr_retries();
         Ok(result)

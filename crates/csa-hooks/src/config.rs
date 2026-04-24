@@ -288,6 +288,10 @@ command = "echo project"
         let pre_run_hook = config.get_for_event(HookEvent::PreRun);
         // PreRun has no built-in, should be disabled by default
         assert!(!pre_run_hook.enabled);
+
+        let pre_session_hook = config.get_for_event(HookEvent::PreSession);
+        // PreSession is configured via global config.toml, not hooks.toml defaults.
+        assert!(!pre_session_hook.enabled);
     }
 
     #[test]
@@ -339,6 +343,9 @@ timeout_secs = 20
 
         let todo_save = config.get_for_event(HookEvent::TodoSave);
         assert!(!todo_save.enabled);
+
+        let pre_session = config.get_for_event(HookEvent::PreSession);
+        assert!(!pre_session.enabled);
 
         let pre_run = config.get_for_event(HookEvent::PreRun);
         assert!(!pre_run.enabled);
