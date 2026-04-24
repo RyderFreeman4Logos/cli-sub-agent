@@ -52,7 +52,8 @@ Each bucket gets an independent RECON employee.
 
 The bucketing must produce:
 - `${BUCKET_COUNT}`: Number of independent buckets (workflow variable).
-- `${MULTI_BUCKET}`: Set to `"yes"` when `BUCKET_COUNT > 1`, empty string `""` otherwise (workflow variable). Used as the Step 3 condition because `plan_condition` only supports truthiness checks, not numeric comparisons.
+- `${MULTI_BUCKET}`: Set to `"yes"` when `BUCKET_COUNT > 1`, empty string `""` otherwise (workflow variable). Used as the Step 3/5/6 condition.
+- `${SINGLE_BUCKET}`: Set to `"yes"` when `BUCKET_COUNT == 1`, empty string `""` otherwise (workflow variable). Used as the Step 4 condition. Introduced because `plan_condition` only supports truthiness checks and `!(expr)` negation — bare `!VAR` is not valid syntax.
 - `BUCKET_N_IDS`: Finding IDs in bucket N, space-separated (shell-local, N = 1..BUCKET_COUNT).
 - `BUCKET_N_FILE`: Primary file for bucket N (shell-local, N = 1..BUCKET_COUNT).
 
@@ -113,7 +114,7 @@ that modify state, or create commits. They analyze and plan only.
 ## Step 4: Single-Bucket Fallback
 
 Tool: bash
-Condition: !${MULTI_BUCKET}
+Condition: ${SINGLE_BUCKET}
 
 Single-bucket path: only one file-bucket exists, so parallel RECON has
 no benefit. Dispatch a standard single-employee fix session that
@@ -191,6 +192,7 @@ just test
 - `${REVIEW_SID}`: Session ID of the review that produced findings.
 - `${BUCKET_COUNT}`: Number of independent finding buckets.
 - `${MULTI_BUCKET}`: Boolean gate — `"yes"` when `BUCKET_COUNT > 1`, `""` otherwise.
+- `${SINGLE_BUCKET}`: Boolean gate — `"yes"` when `BUCKET_COUNT == 1`, `""` otherwise.
 - `${MERGED_FIX_PLAN}`: Merged fix-plan document from all RECON outputs.
 - `${EDIT_SID}`: Session ID of the EDIT employee.
 

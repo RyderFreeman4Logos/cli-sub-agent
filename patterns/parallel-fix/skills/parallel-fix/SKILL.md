@@ -47,7 +47,8 @@ breaks prompt-guard propagation.
 2. **Bucket by primary file**: Group findings by `file_ranges[0].path`.
    Findings with no `file_ranges` go into a catch-all bucket.
    Set `${MULTI_BUCKET}` to `"yes"` when bucket count > 1, `""` otherwise.
-3. **Check bucket count**: If only 1 bucket (`${MULTI_BUCKET}` is empty), fall back to standard fix.
+   Set `${SINGLE_BUCKET}` to `"yes"` when bucket count == 1, `""` otherwise.
+3. **Check bucket count**: If only 1 bucket (`${SINGLE_BUCKET}` is `"yes"`), fall back to standard fix.
 4. **Launch parallel RECON**: For each bucket, dispatch a read-only CSA
    employee at `tier-1-quick`:
    ```bash
