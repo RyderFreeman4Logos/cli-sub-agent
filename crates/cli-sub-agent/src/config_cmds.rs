@@ -14,6 +14,9 @@ use helpers::{format_missing_key_message, format_toml_value, resolve_key, sugges
 #[path = "config_cmds_display.rs"]
 mod display;
 use display::{inject_resolved_tool_transports_json, inject_resolved_tool_transports_toml};
+#[path = "config_cmds_set.rs"]
+mod set;
+pub(crate) use set::handle_config_set;
 
 pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;

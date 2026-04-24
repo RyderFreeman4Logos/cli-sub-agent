@@ -36,6 +36,7 @@ tempfile.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 chrono.workspace = true
 ulid.workspace = true
 sysinfo.workspace = true

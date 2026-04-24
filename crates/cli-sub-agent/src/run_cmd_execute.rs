@@ -25,44 +25,17 @@ use crate::run_cmd_tool_selection::{
     resolve_last_session_selection, resolve_return_target_session_id, resolve_skill_and_prompt,
     resolve_tool_by_strategy,
 };
+#[path = "run_cmd_execute_routing.rs"]
+mod routing;
+use routing::{
+    RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_tier_context,
+};
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
     detect_effective_repo, find_recent_interrupted_skill_session, resolve_run_timeout_seconds,
     skill_session_description,
 };
-
-fn resolve_run_tier_context(
-    config: Option<&ProjectConfig>,
-    tool_name: &str,
-    strategy_resolved_tier_name: Option<String>,
-    fallback_tier_name: Option<String>,
-    force_ignore_tier_setting: bool,
-    user_model_spec_explicit: bool,
-    user_explicit_tool: bool,
-) -> (bool, bool, Option<String>) {
-    if force_ignore_tier_setting || user_model_spec_explicit {
-        return (false, false, None);
-    }
-
-    let resolved_tier_name = strategy_resolved_tier_name.or_else(|| {
-        (!user_explicit_tool)
-            .then_some(fallback_tier_name)
-            .flatten()
-    });
-    let tier_auto_select = !user_explicit_tool && resolved_tier_name.is_some();
-    let failover_on_crash_enabled = tier_auto_select
-        || (user_explicit_tool
-            && resolved_tier_name.as_deref().is_some_and(|tier_name| {
-                config.is_some_and(|cfg| cfg.tier_contains_tool(tier_name, tool_name))
-            }));
-
-    (
-        tier_auto_select,
-        failover_on_crash_enabled,
-        resolved_tier_name,
-    )
-}
 
 fn finalize_prompt_text(
     project_root: &Path,
@@ -375,6 +348,18 @@ pub(crate) async fn handle_run(
     else {
         return Ok(1);
     };
+    let model_selection_flags = RunModelSelectionFlags {
+        tool: tool.is_some(),
+        auto_route: auto_route.is_some(),
+        skill: skill.is_some(),
+        model_spec: model_spec.is_some(),
+        model: model.is_some(),
+        thinking: thinking.is_some(),
+        tier: tier.is_some(),
+    };
+    let primary_writer_spec =
+        resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
+    let model_spec = model_spec.or(primary_writer_spec);
     let effective_tier = tier.or(auto_route.clone());
 
     // Track whether user explicitly provided --tool on the CLI (before skill

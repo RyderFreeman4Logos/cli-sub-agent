@@ -498,6 +498,15 @@ async fn run() -> Result<()> {
             } => {
                 config_cmds::handle_config_get(key, default, project, global, cd)?;
             }
+            ConfigCommands::Set {
+                key,
+                value,
+                project,
+                cd,
+                ..
+            } => {
+                config_cmds::handle_config_set(key, value, project, cd)?;
+            }
         },
         Commands::Memory { command } => {
             memory_cmd::handle_memory_command(command).await?;
