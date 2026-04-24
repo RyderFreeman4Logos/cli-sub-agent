@@ -56,12 +56,14 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
 
 3. **Deduplicate against existing rules**: Search project-local rules
    (`.agents/project-rules-ref/`). Use keyword grep + semantic LLM comparison
-   (both in a single bash block).
-   - EXACT_MATCH → skip.
-   - PARTIAL_MATCH → propose update (add case study to existing rule).
-   - NO_MATCH → proceed to draft.
+   (both in a single bash block). Emits `CSA_VAR:SHOULD_DRAFT` and `CSA_VAR:DEDUPE_RESULT`.
+   - EXACT_MATCH → skip (SHOULD_DRAFT empty).
+   - PARTIAL_MATCH → propose update, add case study (SHOULD_DRAFT=yes).
+   - NO_MATCH → proceed to draft (SHOULD_DRAFT=yes).
 
-4. **Generate rule draft**: Structure mirrors `rust/017-concurrent-file-primitives.md`:
+4. **Generate rule draft** (bash, dispatches csa run): Structure mirrors `rust/017-concurrent-file-primitives.md`.
+   Captures draft between RULE_DRAFT_START/END markers into `DRAFT_FILE`.
+   Emits `CSA_VAR:DRAFT_FILE` and `CSA_VAR:STEP4_SESSION_ID`:
    - Core Requirement
    - Why This Rule Exists (root cause + failure mode)
    - Anti-Patterns (Forbidden) — table format
@@ -80,8 +82,8 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
    ---
    ```
 
-5. **Propose via PR**: NEVER auto-commit. Create branch
-   `chore/rules-propose-<shortsha>`, commit rule file, push, open PR.
+5. **Propose via PR**: NEVER auto-commit. Reads draft from `DRAFT_FILE` (Step 4).
+   Create branch `chore/rules-propose-<shortsha>`, commit rule file, push, open PR.
    Human review is mandatory before merge.
 
    On rule-proposal PR merge, update relevant AGENTS.md with one compact line:

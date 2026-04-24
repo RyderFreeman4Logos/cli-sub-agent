@@ -111,7 +111,9 @@ fi
 Tool: bash
 
 Check whether an existing rule already covers this bug class. Search
-project-local rules (`.agents/project-rules-ref/`).
+project-local rules (`.agents/project-rules-ref/`). Emits
+`CSA_VAR:SHOULD_DRAFT=yes` when Step 4 should run, and
+`CSA_VAR:DEDUPE_RESULT` with the semantic comparison outcome.
 
 ```bash
 set -euo pipefail
@@ -126,6 +128,8 @@ fi
 if [ -z "${PROJECT_MATCHES}" ]; then
   echo "EXISTING_RULE_MATCH=none"
   echo "CSA_VAR:EXISTING_RULE_MATCH=none"
+  echo "CSA_VAR:DEDUPE_RESULT=NO_MATCH"
+  echo "CSA_VAR:SHOULD_DRAFT=yes"
 else
   echo "Potential matches found:"
   echo "${PROJECT_MATCHES}"
@@ -141,12 +145,25 @@ else
      Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
      If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
   csa session wait --session "$DEDUPE_SID"
+
+  # Read dedupe result and decide whether to draft
+  DEDUPE_OUTPUT=$(csa session result --session "$DEDUPE_SID" --section summary 2>/dev/null || true)
+  if echo "$DEDUPE_OUTPUT" | grep -q "DEDUPE_RESULT=EXACT_MATCH"; then
+    echo "CSA_VAR:DEDUPE_RESULT=EXACT_MATCH"
+    echo "CSA_VAR:SHOULD_DRAFT="
+  elif echo "$DEDUPE_OUTPUT" | grep -q "DEDUPE_RESULT=PARTIAL_MATCH"; then
+    echo "CSA_VAR:DEDUPE_RESULT=PARTIAL_MATCH"
+    echo "CSA_VAR:SHOULD_DRAFT=yes"
+  else
+    echo "CSA_VAR:DEDUPE_RESULT=NO_MATCH"
+    echo "CSA_VAR:SHOULD_DRAFT=yes"
+  fi
 fi
 ```
 
 ## Step 4: Generate Rule Draft
 
-Tool: csa
+Tool: bash (dispatches csa run, captures draft into DRAFT_FILE)
 Tier: tier-2-standard
 
 Generate a rule file following the structure of existing rules
@@ -172,6 +189,7 @@ finding-ids: [<list of finding IDs>]
 ```
 
 ```bash
+set -euo pipefail
 DRAFT_SID=$(csa run --sa-mode true --tier tier-2-standard \
   --description "draft-rule: ${BUG_CLASS_NAME}" \
   "Generate a coding rule file for the following bug class.
@@ -196,6 +214,23 @@ DRAFT_SID=$(csa run --sa-mode true --tier tier-2-standard \
 
    Output the complete rule file content between RULE_DRAFT_START and RULE_DRAFT_END markers.")
 csa session wait --session "$DRAFT_SID"
+
+# Extract rule content from session output between markers
+DRAFT_RAW=$(csa session result --session "$DRAFT_SID" --section details 2>/dev/null || \
+            csa session result --session "$DRAFT_SID" 2>/dev/null || true)
+DRAFT_CONTENT=$(echo "$DRAFT_RAW" | sed -n '/RULE_DRAFT_START/,/RULE_DRAFT_END/{/RULE_DRAFT_START/d;/RULE_DRAFT_END/d;p}')
+
+if [ -z "$DRAFT_CONTENT" ]; then
+  echo "ERROR: Could not extract rule draft from session $DRAFT_SID"
+  exit 1
+fi
+
+# Write draft to a temp file and emit its path
+DRAFT_FILE=".agents/project-rules-ref/.draft-${BUG_CLASS_SLUG}.md"
+mkdir -p "$(dirname "$DRAFT_FILE")"
+echo "$DRAFT_CONTENT" > "$DRAFT_FILE"
+echo "CSA_VAR:DRAFT_FILE=$DRAFT_FILE"
+echo "CSA_VAR:STEP4_SESSION_ID=$DRAFT_SID"
 ```
 
 ## Step 5: Propose via PR
@@ -203,10 +238,18 @@ csa session wait --session "$DRAFT_SID"
 Tool: bash
 
 Create a proposal PR with the rule draft. NEVER auto-commit rules to
-the main rules repository. Human review is mandatory.
+the main rules repository. Human review is mandatory. Reads draft
+content from `DRAFT_FILE` produced by Step 4.
 
 ```bash
 set -euo pipefail
+
+# Read draft content from Step 4 output file
+if [ ! -f "${DRAFT_FILE}" ]; then
+  echo "ERROR: DRAFT_FILE not found at ${DRAFT_FILE}"
+  exit 1
+fi
+
 # Determine target directory (project-local, fork-only per rule 030)
 RULE_DIR=".agents/project-rules-ref/${LANG}"
 mkdir -p "${RULE_DIR}"
@@ -226,8 +269,10 @@ SHORT_SHA=$(echo "${FIX_COMMIT_SHA}" | cut -c1-7)
 PROPOSAL_BRANCH="chore/rules-propose-${SHORT_SHA}"
 git checkout -b "${PROPOSAL_BRANCH}"
 
-# Write rule file (RULE_CONTENT extracted from Step 4 output between markers)
-echo "${RULE_CONTENT}" > "${RULE_DIR}/${RULE_FILE}"
+# Copy draft to final rule location
+cp "${DRAFT_FILE}" "${RULE_DIR}/${RULE_FILE}"
+# Clean up draft file
+rm -f "${DRAFT_FILE}"
 
 git add "${RULE_DIR}/${RULE_FILE}"
 git commit -m "chore(rules): propose ${LANG}/${RULE_FILE} from PR #${PR_NUM}
@@ -282,7 +327,11 @@ NNN|bug-class-slug|one-line summary of the rule
 - `${ANTI_PATTERN_EXAMPLES}`: Code examples of the anti-pattern.
 - `${CORRECT_PATTERN}`: Code examples of the correct pattern.
 - `${SEVERITY}`: Finding severity for frontmatter.
-- `${RULE_CONTENT}`: Generated rule file content.
+- `${RULE_CONTENT}`: Generated rule file content (deprecated — use DRAFT_FILE).
+- `${SHOULD_DRAFT}`: Set to "yes" by Step 3 when Step 4 should run (empty on EXACT_MATCH).
+- `${DEDUPE_RESULT}`: Deduplication outcome from Step 3 (EXACT_MATCH|PARTIAL_MATCH|NO_MATCH).
+- `${DRAFT_FILE}`: Path to draft rule file written by Step 4 (read by Step 5).
+- `${STEP4_SESSION_ID}`: Session ID of the Step 4 CSA run (for audit).
 
 ### Filter criteria (enforced before Step 2)
 
