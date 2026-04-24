@@ -1,14 +1,66 @@
 # Hooks
 
-CSA supports lifecycle hooks and prompt guards configured in
-`hooks.toml`. Hooks fire at specific points during execution;
-prompt guards inject context into tool prompts.
+CSA supports a global pre-session hook, lifecycle hooks, and prompt
+guards. Hooks fire at specific points during execution; prompt guards
+inject context into tool prompts.
 
 ## Configuration File
 
-Hooks are configured in `.csa/hooks.toml` (project-level) or
-`~/.config/cli-sub-agent/hooks.toml` (global). Project-level
-hooks take precedence.
+Most hooks are configured in `.csa/hooks.toml` (project-level) or
+`~/.config/cli-sub-agent/hooks.toml` (global). Project-level hooks take
+precedence for those events.
+
+`pre_session` is the exception: it is configured only in the global
+`~/.config/cli-sub-agent/config.toml` as `[hooks.pre_session]`. Project
+`.csa/config.toml` does not participate.
+
+## Pre-Session Hook
+
+### `pre_session`
+
+Fires once per `csa run`, `csa review`, or `csa debate` invocation after
+CSA has resolved the tool transport and before the first user message is
+sent. It is for transport-uniform context priming, such as injecting a
+short memory-system timeline before Codex, Claude Code, Gemini, or
+opencode sees the task.
+
+The hook is opportunistic. Non-zero exit, timeout, missing command, or
+empty stdout logs a warning or debug message and continues without
+injection.
+
+Configure it in the global CSA config:
+
+```toml
+[hooks.pre_session]
+command = "mempal timeline --language en --limit 30"
+enabled = true
+# Optional: only fire for these tool transports. Omit or use [] for all.
+transports = ["codex", "gemini-cli"]
+timeout_seconds = 10
+```
+
+**Input:**
+
+| Channel | Name | Description |
+|---------|------|-------------|
+| env | `CSA_SESSION_ID` | CSA session ULID |
+| env | `CSA_TRANSPORT` | Resolved tool name (`codex`, `claude-code`, `gemini-cli`, `opencode`, etc.) |
+| env | `CSA_PROJECT_ROOT` | Project root path for the CSA session |
+| env | `CSA_WORKING_DIR` | Working directory where the hook runs |
+| stdin | user prompt | Original user prompt text |
+
+**Output:**
+
+Non-empty stdout is prepended to the first user message as:
+
+```xml
+<system-reminder>
+hook stdout here
+</system-reminder>
+```
+
+Hook stderr is logged at WARN. CSA never treats `pre_session` failure as
+a session failure.
 
 ## Lifecycle Hooks
 
@@ -253,6 +305,14 @@ fi
 ```
 
 ## Full Example
+
+```toml
+[hooks.pre_session]
+command = "mempal timeline --language en --limit 30"
+enabled = true
+transports = ["codex", "gemini-cli"]
+timeout_seconds = 10
+```
 
 ```toml
 [pre_run]

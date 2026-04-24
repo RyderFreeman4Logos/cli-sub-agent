@@ -98,7 +98,7 @@ CSA is organized as 14 workspace crates:
 | `csa-resource` | Memory estimation, cgroup/rlimit sandbox |
 | `csa-scheduler` | Tier rotation, 429 failover, concurrency slots |
 | `csa-mcp-hub` | MCP server fan-out daemon |
-| `csa-hooks` | Lifecycle hooks and prompt guards |
+| `csa-hooks` | Pre-session context injection, lifecycle hooks, and prompt guards |
 | `csa-todo` | Git-tracked TODO/plan management |
 | `csa-lock` | flock-based session and slot locking |
 | `weave` | skill-lang compiler (`weave` binary) |
@@ -131,7 +131,7 @@ is reported there rather than rejected during config validation.
 | [MCP Hub](docs/mcp-hub.md) | Shared MCP daemon, proxy injection, FIFO queue |
 | [Resource Control](docs/resource-control.md) | Sandbox, cgroup, rlimits, P95 estimation |
 | [Skills & Patterns](docs/skills-patterns.md) | Skill system, weave compiler, workflow.toml |
-| [Hooks](docs/hooks.md) | Lifecycle hooks and prompt guards |
+| [Hooks](docs/hooks.md) | Pre-session context injection, lifecycle hooks, and prompt guards |
 | [Debate & Review](docs/debate-review.md) | Heterogeneous review, consensus engine |
 | [MCP Hub on macOS](docs/mcp-hub-launchd.md) | launchd integration guide |
 

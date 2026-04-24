@@ -58,6 +58,7 @@ pub(crate) async fn handle_debate(
     else {
         return Ok(1);
     };
+    let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
 
     // 2b. Verify debate skill is available (fail fast before any execution)
     verify_debate_skill_available(&project_root)?;
@@ -388,6 +389,7 @@ pub(crate) async fn handle_debate(
                 None,
                 None,
                 Some(&global_config),
+                pre_session_hook.clone(),
                 args.no_fs_sandbox,
                 readonly_project_root,
                 &args.extra_writable,

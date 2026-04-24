@@ -634,6 +634,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
         project_dir.path(),
         None,
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",

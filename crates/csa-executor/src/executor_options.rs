@@ -26,6 +26,9 @@ pub struct ExecuteOptions {
     /// Optional resource sandbox config (cgroup/rlimit limits).
     /// When `Some`, the spawned tool process will be wrapped in resource isolation.
     pub sandbox: Option<SandboxContext>,
+    /// Optional global-only pre-session hook invocation used to prepend context
+    /// to the first user message before it reaches the selected transport.
+    pub pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
 }
 
 /// Sandbox configuration resolved from project/tool config.
@@ -62,6 +65,7 @@ impl ExecuteOptions {
             setting_sources: None,
             initial_response_timeout_seconds: None,
             sandbox: None,
+            pre_session_hook: None,
         }
     }
 
@@ -104,6 +108,12 @@ impl ExecuteOptions {
     /// Set sandbox context for resource isolation.
     pub fn with_sandbox(mut self, sandbox: SandboxContext) -> Self {
         self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Set the global-only pre-session hook invocation for this execution.
+    pub fn with_pre_session_hook(mut self, hook: csa_hooks::PreSessionHookInvocation) -> Self {
+        self.pre_session_hook = Some(hook);
         self
     }
 

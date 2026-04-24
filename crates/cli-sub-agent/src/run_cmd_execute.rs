@@ -350,6 +350,7 @@ pub(crate) async fn handle_run(
     else {
         return Ok(1);
     };
+    let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     // Track whether user explicitly provided --tool on the CLI (before skill
     // resolution may override it).  This drives tier enforcement: explicit
     // --tool (including --tool auto) is blocked when tiers are configured.
@@ -684,6 +685,7 @@ pub(crate) async fn handle_run(
         resolved_tier_name: resolved_tier_name.as_deref(),
         context_load_options: context_load_options.as_ref(),
         memory_injection,
+        pre_session_hook,
         task_needs_edit,
         no_fs_sandbox,
         extra_writable,

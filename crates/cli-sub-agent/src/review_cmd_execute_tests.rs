@@ -67,6 +67,7 @@ printf 'tool mutation\\n' >> \"{}\"\n",
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -169,6 +170,7 @@ printf '%s\\n' \
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -262,6 +264,7 @@ printf '%s\\n' \
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -447,6 +450,7 @@ fi\n",
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -513,6 +517,7 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -606,6 +611,7 @@ printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",

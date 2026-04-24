@@ -3,6 +3,7 @@
 /// Hook events that trigger hook execution.
 ///
 /// All trigger points are wired:
+/// - `PreSession` — fired once before the first user message is sent to the resolved transport
 /// - `PreRun` — fired before tool spawn in `pipeline::execute_with_session_and_meta`
 /// - `PostRun` — fired after every tool execution in `pipeline::execute_with_session_and_meta`
 /// - `PostEdit` — fired after PostRun when `.rs` files are in changed_paths (observational clippy check)
@@ -15,6 +16,9 @@
 ///   persisted to JSONL audit log for traceability
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
+    /// Before the first user message is sent to the resolved transport.
+    /// Triggered from `csa-executor` after transport resolution.
+    PreSession,
     /// After a session execution completes (success or failure).
     /// Triggered in `pipeline::execute_with_session` after session save.
     SessionComplete,
@@ -65,6 +69,7 @@ impl HookEvent {
     pub fn as_config_key(&self) -> &str {
         match self {
             HookEvent::SessionComplete => "session_complete",
+            HookEvent::PreSession => "pre_session",
             HookEvent::TodoCreate => "todo_create",
             HookEvent::TodoSave => "todo_save",
             HookEvent::PreRun => "pre_run",
@@ -87,8 +92,8 @@ impl HookEvent {
     /// Classification:
     /// - **Gatekeeping**: `PreRun` (can block tool spawn), `SessionComplete`
     ///   (can block session save acknowledgement).
-    /// - **Observational**: `PostRun`, `TodoCreate`, `TodoSave` — purely
-    ///   informational, no control flow impact.
+    /// - **Observational**: `PreSession`, `PostRun`, `TodoCreate`, `TodoSave`
+    ///   — purely informational, no control flow impact.
     pub fn is_gatekeeping(&self) -> bool {
         matches!(self, HookEvent::PreRun | HookEvent::SessionComplete)
     }
@@ -100,6 +105,7 @@ impl HookEvent {
     pub fn default_timeout_secs(&self) -> u64 {
         match self {
             HookEvent::PostEdit => 120,
+            HookEvent::PreSession => 10,
             _ => 30,
         }
     }
@@ -132,6 +138,7 @@ impl HookEvent {
             )),
             HookEvent::TodoCreate
             | HookEvent::TodoSave
+            | HookEvent::PreSession
             | HookEvent::PreRun
             | HookEvent::PostRun
             | HookEvent::MergeCompleted => None,
@@ -149,6 +156,7 @@ mod tests {
             HookEvent::SessionComplete.as_config_key(),
             "session_complete"
         );
+        assert_eq!(HookEvent::PreSession.as_config_key(), "pre_session");
         assert_eq!(HookEvent::TodoCreate.as_config_key(), "todo_create");
         assert_eq!(HookEvent::TodoSave.as_config_key(), "todo_save");
         assert_eq!(HookEvent::PreRun.as_config_key(), "pre_run");
