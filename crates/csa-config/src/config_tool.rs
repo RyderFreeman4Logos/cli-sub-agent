@@ -64,13 +64,13 @@ pub struct ToolConfig {
     pub default_model: Option<String>,
     /// Default thinking budget used when `--tool` is explicit but `--thinking` is omitted.
     ///
-    /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
+    /// Accepts the same values as `--thinking`: low, medium, high, xhigh, max, or a number.
     /// Lower priority than `--thinking` and `thinking_lock`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_thinking: Option<String>,
     /// Lock thinking budget for this tool. When set, any CLI `--thinking` or
     /// `--model-spec` thinking override is silently replaced with this value.
-    /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
+    /// Accepts the same values as `--thinking`: low, medium, high, xhigh, max, or a number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
     /// Per-tool initial-response timeout override (seconds).

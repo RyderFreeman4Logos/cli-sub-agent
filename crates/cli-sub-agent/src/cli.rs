@@ -160,7 +160,7 @@ pub enum Commands {
         #[arg(short, long)]
         model: Option<String>,
 
-        /// Thinking budget (low, medium, high, xhigh)
+        /// Thinking budget (low, medium, high, xhigh, max)
         #[arg(long)]
         thinking: Option<String>,
 
