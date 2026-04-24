@@ -74,12 +74,20 @@ fn validate_one_path(
             return None;
         }
 
+        let expects_directory = expects_directory_target(relative_path);
         match fs::metadata(&full_path) {
             Ok(target_metadata) => {
-                if expects_directory_target(relative_path) && target_metadata.is_file() {
+                if expects_directory && target_metadata.is_file() {
                     let resolved_target = describe_symlink_target(&full_path);
                     return Some(format!(
                         "{relative_path:<32} points to regular file '{resolved_target}', expected directory target; choose a directory target before recreating the symlink"
+                    ));
+                }
+
+                if !expects_directory && target_metadata.is_dir() {
+                    let resolved_target = describe_symlink_target(&full_path);
+                    return Some(format!(
+                        "{relative_path:<32} points to directory '{resolved_target}', expected file target; choose a file target before recreating the symlink"
                     ));
                 }
             }
@@ -93,14 +101,22 @@ fn validate_one_path(
                     }
                 };
 
-                if try_auto_heal_missing_target_dir(relative_path, &full_path, &resolved_target) {
-                    return None;
+                if expects_directory {
+                    if try_auto_heal_missing_target_dir(relative_path, &full_path, &resolved_target)
+                    {
+                        return None;
+                    }
+
+                    return Some(format!(
+                        "{relative_path:<32} broken symlink: target directory '{}' does not exist; create it with: {}",
+                        resolved_target.display(),
+                        mkdir_command(&resolved_target)
+                    ));
                 }
 
                 return Some(format!(
-                    "{relative_path:<32} broken symlink: target directory '{}' does not exist; create it with: {}",
-                    resolved_target.display(),
-                    mkdir_command(&resolved_target)
+                    "{relative_path:<32} broken symlink: target file '{}' does not exist",
+                    resolved_target.display()
                 ));
             }
             Err(err) => {
@@ -340,6 +356,85 @@ mod tests {
         assert!(err.to_string().contains("mkdir -p"), "got: {err}");
         assert!(
             err.to_string().contains(&target.display().to_string()),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_target_broken_symlink_does_not_suggest_mkdir() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("missing.md");
+        std::os::unix::fs::symlink(&target, d.path().join("AGENTS.md")).unwrap();
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("broken -> err");
+
+        assert!(err.to_string().contains("target file"), "got: {err}");
+        assert!(!err.to_string().contains("mkdir -p"), "got: {err}");
+        assert!(!err.to_string().contains("target directory"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_target_broken_symlink_is_not_auto_healed() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("missing.md");
+        std::os::unix::fs::symlink(&target, d.path().join("AGENTS.md")).unwrap();
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("broken -> err");
+
+        assert!(err.to_string().contains("target file"), "got: {err}");
+        assert!(
+            !target.exists(),
+            "file-target symlink must not create a directory at the missing file path"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_target_pointing_to_file_is_violation() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("rules-file");
+        std::fs::write(&target, "not a directory").unwrap();
+        std::fs::create_dir_all(d.path().join(".agents")).unwrap();
+        std::os::unix::fs::symlink(&target, d.path().join(".agents/rules-ref")).unwrap();
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("file target -> err");
+
+        assert!(
+            err.to_string().contains("expected directory target"),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_target_pointing_to_directory_is_violation() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("rules-dir");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, d.path().join("AGENTS.md")).unwrap();
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("dir target -> err");
+
+        assert!(
+            err.to_string().contains("expected file target"),
             "got: {err}"
         );
     }
