@@ -502,10 +502,10 @@ async fn run() -> Result<()> {
                 key,
                 value,
                 project,
-                global,
                 cd,
+                ..
             } => {
-                config_cmds::handle_config_set(key, value, project, global, cd)?;
+                config_cmds::handle_config_set(key, value, project, cd)?;
             }
         },
         Commands::Memory { command } => {

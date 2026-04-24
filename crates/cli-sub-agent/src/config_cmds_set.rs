@@ -5,7 +5,6 @@ pub(crate) fn handle_config_set(
     key: String,
     value: String,
     project: bool,
-    _global: bool,
     cd: Option<String>,
 ) -> Result<()> {
     validate_config_set_value(&key, &value)?;
@@ -17,7 +16,7 @@ pub(crate) fn handle_config_set(
         GlobalConfig::config_path()?
     };
 
-    write_string_config_value(&path, &key, &value)
+    write_config_value(&path, &key, &value)
 }
 
 fn validate_config_set_value(key: &str, value: &str) -> Result<()> {
@@ -33,7 +32,7 @@ fn validate_config_set_value(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_string_config_value(path: &std::path::Path, key: &str, value: &str) -> Result<()> {
+fn write_config_value(path: &std::path::Path, key: &str, value: &str) -> Result<()> {
     let mut doc = match std::fs::read_to_string(path) {
         Ok(content) if !content.trim().is_empty() => content
             .parse::<toml_edit::DocumentMut>()
@@ -43,7 +42,7 @@ fn write_string_config_value(path: &std::path::Path, key: &str, value: &str) -> 
         Err(err) => return Err(err.into()),
     };
 
-    set_document_string_value(&mut doc, key, value)?;
+    set_document_config_value(&mut doc, key, value)?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -52,13 +51,13 @@ fn write_string_config_value(path: &std::path::Path, key: &str, value: &str) -> 
     Ok(())
 }
 
-fn set_document_string_value(
+fn set_document_config_value(
     doc: &mut toml_edit::DocumentMut,
     key: &str,
     value: &str,
 ) -> Result<()> {
     let parts = parse_dotted_key(key)?;
-    set_table_string_value(doc.as_table_mut(), &parts, value)
+    set_table_config_value(doc.as_table_mut(), &parts, key, value, "")
 }
 
 fn parse_dotted_key(key: &str) -> Result<Vec<&str>> {
@@ -69,13 +68,27 @@ fn parse_dotted_key(key: &str) -> Result<Vec<&str>> {
     Ok(parts)
 }
 
-fn set_table_string_value(table: &mut toml_edit::Table, parts: &[&str], value: &str) -> Result<()> {
+fn set_table_config_value(
+    table: &mut toml_edit::Table,
+    parts: &[&str],
+    target_key: &str,
+    value: &str,
+    parent_path: &str,
+) -> Result<()> {
     let Some((head, tail)) = parts.split_first() else {
         anyhow::bail!("Invalid empty config key path");
     };
+    let current_path = if parent_path.is_empty() {
+        (*head).to_string()
+    } else {
+        format!("{parent_path}.{head}")
+    };
 
     if tail.is_empty() {
-        table[head] = toml_edit::value(value);
+        let toml_value = value
+            .parse::<toml_edit::Value>()
+            .unwrap_or_else(|_| toml_edit::Value::from(value));
+        table[head] = toml_edit::Item::Value(toml_value);
         return Ok(());
     }
 
@@ -83,11 +96,25 @@ fn set_table_string_value(table: &mut toml_edit::Table, parts: &[&str], value: &
         table[head] = toml_edit::Item::Table(toml_edit::Table::new());
     }
 
-    let Some(child) = table[head].as_table_mut() else {
-        anyhow::bail!("Cannot set {head}: existing value is not a table");
+    let item = &mut table[head];
+    if item.as_inline_table().is_some() {
+        anyhow::bail!(
+            "Cannot set config key '{}': existing path '{}' is an inline table; \
+             inline tables are not currently supported. Convert it to a standard TOML table first.",
+            target_key,
+            current_path
+        );
+    }
+
+    let Some(child) = item.as_table_mut() else {
+        anyhow::bail!(
+            "Cannot set config key '{}': existing path '{}' is not a table",
+            target_key,
+            current_path
+        );
     };
 
-    set_table_string_value(child, tail, value)
+    set_table_config_value(child, tail, target_key, value, &current_path)
 }
 
 #[cfg(test)]
@@ -123,10 +150,10 @@ mod tests {
     }
 
     #[test]
-    fn set_document_string_value_creates_nested_preferences_key() {
+    fn set_document_config_value_creates_nested_preferences_string_key() {
         let mut doc = toml_edit::DocumentMut::new();
 
-        set_document_string_value(
+        set_document_config_value(
             &mut doc,
             "preferences.primary_writer_spec",
             "codex/openai/gpt-5.4/high",
@@ -136,6 +163,45 @@ mod tests {
         assert_eq!(
             doc["preferences"]["primary_writer_spec"].as_str(),
             Some("codex/openai/gpt-5.4/high")
+        );
+    }
+
+    #[test]
+    fn set_document_config_value_preserves_boolean_type() {
+        let mut doc = toml_edit::DocumentMut::new();
+
+        set_document_config_value(&mut doc, "tools.codex.enabled", "false").unwrap();
+
+        assert_eq!(doc["tools"]["codex"]["enabled"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn set_document_config_value_preserves_integer_type() {
+        let mut doc = toml_edit::DocumentMut::new();
+
+        set_document_config_value(&mut doc, "defaults.max_concurrent", "7").unwrap();
+
+        assert_eq!(doc["defaults"]["max_concurrent"].as_integer(), Some(7));
+    }
+
+    #[test]
+    fn set_document_config_value_rejects_inline_table_parent_with_context() {
+        let mut doc = "[tools]\ncodex = { enabled = true }\n"
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+
+        let err = set_document_config_value(&mut doc, "tools.codex.model", "gpt-5")
+            .expect_err("inline table parent should be rejected");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("Cannot set config key 'tools.codex.model'"),
+            "{message}"
+        );
+        assert!(message.contains("existing path 'tools.codex'"), "{message}");
+        assert!(
+            message.contains("inline tables are not currently supported"),
+            "{message}"
         );
     }
 
@@ -151,7 +217,6 @@ mod tests {
         handle_config_set(
             "preferences.primary_writer_spec".to_string(),
             "codex/openai/gpt-5.4/high".to_string(),
-            false,
             false,
             None,
         )
@@ -179,7 +244,6 @@ mod tests {
         let err = handle_config_set(
             "preferences.primary_writer_spec".to_string(),
             "codex/openai/missing-thinking".to_string(),
-            false,
             false,
             None,
         )
