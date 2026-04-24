@@ -207,6 +207,7 @@ impl Transport for AcpTransport {
                 output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
                 setting_sources: None,
                 sandbox: None,
+                thinking_budget: None,
             },
         )
         .await

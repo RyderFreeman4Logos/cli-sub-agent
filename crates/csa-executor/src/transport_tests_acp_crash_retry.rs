@@ -462,3 +462,116 @@ fn classify_signal_negative_9_as_oom() {
     );
     assert_eq!(classification.kind, CodexAcpCrashKind::Oom);
 }
+
+// --- Issue #766: idle disconnect detection and downshift ---
+
+fn make_transport_result(exit_code: i32, stderr: &str) -> TransportResult {
+    TransportResult {
+        execution: csa_process::ExecutionResult {
+            output: String::new(),
+            stderr_output: stderr.to_string(),
+            summary: String::new(),
+            exit_code,
+            peak_memory_mb: None,
+        },
+        provider_session_id: None,
+        events: Vec::new(),
+        metadata: Default::default(),
+    }
+}
+
+#[test]
+fn idle_disconnect_detected_on_exit_137_with_idle_timeout_stderr() {
+    let result = make_transport_result(
+        137,
+        "idle timeout: no ACP events/stderr for 250s; process killed\n",
+    );
+    assert!(is_idle_disconnect(&result));
+}
+
+#[test]
+fn idle_disconnect_not_detected_on_exit_0() {
+    let result = make_transport_result(0, "some normal output");
+    assert!(!is_idle_disconnect(&result));
+}
+
+#[test]
+fn idle_disconnect_not_detected_on_exit_137_without_idle_marker() {
+    // Exit 137 from OOM, not idle timeout.
+    let result = make_transport_result(137, "Killed\n");
+    assert!(!is_idle_disconnect(&result));
+}
+
+#[test]
+fn idle_disconnect_not_detected_on_initial_response_timeout() {
+    // Initial response timeout also exits 137 but different marker.
+    let result = make_transport_result(
+        137,
+        "initial response timeout: no ACP events/stderr for 60s; process killed\n",
+    );
+    assert!(!is_idle_disconnect(&result));
+}
+
+#[test]
+fn build_downshifted_args_injects_effort_when_absent() {
+    let args: Vec<String> = vec!["--acp".into()];
+    let result = build_downshifted_acp_args(&args, &ThinkingBudget::Medium);
+    assert_eq!(
+        result,
+        vec!["--acp", "-c", "model_reasoning_effort=medium"]
+    );
+}
+
+#[test]
+fn build_downshifted_args_replaces_existing_effort() {
+    let args: Vec<String> = vec![
+        "-c".into(),
+        "model_reasoning_effort=high".into(),
+        "--other".into(),
+    ];
+    let result = build_downshifted_acp_args(&args, &ThinkingBudget::Medium);
+    assert_eq!(
+        result,
+        vec!["-c", "model_reasoning_effort=medium", "--other"]
+    );
+}
+
+#[test]
+fn idle_disconnect_downshift_covers_all_levels() {
+    use crate::model_spec::ThinkingBudget;
+
+    // Max → Xhigh
+    assert!(matches!(
+        ThinkingBudget::Max.idle_disconnect_downshift(),
+        Some(ThinkingBudget::Xhigh)
+    ));
+    // Xhigh → High
+    assert!(matches!(
+        ThinkingBudget::Xhigh.idle_disconnect_downshift(),
+        Some(ThinkingBudget::High)
+    ));
+    // High → Medium
+    assert!(matches!(
+        ThinkingBudget::High.idle_disconnect_downshift(),
+        Some(ThinkingBudget::Medium)
+    ));
+    // Medium → Low
+    assert!(matches!(
+        ThinkingBudget::Medium.idle_disconnect_downshift(),
+        Some(ThinkingBudget::Low)
+    ));
+    // Low → None (already minimal)
+    assert!(ThinkingBudget::Low.idle_disconnect_downshift().is_none());
+    // Default → None
+    assert!(
+        ThinkingBudget::DefaultBudget
+            .idle_disconnect_downshift()
+            .is_none()
+    );
+    // Custom → None
+    assert!(
+        ThinkingBudget::Custom(5000)
+            .idle_disconnect_downshift()
+            .is_none()
+    );
+}

@@ -13,6 +13,9 @@ use csa_acp::SessionEvent;
 use csa_session::state::{MetaSessionState, ToolState};
 use regex::Regex;
 
+use crate::model_spec::ThinkingBudget;
+use csa_core::env::NO_FAILOVER_ENV_KEY;
+
 use super::{
     AcpTransport, DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, TransportOptions,
     TransportResult, consume_resolved_initial_response_timeout_seconds,
@@ -22,6 +25,46 @@ use super::{
 /// Delay between crash retry attempts in seconds.
 pub(crate) const ACP_CRASH_RETRY_DELAY_SECS: u64 = 3;
 pub(crate) const CODEX_ACP_INITIAL_STALL_REASON: &str = "codex_acp_initial_stall";
+
+/// Detect whether a successful `TransportResult` represents an ACP idle disconnect.
+///
+/// Idle disconnect is characterized by exit_code=137 and "idle timeout" in stderr,
+/// which the csa-acp layer produces when the ACP process is killed due to no
+/// events/stderr within the configured idle timeout window. This is distinct from
+/// OOM kills (which also exit 137 but have different stderr signatures) and from
+/// initial response timeouts.
+pub(crate) fn is_idle_disconnect(result: &TransportResult) -> bool {
+    result.execution.exit_code == 137
+        && result
+            .execution
+            .stderr_output
+            .contains("idle timeout: no ACP events/stderr for")
+}
+
+/// Build ACP args with reasoning effort injected or replaced for the downshifted budget.
+///
+/// If the args already contain `model_reasoning_effort=...`, replace it.
+/// Otherwise, inject `-c model_reasoning_effort=<effort>` (codex-style).
+fn build_downshifted_acp_args(args: &[String], new_budget: &ThinkingBudget) -> Vec<String> {
+    let new_effort = new_budget.codex_effort();
+    let effort_prefix = "model_reasoning_effort=";
+    let mut result = Vec::with_capacity(args.len() + 2);
+    let mut replaced = false;
+    for arg in args {
+        if arg.starts_with(effort_prefix) {
+            result.push(format!("{effort_prefix}{new_effort}"));
+            replaced = true;
+        } else {
+            result.push(arg.clone());
+        }
+    }
+    if !replaced {
+        // Inject codex-style `-c model_reasoning_effort=<effort>` for adapters that forward it.
+        result.push("-c".to_string());
+        result.push(format!("{effort_prefix}{new_effort}"));
+    }
+    result
+}
 
 /// OOM-related signals that indicate the process was killed by the kernel
 /// or resource sandbox. Retrying these wastes tokens because the same
@@ -436,6 +479,11 @@ pub(crate) fn apply_codex_acp_initial_stall_summary(
 /// ACP servers (claude-code, codex) can crash with "server shut down
 /// unexpectedly" during large diff reads. One retry with a fresh process
 /// often succeeds because the crash is transient.
+///
+/// When `options.thinking_budget` is set, idle disconnects trigger an automatic
+/// one-level downshift and a single retry with reduced reasoning effort
+/// (Issue #766). `--no-failover` (via `_CSA_NO_FAILOVER` in `extra_env`)
+/// disables this behavior.
 pub(super) async fn execute_with_crash_retry(
     transport: &AcpTransport,
     prompt: &str,
@@ -451,6 +499,8 @@ pub(super) async fn execute_with_crash_retry(
             consume_resolved_initial_response_timeout_seconds(options.initial_response_timeout)
         })
         .flatten();
+    let no_failover = extra_env.is_some_and(|env| env.contains_key(NO_FAILOVER_ENV_KEY));
+    let mut idle_downshift_attempted = false;
     loop {
         // Only resume provider session on the first attempt; retries start fresh.
         let resume_id = if attempt == 1 {
@@ -475,6 +525,49 @@ pub(super) async fn execute_with_crash_retry(
 
         match result {
             Ok(mut tr) => {
+                // --- Issue #766: idle disconnect auto-downshift ---
+                // On first idle disconnect, if a downshift target exists and
+                // --no-failover is not set, retry once with reduced reasoning effort.
+                if is_idle_disconnect(&tr) && !idle_downshift_attempted && !no_failover {
+                    idle_downshift_attempted = true;
+                    if let Some(downshift_target) = options
+                        .thinking_budget
+                        .as_ref()
+                        .and_then(ThinkingBudget::idle_disconnect_downshift)
+                    {
+                        let downshifted_args =
+                            build_downshifted_acp_args(&transport.acp_args, &downshift_target);
+                        tracing::warn!(
+                            tool = %transport.tool_name,
+                            from = ?options.thinking_budget,
+                            to = ?downshift_target,
+                            new_effort = downshift_target.codex_effort(),
+                            "ACP idle disconnect detected; retrying with \
+                             downshifted thinking budget (#766)"
+                        );
+                        tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
+                        // Single retry with downshifted args.
+                        let retry_result = transport
+                            .execute_acp_attempt(
+                                prompt,
+                                session,
+                                extra_env,
+                                options,
+                                &downshifted_args,
+                                None, // fresh process, no resume
+                            )
+                            .await;
+                        return retry_result;
+                    }
+                    // No downshift target (already at lowest) — fall through to return as-is.
+                    tracing::warn!(
+                        tool = %transport.tool_name,
+                        budget = ?options.thinking_budget,
+                        "ACP idle disconnect detected but thinking budget is \
+                         already at minimum; propagating result (#766)"
+                    );
+                }
+
                 if transport.tool_name == "codex"
                     && let Some(classification) = classify_codex_acp_initial_stall(
                         &tr,

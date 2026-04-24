@@ -5,6 +5,8 @@ use csa_process::{ExecutionResult, StreamMode};
 use csa_resource::isolation_plan::IsolationPlan;
 use serde::{Deserialize, Serialize};
 
+use crate::model_spec::ThinkingBudget;
+
 /// Signals that the initial-response timeout has already passed through a resolver.
 ///
 /// `None` means the watchdog is disabled; `Some(seconds)` is the concrete deadline.
@@ -55,6 +57,10 @@ pub struct TransportOptions<'a> {
     pub output_spool_keep_rotated: bool,
     pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
+    /// Current thinking budget for idle-disconnect auto-downshift (Issue #766).
+    /// When set and an ACP idle disconnect is detected, the retry uses a
+    /// one-level-lower budget. `None` disables idle-disconnect downshift.
+    pub thinking_budget: Option<ThinkingBudget>,
 }
 
 #[derive(Debug, Clone)]

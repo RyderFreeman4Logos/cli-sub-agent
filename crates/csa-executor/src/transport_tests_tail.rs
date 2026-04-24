@@ -647,6 +647,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: None,
+        thinking_budget: None,
     };
 
     let result = transport

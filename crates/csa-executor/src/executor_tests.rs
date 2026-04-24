@@ -739,6 +739,20 @@ fn override_thinking_budget_works_for_all_tools() {
     }
 }
 
+// --- thinking_budget getter tests (#766) ---
+
+#[test]
+fn thinking_budget_getter_returns_some_when_set() {
+    let exec = Executor::from_tool_name(&ToolName::Codex, None, Some(ThinkingBudget::High));
+    assert!(matches!(exec.thinking_budget(), Some(ThinkingBudget::High)));
+}
+
+#[test]
+fn thinking_budget_getter_returns_none_when_unset() {
+    let exec = Executor::from_tool_name(&ToolName::ClaudeCode, None, None);
+    assert!(exec.thinking_budget().is_none());
+}
+
 // --- ACP init timeout regression tests (issue #417) ---
 
 #[test]
