@@ -14,6 +14,9 @@ name = "REVIEW_SID"
 name = "BUCKET_COUNT"
 
 [[workflow.variables]]
+name = "MULTI_BUCKET"
+
+[[workflow.variables]]
 name = "MERGED_FIX_PLAN"
 
 [[workflow.variables]]
@@ -50,6 +53,8 @@ Each bucket gets an independent RECON employee.
 
 The bucketing must produce:
 - `${BUCKET_COUNT}`: Number of independent buckets.
+- `${MULTI_BUCKET}`: Set to "yes" when BUCKET_COUNT > 1, empty string "" otherwise.
+  (plan_condition only supports truthiness checks, not numeric comparisons.)
 
 If `${BUCKET_COUNT}` == 1, skip parallel RECON — fall back to standard
 single-employee fix (no benefit from parallelism)."""
@@ -68,7 +73,7 @@ Wait for employees sequentially (no parallel waits).
 
 RECON employees are read-only — they MUST NOT edit files or modify git state."""
 on_fail = "skip"
-condition = "${BUCKET_COUNT} > 1"
+condition = "${MULTI_BUCKET}"
 
 [[workflow.steps]]
 id = 4

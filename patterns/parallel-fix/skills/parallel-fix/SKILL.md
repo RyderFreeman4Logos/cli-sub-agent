@@ -46,7 +46,8 @@ breaks prompt-guard propagation.
 1. **Parse findings**: Read review output via `csa session result --session "$REVIEW_SID" --section details`.
 2. **Bucket by primary file**: Group findings by `file_ranges[0].path`.
    Findings with no `file_ranges` go into a catch-all bucket.
-3. **Check bucket count**: If only 1 bucket, fall back to standard fix.
+   Set `${MULTI_BUCKET}` to `"yes"` when bucket count > 1, `""` otherwise.
+3. **Check bucket count**: If only 1 bucket (`${MULTI_BUCKET}` is empty), fall back to standard fix.
 4. **Launch parallel RECON**: For each bucket, dispatch a read-only CSA
    employee at `tier-1-quick`:
    ```bash
