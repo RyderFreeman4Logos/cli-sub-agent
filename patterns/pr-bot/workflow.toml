@@ -1116,6 +1116,10 @@ fi
 # shellcheck source=patterns/pr-bot/scripts/pr-bot-quota-cache.sh
 . "${PR_BOT_QUOTA_CACHE_SCRIPT}"
 OUTPUT_FILE="$(mktemp -t pr-bot-wait-${PR_NUM}-XXXXXX.json)"
+# mktemp creates a 0-byte sentinel; the wrapper's poll loop below uses
+# [ -s ] (exists AND non-empty) so the empty sentinel does not trip the
+# existence check, and the helper's atomic-rename write_output() is the
+# only way to produce a non-empty file (#1079).
 INTERVAL="$(csa config get pr_review.cloud_bot_poll_interval_seconds --default 30)"
 WAIT_LONG_POLL_SECS="$(csa config get kv_cache.long_poll_seconds --default 240)"
 WAIT_RESULT_GRACE_SECS=1
@@ -1135,7 +1139,7 @@ WAIT_STARTED_AT="$(date +%s)"
 WAIT_ELAPSED_SECS=0
 
 while [ "${WAIT_ELAPSED_SECS}" -lt "${CLOUD_BOT_POLL_MAX_SECONDS}" ]; do
-  if [ -f "${OUTPUT_FILE}" ]; then
+  if [ -s "${OUTPUT_FILE}" ]; then
     break
   fi
   if ! kill -0 "${POLL_PID}" 2>/dev/null; then
