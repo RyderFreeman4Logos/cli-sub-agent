@@ -84,14 +84,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     let project_root_for_hooks = project_root.display().to_string();
-
     // 2. Load config and validate recursion depth
     let Some((config, global_config)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
     };
-
+    let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     // 2b. Verify review skill is available (fail fast before any execution)
     verify_review_skill_available(&project_root, args.allow_fallback)?;
     // Warn if running inside a worktree submodule (known limitation, see #487)
@@ -99,7 +98,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
     }
-
     // 2c. Run pre-review quality gate pipeline (after skill check, before tool execution)
     let gate_summary = {
         let gate_steps = global_config.review.effective_gate_steps();
@@ -109,7 +107,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .map(|r| r.gate_timeout_secs)
             .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
         let gate_mode = &global_config.review.gate_mode;
-
         if gate_steps.is_empty() {
             // Legacy path: use single gate_command with auto-detection fallback
             let gate_command = config
@@ -374,6 +371,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &project_root,
             config.as_ref(),
             &global_config,
+            pre_session_hook.clone(),
             review_routing.clone(),
             stream_mode,
             idle_timeout_seconds,
@@ -595,6 +593,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let reviewer_project_root = project_root.clone();
         let reviewer_config = config.clone();
         let reviewer_global = global_config.clone();
+        let reviewer_pre_session_hook = pre_session_hook.clone();
         let reviewer_description = format!(
             "review[{}]: {}",
             reviewer_index + 1,
@@ -643,6 +642,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &reviewer_project_root,
                 reviewer_config.as_ref(),
                 &reviewer_global,
+                reviewer_pre_session_hook,
                 reviewer_routing,
                 stream_mode,
                 idle_timeout_seconds,

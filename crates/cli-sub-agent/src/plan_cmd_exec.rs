@@ -247,6 +247,7 @@ pub(super) async fn execute_csa_step(
             None,
             None,
             None,
+            None,
             ParentSessionSource::ExplicitOnly,
             SessionCreationMode::FreshChild,
             false, // no_fs_sandbox

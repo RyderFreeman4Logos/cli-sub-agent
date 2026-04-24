@@ -57,6 +57,7 @@ pub(crate) async fn execute_with_session(
     wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
+    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
@@ -83,6 +84,7 @@ pub(crate) async fn execute_with_session(
         wall_timeout,
         memory_injection,
         global_config,
+        pre_session_hook,
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
@@ -114,6 +116,7 @@ pub(crate) async fn execute_with_session_and_meta(
     wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
+    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
@@ -140,6 +143,7 @@ pub(crate) async fn execute_with_session_and_meta(
         wall_timeout,
         memory_injection,
         global_config,
+        pre_session_hook,
         ParentSessionSource::ExplicitOrEnv,
         SessionCreationMode::DaemonManaged,
         no_fs_sandbox,
@@ -172,6 +176,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
+    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     parent_session_source: ParentSessionSource,
     session_creation_mode: SessionCreationMode,
     no_fs_sandbox: bool,
@@ -498,7 +503,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-
     // Suppress guards for debate (read-only, #467); review keeps them for --fix.
     if !matches!(task_type, Some("debate")) && !hooks_config.prompt_guard.is_empty() {
         let guard_context = GuardContext {
@@ -521,7 +525,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             effective_prompt = format!("{effective_prompt}\n\n{guard_block}");
         }
     }
-
     // Inject structured output section markers when enabled in config.
     let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);
     if let Some(instructions) =
@@ -572,9 +575,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
     apply_transport_failover_overrides(&mut execute_options, merged_env_ref);
-    if global_config.is_some()
-        && let Some(pre_session_hook) = csa_hooks::load_global_pre_session_hook_config()
-    {
+    if let Some(pre_session_hook) = pre_session_hook {
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);
     }
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
@@ -603,7 +604,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     )
     .await
     .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;
-
     if let Some(ref mut guard) = cleanup_guard {
         guard.defuse();
     }

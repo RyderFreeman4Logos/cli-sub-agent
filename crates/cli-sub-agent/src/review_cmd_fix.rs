@@ -78,6 +78,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.project_root,
             ctx.config,
             ctx.global_config,
+            None,
             ctx.review_routing.clone(),
             ctx.stream_mode,
             ctx.idle_timeout_seconds,

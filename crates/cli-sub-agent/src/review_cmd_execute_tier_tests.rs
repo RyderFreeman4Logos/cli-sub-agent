@@ -84,6 +84,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -209,6 +210,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -345,6 +347,7 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -415,6 +418,7 @@ async fn execute_review_primary_success_keeps_routing_metadata_empty() {
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -493,6 +497,7 @@ async fn execute_review_does_not_advance_tier_on_http_5xx() {
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",

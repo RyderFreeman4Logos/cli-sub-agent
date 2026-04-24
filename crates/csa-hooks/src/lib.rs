@@ -79,8 +79,9 @@ pub use merge_guard::{
 };
 pub use policy::FailPolicy;
 pub use pre_session::{
-    PreSessionHookConfig, PreSessionHookContext, format_pre_session_reminder,
-    global_pre_session_config_path, load_global_pre_session_hook_config,
+    PreSessionHookConfig, PreSessionHookContext, PreSessionHookInvocation,
+    format_pre_session_reminder, global_pre_session_config_path,
+    load_global_pre_session_hook_config, load_global_pre_session_hook_invocation,
     load_pre_session_hook_config_from_path, parse_pre_session_hook_config,
     prepend_pre_session_stdout, run_pre_session_hook,
 };

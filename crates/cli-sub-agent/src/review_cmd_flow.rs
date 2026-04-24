@@ -82,6 +82,7 @@ pub(crate) async fn execute_review_for_tests(
         project_root,
         project_config,
         global_config,
+        None,
         review_routing,
         stream_mode,
         idle_timeout_seconds,

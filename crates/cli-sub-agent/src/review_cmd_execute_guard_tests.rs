@@ -62,6 +62,7 @@ printf '%s\\n' \
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -142,6 +143,7 @@ exit 7\n",
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -240,6 +242,7 @@ fi\n",
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",
@@ -326,6 +329,7 @@ printf '%s\\n' \
         project_dir.path(),
         Some(&config),
         &global,
+        None,
         ReviewRoutingMetadata {
             project_profile: ProjectProfile::Unknown,
             detection_method: "auto",

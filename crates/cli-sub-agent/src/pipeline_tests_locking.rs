@@ -50,6 +50,7 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         None,
         None,
         None,
+        None,
         false,
         false,
         &[],

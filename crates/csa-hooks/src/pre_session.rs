@@ -2,10 +2,15 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Stdio;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
 
 const DEFAULT_PRE_SESSION_TIMEOUT_SECONDS: u64 = 10;
 
@@ -60,6 +65,35 @@ impl PreSessionHookConfig {
     /// Return true when this hook should run for the resolved tool transport.
     pub fn matches_transport(&self, transport: &str) -> bool {
         self.transports.is_empty() || self.transports.iter().any(|name| name == transport)
+    }
+}
+
+/// Per-command invocation state for `[hooks.pre_session]`.
+///
+/// Clones share the same fired flag so retries and multi-turn transport calls
+/// for one `csa run`/`review`/`debate` command cannot inject the hook twice.
+#[derive(Debug, Clone)]
+pub struct PreSessionHookInvocation {
+    config: PreSessionHookConfig,
+    fired: Arc<AtomicBool>,
+}
+
+impl PreSessionHookInvocation {
+    pub fn new(config: PreSessionHookConfig) -> Self {
+        Self {
+            config,
+            fired: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn config(&self) -> &PreSessionHookConfig {
+        &self.config
+    }
+
+    pub fn claim_first_fire(&self) -> bool {
+        self.fired
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 }
 
@@ -140,6 +174,11 @@ pub fn load_global_pre_session_hook_config() -> Option<PreSessionHookConfig> {
         .and_then(load_pre_session_hook_config_from_path)
 }
 
+/// Load global hook config and wrap it in per-invocation state.
+pub fn load_global_pre_session_hook_invocation() -> Option<PreSessionHookInvocation> {
+    load_global_pre_session_hook_config().map(PreSessionHookInvocation::new)
+}
+
 /// Wrap hook stdout in the system reminder block used for prompt priming.
 pub fn format_pre_session_reminder(stdout: &str) -> Option<String> {
     let content = stdout.trim();
@@ -156,7 +195,7 @@ pub fn prepend_pre_session_stdout(prompt: &str, stdout: &str) -> Option<String> 
 
 /// Run a pre-session hook opportunistically and return a prompt with injected
 /// context when the hook succeeds and writes non-empty stdout.
-pub fn run_pre_session_hook(
+pub async fn run_pre_session_hook(
     config: &PreSessionHookConfig,
     context: &PreSessionHookContext<'_>,
 ) -> Option<String> {
@@ -184,7 +223,7 @@ pub fn run_pre_session_hook(
         return None;
     };
 
-    match run_pre_session_hook_command(command, config.timeout_seconds, context) {
+    match run_pre_session_hook_command(command, config.timeout_seconds, context).await {
         Ok(output) => {
             if !output.stderr.trim().is_empty() {
                 tracing::warn!(
@@ -204,7 +243,7 @@ pub fn run_pre_session_hook(
     }
 }
 
-fn run_pre_session_hook_command(
+async fn run_pre_session_hook_command(
     command: &str,
     timeout_seconds: u64,
     context: &PreSessionHookContext<'_>,
@@ -223,68 +262,111 @@ fn run_pre_session_hook_command(
 
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
 
     let mut child = cmd
         .spawn()
         .with_context(|| "failed to spawn pre_session hook")?;
+    let child_pid = child.id();
 
-    let stdin = child.stdin.take();
     let prompt = context.user_prompt.as_bytes().to_vec();
-    let stdin_writer = std::thread::spawn(move || {
-        if let Some(mut stdin) = stdin {
+    let stdin_writer = child.stdin.take().map(|mut stdin| {
+        tokio::spawn(async move {
             // Hooks are allowed to ignore stdin. A fast command such as
             // `echo context` can close its stdin before this writer finishes;
             // that must not turn an otherwise successful hook into a failure.
-            let _ = stdin.write_all(&prompt);
-        }
+            let _ = stdin.write_all(&prompt).await;
+        })
     });
 
     let timeout = Duration::from_secs(timeout_seconds.max(1));
-    let start = Instant::now();
+    let mut stdout = child
+        .stdout
+        .take()
+        .context("pre_session hook stdout pipe missing")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .context("pre_session hook stderr pipe missing")?;
+    let stdout_reader = tokio::spawn(async move {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).await.map(|_| output)
+    });
+    let stderr_reader = tokio::spawn(async move {
+        let mut output = Vec::new();
+        stderr.read_to_end(&mut output).await.map(|_| output)
+    });
 
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                stdin_writer
-                    .join()
-                    .map_err(|_| anyhow::anyhow!("pre_session hook stdin writer panicked"))?;
-                let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if !status.success() {
-                    let exit_code = status.code().unwrap_or(-1);
-                    bail!(
-                        "pre_session hook exited with code {exit_code}: {}",
-                        stderr.trim()
-                    );
-                }
-                return Ok(PreSessionHookOutput { stdout, stderr });
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(wait_result) => {
+            wait_result.with_context(|| "failed while waiting for pre_session hook")?
+        }
+        Err(_) => {
+            kill_pre_session_hook_child(&mut child, child_pid).await;
+            if let Some(stdin_writer) = stdin_writer {
+                stdin_writer.abort();
+                let _ = stdin_writer.await;
             }
-            None => {
-                if start.elapsed() >= timeout {
-                    #[cfg(unix)]
-                    {
-                        // SAFETY: negative PID targets the process group created
-                        // with process_group(0) for this child.
-                        unsafe {
-                            libc::kill(-(child.id() as i32), libc::SIGKILL);
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = child.kill();
-                    }
-                    let _ = child.wait();
-                    let _ = stdin_writer.join();
-                    bail!("pre_session hook timed out after {}s", timeout.as_secs());
-                }
-                std::thread::sleep(Duration::from_millis(50));
+            stdout_reader.abort();
+            stderr_reader.abort();
+            let _ = stdout_reader.await;
+            let _ = stderr_reader.await;
+            tracing::warn!(
+                timeout_seconds = timeout.as_secs(),
+                "pre_session hook timed out; killed child"
+            );
+            bail!("pre_session hook timed out after {}s", timeout.as_secs());
+        }
+    };
+
+    if let Some(stdin_writer) = stdin_writer {
+        stdin_writer
+            .await
+            .with_context(|| "pre_session hook stdin writer task failed to join")?;
+    }
+    let stdout = read_hook_pipe(stdout_reader, "stdout").await?;
+    let stderr = read_hook_pipe(stderr_reader, "stderr").await?;
+    let stdout = String::from_utf8_lossy(&stdout).to_string();
+    let stderr = String::from_utf8_lossy(&stderr).to_string();
+    if !status.success() {
+        let exit_code = status.code().unwrap_or(-1);
+        bail!(
+            "pre_session hook exited with code {exit_code}: {}",
+            stderr.trim()
+        );
+    }
+    Ok(PreSessionHookOutput { stdout, stderr })
+}
+
+async fn read_hook_pipe(
+    reader: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+    pipe_name: &str,
+) -> Result<Vec<u8>> {
+    reader
+        .await
+        .with_context(|| format!("pre_session hook {pipe_name} reader task failed to join"))?
+        .with_context(|| format!("failed to read pre_session hook {pipe_name}"))
+}
+
+async fn kill_pre_session_hook_child(child: &mut tokio::process::Child, child_pid: Option<u32>) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child_pid {
+            // SAFETY: negative PID targets the process group created with
+            // process_group(0) for this child.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
             }
+        } else {
+            let _ = child.start_kill();
         }
     }
+    #[cfg(not(unix))]
+    {
+        let _ = child.start_kill();
+    }
+    let _ = child.wait().await;
 }
 
 #[cfg(test)]
@@ -373,50 +455,80 @@ timeout_secs = 7
         assert!(prepend_pre_session_stdout("user task", "\n \t").is_none());
     }
 
-    #[test]
-    fn run_pre_session_hook_success_reads_prompt_from_stdin() {
+    #[tokio::test]
+    async fn run_pre_session_hook_success_reads_prompt_from_stdin() {
         let config = PreSessionHookConfig {
             command: Some("read line; printf 'seen:%s\\n' \"$line\"".to_string()),
             timeout_seconds: 2,
             ..Default::default()
         };
 
-        let injected =
-            run_pre_session_hook(&config, &context("original prompt")).expect("hook should inject");
+        let injected = run_pre_session_hook(&config, &context("original prompt"))
+            .await
+            .expect("hook should inject");
 
         assert!(injected.contains("seen:original prompt"));
         assert!(injected.ends_with("\n\noriginal prompt"));
     }
 
-    #[test]
-    fn run_pre_session_hook_nonzero_skips_injection() {
+    #[tokio::test]
+    async fn run_pre_session_hook_nonzero_skips_injection() {
         let config = PreSessionHookConfig {
             command: Some("echo nope >&2; exit 42".to_string()),
             timeout_seconds: 2,
             ..Default::default()
         };
 
-        assert!(run_pre_session_hook(&config, &context("original prompt")).is_none());
+        assert!(
+            run_pre_session_hook(&config, &context("original prompt"))
+                .await
+                .is_none()
+        );
     }
 
-    #[test]
-    fn run_pre_session_hook_timeout_skips_injection() {
+    #[tokio::test]
+    async fn run_pre_session_hook_timeout_skips_injection() {
         let config = PreSessionHookConfig {
             command: Some("sleep 2".to_string()),
             timeout_seconds: 1,
             ..Default::default()
         };
 
-        assert!(run_pre_session_hook(&config, &context("original prompt")).is_none());
+        assert!(
+            run_pre_session_hook(&config, &context("original prompt"))
+                .await
+                .is_none()
+        );
     }
 
-    #[test]
-    fn run_pre_session_hook_missing_command_skips_injection() {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_pre_session_hook_large_stdout_does_not_deadlock() {
+        let config = PreSessionHookConfig {
+            command: Some("dd if=/dev/zero bs=70000 count=1 2>/dev/null | tr '\\0' x".to_string()),
+            timeout_seconds: 2,
+            ..Default::default()
+        };
+
+        let injected = run_pre_session_hook(&config, &context("original prompt"))
+            .await
+            .expect("large hook stdout should inject");
+
+        assert!(injected.starts_with("<system-reminder>\n"));
+        assert!(injected.ends_with("\n\noriginal prompt"));
+    }
+
+    #[tokio::test]
+    async fn run_pre_session_hook_missing_command_skips_injection() {
         let config = PreSessionHookConfig {
             command: None,
             ..Default::default()
         };
 
-        assert!(run_pre_session_hook(&config, &context("original prompt")).is_none());
+        assert!(
+            run_pre_session_hook(&config, &context("original prompt"))
+                .await
+                .is_none()
+        );
     }
 }

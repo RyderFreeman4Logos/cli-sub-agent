@@ -348,7 +348,7 @@ impl Executor {
             sandbox: sandbox_transport.as_ref(),
         };
         let transport = self.transport(session_config)?;
-        let effective_prompt = self.apply_pre_session_hook(prompt, session, &options);
+        let effective_prompt = self.apply_pre_session_hook(prompt, session, &options).await;
         let mut result = transport
             .execute(
                 &effective_prompt,

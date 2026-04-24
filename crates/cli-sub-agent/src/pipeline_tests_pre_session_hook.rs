@@ -11,9 +11,21 @@ async fn execute_with_session_and_meta_injects_global_pre_session_hook_output() 
     let temp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let _csa_session_id_guard = ScopedEnvVarRestore::unset("CSA_SESSION_ID");
+    let xdg_config_home = temp.path().join("xdg-config");
+    let home_dir = temp.path().join("home");
+    fs::create_dir_all(&xdg_config_home).unwrap();
+    fs::create_dir_all(&home_dir).unwrap();
+    let _xdg_config_guard =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", xdg_config_home.to_str().unwrap());
+    let _home_guard = ScopedEnvVarRestore::set("HOME", home_dir.to_str().unwrap());
 
     let project_root = temp.path();
     let config_path = csa_config::GlobalConfig::config_path().unwrap();
+    assert!(
+        config_path.starts_with(&xdg_config_home),
+        "test config path must stay under temp XDG_CONFIG_HOME, got {}",
+        config_path.display()
+    );
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     fs::write(
         &config_path,
@@ -27,6 +39,7 @@ timeout_seconds = 2
     )
     .unwrap();
     let global_config = csa_config::GlobalConfig::load().unwrap();
+    let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
 
     let bin_dir = project_root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
@@ -86,6 +99,7 @@ printf 'ok\n'
         None,
         None,
         Some(&global_config),
+        pre_session_hook,
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],
