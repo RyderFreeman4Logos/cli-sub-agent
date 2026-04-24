@@ -381,6 +381,12 @@ async fn run() -> Result<()> {
                 daemon_child,
                 &session_id,
                 cd.as_deref(),
+                run_cmd_daemon::DaemonSpawnOptions::for_run(
+                    skill.as_deref(),
+                    prompt.as_deref(),
+                    prompt_flag.as_deref(),
+                    prompt_file.as_deref(),
+                ),
             )?;
 
             // Daemon child path: continue with normal run logic.
@@ -503,6 +509,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
+                run_cmd_daemon::DaemonSpawnOptions::default(),
             )?;
             let result = review_cmd::handle_review(args, current_depth).await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
@@ -521,6 +528,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
+                run_cmd_daemon::DaemonSpawnOptions::default(),
             )?;
             let result = debate_cmd::handle_debate(args, current_depth, output_format).await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);

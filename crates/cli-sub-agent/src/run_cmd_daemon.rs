@@ -1,9 +1,45 @@
 //! Daemon spawn logic for execution commands (daemon mode is the default).
 //! Shared by `csa run`, `csa review`, and `csa debate`.
 
+use std::io::IsTerminal;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DaemonSpawnOptions {
+    run_stdin_prompt: RunStdinPrompt,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum RunStdinPrompt {
+    #[default]
+    None,
+    Omitted,
+    PositionalSentinel,
+}
+
+impl DaemonSpawnOptions {
+    pub(crate) fn for_run(
+        skill: Option<&str>,
+        prompt: Option<&str>,
+        prompt_flag: Option<&str>,
+        prompt_file: Option<&Path>,
+    ) -> Self {
+        let run_stdin_prompt = if prompt_file.is_some() || prompt_flag.is_some() {
+            RunStdinPrompt::None
+        } else if prompt == Some("-") {
+            RunStdinPrompt::PositionalSentinel
+        } else if prompt.is_none() && skill.is_none() {
+            RunStdinPrompt::Omitted
+        } else {
+            RunStdinPrompt::None
+        };
+
+        Self { run_stdin_prompt }
+    }
+}
 
 /// Guard returned by [`check_daemon_flags`] when running as daemon child.
 ///
@@ -40,12 +76,13 @@ pub(crate) fn check_daemon_flags(
     daemon_child: bool,
     session_id: &Option<String>,
     cd: Option<&str>,
+    spawn_options: DaemonSpawnOptions,
 ) -> Result<DaemonChildGuard> {
     if !no_daemon && !daemon_child {
         if session_id.is_some() {
             anyhow::bail!("--session-id is an internal flag and must not be used directly");
         }
-        spawn_and_exit(subcommand, cd)?;
+        spawn_and_exit(subcommand, cd, spawn_options)?;
     }
     let mut stderr_rotation = None;
     if let Some(sid) = session_id {
@@ -116,24 +153,30 @@ fn resolve_stderr_spool_config(project_root: &std::path::Path) -> (u64, bool, st
 /// captured in the session directory.
 ///
 /// This function **never returns on success** — it calls `process::exit(0)`.
-pub(crate) fn spawn_and_exit(subcommand: &str, cd: Option<&str>) -> Result<()> {
+pub(crate) fn spawn_and_exit(
+    subcommand: &str,
+    cd: Option<&str>,
+    spawn_options: DaemonSpawnOptions,
+) -> Result<()> {
     let sid = csa_session::new_session_id();
     let project_root = crate::pipeline::determine_project_root(cd)?;
     let session_root = csa_session::get_session_root(&project_root)?;
     let session_dir = session_root.join("sessions").join(&sid);
+    let stdin_prompt = read_stdin_prompt_if_needed(spawn_options)?;
+    persist_daemon_placeholder_session(&project_root, &session_dir, &sid, subcommand)?;
+    let stdin_prompt_file = write_stdin_prompt_if_needed(&session_dir, stdin_prompt)?;
 
     // Collect args to forward: everything after the subcommand verb.
     // spawn_daemon() injects '<subcommand> --daemon-child --session-id <ID>' itself.
     // We find the subcommand by position (not substring) to handle global flags
     // that may appear before the subcommand (e.g. `csa --format json review ...`).
     let all_args: Vec<String> = std::env::args().collect();
-    let run_pos = all_args.iter().position(|a| a == subcommand).unwrap_or(1);
-    let forwarded_args: Vec<String> = all_args
-        .iter()
-        .skip(run_pos + 1)
-        .filter(|a| *a != "--daemon") // daemon is now default; strip no-op flag
-        .cloned()
-        .collect();
+    let forwarded_args = build_forwarded_args(
+        &all_args,
+        subcommand,
+        spawn_options,
+        stdin_prompt_file.as_deref(),
+    );
 
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
     let mut daemon_env = std::collections::HashMap::new();
@@ -182,4 +225,267 @@ pub(crate) fn spawn_and_exit(subcommand: &str, cd: Option<&str>) -> Result<()> {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(0);
+}
+
+fn persist_daemon_placeholder_session(
+    project_root: &Path,
+    session_dir: &Path,
+    session_id: &str,
+    subcommand: &str,
+) -> Result<()> {
+    let _daemon_env = ScopedDaemonSessionEnv::set(project_root, session_dir, session_id);
+    let state = csa_session::create_session(
+        project_root,
+        Some(&format!("initializing daemon {subcommand}")),
+        None,
+        None,
+    )?;
+    anyhow::ensure!(
+        state.meta_session_id == session_id,
+        "daemon placeholder session id mismatch: requested {session_id}, persisted {}",
+        state.meta_session_id
+    );
+    Ok(())
+}
+
+struct ScopedDaemonSessionEnv {
+    original_id: Option<std::ffi::OsString>,
+    original_dir: Option<std::ffi::OsString>,
+    original_root: Option<std::ffi::OsString>,
+}
+
+impl ScopedDaemonSessionEnv {
+    fn set(project_root: &Path, session_dir: &Path, session_id: &str) -> Self {
+        let guard = Self {
+            original_id: std::env::var_os("CSA_DAEMON_SESSION_ID"),
+            original_dir: std::env::var_os("CSA_DAEMON_SESSION_DIR"),
+            original_root: std::env::var_os("CSA_DAEMON_PROJECT_ROOT"),
+        };
+        // SAFETY: daemon parent is single-threaded here, before spawning the child process.
+        unsafe {
+            std::env::set_var("CSA_DAEMON_SESSION_ID", session_id);
+            std::env::set_var("CSA_DAEMON_SESSION_DIR", session_dir);
+            std::env::set_var("CSA_DAEMON_PROJECT_ROOT", project_root);
+        }
+        guard
+    }
+}
+
+impl Drop for ScopedDaemonSessionEnv {
+    fn drop(&mut self) {
+        // SAFETY: restores process env in the same single-threaded daemon parent scope.
+        unsafe {
+            restore_env("CSA_DAEMON_SESSION_ID", self.original_id.take());
+            restore_env("CSA_DAEMON_SESSION_DIR", self.original_dir.take());
+            restore_env("CSA_DAEMON_PROJECT_ROOT", self.original_root.take());
+        }
+    }
+}
+
+unsafe fn restore_env(key: &str, original: Option<std::ffi::OsString>) {
+    match original {
+        Some(value) => {
+            // SAFETY: caller guarantees env mutation is scoped and single-threaded.
+            unsafe { std::env::set_var(key, value) };
+        }
+        None => {
+            // SAFETY: caller guarantees env mutation is scoped and single-threaded.
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+}
+
+fn read_stdin_prompt_if_needed(spawn_options: DaemonSpawnOptions) -> Result<Option<String>> {
+    if spawn_options.run_stdin_prompt == RunStdinPrompt::None {
+        return Ok(None);
+    }
+
+    let mut stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        anyhow::bail!(
+            "No prompt provided and stdin is a terminal.\n\n\
+             Usage:\n  \
+             csa run --sa-mode <true|false> --tool <tool> \"your prompt here\"\n  \
+             echo \"prompt\" | csa run --sa-mode <true|false> --tool <tool>"
+        );
+    }
+
+    let mut prompt = String::new();
+    std::io::Read::read_to_string(&mut stdin, &mut prompt)
+        .context("failed to read daemon run prompt from stdin")?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
+    }
+    Ok(Some(prompt))
+}
+
+fn write_stdin_prompt_if_needed(
+    session_dir: &Path,
+    prompt: Option<String>,
+) -> Result<Option<PathBuf>> {
+    let Some(prompt) = prompt else {
+        return Ok(None);
+    };
+    let input_dir = session_dir.join("input");
+    std::fs::create_dir_all(&input_dir).with_context(|| {
+        format!(
+            "failed to create daemon prompt input dir {}",
+            input_dir.display()
+        )
+    })?;
+    let prompt_path = input_dir.join("stdin-prompt.txt");
+    std::fs::write(&prompt_path, prompt).with_context(|| {
+        format!(
+            "failed to write daemon stdin prompt file {}",
+            prompt_path.display()
+        )
+    })?;
+    Ok(Some(prompt_path))
+}
+
+fn build_forwarded_args(
+    all_args: &[String],
+    subcommand: &str,
+    spawn_options: DaemonSpawnOptions,
+    stdin_prompt_file: Option<&Path>,
+) -> Vec<String> {
+    let run_pos = all_args.iter().position(|a| a == subcommand).unwrap_or(1);
+    let mut forwarded_args: Vec<String> = all_args
+        .iter()
+        .skip(run_pos + 1)
+        .filter(|a| *a != "--daemon")
+        .cloned()
+        .collect();
+
+    if spawn_options.run_stdin_prompt == RunStdinPrompt::PositionalSentinel
+        && let Some(pos) = forwarded_args.iter().rposition(|arg| arg == "-")
+    {
+        forwarded_args.remove(pos);
+        if forwarded_args.last().is_some_and(|arg| arg == "--") {
+            forwarded_args.pop();
+        }
+    }
+
+    if let Some(prompt_file) = stdin_prompt_file {
+        forwarded_args.push("--prompt-file".to_string());
+        forwarded_args.push(prompt_file.display().to_string());
+    }
+
+    forwarded_args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_daemon_options_detect_omitted_stdin_prompt_without_skill() {
+        let options = DaemonSpawnOptions::for_run(None, None, None, None);
+        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::Omitted);
+    }
+
+    #[test]
+    fn run_daemon_options_do_not_capture_stdin_for_skill_only_run() {
+        let options = DaemonSpawnOptions::for_run(Some("demo"), None, None, None);
+        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::None);
+    }
+
+    #[test]
+    fn run_daemon_options_detect_positional_stdin_sentinel() {
+        let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None);
+        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PositionalSentinel);
+    }
+
+    #[test]
+    fn forwarded_args_append_prompt_file_for_omitted_stdin_prompt() {
+        let all_args = vec![
+            "csa".to_string(),
+            "run".to_string(),
+            "--sa-mode".to_string(),
+            "true".to_string(),
+        ];
+        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
+
+        let forwarded = build_forwarded_args(
+            &all_args,
+            "run",
+            DaemonSpawnOptions {
+                run_stdin_prompt: RunStdinPrompt::Omitted,
+            },
+            Some(prompt_file),
+        );
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--sa-mode",
+                "true",
+                "--prompt-file",
+                "/state/session/input/stdin-prompt.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn forwarded_args_replace_positional_stdin_sentinel_with_prompt_file() {
+        let all_args = vec![
+            "csa".to_string(),
+            "run".to_string(),
+            "--sa-mode".to_string(),
+            "true".to_string(),
+            "-".to_string(),
+        ];
+        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
+
+        let forwarded = build_forwarded_args(
+            &all_args,
+            "run",
+            DaemonSpawnOptions {
+                run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
+            },
+            Some(prompt_file),
+        );
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--sa-mode",
+                "true",
+                "--prompt-file",
+                "/state/session/input/stdin-prompt.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn forwarded_args_remove_trailing_double_dash_with_stdin_sentinel() {
+        let all_args = vec![
+            "csa".to_string(),
+            "run".to_string(),
+            "--sa-mode".to_string(),
+            "true".to_string(),
+            "--".to_string(),
+            "-".to_string(),
+        ];
+        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
+
+        let forwarded = build_forwarded_args(
+            &all_args,
+            "run",
+            DaemonSpawnOptions {
+                run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
+            },
+            Some(prompt_file),
+        );
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--sa-mode",
+                "true",
+                "--prompt-file",
+                "/state/session/input/stdin-prompt.txt"
+            ]
+        );
+    }
 }
