@@ -1,11 +1,12 @@
 //! Daemon spawn logic for execution commands (daemon mode is the default).
 //! Shared by `csa run`, `csa review`, and `csa debate`.
 
-use std::io::IsTerminal;
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DaemonSpawnOptions {
@@ -233,12 +234,14 @@ fn persist_daemon_placeholder_session(
     session_id: &str,
     subcommand: &str,
 ) -> Result<()> {
-    let _daemon_env = ScopedDaemonSessionEnv::set(project_root, session_dir, session_id);
-    let state = csa_session::create_session(
+    let state = csa_session::create_session_with_daemon_env(
         project_root,
         Some(&format!("initializing daemon {subcommand}")),
         None,
         None,
+        Some(session_id),
+        Some(session_dir),
+        Some(project_root),
     )?;
     anyhow::ensure!(
         state.meta_session_id == session_id,
@@ -246,53 +249,6 @@ fn persist_daemon_placeholder_session(
         state.meta_session_id
     );
     Ok(())
-}
-
-struct ScopedDaemonSessionEnv {
-    original_id: Option<std::ffi::OsString>,
-    original_dir: Option<std::ffi::OsString>,
-    original_root: Option<std::ffi::OsString>,
-}
-
-impl ScopedDaemonSessionEnv {
-    fn set(project_root: &Path, session_dir: &Path, session_id: &str) -> Self {
-        let guard = Self {
-            original_id: std::env::var_os("CSA_DAEMON_SESSION_ID"),
-            original_dir: std::env::var_os("CSA_DAEMON_SESSION_DIR"),
-            original_root: std::env::var_os("CSA_DAEMON_PROJECT_ROOT"),
-        };
-        // SAFETY: daemon parent is single-threaded here, before spawning the child process.
-        unsafe {
-            std::env::set_var("CSA_DAEMON_SESSION_ID", session_id);
-            std::env::set_var("CSA_DAEMON_SESSION_DIR", session_dir);
-            std::env::set_var("CSA_DAEMON_PROJECT_ROOT", project_root);
-        }
-        guard
-    }
-}
-
-impl Drop for ScopedDaemonSessionEnv {
-    fn drop(&mut self) {
-        // SAFETY: restores process env in the same single-threaded daemon parent scope.
-        unsafe {
-            restore_env("CSA_DAEMON_SESSION_ID", self.original_id.take());
-            restore_env("CSA_DAEMON_SESSION_DIR", self.original_dir.take());
-            restore_env("CSA_DAEMON_PROJECT_ROOT", self.original_root.take());
-        }
-    }
-}
-
-unsafe fn restore_env(key: &str, original: Option<std::ffi::OsString>) {
-    match original {
-        Some(value) => {
-            // SAFETY: caller guarantees env mutation is scoped and single-threaded.
-            unsafe { std::env::set_var(key, value) };
-        }
-        None => {
-            // SAFETY: caller guarantees env mutation is scoped and single-threaded.
-            unsafe { std::env::remove_var(key) };
-        }
-    }
 }
 
 fn read_stdin_prompt_if_needed(spawn_options: DaemonSpawnOptions) -> Result<Option<String>> {
@@ -310,13 +266,25 @@ fn read_stdin_prompt_if_needed(spawn_options: DaemonSpawnOptions) -> Result<Opti
         );
     }
 
-    let mut prompt = String::new();
-    std::io::Read::read_to_string(&mut stdin, &mut prompt)
+    let prompt = read_bounded_stdin_prompt(&mut stdin, STDIN_PROMPT_MAX_BYTES)
         .context("failed to read daemon run prompt from stdin")?;
     if prompt.trim().is_empty() {
         anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
     }
     Ok(Some(prompt))
+}
+
+fn read_bounded_stdin_prompt(reader: impl Read, max_bytes: u64) -> Result<String> {
+    let mut prompt = String::new();
+    let mut limited_reader = reader.take(max_bytes.saturating_add(1));
+    limited_reader.read_to_string(&mut prompt)?;
+    if prompt.len() as u64 > max_bytes {
+        anyhow::bail!(
+            "Prompt from stdin exceeds the {} byte daemon limit. Use --prompt-file for larger input.",
+            max_bytes
+        );
+    }
+    Ok(prompt)
 }
 
 fn write_stdin_prompt_if_needed(
@@ -486,6 +454,27 @@ mod tests {
                 "--prompt-file",
                 "/state/session/input/stdin-prompt.txt"
             ]
+        );
+    }
+
+    #[test]
+    fn bounded_stdin_prompt_accepts_prompt_at_limit() {
+        let prompt = "x".repeat(16);
+        let read = read_bounded_stdin_prompt(std::io::Cursor::new(prompt.as_bytes()), 16)
+            .expect("prompt at limit should be accepted");
+
+        assert_eq!(read, prompt);
+    }
+
+    #[test]
+    fn bounded_stdin_prompt_rejects_prompt_over_limit() {
+        let prompt = "x".repeat(17);
+        let err = read_bounded_stdin_prompt(std::io::Cursor::new(prompt.as_bytes()), 16)
+            .expect_err("prompt over limit should fail");
+
+        assert!(
+            err.to_string().contains("exceeds the 16 byte daemon limit"),
+            "unexpected error: {err}"
         );
     }
 }

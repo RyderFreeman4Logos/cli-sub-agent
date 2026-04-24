@@ -81,15 +81,16 @@ pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 pub use manager::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
     RepoWriteAudit, SaveOptions, clear_manager_sidecar, complete_session, compute_repo_write_audit,
-    contract_result_path, create_session, create_session_fresh, decode_session_created_at,
-    delete_session, delete_session_from_root, detect_git_head, find_sessions, get_session_dir,
-    get_session_dir_global, get_session_root, legacy_user_result_path,
-    list_all_project_session_roots, list_all_sessions, list_all_sessions_all_projects,
-    list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,
-    load_metadata, load_result, load_result_view, load_session, load_session_global_exact,
-    redact_result_sidecar_value, render_redacted_result_sidecar, resolve_fork_source,
-    resolve_resume_session, save_result, save_result_with_options, save_session, save_session_in,
-    update_last_accessed, validate_tool_access, write_audit_warning_artifact,
+    contract_result_path, create_session, create_session_fresh, create_session_with_daemon_env,
+    decode_session_created_at, delete_session, delete_session_from_root, detect_git_head,
+    find_sessions, get_session_dir, get_session_dir_global, get_session_root,
+    legacy_user_result_path, list_all_project_session_roots, list_all_sessions,
+    list_all_sessions_all_projects, list_artifacts, list_sessions, list_sessions_from_root,
+    list_sessions_from_root_readonly, load_metadata, load_result, load_result_view, load_session,
+    load_session_global_exact, redact_result_sidecar_value, render_redacted_result_sidecar,
+    resolve_fork_source, resolve_resume_session, save_result, save_result_with_options,
+    save_session, save_session_in, update_last_accessed, validate_tool_access,
+    write_audit_warning_artifact,
 };
 
 pub use manager::ResumeSessionResolution;

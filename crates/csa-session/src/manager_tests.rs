@@ -180,6 +180,32 @@ fn test_create_session_ignores_bare_inherited_daemon_session_id() {
 }
 
 #[test]
+fn test_create_session_with_daemon_env_uses_preassigned_id() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path();
+    let session_id = "01K00000000000000000000001";
+    let session_dir = get_session_root(project)
+        .unwrap()
+        .join("sessions")
+        .join(session_id);
+
+    let state = create_session_with_daemon_env(
+        project,
+        Some("daemon placeholder"),
+        None,
+        None,
+        Some(session_id),
+        Some(&session_dir),
+        Some(project),
+    )
+    .unwrap();
+
+    assert_eq!(state.meta_session_id, session_id);
+    assert!(session_dir.join(STATE_FILE_NAME).exists());
+}
+
+#[test]
 fn test_list_sessions_with_tool_filter() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);

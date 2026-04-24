@@ -158,18 +158,30 @@ fn classify_diagnostic_hint(stderr_tail: &str) -> Option<&'static str> {
 }
 
 fn compact_diagnostic_value(value: &str) -> String {
-    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_chars(&compact, DIAGNOSTIC_VALUE_MAX_CHARS)
-}
+    let mut compact = String::new();
+    let mut chars = 0;
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    let mut iter = value.chars();
-    let truncated = iter.by_ref().take(max_chars).collect::<String>();
-    if iter.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
+    for word in value.split_whitespace() {
+        if !compact.is_empty() {
+            if chars == DIAGNOSTIC_VALUE_MAX_CHARS {
+                compact.push_str("...");
+                return compact;
+            }
+            compact.push(' ');
+            chars += 1;
+        }
+
+        for ch in word.chars() {
+            if chars == DIAGNOSTIC_VALUE_MAX_CHARS {
+                compact.push_str("...");
+                return compact;
+            }
+            compact.push(ch);
+            chars += 1;
+        }
     }
+
+    compact
 }
 
 fn option_or_missing(value: Option<&str>) -> &str {

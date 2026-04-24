@@ -21,8 +21,8 @@ mod manager_paths;
 mod manager_result;
 
 pub use manager_audit::{RepoWriteAudit, compute_repo_write_audit, write_audit_warning_artifact};
-pub use manager_daemon::ResumeSessionResolution;
-use manager_daemon::{SessionIdStrategy, preassigned_daemon_session_id};
+pub use manager_daemon::{ResumeSessionResolution, create_session_with_daemon_env};
+use manager_daemon::{SessionIdStrategy, preassigned_daemon_session_id_from_env};
 pub use manager_legacy::decode_session_created_at;
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;
@@ -63,7 +63,7 @@ pub fn create_session(
         description,
         parent_id,
         tool,
-        SessionIdStrategy::DaemonAware,
+        SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_env()),
     )
 }
 
@@ -101,7 +101,7 @@ pub(crate) fn create_session_in(
         description,
         parent_id,
         tool,
-        SessionIdStrategy::DaemonAware,
+        SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_env()),
     )
 }
 
@@ -118,7 +118,7 @@ fn create_session_in_with_strategy(
     // child sessions must opt out of that binding so they do not collapse onto
     // the caller's own daemon session.
     let session_id = match session_id_strategy {
-        SessionIdStrategy::DaemonAware => match preassigned_daemon_session_id() {
+        SessionIdStrategy::DaemonAware(preassigned_session_id) => match preassigned_session_id {
             Some(id) => {
                 validate_session_id(&id)?;
                 id
