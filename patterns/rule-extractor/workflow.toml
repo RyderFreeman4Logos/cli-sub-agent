@@ -1,0 +1,269 @@
+[workflow]
+name = "rule-extractor"
+description = "Auto-extract coding rules from HIGH/CRITICAL PR-bot findings (closed-loop learning)"
+
+[[workflow.variables]]
+name = "REPO"
+
+[[workflow.variables]]
+name = "PR_NUM"
+
+[[workflow.variables]]
+name = "REVIEW_SESSION_ID"
+
+[[workflow.variables]]
+name = "FINDING_DESCRIPTION"
+
+[[workflow.variables]]
+name = "FINDING_SEVERITY"
+
+[[workflow.variables]]
+name = "FINDING_FILE"
+
+[[workflow.variables]]
+name = "FIX_COMMIT_SHA"
+
+[[workflow.variables]]
+name = "FIX_DIFF_SUMMARY"
+
+[[workflow.variables]]
+name = "BUG_CLASS_NAME"
+
+[[workflow.variables]]
+name = "BUG_CLASS_DESCRIPTION"
+
+[[workflow.variables]]
+name = "BUG_CLASS_KEYWORDS"
+
+[[workflow.variables]]
+name = "BUG_CLASS_SLUG"
+
+[[workflow.variables]]
+name = "LANG"
+
+[[workflow.variables]]
+name = "ANTI_PATTERN_EXAMPLES"
+
+[[workflow.variables]]
+name = "CORRECT_PATTERN"
+
+[[workflow.variables]]
+name = "SEVERITY"
+
+[[workflow.variables]]
+name = "RULE_CONTENT"
+
+[[workflow.variables]]
+name = "HAS_BUG_CLASS_FINDINGS"
+
+[[workflow.variables]]
+name = "EXISTING_RULE_MATCH"
+
+[[workflow.variables]]
+name = "PROPOSAL_BRANCH"
+
+[[workflow.steps]]
+id = 1
+title = "Collect Findings"
+tool = "bash"
+prompt = """
+Read the merged PR's review artifacts and extract HIGH/CRITICAL findings.
+
+```bash
+set -euo pipefail
+# Collect review findings from the merged PR
+if [ -n "${REVIEW_SESSION_ID:-}" ]; then
+  csa session result --session "${REVIEW_SESSION_ID}" --section details
+else
+  # Fall back to PR comment history for bot findings
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" \
+    | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL")) | {id: .id, body: .body, path: .path}'
+fi
+```
+
+Output: structured list of HIGH/CRITICAL findings with finding ID, severity,
+file path, description, and fix status."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
+title = "Classify Bug Class vs Isolated Mistake"
+tool = "csa"
+prompt = """
+For each HIGH/CRITICAL finding from Step 1, classify as BUG_CLASS or ISOLATED_MISTAKE.
+
+Criteria for BUG_CLASS:
+- The anti-pattern is reproducible in other code
+- The fix required a structural change, not just a line edit
+- Two or more examples exist or could exist
+
+Criteria for ISOLATED_MISTAKE:
+- Single-line fix, unique to this code path
+- Cannot generalize to other locations
+
+```bash
+CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "classify-finding: bug-class-or-isolated" \
+  "Classify the following review finding as BUG_CLASS or ISOLATED_MISTAKE.
+
+   Finding: ${FINDING_DESCRIPTION}
+   Severity: ${FINDING_SEVERITY}
+   File: ${FINDING_FILE}
+   Fix commit: ${FIX_COMMIT_SHA}
+   Fix diff summary: ${FIX_DIFF_SUMMARY}
+
+   Output: CLASSIFICATION=BUG_CLASS or CLASSIFICATION=ISOLATED_MISTAKE
+   Then: RATIONALE: <one paragraph>")
+csa session wait --session "$CLASSIFY_SID"
+```
+
+Set HAS_BUG_CLASS_FINDINGS to "yes" if any finding classified as BUG_CLASS,
+empty string otherwise. Only BUG_CLASS findings proceed to Step 3."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 3
+title = "Deduplicate Against Existing Rules"
+tool = "bash"
+prompt = """
+Check whether an existing rule already covers this bug class.
+
+```bash
+set -euo pipefail
+SHARED_RULES_DIR="${HOME}/project/github/t4nature/s/llm/coding/rules"
+PROJECT_RULES_DIR=".agents/project-rules-ref"
+
+# Keyword grep across shared rules
+SHARED_MATCHES=""
+if [ -d "${SHARED_RULES_DIR}" ]; then
+  SHARED_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS}" "${SHARED_RULES_DIR}/" 2>/dev/null || true)
+fi
+
+# Keyword grep across project-local rules
+PROJECT_MATCHES=""
+if [ -d "${PROJECT_RULES_DIR}" ]; then
+  PROJECT_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS}" "${PROJECT_RULES_DIR}/" 2>/dev/null || true)
+fi
+
+ALL_MATCHES="${SHARED_MATCHES}${PROJECT_MATCHES}"
+if [ -z "${ALL_MATCHES}" ]; then
+  echo "EXISTING_RULE_MATCH=none"
+else
+  echo "Potential matches found:"
+  echo "${ALL_MATCHES}"
+  echo "EXISTING_RULE_MATCH=potential"
+fi
+```
+
+If keyword grep finds potential matches, dispatch semantic deduplication:
+
+```bash
+DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
+  --description "dedupe-check: ${BUG_CLASS_NAME}" \
+  "Compare this bug class against the existing rule.
+   Bug class: ${BUG_CLASS_DESCRIPTION}
+   Existing rule content: (read from matched file)
+   Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
+   If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
+csa session wait --session "$DEDUPE_SID"
+```
+
+EXACT_MATCH: skip rule generation.
+PARTIAL_MATCH: propose update to existing rule (add case study).
+NO_MATCH: proceed to Step 4."""
+on_fail = "skip"
+condition = "${HAS_BUG_CLASS_FINDINGS}"
+
+[[workflow.steps]]
+id = 4
+title = "Generate Rule Draft"
+tool = "csa"
+prompt = """
+Generate a rule file following existing structure (mirrors rust/017-concurrent-file-primitives.md).
+
+```bash
+DRAFT_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "draft-rule: ${BUG_CLASS_NAME}" \
+  "Generate a coding rule file for the following bug class.
+
+   Bug class: ${BUG_CLASS_DESCRIPTION}
+   Language: ${LANG}
+   Anti-pattern examples: ${ANTI_PATTERN_EXAMPLES}
+   Correct pattern: ${CORRECT_PATTERN}
+   PR: #${PR_NUM}
+   Fix commit: ${FIX_COMMIT_SHA}
+
+   Structure:
+   1. Core Requirement (one paragraph)
+   2. Why This Rule Exists (failure mode + root cause)
+   3. Anti-Patterns table (| Anti-pattern | Consequence | Fix |)
+   4. Required Implementation Patterns (code examples)
+   5. Decision Checklist (2-4 yes/no items)
+   6. Case Study: PR #${PR_NUM}
+
+   Frontmatter: source: pr-bot-finding, pr: #${PR_NUM},
+   severity: ${SEVERITY}, extracted-at: $(date -u +%Y-%m-%d)
+
+   Output between RULE_DRAFT_START and RULE_DRAFT_END markers.")
+csa session wait --session "$DRAFT_SID"
+```
+
+Extract RULE_CONTENT from between markers."""
+on_fail = "abort"
+condition = "${HAS_BUG_CLASS_FINDINGS}"
+
+[[workflow.steps]]
+id = 5
+title = "Propose via PR"
+tool = "bash"
+prompt = """
+Create a proposal PR with the rule draft. NEVER auto-commit to main rules.
+
+```bash
+set -euo pipefail
+SHARED_RULES_DIR="${HOME}/project/github/t4nature/s/llm/coding/rules"
+RULE_DIR="${SHARED_RULES_DIR}/${LANG}"
+
+# Determine next rule number
+NEXT_NUM=$(ls "${RULE_DIR}/" 2>/dev/null | grep -E '^[0-9]{3}-' | sort -n | tail -1 | cut -c1-3)
+NEXT_NUM=$(printf '%03d' $((10#${NEXT_NUM:-0} + 1)))
+RULE_FILE="${NEXT_NUM}-${BUG_CLASS_SLUG}.md"
+
+# Create proposal branch
+SHORT_SHA=$(echo "${FIX_COMMIT_SHA}" | cut -c1-7)
+PROPOSAL_BRANCH="chore/rules-propose-${SHORT_SHA}"
+git checkout -b "${PROPOSAL_BRANCH}"
+
+# Write rule file (RULE_CONTENT from Step 4)
+echo "${RULE_CONTENT}" > "${RULE_DIR}/${RULE_FILE}"
+
+git add "${RULE_DIR}/${RULE_FILE}"
+git commit -m "chore(rules): propose ${LANG}/${RULE_FILE} from PR #${PR_NUM}
+
+Extracted from HIGH/CRITICAL finding in PR #${PR_NUM}.
+Bug class: ${BUG_CLASS_NAME}
+Source: pr-bot-finding auto-extraction (issue #661)"
+
+git push -u origin "${PROPOSAL_BRANCH}"
+gh pr create \
+  --title "chore(rules): propose ${LANG}/${RULE_FILE} — ${BUG_CLASS_NAME}" \
+  --body "## Rule Proposal (auto-extracted)
+
+Source PR: #${PR_NUM}
+Severity: ${SEVERITY}
+Bug class: ${BUG_CLASS_NAME}
+
+Auto-extracted by rule-extractor pattern (issue #661). Human review required.
+
+### Checklist
+- [ ] Rule accurately describes the bug class
+- [ ] Anti-patterns are correct and actionable
+- [ ] Preferred patterns are structurally safe
+- [ ] Decision checklist is clear for agents
+- [ ] No overlap with existing rules"
+```
+
+On merge of the proposal PR, update the relevant AGENTS.md index with
+one compact line: NNN|bug-class-slug|one-line summary."""
+on_fail = "abort"
+condition = "${HAS_BUG_CLASS_FINDINGS}"

@@ -1,0 +1,298 @@
+---
+name = "rule-extractor"
+description = "Auto-extract coding rules from HIGH/CRITICAL PR-bot findings (closed-loop learning)"
+allowed-tools = "Bash, Read, Grep, Glob"
+tier = "tier-2-standard"
+version = "0.1.0"
+---
+
+# Rule Extractor: Closed-Loop Learning from PR-Bot Findings
+
+Transforms verified HIGH/CRITICAL review findings into reusable coding rules.
+When pr-bot identifies a structural bug class during review, this pattern
+extracts the lesson into a rule file so the bug class goes extinct — future
+agents see the rule at write-time and avoid the anti-pattern entirely.
+
+**Design choice (Option 2)**: Runs post-merge on pr-bot, not on review
+completion. This ensures rules are extracted from the FINAL fix state, not
+intermediate review iterations. The merged code represents the authoritative
+fix, and the full review history (rounds, false positives, debate results)
+is available for case study generation.
+
+## When to Use
+
+Use this pattern when ALL of these conditions are met:
+1. A PR was **merged successfully** via pr-bot.
+2. The PR's review history contains **HIGH/CRITICAL/P1** severity findings.
+3. The findings were **confirmed real** (not false positives — passed debate arbitration or were fixed).
+4. At least one finding represents a **bug class** (structural pattern), not an isolated mistake.
+
+## Step 1: Collect Findings
+
+Tool: bash
+
+Read the merged PR's review artifacts and extract HIGH/CRITICAL findings.
+
+```bash
+# Collect review findings from the merged PR
+# FINDINGS_SOURCE can be: findings.toml from csa review session, or PR comments
+if [ -n "${REVIEW_SESSION_ID:-}" ]; then
+  csa session result --session "${REVIEW_SESSION_ID}" --section details
+else
+  # Fall back to PR comment history for bot findings
+  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" \
+    | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL")) | {id: .id, body: .body, path: .path}'
+fi
+```
+
+Output: structured list of HIGH/CRITICAL findings with:
+- Finding ID or comment ID
+- Severity (HIGH/CRITICAL/P1)
+- File path and line range
+- Description of the issue
+- Whether it was fixed (commit SHA) or dismissed (debate verdict)
+
+## Step 2: Classify Bug Class vs Isolated Mistake
+
+Tool: csa
+Tier: tier-2-standard
+
+For each HIGH/CRITICAL finding, dispatch an LLM classifier to determine
+whether the finding represents a **bug class** (structural anti-pattern
+that can recur) or an **isolated mistake** (one-off typo, copy-paste error,
+unique to this specific code path).
+
+Classification criteria:
+- **Bug class**: The anti-pattern is reproducible in other code. Two or more
+  examples exist (either in this PR's findings or in historical PRs). The fix
+  required a structural change (new abstraction, pattern switch), not just a
+  line edit.
+- **Isolated mistake**: The fix was a single-line correction. The mistake
+  cannot generalize to other code paths. No historical precedent exists.
+
+Only bug classes proceed to Step 3. Isolated mistakes are logged and skipped.
+
+```bash
+CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "classify-finding: bug-class-or-isolated" \
+  "Classify the following review finding as either BUG_CLASS or ISOLATED_MISTAKE.
+
+   Finding: ${FINDING_DESCRIPTION}
+   Severity: ${FINDING_SEVERITY}
+   File: ${FINDING_FILE}
+   Fix commit: ${FIX_COMMIT_SHA}
+   Fix diff summary: ${FIX_DIFF_SUMMARY}
+
+   Criteria for BUG_CLASS:
+   - The anti-pattern is reproducible in other code
+   - The fix required a structural change, not just a line edit
+   - Two or more examples exist or could exist in a codebase of this size
+
+   Criteria for ISOLATED_MISTAKE:
+   - Single-line fix, unique to this code path
+   - Cannot generalize to other locations
+   - No historical precedent
+
+   Output exactly one line: CLASSIFICATION=BUG_CLASS or CLASSIFICATION=ISOLATED_MISTAKE
+   Then output RATIONALE: <one paragraph explaining why>")
+csa session wait --session "$CLASSIFY_SID"
+```
+
+## Step 3: Deduplicate Against Existing Rules
+
+Tool: bash
+
+Check whether an existing rule already covers this bug class. Search both
+the shared rules repository and project-local rules.
+
+```bash
+# Search shared rules
+SHARED_RULES_DIR="${HOME}/project/github/t4nature/s/llm/coding/rules"
+if [ -d "${SHARED_RULES_DIR}" ]; then
+  grep -rl "${BUG_CLASS_KEYWORDS}" "${SHARED_RULES_DIR}/" || true
+fi
+
+# Search project-local rules
+PROJECT_RULES_DIR=".agents/project-rules-ref"
+if [ -d "${PROJECT_RULES_DIR}" ]; then
+  grep -rl "${BUG_CLASS_KEYWORDS}" "${PROJECT_RULES_DIR}/" || true
+fi
+```
+
+If a matching rule is found:
+- **Exact match**: Skip rule generation. Log "already covered by rule NNN".
+- **Partial match**: Propose an UPDATE to the existing rule (add new case study
+  section) instead of creating a new rule.
+- **No match**: Proceed to Step 4 to generate a new rule.
+
+For semantic deduplication beyond keyword grep, dispatch an LLM comparison:
+
+```bash
+DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
+  --description "dedupe-check: ${BUG_CLASS_NAME}" \
+  "Compare this bug class description against the existing rule below.
+   Are they covering the same anti-pattern?
+
+   Bug class: ${BUG_CLASS_DESCRIPTION}
+   Existing rule: ${EXISTING_RULE_CONTENT}
+
+   Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
+   If PARTIAL_MATCH, output UPDATE_SUGGESTION: <what to add to existing rule>")
+csa session wait --session "$DEDUPE_SID"
+```
+
+## Step 4: Generate Rule Draft
+
+Tool: csa
+Tier: tier-2-standard
+
+Generate a rule file following the structure of existing rules
+(e.g., `rust/017-concurrent-file-primitives.md`). The rule must contain:
+
+1. **Core Requirement**: One-paragraph summary of what the rule requires.
+2. **Why This Rule Exists**: Root cause explanation with the concrete failure mode.
+3. **Anti-Patterns (Forbidden)**: Table of code shapes that cause this bug.
+4. **Required Implementation Patterns**: Structurally-safe alternatives with code examples.
+5. **Decision Checklist**: 2-4 yes/no checks an agent can apply at write-time.
+6. **Case Study**: Link to the PR/commit that surfaced this bug class.
+
+The rule file includes frontmatter for traceability:
+
+```yaml
+---
+source: pr-bot-finding
+pr: "#<PR_NUM>"
+severity: <HIGH|CRITICAL>
+extracted-at: <ISO-8601 date>
+finding-ids: [<list of finding IDs>]
+---
+```
+
+```bash
+DRAFT_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "draft-rule: ${BUG_CLASS_NAME}" \
+  "Generate a coding rule file for the following bug class.
+
+   Bug class: ${BUG_CLASS_DESCRIPTION}
+   Language: ${LANG}
+   Anti-pattern examples: ${ANTI_PATTERN_EXAMPLES}
+   Correct pattern: ${CORRECT_PATTERN}
+   PR: #${PR_NUM}
+   Fix commit: ${FIX_COMMIT_SHA}
+
+   Use this structure (mirrors rust/017-concurrent-file-primitives.md):
+   1. Core Requirement (one paragraph)
+   2. Why This Rule Exists (failure mode + root cause)
+   3. Anti-Patterns table (| Anti-pattern | Consequence | Fix |)
+   4. Required Implementation Patterns (code examples)
+   5. Decision Checklist (2-4 yes/no items)
+   6. Case Study: PR #${PR_NUM}
+
+   Add frontmatter: source: pr-bot-finding, pr: #${PR_NUM}, severity: ${SEVERITY},
+   extracted-at: $(date -u +%Y-%m-%d)
+
+   Output the complete rule file content between RULE_DRAFT_START and RULE_DRAFT_END markers.")
+csa session wait --session "$DRAFT_SID"
+```
+
+## Step 5: Propose via PR
+
+Tool: bash
+
+Create a proposal PR with the rule draft. NEVER auto-commit rules to
+the main rules repository. Human review is mandatory.
+
+```bash
+# Determine target directory and next rule number
+RULE_DIR="${SHARED_RULES_DIR}/${LANG}"
+NEXT_NUM=$(ls "${RULE_DIR}/" 2>/dev/null | grep -E '^[0-9]{3}-' | sort -n | tail -1 | cut -c1-3)
+NEXT_NUM=$(printf '%03d' $((10#${NEXT_NUM:-0} + 1)))
+RULE_FILE="${NEXT_NUM}-${BUG_CLASS_SLUG}.md"
+
+# Create proposal branch
+SHORT_SHA=$(echo "${FIX_COMMIT_SHA}" | cut -c1-7)
+PROPOSAL_BRANCH="chore/rules-propose-${SHORT_SHA}"
+git checkout -b "${PROPOSAL_BRANCH}"
+
+# Write rule file
+# (RULE_CONTENT extracted from Step 4 output between markers)
+echo "${RULE_CONTENT}" > "${RULE_DIR}/${RULE_FILE}"
+
+git add "${RULE_DIR}/${RULE_FILE}"
+git commit -m "chore(rules): propose ${LANG}/${RULE_FILE} from PR #${PR_NUM}
+
+Extracted from HIGH/CRITICAL finding in PR #${PR_NUM}.
+Bug class: ${BUG_CLASS_NAME}
+Source: pr-bot-finding auto-extraction (issue #661)"
+
+git push -u origin "${PROPOSAL_BRANCH}"
+gh pr create \
+  --title "chore(rules): propose ${LANG}/${RULE_FILE} — ${BUG_CLASS_NAME}" \
+  --body "## Rule Proposal (auto-extracted)
+
+Source PR: #${PR_NUM}
+Severity: ${SEVERITY}
+Bug class: ${BUG_CLASS_NAME}
+
+This rule was auto-extracted from a verified HIGH/CRITICAL finding by the
+rule-extractor pattern (issue #661). Human review required before merge.
+
+### Checklist
+- [ ] Rule accurately describes the bug class
+- [ ] Anti-patterns are correct and actionable
+- [ ] Preferred patterns are structurally safe
+- [ ] Decision checklist is clear for agents
+- [ ] No overlap with existing rules"
+```
+
+On merge of the proposal PR, the relevant AGENTS.md index is updated
+with one compact line per rule 034:
+
+```
+NNN|bug-class-slug|one-line summary of the rule
+```
+
+## Variables
+
+### Workflow template variables (declared in workflow.toml)
+
+- `${REPO}`: GitHub repository slug (owner/repo).
+- `${PR_NUM}`: Merged PR number.
+- `${REVIEW_SESSION_ID}`: CSA review session ID (optional, for csa review findings).
+- `${FINDING_DESCRIPTION}`: Description of the current finding being processed.
+- `${FINDING_SEVERITY}`: Severity level (HIGH/CRITICAL/P1).
+- `${FINDING_FILE}`: File path of the finding.
+- `${FIX_COMMIT_SHA}`: Commit SHA of the fix.
+- `${FIX_DIFF_SUMMARY}`: Summary of the fix diff.
+- `${BUG_CLASS_NAME}`: Human-readable name of the classified bug class.
+- `${BUG_CLASS_DESCRIPTION}`: Detailed description of the bug class.
+- `${BUG_CLASS_KEYWORDS}`: Keywords for grep-based deduplication.
+- `${BUG_CLASS_SLUG}`: URL-safe slug for file naming.
+- `${LANG}`: Target language directory (rust, go, py, ts, all-lang).
+- `${ANTI_PATTERN_EXAMPLES}`: Code examples of the anti-pattern.
+- `${CORRECT_PATTERN}`: Code examples of the correct pattern.
+- `${SEVERITY}`: Finding severity for frontmatter.
+- `${RULE_CONTENT}`: Generated rule file content.
+
+### Filter criteria (enforced before Step 2)
+
+1. Finding severity is HIGH/CRITICAL/P1.
+2. False-positive check passed (finding was fixed, not dismissed via debate).
+3. Finding is a bug CLASS (Step 2 classification).
+4. Fix is not trivially single-line (structural change required).
+
+## Integration
+
+- **Invoked by**: pr-bot (post-merge, opt-in) via `csa plan run patterns/rule-extractor/workflow.toml`
+- **Depends on**: pr-bot review artifacts (findings, debate verdicts, fix commits)
+- **Outputs to**: `~/project/github/t4nature/s/llm/coding/rules/<lang>/` (shared rules) or `.agents/project-rules-ref/` (project-local)
+- **Constraint**: NEVER auto-commits. Always proposes via PR for human review.
+- **Constraint**: AGENTS.md rule 030 (fork-only) — PRs target user's fork.
+
+## Done Criteria
+
+1. All HIGH/CRITICAL findings from the merged PR classified (bug class vs isolated).
+2. Bug classes deduplicated against existing rules.
+3. New rules drafted with correct structure (anti-patterns, preferred patterns, decision checklist, case study).
+4. Proposal PR(s) created with human review required.
+5. No auto-commits to rules repositories.
