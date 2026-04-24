@@ -61,7 +61,7 @@ breaks prompt-guard propagation.
    - The weave workflow itself remains single-pass and only provides the deterministic halt gate plus one review/fix/re-review pass.
    - Rounds 2 and 3 are driven by the orchestrator re-invoking the contract, not by native weave `WHILE`/`GOTO`.
    - The hard cap and exception rules above are binding on the orchestrator even when weave cannot mechanically express the full loop.
-   - **Multi-finding optimization**: When a fix round has 2+ findings in different files, use the `parallel-fix` pattern (parallel RECON / serial EDIT) instead of a single-employee fix. See `patterns/parallel-fix/SKILL.md`.
+   - **Multi-finding optimization**: When a fix round has 2+ findings in different files, use the `parallel-fix` pattern (parallel RECON / serial EDIT) instead of a single-employee fix. See `patterns/parallel-fix/skills/parallel-fix/SKILL.md`.
 6. **AGENTS.md compliance**: Discover AGENTS.md chain for each staged file. Check every applicable rule. If the staged diff or generated commit body lists concrete `Timing/Race Scenarios`, verify that matching regression tests exist and are named under `Regression Tests Added`; missing or mismatched tests are a blocking failure. Zero unchecked items before proceeding.
 7. **Generate commit message**: `csa run "Run 'git diff --staged' and generate a Conventional Commits message"` (tier-1).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.

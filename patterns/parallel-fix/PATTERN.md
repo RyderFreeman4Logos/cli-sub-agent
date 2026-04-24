@@ -110,9 +110,34 @@ csa session wait --session "$SID_2"
 RECON employees are read-only — they MUST NOT edit files, run git commands
 that modify state, or create commits. They analyze and plan only.
 
-## Step 4: Merge Fix Plans
+## Step 4: Single-Bucket Fallback
 
 Tool: bash
+Condition: !${MULTI_BUCKET}
+
+Single-bucket path: only one file-bucket exists, so parallel RECON has
+no benefit. Dispatch a standard single-employee fix session that
+combines RECON + EDIT in one pass.
+
+The employee receives all findings from the single bucket, analyzes
+root causes, applies fixes, runs `just fmt`, and stages changed files.
+Does NOT create commits — the caller (commit skill) handles commit creation.
+
+```bash
+EDIT_SID=$(csa run --sa-mode true --tier tier-2-standard \
+  --description "fix: single-bucket ${BUCKET_1_FILE}" \
+  "Analyze and fix the following findings in ${BUCKET_1_FILE}.
+   Apply each fix in order. After all fixes, run 'just fmt' and
+   stage the changed files. Do NOT create any commits.
+
+   Findings: ${BUCKET_1_IDS}")
+csa session wait --session "$EDIT_SID"
+```
+
+## Step 5: Merge Fix Plans
+
+Tool: bash
+Condition: ${MULTI_BUCKET}
 
 Collect fix-plan artifacts from all RECON sessions.
 Detect conflicts: if two plans propose edits to the same file:line range,
@@ -122,9 +147,10 @@ Produce a merged fix-plan document ordering fixes by:
 1. Severity (critical first).
 2. File path (alphabetical within same severity).
 
-## Step 5: Serial EDIT Phase
+## Step 6: Serial EDIT Phase
 
 Tool: bash
+Condition: ${MULTI_BUCKET}
 
 Dispatch a **single** CSA employee with write permissions to apply all
 fix plans serially. The employee receives the merged fix-plan and must:
@@ -145,7 +171,7 @@ EDIT_SID=$(csa run --sa-mode true --tier tier-2-standard \
 csa session wait --session "$EDIT_SID"
 ```
 
-## Step 6: Verify Fixes
+## Step 7: Verify Fixes
 
 Tool: bash
 OnFail: skip
