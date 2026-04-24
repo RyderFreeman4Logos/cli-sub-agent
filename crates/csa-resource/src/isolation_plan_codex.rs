@@ -36,7 +36,14 @@ pub(super) fn add_codex_home_for_tool(
             config_hint: CODEX_SANDBOX_CONFIG_HINT,
         });
     } else if codex_home.is_absolute() && codex_home.exists() {
-        push_unique_path(writable_paths, codex_home);
+        if super::is_sensitive_system_path(&codex_home) {
+            tracing::warn!(
+                path = %codex_home.display(),
+                "rejecting writable path under sensitive system directory"
+            );
+        } else {
+            push_unique_path(writable_paths, codex_home);
+        }
     }
 }
 
@@ -72,7 +79,7 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 fn path_is_covered_by_writable_mount(path: &Path, writable_paths: &[PathBuf]) -> bool {
     writable_paths
         .iter()
-        .any(|candidate| candidate == path || path.starts_with(candidate))
+        .any(|candidate| path.starts_with(candidate))
 }
 
 fn validate_required_writable_dir(
