@@ -33,7 +33,7 @@ This skill activates as a post-merge step in pr-bot when:
 
 The orchestrator invokes this skill via:
 ```bash
-csa plan run patterns/rule-extractor/workflow.toml
+csa plan run --sa-mode true patterns/rule-extractor/workflow.toml
 ```
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
@@ -44,9 +44,10 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
 
 ### Step-by-Step
 
-1. **Collect findings**: Read merged PR's review artifacts. Extract HIGH/CRITICAL
-   findings from `findings.toml` (via `csa session result`) or PR comments
-   (via `gh api`).
+1. **Collect findings**: Read merged PR's review artifacts. Parse `findings.toml`
+   from review session output directory (or PR comments as fallback). Emits
+   `CSA_VAR:FINDING_DESCRIPTION`, `CSA_VAR:FINDING_SEVERITY`, `CSA_VAR:FINDING_FILE`
+   for the first HIGH/CRITICAL finding. One finding per invocation.
 
 2. **Classify each finding** (bash step): Dispatch LLM classifier via `csa run`
    to determine BUG_CLASS vs ISOLATED_MISTAKE. Emits
@@ -56,7 +57,8 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
 
 3. **Deduplicate against existing rules**: Search project-local rules
    (`.agents/project-rules-ref/`). Use keyword grep + semantic LLM comparison
-   (both in a single bash block). Emits `CSA_VAR:SHOULD_DRAFT` and `CSA_VAR:DEDUPE_RESULT`.
+   with actual matched file content (both in a single bash block). Emits
+   `CSA_VAR:SHOULD_DRAFT` and `CSA_VAR:DEDUPE_RESULT`.
    - EXACT_MATCH → skip (SHOULD_DRAFT empty).
    - PARTIAL_MATCH → propose update, add case study (SHOULD_DRAFT=yes).
    - NO_MATCH → proceed to draft (SHOULD_DRAFT=yes).

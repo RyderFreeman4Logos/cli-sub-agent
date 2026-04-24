@@ -79,22 +79,63 @@ id = 1
 title = "Collect Findings"
 tool = "bash"
 prompt = """
-Read the merged PR's review artifacts and extract HIGH/CRITICAL findings.
+Read the merged PR's review artifacts and extract the first HIGH/CRITICAL finding.
+Emits CSA_VAR:FINDING_DESCRIPTION, CSA_VAR:FINDING_SEVERITY, CSA_VAR:FINDING_FILE
+for consumption by Step 2. This pattern processes one finding per invocation;
+invoke the pattern once per finding for multi-finding PRs.
 
 ```bash
 set -euo pipefail
 # Collect review findings from the merged PR
+FINDINGS_RAW=""
 if [ -n "${REVIEW_SESSION_ID:-}" ]; then
-  csa session result --session "${REVIEW_SESSION_ID}" --section details
+  # Extract findings.toml from the review session output directory
+  SESSION_DIR=$(csa session result --session "${REVIEW_SESSION_ID}" --session-dir 2>/dev/null || true)
+  if [ -n "$SESSION_DIR" ] && [ -f "$SESSION_DIR/output/findings.toml" ]; then
+    FINDINGS_RAW=$(cat "$SESSION_DIR/output/findings.toml")
+  else
+    # Fallback: read from session details text
+    FINDINGS_RAW=$(csa session result --session "${REVIEW_SESSION_ID}" --section details 2>/dev/null || true)
+  fi
 else
   # Fall back to PR comment history for bot findings
   gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" \
     | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL")) | {id: .id, body: .body, path: .path}'
 fi
+
+# Parse findings.toml for first HIGH/CRITICAL finding and emit CSA_VARs.
+# findings.toml uses [[findings]] sections with id, severity, description,
+# and file_ranges (array of {path, start, end}).
+if [ -n "$FINDINGS_RAW" ]; then
+  # Extract severity, description, and file path from first high/critical finding.
+  # The toml structure: severity = "high"|"critical", description = "...",
+  # file_ranges has path = "..." entries.
+  FIRST_SEV=$(echo "$FINDINGS_RAW" | grep -i '^severity' | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/')
+  FIRST_DESC=$(echo "$FINDINGS_RAW" | grep -i '^description' | head -1 | sed 's/.*= *"\(.*\)".*/\1/')
+  FIRST_FILE=$(echo "$FINDINGS_RAW" | grep -i '^path' | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/')
+
+  if [ -n "$FIRST_DESC" ]; then
+    echo "CSA_VAR:FINDING_DESCRIPTION=$FIRST_DESC"
+    echo "CSA_VAR:FINDING_SEVERITY=${FIRST_SEV:-HIGH}"
+    echo "CSA_VAR:FINDING_FILE=${FIRST_FILE:-unknown}"
+    echo "Extracted finding: severity=$FIRST_SEV file=$FIRST_FILE"
+    echo "Description: $FIRST_DESC"
+  else
+    echo "WARNING: No parseable findings in review session output"
+    echo "CSA_VAR:FINDING_DESCRIPTION="
+    echo "CSA_VAR:FINDING_SEVERITY="
+    echo "CSA_VAR:FINDING_FILE="
+  fi
+else
+  echo "WARNING: No findings data available from session or PR comments"
+  echo "CSA_VAR:FINDING_DESCRIPTION="
+  echo "CSA_VAR:FINDING_SEVERITY="
+  echo "CSA_VAR:FINDING_FILE="
+fi
 ```
 
-Output: structured list of HIGH/CRITICAL findings with finding ID, severity,
-file path, description, and fix status."""
+Output: CSA_VAR:FINDING_DESCRIPTION, CSA_VAR:FINDING_SEVERITY, CSA_VAR:FINDING_FILE
+for the first HIGH/CRITICAL finding. Empty values if no findings found."""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -129,7 +170,10 @@ CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
    Then: RATIONALE: <one paragraph>")
 csa session wait --session "$CLASSIFY_SID"
 
-# Read classifier result and emit CSA_VAR
+# NOTE: This bash block emits CSA_VAR:HAS_BUG_CLASS_FINDINGS which gates
+# Step 3 (condition = "${HAS_BUG_CLASS_FINDINGS}"). The CSA_VAR: prefix
+# is the mechanism by which tool=bash steps propagate variables to
+# subsequent workflow steps — this is correct and intentional.
 CLASSIFY_OUTPUT=$(csa session result --session "$CLASSIFY_SID" --section summary 2>/dev/null || true)
 if echo "$CLASSIFY_OUTPUT" | grep -q "CLASSIFICATION=BUG_CLASS"; then
   echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS=yes"
@@ -170,12 +214,23 @@ else
   echo "EXISTING_RULE_MATCH=potential"
   echo "CSA_VAR:EXISTING_RULE_MATCH=potential"
 
+  # Read actual content from matched rule files for semantic comparison
+  MATCHED_CONTENT=""
+  while IFS= read -r match_file; do
+    [ -z "$match_file" ] && continue
+    MATCHED_CONTENT="${MATCHED_CONTENT}
+--- ${match_file} ---
+$(cat "$match_file")
+"
+  done <<< "${PROJECT_MATCHES}"
+
   # Dispatch semantic deduplication for potential matches
   DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
     --description "dedupe-check: ${BUG_CLASS_NAME}" \
-    "Compare this bug class against the existing rule.
+    "Compare this bug class against the existing rule(s).
      Bug class: ${BUG_CLASS_DESCRIPTION}
-     Existing rule content: (read from matched file)
+     Existing rule content:
+${MATCHED_CONTENT}
      Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
      If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
   csa session wait --session "$DEDUPE_SID"
@@ -276,6 +331,9 @@ if [ ! -f "${DRAFT_FILE}" ]; then
   exit 1
 fi
 
+# RULE_DIR is project-local (.agents/project-rules-ref/) within the fork repo,
+# so git-add is safe — this path is NOT covered by ~/.gitignore_noai (rule 036).
+# The .agents/project-rules-ref/ directory is fork-only content (rule 030).
 RULE_DIR=".agents/project-rules-ref/${LANG}"
 mkdir -p "${RULE_DIR}"
 

@@ -34,23 +34,28 @@ Tool: bash
 Read the merged PR's review artifacts and extract HIGH/CRITICAL findings.
 
 ```bash
-# Collect review findings from the merged PR
-# FINDINGS_SOURCE can be: findings.toml from csa review session, or PR comments
+# Collect review findings from the merged PR and parse findings.toml.
+# Emits CSA_VAR:FINDING_DESCRIPTION, CSA_VAR:FINDING_SEVERITY, CSA_VAR:FINDING_FILE
+# for the first HIGH/CRITICAL finding. Pattern processes one finding per invocation;
+# invoke once per finding for multi-finding PRs.
 if [ -n "${REVIEW_SESSION_ID:-}" ]; then
-  csa session result --session "${REVIEW_SESSION_ID}" --section details
+  # Extract findings.toml from the review session output directory
+  SESSION_DIR=$(csa session result --session "${REVIEW_SESSION_ID}" --session-dir 2>/dev/null || true)
+  if [ -n "$SESSION_DIR" ] && [ -f "$SESSION_DIR/output/findings.toml" ]; then
+    FINDINGS_RAW=$(cat "$SESSION_DIR/output/findings.toml")
+  else
+    FINDINGS_RAW=$(csa session result --session "${REVIEW_SESSION_ID}" --section details 2>/dev/null || true)
+  fi
 else
   # Fall back to PR comment history for bot findings
   gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" \
     | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL")) | {id: .id, body: .body, path: .path}'
 fi
+# Parse first HIGH/CRITICAL finding from TOML and emit CSA_VARs
 ```
 
-Output: structured list of HIGH/CRITICAL findings with:
-- Finding ID or comment ID
-- Severity (HIGH/CRITICAL/P1)
-- File path and line range
-- Description of the issue
-- Whether it was fixed (commit SHA) or dismissed (debate verdict)
+Output: CSA_VAR:FINDING_DESCRIPTION, CSA_VAR:FINDING_SEVERITY, CSA_VAR:FINDING_FILE
+for the first HIGH/CRITICAL finding. Empty values if no findings found.
 
 ## Step 2: Classify Bug Class vs Isolated Mistake
 
@@ -136,12 +141,23 @@ else
   echo "EXISTING_RULE_MATCH=potential"
   echo "CSA_VAR:EXISTING_RULE_MATCH=potential"
 
+  # Read actual content from matched rule files for semantic comparison
+  MATCHED_CONTENT=""
+  while IFS= read -r match_file; do
+    [ -z "$match_file" ] && continue
+    MATCHED_CONTENT="${MATCHED_CONTENT}
+--- ${match_file} ---
+$(cat "$match_file")
+"
+  done <<< "${PROJECT_MATCHES}"
+
   # Dispatch semantic deduplication for potential matches
   DEDUPE_SID=$(csa run --sa-mode true --tier tier-1-quick \
     --description "dedupe-check: ${BUG_CLASS_NAME}" \
-    "Compare this bug class against the existing rule.
+    "Compare this bug class against the existing rule(s).
      Bug class: ${BUG_CLASS_DESCRIPTION}
-     Existing rule content: (read from matched file)
+     Existing rule content:
+${MATCHED_CONTENT}
      Output: DEDUPE_RESULT=EXACT_MATCH|PARTIAL_MATCH|NO_MATCH
      If PARTIAL_MATCH: UPDATE_SUGGESTION: <what to add>")
   csa session wait --session "$DEDUPE_SID"
@@ -342,7 +358,7 @@ NNN|bug-class-slug|one-line summary of the rule
 
 ## Integration
 
-- **Invoked by**: pr-bot (post-merge, opt-in) via `csa plan run patterns/rule-extractor/workflow.toml`
+- **Invoked by**: pr-bot (post-merge, opt-in) via `csa plan run --sa-mode true patterns/rule-extractor/workflow.toml`
 - **Depends on**: pr-bot review artifacts (findings, debate verdicts, fix commits)
 - **Outputs to**: `.agents/project-rules-ref/<lang>/` (project-local, fork-only per rule 030)
 - **Constraint**: NEVER auto-commits. Always proposes via PR for human review.
