@@ -1,4 +1,39 @@
 use super::*;
+use std::ffi::OsString;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: tests that mutate process environment hold ENV_LOCK, so no
+        // other test in this module observes a concurrent environment change.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        // SAFETY: the guard is only used while ENV_LOCK is held, preserving
+        // exclusive access to process environment mutations for these tests.
+        unsafe {
+            if let Some(value) = &self.previous {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
 
 #[test]
 fn test_builder_best_effort_with_bwrap() {
@@ -348,6 +383,10 @@ fn test_submodule_no_superproject_found() {
 
 #[test]
 fn test_tool_defaults_codex() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let codex_home = temp.path().join("codex-home");
+    let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -360,16 +399,16 @@ fn test_tool_defaults_codex() {
     assert!(plan.writable_paths.contains(&project));
     assert!(plan.writable_paths.contains(&session));
 
+    assert!(
+        codex_home.is_dir(),
+        "codex defaults should pre-create CODEX_HOME"
+    );
+    assert!(
+        plan.writable_paths.contains(&codex_home),
+        "codex defaults should include CODEX_HOME"
+    );
+
     if let Some(home) = home_dir() {
-        // Tool config dir is only added if it exists on disk (matches
-        // production behavior in isolation_plan.rs:286 `if p.exists()`).
-        let codex_dir = home.join(".codex");
-        if codex_dir.exists() {
-            assert!(
-                plan.writable_paths.contains(&codex_dir),
-                "codex defaults should include ~/.codex when it exists"
-            );
-        }
         // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
         // match production code at isolation_plan.rs:219,227).
         let xdg_state = std::env::var("XDG_STATE_HOME")
@@ -389,6 +428,111 @@ fn test_tool_defaults_codex() {
             );
         }
     }
+}
+
+#[test]
+fn test_tool_defaults_codex_honors_codex_home_env() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let codex_home = temp.path().join("custom-codex-home");
+    let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
+
+    let project = PathBuf::from("/tmp/project");
+    let session = PathBuf::from("/tmp/session");
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults("codex", &project, &session)
+        .build()
+        .expect("should succeed");
+
+    assert!(
+        codex_home.is_dir(),
+        "codex defaults should pre-create CODEX_HOME"
+    );
+    assert!(
+        plan.writable_paths.contains(&codex_home),
+        "codex defaults should include CODEX_HOME"
+    );
+}
+
+#[test]
+fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let codex_home = temp.path().join("readonly-codex-home");
+    std::fs::create_dir(&codex_home).unwrap();
+    #[cfg(unix)]
+    let original_mode = {
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = std::fs::metadata(&codex_home).unwrap();
+        let original_mode = metadata.permissions().mode();
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o500);
+        std::fs::set_permissions(&codex_home, permissions).unwrap();
+        original_mode
+    };
+    #[cfg(not(unix))]
+    {
+        let mut permissions = std::fs::metadata(&codex_home).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&codex_home, permissions).unwrap();
+    }
+
+    let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
+
+    let project = PathBuf::from("/tmp/project");
+    let session = PathBuf::from("/tmp/session");
+
+    let error = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults("codex", &project, &session)
+        .build()
+        .expect_err("unwritable CODEX_HOME should fail preflight");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(&codex_home).unwrap().permissions();
+        permissions.set_mode(original_mode);
+        std::fs::set_permissions(&codex_home, permissions).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        let mut permissions = std::fs::metadata(&codex_home).unwrap().permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&codex_home, permissions).unwrap();
+    }
+
+    let message = format!("{error:#}");
+    assert!(message.contains("codex sandbox preflight failed"));
+    assert!(message.contains("CODEX_HOME"));
+    assert!(message.contains("[tools.codex].filesystem_sandbox.writable_paths"));
+}
+
+#[test]
+fn test_parent_tool_defaults_expose_existing_codex_home_for_nested_csa() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir(&codex_home).unwrap();
+    let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
+
+    let project = PathBuf::from("/tmp/project");
+    let session = PathBuf::from("/tmp/session");
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults("claude-code", &project, &session)
+        .build()
+        .expect("should succeed");
+
+    assert!(
+        plan.writable_paths.contains(&codex_home),
+        "parent sandboxes should expose existing Codex home for nested Codex CSA sessions"
+    );
 }
 
 #[test]

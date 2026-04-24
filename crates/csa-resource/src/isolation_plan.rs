@@ -11,6 +11,9 @@ use crate::sandbox::ResourceCapability;
 
 pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 
+#[path = "isolation_plan_codex.rs"]
+mod codex_paths;
+
 // ---------------------------------------------------------------------------
 // EnforcementMode (local copy)
 // ---------------------------------------------------------------------------
@@ -107,6 +110,7 @@ pub struct IsolationPlanBuilder {
     project_root: Option<PathBuf>,
     soft_limit_percent: Option<u8>,
     memory_monitor_interval_seconds: Option<u64>,
+    required_writable_dirs: Vec<codex_paths::RequiredWritableDir>,
 }
 
 impl IsolationPlanBuilder {
@@ -128,6 +132,7 @@ impl IsolationPlanBuilder {
             project_root: None,
             soft_limit_percent: None,
             memory_monitor_interval_seconds: None,
+            required_writable_dirs: Vec::new(),
         }
     }
 
@@ -302,10 +307,22 @@ impl IsolationPlanBuilder {
             // already covered by the CARGO_HOME logic above — when mise sets
             // CARGO_HOME into the toolchain dir, those subdirs get write access.
 
+            // Codex writes rollout JSONL and arg0 PATH shim files under
+            // CODEX_HOME (default: ~/.codex).  Expose an existing Codex home
+            // for every sandboxed parent because CSA sessions can recursively
+            // spawn Codex ACP children; an inner bwrap cannot make a source
+            // path writable if the parent bwrap mounted it read-only.
+            codex_paths::add_codex_home_for_tool(
+                tool_name,
+                &home,
+                &mut self.writable_paths,
+                &mut self.required_writable_dirs,
+            );
+
             // Tool-specific config/data directories (only if they exist).
             let tool_dirs: &[&str] = match tool_name {
                 "claude-code" => &[".claude"],
-                "codex" => &[".codex"],
+                "codex" => &[],
                 "gemini-cli" => &[".gemini", ".config/gemini-cli"],
                 "opencode" => &[".config/opencode"],
                 _ => &[],
@@ -376,6 +393,12 @@ impl IsolationPlanBuilder {
                 "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
             );
         }
+
+        codex_paths::validate_required_writable_dirs(
+            self.filesystem,
+            &self.required_writable_dirs,
+            &self.writable_paths,
+        )?;
 
         Ok(IsolationPlan {
             resource: self.resource,
