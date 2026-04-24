@@ -178,20 +178,50 @@ else
   MKTD_INTENSITY="full"
   echo "Planning intensity: full (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
 fi
-csa plan run --sa-mode true patterns/mktd/workflow.toml \
+set +e
+MKTD_OUTPUT="$(csa plan run --sa-mode true patterns/mktd/workflow.toml \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
   --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" \
-  --var INTENSITY="${MKTD_INTENSITY}"
+  --var INTENSITY="${MKTD_INTENSITY}" 2>&1)"
+MKTD_EXIT=$?
+set -e
+printf '%s\n' "${MKTD_OUTPUT}"
+print_mktd_failure_context() {
+  echo "mktd exit code: ${MKTD_EXIT}" >&2
+  echo "mktd failure context (step/exit lines):" >&2
+  MKTD_FAILURE_CONTEXT="$(printf '%s\n' "${MKTD_OUTPUT}" | grep -Ei '(error|Step [0-9]+|timeout|fail)' | tail -40 || true)"
+  if [ -n "${MKTD_FAILURE_CONTEXT}" ]; then
+    printf '%s\n' "${MKTD_FAILURE_CONTEXT}" >&2
+  else
+    printf '%s\n' "${MKTD_OUTPUT}" | tail -80 >&2
+  fi
+}
+fail_step7_gate() {
+  echo "ERROR: ${1}" >&2
+  if [ "${MKTD_EXIT}" -ne 0 ]; then
+    print_mktd_failure_context
+  else
+    echo "mktd exit code: 0" >&2
+  fi
+  exit 1
+}
 LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
 if [ -z "${LATEST_TS}" ]; then
-  echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2
-  exit 1
+  fail_step7_gate "mktd did not produce a TODO for branch ${CURRENT_BRANCH}."
 fi
 TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
-grep -qF -- '- [ ] ' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks." >&2; exit 1; }
-grep -q 'DONE WHEN' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses." >&2; exit 1; }
+if ! grep -qF -- '- [ ] ' "${TODO_PATH}"; then
+  fail_step7_gate "TODO missing checkbox tasks."
+fi
+if ! grep -q 'DONE WHEN' "${TODO_PATH}"; then
+  fail_step7_gate "TODO missing DONE WHEN clauses."
+fi
+if [ "${MKTD_EXIT}" -ne 0 ]; then
+  echo "WARNING: mktd exited ${MKTD_EXIT}, but TODO gates passed; treating Step 7 as successful." >&2
+  print_mktd_failure_context
+fi
 echo "CSA_VAR:MKTD_TODO_TIMESTAMP=${LATEST_TS}"
 echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 ```
