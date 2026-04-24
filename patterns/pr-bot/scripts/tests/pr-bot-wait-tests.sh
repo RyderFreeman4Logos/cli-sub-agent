@@ -143,7 +143,7 @@ run_wait_wrapper_loop() {
   wait_elapsed_secs=0
 
   while [ "${wait_elapsed_secs}" -lt "${cloud_bot_poll_max_seconds}" ]; do
-    if [ -f "${output_file}" ]; then
+    if [ -s "${output_file}" ]; then
       break
     fi
     if ! kill -0 "${poll_pid}" 2>/dev/null; then
@@ -432,6 +432,33 @@ run_wait_wrapper_long_helper_timeout_test() {
   assert_json_value "${output_file}" '.status' 'timeout'
 }
 
+# Regression test for #1079: mktemp creates an empty file that fools
+# the wrapper's existence check, causing the poll loop to break on
+# its first iteration before the helper has written a result.
+run_wrapper_no_break_on_empty_output_test() {
+  local case_dir="${TMP_ROOT}/wrapper-no-break-empty"
+  local output_file
+  local started_at
+  local elapsed_seconds
+
+  mkdir -p "${case_dir}"
+  # Simulate mktemp behavior: create the output file as 0-byte sentinel
+  output_file="${case_dir}/result.json"
+  touch "${output_file}"  # 0-byte file exists — this is what mktemp does
+
+  # Spawn a helper that writes "replied" after 3s via atomic rename
+  spawn_wait_wrapper_helper "${output_file}" 3 replied
+  started_at="$(date +%s)"
+  # run_wait_wrapper_loop uses [ -s ] (non-empty check), so the pre-existing
+  # 0-byte file must NOT cause an early break
+  run_wait_wrapper_loop "${output_file}" "${SPAWNED_WAIT_WRAPPER_PID}" 240 30 42
+  elapsed_seconds=$(( $(date +%s) - started_at ))
+
+  # The wrapper must have waited for the helper (~3s), not broken immediately
+  assert_elapsed_between "${elapsed_seconds}" 2 6 "#1079 regression: wrapper must not break on empty sentinel"
+  assert_json_value "${output_file}" '.status' 'replied'
+}
+
 run_replied_test
 run_quota_test
 run_null_commit_replied_test
@@ -439,5 +466,6 @@ run_timeout_test
 run_quiet_wait_window_regression_test
 run_wait_wrapper_short_helper_timeout_test
 run_wait_wrapper_long_helper_timeout_test
+run_wrapper_no_break_on_empty_output_test
 
 echo "pr-bot-wait tests: PASS"
