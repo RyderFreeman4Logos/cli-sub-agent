@@ -68,7 +68,11 @@ tool = "bash"
 prompt = """
 Apply fixes for all issues reported in the review.
 Focus on Critical and High severity first.
-After fixing, stage changes for re-review."""
+After fixing, stage changes for re-review.
+
+Multi-Finding Optimization: When the review produced 2+ findings in different
+files, use the parallel-fix pattern (RECON/EDIT split) instead of a single
+employee. See patterns/parallel-fix/PATTERN.md."""
 on_fail = "skip"
 
 [[workflow.steps]]

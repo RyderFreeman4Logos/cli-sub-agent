@@ -31,6 +31,8 @@ breaks prompt-guard propagation.
 
 1. Reviews current diff with `csa review --diff`
 2. If issues found: fixes them and re-reviews (up to MAX_ROUNDS)
+   - **Multi-finding optimization**: When 2+ findings affect different files,
+     uses `parallel-fix` pattern (parallel RECON / serial EDIT) for faster fix rounds.
 3. If clean: exits successfully
 4. If max rounds reached: reports remaining issues
 

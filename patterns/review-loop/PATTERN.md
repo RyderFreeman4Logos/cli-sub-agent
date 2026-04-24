@@ -60,6 +60,14 @@ Apply fixes for all issues reported in the review.
 Focus on Critical and High severity first.
 After fixing, stage changes for re-review.
 
+### Multi-Finding Optimization
+
+When the review produced 2+ findings in different files, the orchestrator
+SHOULD use the `parallel-fix` pattern instead of a single-employee fix.
+See `patterns/parallel-fix/PATTERN.md` for the RECON/EDIT split protocol.
+Detection: parse `output/findings.toml` from the review session, bucket
+by primary file. If 2+ buckets → delegate to parallel-fix.
+
 ## IF ${REVIEW_HAS_ISSUES}
 
 ## Step 5: Round Check

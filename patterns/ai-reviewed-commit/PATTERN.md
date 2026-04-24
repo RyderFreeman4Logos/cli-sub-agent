@@ -106,6 +106,14 @@ OnFail: retry 3
 Dispatch sub-agent to fix issues found in review.
 Preserve original code intent. Do NOT delete code to silence warnings.
 
+### Multi-Finding Optimization
+
+When the review produced 2+ findings in different files, the orchestrator
+SHOULD use the `parallel-fix` pattern instead of a single-employee fix.
+See `patterns/parallel-fix/PATTERN.md` for the RECON/EDIT split protocol.
+Detection: parse `output/findings.toml` from the review session, bucket
+by primary file. If 2+ buckets → delegate to parallel-fix.
+
 ## Step 7: Re-stage Fixed Files
 
 Tool: bash
