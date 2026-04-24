@@ -70,9 +70,9 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 fn path_is_covered_by_writable_mount(path: &Path, writable_paths: &[PathBuf]) -> bool {
-    writable_paths.iter().any(|candidate| {
-        candidate == path || (candidate != Path::new("/") && path.starts_with(candidate))
-    })
+    writable_paths
+        .iter()
+        .any(|candidate| candidate == path || path.starts_with(candidate))
 }
 
 fn validate_required_writable_dir(
@@ -190,4 +190,41 @@ fn probe_writable_dir(path: &Path, required: &RequiredWritableDir) -> anyhow::Re
         required.source,
         required.config_hint
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn root_writable_mount_covers_absolute_subpaths() {
+        let writable_paths = [PathBuf::from("/")];
+
+        assert!(super::path_is_covered_by_writable_mount(
+            Path::new("/home/user/.codex"),
+            &writable_paths
+        ));
+        assert!(super::path_is_covered_by_writable_mount(
+            Path::new("/"),
+            &writable_paths
+        ));
+    }
+
+    #[test]
+    fn writable_mount_covers_itself_and_descendants_only() {
+        let writable_paths = [PathBuf::from("/home/user")];
+
+        assert!(super::path_is_covered_by_writable_mount(
+            Path::new("/home/user"),
+            &writable_paths
+        ));
+        assert!(super::path_is_covered_by_writable_mount(
+            Path::new("/home/user/.codex"),
+            &writable_paths
+        ));
+        assert!(!super::path_is_covered_by_writable_mount(
+            Path::new("/home/user2/.codex"),
+            &writable_paths
+        ));
+    }
 }
