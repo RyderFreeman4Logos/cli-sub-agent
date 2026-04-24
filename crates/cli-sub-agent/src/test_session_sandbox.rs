@@ -40,6 +40,9 @@ impl ScopedSessionSandbox {
             "CSA_DAEMON_SESSION_ID",
             "CSA_DAEMON_SESSION_DIR",
             "CSA_DAEMON_PROJECT_ROOT",
+            // Prevent sa-mode env leak from parent CSA session into test
+            // processes (triggers no-op exit gate on fast test executions).
+            "CSA_EMIT_CALLER_GUARD_INJECTION",
         ];
         let originals: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
         let home_path = tmp.path();
@@ -53,6 +56,7 @@ impl ScopedSessionSandbox {
             std::env::remove_var("CSA_DAEMON_SESSION_ID");
             std::env::remove_var("CSA_DAEMON_SESSION_DIR");
             std::env::remove_var("CSA_DAEMON_PROJECT_ROOT");
+            std::env::remove_var("CSA_EMIT_CALLER_GUARD_INJECTION");
         }
         Self {
             originals,

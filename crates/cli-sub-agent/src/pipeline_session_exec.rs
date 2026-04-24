@@ -746,6 +746,12 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             execute_events_observed,
         );
     }
+    let has_tool_calls = transport_result.metadata.has_tool_calls
+        || transport_result.metadata.has_execute_tool_calls;
+    let sa_mode = std::env::var(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
+        .unwrap_or(false);
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
         executor,
         prompt,
@@ -765,6 +771,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         transcript_artifacts,
         changed_paths,
         pre_exec_snapshot,
+        has_tool_calls,
+        sa_mode,
     };
     if let Err(err) =
         crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &mut result)
