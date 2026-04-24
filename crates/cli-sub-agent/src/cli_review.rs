@@ -59,6 +59,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub model_spec: Option<String>,
 
+    /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
+    #[arg(long, value_name = "LABEL")]
+    pub hint_difficulty: Option<String>,
+
     /// Thinking budget (accepted for CLI compatibility but not used by review;
     /// thinking level is controlled via tier configuration)
     #[arg(long)]
@@ -347,6 +351,10 @@ pub struct DebateArgs {
     /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
     #[arg(long)]
     pub model_spec: Option<String>,
+
+    /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
+    #[arg(long, value_name = "LABEL")]
+    pub hint_difficulty: Option<String>,
 
     /// Thinking budget (low, medium, high, xhigh, max)
     #[arg(long)]

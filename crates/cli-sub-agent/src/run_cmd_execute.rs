@@ -28,7 +28,8 @@ use crate::run_cmd_tool_selection::{
 #[path = "run_cmd_execute_routing.rs"]
 mod routing;
 use routing::{
-    RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_tier_context,
+    RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
+    resolve_run_tier_context,
 };
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
@@ -229,6 +230,7 @@ where
 pub(crate) async fn handle_run(
     tool: Option<csa_core::types::ToolArg>,
     auto_route: Option<String>,
+    hint_difficulty: Option<String>,
     skill: Option<String>,
     prompt: Option<String>,
     prompt_flag: Option<String>,
@@ -348,20 +350,6 @@ pub(crate) async fn handle_run(
     else {
         return Ok(1);
     };
-    let model_selection_flags = RunModelSelectionFlags {
-        tool: tool.is_some(),
-        auto_route: auto_route.is_some(),
-        skill: skill.is_some(),
-        model_spec: model_spec.is_some(),
-        model: model.is_some(),
-        thinking: thinking.is_some(),
-        tier: tier.is_some(),
-    };
-    let primary_writer_spec =
-        resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
-    let model_spec = model_spec.or(primary_writer_spec);
-    let effective_tier = tier.or(auto_route.clone());
-
     // Track whether user explicitly provided --tool on the CLI (before skill
     // resolution may override it).  This drives tier enforcement: explicit
     // --tool (including --tool auto) is blocked when tiers are configured.
@@ -388,6 +376,7 @@ pub(crate) async fn handle_run(
     )?;
     let resolved_skill = skill_res.resolved_skill;
     let gate_prompt_text = skill_res.prompt_text.clone();
+    let frontmatter_difficulty = skill_res.frontmatter_difficulty.clone();
     let task_needs_edit = crate::run_helpers::resolve_task_edit_requirement(
         resolved_skill.as_ref(),
         &skill_res.prompt_text,
@@ -401,6 +390,20 @@ pub(crate) async fn handle_run(
     let thinking = skill_res.thinking;
     let model = skill_res.model;
     let skill_session_tag = skill.as_deref().map(skill_session_description);
+
+    let model_selection_flags = RunModelSelectionFlags {
+        tool: user_explicit_tool,
+        auto_route: auto_route.is_some(),
+        skill: skill.is_some(),
+        model_spec: model_spec.is_some(),
+        model: model.is_some(),
+        thinking: thinking.is_some(),
+        tier: tier.is_some(),
+        hint_difficulty: hint_difficulty.is_some() || frontmatter_difficulty.is_some(),
+    };
+    let primary_writer_spec =
+        resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
+    let model_spec = model_spec.or(primary_writer_spec);
 
     let mut merged_aliases = global_config.tool_aliases.clone();
     if let Some(c) = config.as_ref() {
@@ -421,6 +424,15 @@ pub(crate) async fn handle_run(
         parent.as_deref()
     };
 
+    let effective_tier = resolve_run_effective_tier(
+        config.as_ref(),
+        tier.as_deref(),
+        auto_route.as_deref(),
+        model_spec.as_deref(),
+        hint_difficulty.as_deref(),
+        frontmatter_difficulty.as_deref(),
+    )?;
+
     // Enforce tier routing: when tiers are configured, explicit --tool (any
     // value, including "auto") is blocked unless --tier is also specified or
     // --force-ignore-tier-setting is active.
@@ -436,6 +448,7 @@ pub(crate) async fn handle_run(
         let err = anyhow::anyhow!(
             "Direct --tool is blocked when tiers are configured.\n\
              Use --tier <name> or --auto-route <intent> to select tier-based routing, or \
+             --hint-difficulty <label> to route through [tier_mapping], or \
              --force-ignore-tier-setting to bypass.\n\
              Available tiers: {}",
             tier_list.join(", ")

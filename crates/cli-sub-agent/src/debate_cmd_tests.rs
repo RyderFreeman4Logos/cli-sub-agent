@@ -713,6 +713,20 @@ fn debate_cli_parses_thinking_flag() {
 }
 
 #[test]
+fn debate_cli_parses_hint_difficulty_flag() {
+    let args = parse_debate_args(&[
+        "csa",
+        "debate",
+        "--tool",
+        "claude-code",
+        "--hint-difficulty",
+        "architecture_design",
+        "question",
+    ]);
+    assert_eq!(args.hint_difficulty.as_deref(), Some("architecture_design"));
+}
+
+#[test]
 fn debate_cli_parses_no_stream_stdout_flag() {
     let args = parse_debate_args(&["csa", "debate", "--no-stream-stdout", "question"]);
     assert!(!args.stream_stdout);

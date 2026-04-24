@@ -167,6 +167,9 @@ pub(crate) async fn handle_debate(
     let effective_question =
         crate::run_helpers::resolve_positional_stdin_sentinel(args.question)?.or(args.topic);
     let mut question = resolve_prompt_with_file(effective_question, args.prompt_file.as_deref())?;
+    let parsed_question = crate::difficulty_routing::strip_difficulty_frontmatter(question)?;
+    let frontmatter_difficulty = parsed_question.difficulty;
+    question = parsed_question.prompt;
     if let Some(ctx) = &args.context {
         question = format!("<debate-context>\n{ctx}\n</debate-context>\n\n{question}");
     }
@@ -208,6 +211,30 @@ pub(crate) async fn handle_debate(
             .and_then(|spec| spec.split('/').next())
             .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
     });
+    let effective_tier =
+        match crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
+            config.as_ref(),
+            args.tier.as_deref(),
+            args.model_spec.as_deref(),
+            args.hint_difficulty.as_deref(),
+            frontmatter_difficulty.as_deref(),
+        ) {
+            Ok(tier) => tier,
+            Err(err) => {
+                return Err(crate::session_guard::persist_pre_exec_error_result(
+                    crate::session_guard::PreExecErrorCtx {
+                        project_root: &project_root,
+                        session_id: args.session.as_deref(),
+                        description: Some(debate_description.as_str()),
+                        parent: None,
+                        tool_name: explicit_tool.map(|tool| tool.as_str()),
+                        task_type: Some("debate"),
+                        tier_name: args.tier.as_deref(),
+                        error: err,
+                    },
+                ));
+            }
+        };
     let resolved_selection = match resolve_debate_selection(
         args.tool,
         args.model_spec.as_deref(),
@@ -216,7 +243,7 @@ pub(crate) async fn handle_debate(
         parent_tool.as_deref(),
         &project_root,
         args.force_override_user_config,
-        args.tier.as_deref(),
+        effective_tier.as_deref(),
         args.force_ignore_tier_setting,
     ) {
         Ok(resolved) => resolved,
@@ -229,7 +256,7 @@ pub(crate) async fn handle_debate(
                     parent: None,
                     tool_name: explicit_tool.map(|tool| tool.as_str()),
                     task_type: Some("debate"),
-                    tier_name: args.tier.as_deref(),
+                    tier_name: effective_tier.as_deref(),
                     error: err,
                 },
             ));
@@ -246,7 +273,7 @@ pub(crate) async fn handle_debate(
         resolve_debate_tier_name(
             config.as_ref(),
             &global_config,
-            args.tier.as_deref(),
+            effective_tier.as_deref(),
             args.force_override_user_config,
             args.force_ignore_tier_setting,
         )?

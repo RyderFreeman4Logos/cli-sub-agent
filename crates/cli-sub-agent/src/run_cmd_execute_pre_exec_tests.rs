@@ -88,6 +88,7 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
         None,
         None,
         None,
+        None,
         Some("inspect the repository".to_string()),
         None,
         None,
@@ -167,6 +168,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
     write_project_config(project_dir.path(), &config);
 
     let err = handle_run(
+        None,
         None,
         None,
         None,

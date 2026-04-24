@@ -69,9 +69,10 @@ use resolve::build_review_instruction;
 pub(crate) use resolve::resolve_review_tool;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope,
-    resolve_review_model, resolve_review_selection, resolve_review_stream_mode,
-    resolve_review_thinking, resolve_review_tier_name, review_scope_allows_auto_discovery,
-    verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
+    resolve_review_effective_tier, resolve_review_model, resolve_review_selection,
+    resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
+    review_scope_allows_auto_discovery, verify_review_skill_available,
+    write_multi_reviewer_consolidated_artifact,
 };
 use result_handling::{build_reviewer_outcome, resolve_single_review_result};
 #[rustfmt::skip]
@@ -260,9 +261,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         prompt.push_str(summary);
     }
 
-    // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
+    let effective_tier = resolve_review_effective_tier(&args, config.as_ref())?;
     let resolved_selection = match resolve_review_selection(
         args.tool,
         args.model_spec.as_deref(),
@@ -271,7 +272,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         parent_tool.as_deref(),
         &project_root,
         args.force_override_user_config,
-        args.tier.as_deref(),
+        effective_tier.as_deref(),
         args.force_ignore_tier_setting,
     ) {
         Ok(resolved) => resolved,
@@ -284,7 +285,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                     parent: None,
                     tool_name: explicit_review_tool(&args).map(|tool| tool.as_str()),
                     task_type: Some("review"),
-                    tier_name: args.tier.as_deref(),
+                    tier_name: effective_tier.as_deref(),
                     error: err,
                 },
             ));
@@ -300,7 +301,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         resolve_review_tier_name(
             config.as_ref(),
             &global_config,
-            args.tier.as_deref(),
+            effective_tier.as_deref(),
             args.force_override_user_config,
             args.force_ignore_tier_setting,
         )?

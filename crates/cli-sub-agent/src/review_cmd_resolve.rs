@@ -138,6 +138,7 @@ pub(crate) fn resolve_review_selection(
         anyhow::bail!(
             "Direct --tool is restricted when tiers are configured. \
              Use --tier <name> to specify which tier's model/thinking config to use, \
+             --hint-difficulty <label> to route through [tier_mapping], \
              or add --force-ignore-tier-setting to override. \
              Available tiers: [{}]{alias_hint}",
             available.join(", ")
@@ -358,6 +359,19 @@ pub(crate) fn resolve_review_tier_name(
         .and_then(|r| r.tier.as_deref())
         .or(global_config.review.tier.as_deref())
         .map(|s| s.to_string()))
+}
+
+pub(crate) fn resolve_review_effective_tier(
+    args: &ReviewArgs,
+    project_config: Option<&ProjectConfig>,
+) -> Result<Option<String>> {
+    crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
+        project_config,
+        args.tier.as_deref(),
+        args.model_spec.as_deref(),
+        args.hint_difficulty.as_deref(),
+        None,
+    )
 }
 
 pub(crate) fn resolve_review_model(

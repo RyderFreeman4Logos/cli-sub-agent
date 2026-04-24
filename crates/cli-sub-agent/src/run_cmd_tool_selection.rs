@@ -456,6 +456,7 @@ fn resolve_heterogeneous_strict(
 /// Resolved skill, prompt text, and overridden CLI params.
 pub(crate) struct SkillResolution {
     pub(crate) prompt_text: String,
+    pub(crate) frontmatter_difficulty: Option<String>,
     pub(crate) resolved_skill: Option<ResolvedSkill>,
     pub(crate) tool: Option<csa_core::types::ToolArg>,
     pub(crate) model: Option<String>,
@@ -478,7 +479,7 @@ pub(crate) fn resolve_skill_and_prompt(
         None
     };
 
-    let prompt_text = if let Some(ref sk) = resolved_skill {
+    let (prompt_text, frontmatter_difficulty) = if let Some(ref sk) = resolved_skill {
         // Skills execute inside `csa run` as the leaf executor. Inject an
         // explicit mode marker so skill docs can branch deterministically and
         // avoid orchestrator-style recursive `csa run` loops.
@@ -508,13 +509,17 @@ pub(crate) fn resolve_skill_and_prompt(
             }
         }
 
+        let mut difficulty = None;
         if let Some(user_prompt) = prompt {
-            parts.push(format!("---\n\n{user_prompt}"));
+            let parsed = crate::difficulty_routing::strip_difficulty_frontmatter(user_prompt)?;
+            difficulty = parsed.difficulty;
+            parts.push(format!("---\n\n{}", parsed.prompt));
         }
 
-        parts.join("\n\n")
+        (parts.join("\n\n"), difficulty)
     } else {
-        read_prompt(prompt)?
+        let parsed = crate::difficulty_routing::strip_difficulty_frontmatter(read_prompt(prompt)?)?;
+        (parsed.prompt, parsed.difficulty)
     };
 
     // Apply skill agent config overrides for tool/model when CLI didn't specify.
@@ -547,6 +552,7 @@ pub(crate) fn resolve_skill_and_prompt(
 
     Ok(SkillResolution {
         prompt_text,
+        frontmatter_difficulty,
         resolved_skill,
         tool,
         model,
@@ -765,3 +771,7 @@ mod tests {
 #[cfg(test)]
 #[path = "run_cmd_tool_selection_model_spec_tests.rs"]
 mod model_spec_tests;
+
+#[cfg(test)]
+#[path = "run_cmd_tool_selection_hint_tests.rs"]
+mod hint_tests;

@@ -83,6 +83,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         Some(ToolArg::Specific(ToolName::Codex)),
         None,
         None,
+        None,
         Some("inspect the repository".to_string()),
         None,
         None,

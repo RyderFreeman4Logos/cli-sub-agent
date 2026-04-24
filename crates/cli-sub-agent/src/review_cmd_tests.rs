@@ -100,6 +100,20 @@ fn parse_or_validate_review_error(argv: &[&str]) -> clap::Error {
     }
 }
 
+#[test]
+fn review_cli_parses_hint_difficulty_flag() {
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--tool",
+        "claude-code",
+        "--hint-difficulty",
+        "code_review",
+        "--diff",
+    ]);
+    assert_eq!(args.hint_difficulty.as_deref(), Some("code_review"));
+}
+
 fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
     SpecDocument {
         schema_version: 1,
@@ -399,6 +413,7 @@ fn default_review_args() -> ReviewArgs {
         session: None,
         model: None,
         model_spec: None,
+        hint_difficulty: None,
         thinking: None,
         no_failover: false,
         diff: false,

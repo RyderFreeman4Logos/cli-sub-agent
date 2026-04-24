@@ -56,6 +56,26 @@ fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
     Cli::try_parse_from(args)
 }
 
+#[test]
+fn run_cli_hint_difficulty_parses() {
+    let cli = try_parse_cli(&[
+        "csa",
+        "run",
+        "--tool",
+        "claude",
+        "--hint-difficulty",
+        "quick_question",
+        "prompt",
+    ])
+    .unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            hint_difficulty, ..
+        } => assert_eq!(hint_difficulty.as_deref(), Some("quick_question")),
+        _ => panic!("expected Run command"),
+    }
+}
+
 include!("run_cmd_tests_core.rs");
 include!("run_cmd_tests_policy.rs");
 
