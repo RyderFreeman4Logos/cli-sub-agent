@@ -170,6 +170,7 @@ pub(crate) async fn process_execution_result(
     // elapsed time).  Rewrite status to failure so orchestrators retry.
     let elapsed_secs = (execution_end_time - ctx.execution_start_time).num_seconds();
     if ctx.sa_mode
+        && ctx.task_type.is_none_or(|t| t == "run")
         && result.exit_code == 0
         && session.turn_count <= 1
         && !ctx.has_tool_calls
