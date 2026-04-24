@@ -110,7 +110,11 @@ title = "Dispatch Fix Sub-Agent"
 tool = "claude-code"
 prompt = """
 Dispatch sub-agent to fix issues found in review.
-Preserve original code intent. Do NOT delete code to silence warnings."""
+Preserve original code intent. Do NOT delete code to silence warnings.
+
+Multi-Finding Optimization: When the review produced 2+ findings in different
+files, use the parallel-fix pattern (RECON/EDIT split) instead of a single
+employee. See patterns/parallel-fix/PATTERN.md."""
 tier = "tier-2-standard"
 condition = "${REVIEW_HAS_ISSUES}"
 

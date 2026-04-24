@@ -1,0 +1,102 @@
+[workflow]
+name = "parallel-fix"
+description = "Parallel RECON / serial EDIT for multi-finding fix rounds"
+
+[[workflow.variables]]
+name = "REVIEW_SID"
+
+[[workflow.variables]]
+name = "BUCKET_COUNT"
+
+[[workflow.variables]]
+name = "MERGED_FIX_PLAN"
+
+[[workflow.variables]]
+name = "EDIT_SID"
+
+[[workflow.steps]]
+id = 1
+title = "Parse Findings"
+tool = "bash"
+prompt = """
+Read the review session's `output/findings.toml` and extract per-finding metadata.
+
+```bash
+REVIEW_SESSION_DIR=$(csa session result --session "${REVIEW_SID}" --field session_dir 2>/dev/null)
+FINDINGS_TOML="${REVIEW_SESSION_DIR}/output/findings.toml"
+
+if [ ! -f "$FINDINGS_TOML" ]; then
+  echo "ERROR: findings.toml not found at $FINDINGS_TOML"
+  exit 1
+fi
+
+cat "$FINDINGS_TOML"
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
+title = "Bucket Findings by Primary File"
+tool = "bash"
+prompt = """
+Group findings by their primary file path (`file_ranges[0].path`).
+Findings sharing a primary file go into the same bucket.
+Each bucket gets an independent RECON employee.
+
+The bucketing must produce:
+- `${BUCKET_COUNT}`: Number of independent buckets.
+
+If `${BUCKET_COUNT}` == 1, skip parallel RECON — fall back to standard
+single-employee fix (no benefit from parallelism)."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 3
+title = "Parallel RECON Phase"
+tool = "bash"
+prompt = """
+Dispatch one read-only CSA employee per bucket concurrently.
+Each employee analyzes findings in its bucket and produces a fix-plan artifact.
+
+Launch all RECON employees before waiting for any.
+Wait for employees sequentially (no parallel waits).
+
+RECON employees are read-only — they MUST NOT edit files or modify git state."""
+on_fail = "skip"
+condition = "${BUCKET_COUNT} > 1"
+
+[[workflow.steps]]
+id = 4
+title = "Merge Fix Plans"
+tool = "bash"
+prompt = """
+Collect fix-plan artifacts from all RECON sessions.
+Detect conflicts: if two plans propose edits to the same file:line range,
+merge into a single sequential fix instruction.
+
+Produce a merged fix-plan ordered by severity then file path."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 5
+title = "Serial EDIT Phase"
+tool = "bash"
+prompt = """
+Dispatch a single CSA employee with write permissions to apply all
+fix plans serially. The employee applies each fix in order, runs
+`just fmt`, and stages changed files. Does NOT create commits."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 6
+title = "Verify Fixes"
+tool = "bash"
+prompt = """
+Run quality gates after the EDIT phase completes.
+
+```bash
+just fmt
+just clippy
+just test
+```"""
+on_fail = "skip"
