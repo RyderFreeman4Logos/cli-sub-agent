@@ -198,6 +198,8 @@ fn pre_execution_audit_baseline_returns_none_for_legacy_sessions_without_snapsho
         transcript_artifacts: vec![],
         changed_paths: vec![],
         pre_exec_snapshot: None,
+        has_tool_calls: false,
+        sa_mode: false,
     };
 
     assert_eq!(pre_execution_audit_baseline(&ctx, &session), None);
@@ -262,6 +264,8 @@ fn pre_execution_audit_baseline_prefers_per_execution_snapshot() {
             head: "def456".to_string(),
             porcelain: Some(" M fresh.txt\0".to_string()),
         }),
+        has_tool_calls: false,
+        sa_mode: false,
     };
 
     assert_eq!(
@@ -353,6 +357,8 @@ fn audit_failure_does_not_fail_execution() {
         transcript_artifacts: vec![],
         changed_paths: vec![],
         pre_exec_snapshot: None,
+        has_tool_calls: false,
+        sa_mode: false,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTAUDITFAILURE000000000".to_string(),
@@ -469,6 +475,8 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         transcript_artifacts: vec![],
         changed_paths: vec![],
         pre_exec_snapshot: Some(turn_two_snapshot),
+        has_tool_calls: false,
+        sa_mode: false,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTREUSEDSESSIONAUDIT000".to_string(),
@@ -564,6 +572,8 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         transcript_artifacts: vec![],
         changed_paths: vec![],
         pre_exec_snapshot: None,
+        has_tool_calls: false,
+        sa_mode: false,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTAUDITFALLBACK000000000".to_string(),
