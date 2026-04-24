@@ -421,3 +421,44 @@ fn test_parse_skill_config_accepts_input_at_limit() {
     assert_eq!(input.len(), super::MAX_INPUT_BYTES);
     assert!(parse_skill_config(&input).is_ok());
 }
+
+// -- ExecutionConfig / main_agent_only -------------------------------------
+
+#[test]
+fn skill_config_parses_main_agent_only_marker() {
+    let toml_str = r#"
+[skill]
+name = "test-main-only"
+
+[execution]
+main_agent_only = true
+"#;
+    let cfg = parse_skill_config(toml_str).unwrap();
+    assert_eq!(cfg.skill.name, "test-main-only");
+    let exec = cfg.execution.expect("execution section should be present");
+    assert!(exec.main_agent_only);
+}
+
+#[test]
+fn skill_config_defaults_main_agent_only_to_false() {
+    let toml_str = r#"
+[skill]
+name = "test-no-execution"
+"#;
+    let cfg = parse_skill_config(toml_str).unwrap();
+    assert!(cfg.execution.is_none());
+    // When execution is None, main_agent_only effectively defaults to false
+}
+
+#[test]
+fn skill_config_execution_section_defaults_main_agent_only() {
+    let toml_str = r#"
+[skill]
+name = "test-exec-defaults"
+
+[execution]
+"#;
+    let cfg = parse_skill_config(toml_str).unwrap();
+    let exec = cfg.execution.expect("execution section should be present");
+    assert!(!exec.main_agent_only);
+}

@@ -2,8 +2,9 @@
 name = "mktsk"
 description = "Execute TODO plans as deterministic, resumable serial checklists across auto-compaction"
 allowed-tools = "Read, Grep, Glob, Bash, Write, Edit, TaskCreate, TaskUpdate, TaskGet, TaskList"
+execution_context = "main_agent"
 tier = "tier-2-standard"
-version = "0.3.0"
+version = "0.3.1"
 ---
 
 # mktsk: Make Task — Plan-to-Execution Bridge

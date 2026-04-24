@@ -375,6 +375,24 @@ async fn run() -> Result<()> {
             daemon_child,
             session_id,
         } => {
+            // Fast-path refusal for main-agent-only skills — check BEFORE
+            // daemon spawn so the caller sees the error immediately.
+            if let Some(ref skill_name) = skill
+                && !daemon_child
+            {
+                let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+                if let Ok(sk) = skill_resolver::resolve_skill(skill_name, &project_root)
+                    && let Some(ref c) = sk.config
+                    && c.execution.as_ref().is_some_and(|e| e.main_agent_only)
+                {
+                    let n = &c.skill.name;
+                    anyhow::bail!(
+                        "skill '{n}' is main-agent-only and cannot run as a CSA subprocess. \
+                         Use /{n} or Skill('{n}') in the main-agent context instead."
+                    );
+                }
+            }
+
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 no_daemon,

@@ -430,3 +430,42 @@ fn resolve_run_tier_context_drops_tier_for_explicit_model_spec() {
     assert!(!failover_on_crash_enabled);
     assert!(resolved_tier_name.is_none());
 }
+
+#[test]
+fn main_agent_only_skill_config_is_detected() {
+    use weave::parser::{ExecutionConfig, SkillConfig, SkillConfigMeta};
+
+    let cfg = SkillConfig {
+        skill: SkillConfigMeta {
+            name: "mktsk".to_string(),
+            version: Some("0.1.0".to_string()),
+        },
+        agent: None,
+        execution: Some(ExecutionConfig {
+            main_agent_only: true,
+        }),
+    };
+
+    let is_refused = cfg.execution.as_ref().map_or(false, |e| e.main_agent_only);
+    assert!(is_refused, "mktsk should be refused as main-agent-only");
+}
+
+#[test]
+fn non_main_agent_only_skill_config_is_allowed() {
+    use weave::parser::{SkillConfig, SkillConfigMeta};
+
+    let cfg = SkillConfig {
+        skill: SkillConfigMeta {
+            name: "review".to_string(),
+            version: Some("0.1.0".to_string()),
+        },
+        agent: None,
+        execution: None,
+    };
+
+    let is_refused = cfg.execution.as_ref().map_or(false, |e| e.main_agent_only);
+    assert!(
+        !is_refused,
+        "skill without execution config should be allowed"
+    );
+}

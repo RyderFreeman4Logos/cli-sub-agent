@@ -25,6 +25,7 @@ use tracing::{info, warn};
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use weave::compiler::{ExecutionPlan, plan_from_toml};
+use weave::parser::parse_skill_config;
 
 use crate::pattern_resolver;
 use crate::pipeline::determine_project_root;
@@ -464,6 +465,25 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         let jp = plan_journal_path(&project_root, &loaded_plan.name);
         (wf_path, loaded_plan, jp, false)
     };
+
+    // Refuse main-agent-only patterns (they need TaskCreate etc. unavailable to CSA).
+    if let Some(parent) = workflow_path.parent() {
+        let skill_toml_path = parent.join(".skill.toml");
+        if skill_toml_path.is_file()
+            && let Ok(content) = std::fs::read_to_string(&skill_toml_path)
+            && let Ok(skill_config) = parse_skill_config(&content)
+            && skill_config
+                .execution
+                .as_ref()
+                .is_some_and(|e| e.main_agent_only)
+        {
+            let n = &skill_config.skill.name;
+            bail!(
+                "pattern '{n}' is main-agent-only and cannot run via `csa plan run`. \
+                 Use /{n} or Skill('{n}') in the main-agent context instead."
+            );
+        }
+    }
 
     // 5. Parse --var KEY=VALUE into HashMap
     let cli_variables = parse_variables(&vars, &plan)?;

@@ -7,3 +7,6 @@ tier = "tier-2-standard"
 max_turns = 40
 workspace_access = "mutating"
 tools = [{ tool = "auto" }]
+
+[execution]
+main_agent_only = true

@@ -54,7 +54,16 @@ pub(crate) fn resolve_skill(name: &str, project_root: &Path) -> Result<ResolvedS
             let skill_md = std::fs::read_to_string(&skill_md_path)
                 .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
 
-            let config = load_skill_config(dir)?;
+            let mut config = load_skill_config(dir)?;
+
+            // When the skill dir has no .skill.toml, check if a same-named
+            // pattern provides one (e.g. patterns/<name>/.skill.toml).  This
+            // covers the common case where .claude/skills/<name>/SKILL.md is a
+            // copy of patterns/<name>/skills/<name>/SKILL.md but the config
+            // lives at the pattern root.
+            if config.is_none() {
+                config = load_pattern_skill_config(name, project_root)?;
+            }
 
             return Ok(ResolvedSkill {
                 dir: dir.clone(),
@@ -231,6 +240,20 @@ fn superproject_root_from_gitdir_path(gitdir: &Path) -> Option<PathBuf> {
         .canonicalize()
         .unwrap_or(resolved_worktree_gitdir);
     normalized_worktree_gitdir.parent().map(Path::to_path_buf)
+}
+
+/// Fall back to a pattern-level `.skill.toml` when the skill directory lacks one.
+///
+/// Checks `patterns/<name>/.skill.toml` under each discovered repo root.
+fn load_pattern_skill_config(name: &str, project_root: &Path) -> Result<Option<SkillConfig>> {
+    let repo_roots = discover_repo_roots(project_root);
+    for root in &repo_roots {
+        let pattern_config = root.join("patterns").join(name).join(".skill.toml");
+        if pattern_config.is_file() {
+            return load_skill_config(&root.join("patterns").join(name));
+        }
+    }
+    Ok(None)
 }
 
 /// Load `.skill.toml` from a skill directory (optional file).
@@ -661,6 +684,37 @@ tool = "claude-code"
         assert_eq!(agent.tools[0].tool, "codex");
         assert_eq!(agent.tools[0].model.as_deref(), Some("gpt-5.1"));
         assert_eq!(agent.tools[0].thinking_budget.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn resolve_skill_falls_back_to_pattern_toml() {
+        let tmp = TempDir::new().unwrap();
+        // Create skill without TOML
+        make_skill_dir(
+            tmp.path(),
+            ".claude/skills/my-pattern-skill",
+            "# Pattern Skill\nNo local TOML.",
+            None,
+        );
+        // Create pattern with TOML
+        let pattern_dir = tmp.path().join("patterns").join("my-pattern-skill");
+        fs::create_dir_all(&pattern_dir).unwrap();
+        fs::write(
+            pattern_dir.join(".skill.toml"),
+            r#"
+[skill]
+name = "my-pattern-skill"
+[execution]
+main_agent_only = true
+"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_skill("my-pattern-skill", tmp.path()).unwrap();
+        assert!(resolved.skill_md.contains("Pattern Skill"));
+        let config = resolved.config.unwrap();
+        assert_eq!(config.skill.name, "my-pattern-skill");
+        assert!(config.execution.unwrap().main_agent_only);
     }
 
     #[test]

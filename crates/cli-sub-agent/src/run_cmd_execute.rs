@@ -1,15 +1,14 @@
-//! Top-level `csa run` command orchestration.
-//!
-//! Extracted from `run_cmd.rs` to keep module sizes manageable.
+//! Top-level `csa run` command orchestration (extracted from `run_cmd.rs`).
 
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::process::Stdio;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -101,7 +100,6 @@ fn post_exec_gate_requires_changes(project_root: &Path, skip_on_no_changes: bool
     if !skip_on_no_changes || !crate::run_cmd::is_git_worktree(project_root) {
         return Ok(true);
     }
-
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(project_root)
@@ -113,11 +111,9 @@ fn post_exec_gate_requires_changes(project_root: &Path, skip_on_no_changes: bool
                 project_root.display()
             )
         })?;
-
     if !output.status.success() {
         return Ok(true);
     }
-
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
@@ -136,7 +132,6 @@ fn execute_post_exec_gate_command(
 ) -> PostExecGateFuture {
     let command = command.to_string();
     let project_root = project_root.to_path_buf();
-
     Box::pin(async move {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
@@ -144,7 +139,6 @@ fn execute_post_exec_gate_command(
             .current_dir(&project_root)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
-
         #[cfg(unix)]
         {
             cmd.process_group(0);
@@ -402,6 +396,17 @@ pub(crate) async fn handle_run(
         &project_root,
     )?;
     let resolved_skill = skill_res.resolved_skill;
+
+    if let Some(ref sk) = resolved_skill
+        && let Some(ref c) = sk.config
+        && c.execution.as_ref().is_some_and(|e| e.main_agent_only)
+    {
+        let n = &c.skill.name;
+        bail!(
+            "skill '{n}' is main-agent-only and cannot run as a CSA subprocess. \
+               Use /{n} or Skill('{n}') in the main-agent context instead."
+        );
+    }
     let gate_prompt_text = skill_res.prompt_text.clone();
     let task_needs_edit = crate::run_helpers::resolve_task_edit_requirement(
         resolved_skill.as_ref(),

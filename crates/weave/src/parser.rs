@@ -44,6 +44,18 @@ pub struct SkillConfig {
     pub skill: SkillConfigMeta,
     #[serde(default)]
     pub agent: Option<AgentConfig>,
+    #[serde(default)]
+    pub execution: Option<ExecutionConfig>,
+}
+
+/// `[execution]` section of `.skill.toml`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+pub struct ExecutionConfig {
+    /// When true, the skill can only run in the main agent context (e.g.
+    /// Claude Code), not as a CSA subprocess. Skills that require tools like
+    /// TaskCreate/TaskUpdate must set this.
+    #[serde(default)]
+    pub main_agent_only: bool,
 }
 
 /// `[skill]` section of `.skill.toml`.
