@@ -348,7 +348,7 @@ pub struct DebateArgs {
     #[arg(long)]
     pub model_spec: Option<String>,
 
-    /// Thinking budget (low, medium, high, xhigh)
+    /// Thinking budget (low, medium, high, xhigh, max)
     #[arg(long)]
     pub thinking: Option<String>,
 

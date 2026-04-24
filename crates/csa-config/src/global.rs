@@ -621,7 +621,7 @@ pub struct GlobalToolConfig {
     pub memory_swap_max_mb: Option<u64>,
     /// Lock thinking budget for this tool. When set, any CLI `--thinking` or
     /// `--model-spec` thinking override is silently replaced with this value.
-    /// Accepts: low, medium, high, xhigh, or a numeric token count.
+    /// Accepts: low, medium, high, xhigh, max, or a numeric token count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
     /// API key for fallback authentication. Used when OAuth quota is exhausted
