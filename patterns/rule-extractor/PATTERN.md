@@ -47,9 +47,43 @@ if [ -n "${REVIEW_SESSION_ID:-}" ]; then
     FINDINGS_RAW=$(csa session result --session "${REVIEW_SESSION_ID}" --section details 2>/dev/null || true)
   fi
 else
-  # Fall back to PR comment history for bot findings
-  gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" \
-    | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL")) | {id: .id, body: .body, path: .path}'
+  # Fall back to PR comment history for bot findings.
+  # Extract severity + description + path from PR comment bodies and emit
+  # CSA_VARs directly (comment JSON shape differs from findings.toml).
+  PR_COMMENTS=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" 2>/dev/null || true)
+  if [ -n "$PR_COMMENTS" ]; then
+    # Pick the first comment whose body mentions a HIGH/CRITICAL/P0/P1 severity
+    COMMENT_BODY=$(echo "$PR_COMMENTS" \
+      | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL"; "i")) | .body' \
+      | head -1)
+    COMMENT_PATH=$(echo "$PR_COMMENTS" \
+      | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL"; "i")) | .path // "unknown"' \
+      | head -1)
+    if [ -n "$COMMENT_BODY" ]; then
+      # Infer severity from the comment text
+      COMMENT_SEV="HIGH"
+      if echo "$COMMENT_BODY" | grep -qi "CRITICAL\|P0"; then
+        COMMENT_SEV="CRITICAL"
+      fi
+      # Use first line of comment body as description (strip markdown headers)
+      COMMENT_DESC=$(echo "$COMMENT_BODY" | grep -v '^#' | grep -v '^\s*$' | head -1 | sed 's/^[[:space:]]*//')
+      echo "CSA_VAR:FINDING_DESCRIPTION=$COMMENT_DESC"
+      echo "CSA_VAR:FINDING_SEVERITY=$COMMENT_SEV"
+      echo "CSA_VAR:FINDING_FILE=${COMMENT_PATH:-unknown}"
+    else
+      echo "WARNING: No HIGH/CRITICAL findings in PR comments"
+      echo "CSA_VAR:FINDING_DESCRIPTION="
+      echo "CSA_VAR:FINDING_SEVERITY="
+      echo "CSA_VAR:FINDING_FILE="
+    fi
+  else
+    echo "WARNING: Could not fetch PR comments"
+    echo "CSA_VAR:FINDING_DESCRIPTION="
+    echo "CSA_VAR:FINDING_SEVERITY="
+    echo "CSA_VAR:FINDING_FILE="
+  fi
+  # Skip the TOML parser below — CSA_VARs already emitted
+  FINDINGS_RAW=""
 fi
 # Parse first HIGH/CRITICAL finding from TOML and emit CSA_VARs
 ```
@@ -280,9 +314,9 @@ fi
 NEXT_NUM=$(printf '%03d' $((10#${LAST_NUM} + 1)))
 RULE_FILE="${NEXT_NUM}-${BUG_CLASS_SLUG}.md"
 
-# Create proposal branch
-SHORT_SHA=$(echo "${FIX_COMMIT_SHA}" | cut -c1-7)
-PROPOSAL_BRANCH="chore/rules-propose-${SHORT_SHA}"
+# Create proposal branch (include BUG_CLASS_SLUG for uniqueness across findings)
+SHORT_SHA=$(echo "${FIX_COMMIT_SHA}" | cut -c1-8)
+PROPOSAL_BRANCH="chore/rules-propose-${SHORT_SHA}-${BUG_CLASS_SLUG}"
 git checkout -b "${PROPOSAL_BRANCH}"
 
 # Copy draft to final rule location

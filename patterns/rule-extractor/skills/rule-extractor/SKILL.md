@@ -85,7 +85,7 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
    ```
 
 5. **Propose via PR**: NEVER auto-commit. Reads draft from `DRAFT_FILE` (Step 4).
-   Create branch `chore/rules-propose-<shortsha>`, commit rule file, push, open PR.
+   Create branch `chore/rules-propose-<shortsha>-<bug-class-slug>`, commit rule file, push, open PR.
    Human review is mandatory before merge.
 
    On rule-proposal PR merge, update relevant AGENTS.md with one compact line:
