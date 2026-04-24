@@ -6,6 +6,14 @@ use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+struct GitMockConfig<'a> {
+    upstream_ref: Option<&'a str>,
+    remotes: &'a [&'a str],
+    remote_head: Option<&'a str>,
+    current_branch: Option<&'a str>,
+    merge_exit: i32,
+}
+
 /// Setup for post-merge sync tests. Returns (guard_dir, fake_gh, mock_bin_dir, git_log_file).
 fn setup_post_merge_env(
     tmp: &Path,
@@ -24,6 +32,26 @@ fn setup_post_merge_env_with_git(
     current_branch: Option<&str>,
     git_merge_exit: i32,
 ) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    setup_post_merge_env_with_git_remote(
+        tmp,
+        gh_exit,
+        branch,
+        GitMockConfig {
+            upstream_ref: None,
+            remotes: &["origin"],
+            remote_head: origin_head,
+            current_branch,
+            merge_exit: git_merge_exit,
+        },
+    )
+}
+
+fn setup_post_merge_env_with_git_remote(
+    tmp: &Path,
+    gh_exit: i32,
+    branch: Option<&str>,
+    git: GitMockConfig<'_>,
+) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let guard_dir = tmp.join("guard");
     fs::create_dir_all(&guard_dir).unwrap();
     let wrapper_path = guard_dir.join("gh");
@@ -35,11 +63,20 @@ fn setup_post_merge_env_with_git(
         Some(b) => format!("printf '{}\\n'", b),
         None => "exit 1".to_string(),
     };
-    let origin_head_out = match origin_head {
+    let upstream_ref_out = match git.upstream_ref {
         Some(b) => format!("printf '{}\\n'", b),
         None => "exit 1".to_string(),
     };
-    let current_branch_out = match current_branch {
+    let remotes_out = if git.remotes.is_empty() {
+        "exit 1".to_string()
+    } else {
+        format!("printf '{}\\n'", git.remotes.join("\\n"))
+    };
+    let remote_head_out = match git.remote_head {
+        Some(b) => format!("printf '{}\\n'", b),
+        None => "exit 1".to_string(),
+    };
+    let current_branch_out = match git.current_branch {
         Some(b) => format!("printf '{}\\n'", b),
         None => "exit 1".to_string(),
     };
@@ -69,18 +106,22 @@ echo REAL_GH_CALLED
         format!(
             r#"#!/bin/bash
 echo "$@" >> "{log}"
+if [ "$1" = "remote" ] && [ "$#" -eq 1 ]; then {remotes_out}; exit $?; fi
 if [ "$1" = "rev-parse" ] && [ "$2" = "--abbrev-ref" ]; then
   case "$3" in
-    origin/HEAD) {origin_head_out}; exit $?;;
+    '@{{upstream}}') {upstream_ref_out}; exit $?;;
+    */HEAD) {remote_head_out}; exit $?;;
     HEAD) {current_branch_out}; exit $?;;
   esac
 fi
 for a in "$@"; do [ "$a" = "--ff-only" ] && exit {me}; done; exit 0
 "#,
             log = git_log.to_str().unwrap(),
-            origin_head_out = origin_head_out,
+            remotes_out = remotes_out,
+            upstream_ref_out = upstream_ref_out,
+            remote_head_out = remote_head_out,
             current_branch_out = current_branch_out,
-            me = git_merge_exit
+            me = git.merge_exit
         ),
     )
     .unwrap();
@@ -141,21 +182,29 @@ fn assert_log_lacks_prefix(lines: &[String], prefix: &str) {
 }
 
 fn assert_in_place_sync_log(git_log: &Path, branch: &str) {
+    assert_in_place_sync_log_with_remote(git_log, "origin", branch);
+}
+
+fn assert_in_place_sync_log_with_remote(git_log: &Path, remote: &str, branch: &str) {
     let lines = git_log_lines(git_log);
-    assert_log_has_line(&lines, &format!("fetch origin {branch}"));
-    assert_log_has_line(&lines, &format!("merge origin/{branch} --ff-only"));
+    assert_log_has_line(&lines, &format!("fetch {remote} {branch}"));
+    assert_log_has_line(&lines, &format!("merge {remote}/{branch} --ff-only"));
     assert_log_lacks_prefix(&lines, "checkout ");
     assert!(
         !lines
             .iter()
-            .any(|line| line == &format!("fetch origin {branch}:{branch}")),
+            .any(|line| line == &format!("fetch {remote} {branch}:{branch}")),
         "must not use refspec on default branch: {lines:?}"
     );
 }
 
 fn assert_refspec_sync_log(git_log: &Path, branch: &str) {
+    assert_refspec_sync_log_with_remote(git_log, "origin", branch);
+}
+
+fn assert_refspec_sync_log_with_remote(git_log: &Path, remote: &str, branch: &str) {
     let lines = git_log_lines(git_log);
-    assert_log_has_line(&lines, &format!("fetch origin {branch}:{branch}"));
+    assert_log_has_line(&lines, &format!("fetch {remote} {branch}:{branch}"));
     assert_log_lacks_prefix(&lines, "checkout ");
     assert_log_lacks_prefix(&lines, "merge ");
 }
@@ -218,6 +267,30 @@ fn post_merge_sync_uses_git_head_fallback_when_gh_view_fails() {
     let (code, _, _) = run_wrapper_with_mock_git(&gd, &gh, &mb, &["pr", "merge", "42"]);
     assert_eq!(code, 0);
     assert_in_place_sync_log(&gl, "develop");
+}
+
+#[test]
+fn post_merge_sync_uses_upstream_remote_for_head_fetch_and_merge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (gd, gh, mb, gl) = setup_post_merge_env_with_git_remote(
+        tmp.path(),
+        0,
+        None,
+        GitMockConfig {
+            upstream_ref: Some("upstream/develop"),
+            remotes: &["origin"],
+            remote_head: Some("upstream/develop"),
+            current_branch: Some("develop"),
+            merge_exit: 0,
+        },
+    );
+    create_test_marker(tmp.path());
+    let (code, _, _) = run_wrapper_with_mock_git(&gd, &gh, &mb, &["pr", "merge", "42"]);
+    assert_eq!(code, 0);
+    assert_in_place_sync_log_with_remote(&gl, "upstream", "develop");
+    let lines = git_log_lines(&gl);
+    assert_log_lacks_prefix(&lines, "fetch origin ");
+    assert_log_lacks_prefix(&lines, "merge origin/");
 }
 
 #[test]

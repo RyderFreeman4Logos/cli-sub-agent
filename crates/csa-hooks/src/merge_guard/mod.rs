@@ -96,13 +96,22 @@ fi
 # Best-effort local sync of the default branch after a successful merge.
 # Non-fatal: sync failure does NOT change the wrapper's exit code.
 _post_merge_sync() {
+  local PRIMARY_REMOTE
+  PRIMARY_REMOTE="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's!/.*!!' || true)"
+  if [ -z "${PRIMARY_REMOTE}" ]; then
+    PRIMARY_REMOTE="$(git remote 2>/dev/null | head -n1 || true)"
+  fi
+  if [ -z "${PRIMARY_REMOTE}" ]; then
+    return 0
+  fi
+
   local DEFAULT_BRANCH
   DEFAULT_BRANCH="$("${REAL_GH}" repo view --json defaultBranchRef -q '.defaultBranchRef.name' 2>/dev/null || true)"
   if [ -z "${DEFAULT_BRANCH}" ]; then
-    DEFAULT_BRANCH="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's!^origin/!!' || true)"
+    DEFAULT_BRANCH="$(git rev-parse --abbrev-ref "${PRIMARY_REMOTE}/HEAD" 2>/dev/null | sed "s!^${PRIMARY_REMOTE}/!!" || true)"
   fi
   if [ -z "${DEFAULT_BRANCH}" ]; then
-    printf 'NOTE: post-merge sync skipped — could not determine default branch (gh repo view failed, origin/HEAD not set)\n' >&2
+    printf 'NOTE: post-merge sync skipped — could not determine default branch (gh repo view failed, %s/HEAD not set)\n' "${PRIMARY_REMOTE}" >&2
     return 0
   fi
 
@@ -111,12 +120,12 @@ _post_merge_sync() {
 
   if [ "${CURRENT_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
     {
-      git fetch origin "${DEFAULT_BRANCH}" &&
-      git merge "origin/${DEFAULT_BRANCH}" --ff-only
+      git fetch "${PRIMARY_REMOTE}" "${DEFAULT_BRANCH}" &&
+      git merge "${PRIMARY_REMOTE}/${DEFAULT_BRANCH}" --ff-only
     } >&2 || printf 'NOTE: in-place fast-forward failed, continuing\n' >&2
   else
     {
-      git fetch origin "${DEFAULT_BRANCH}:${DEFAULT_BRANCH}"
+      git fetch "${PRIMARY_REMOTE}" "${DEFAULT_BRANCH}:${DEFAULT_BRANCH}"
     } >&2 || printf 'NOTE: refspec update failed, continuing\n' >&2
   fi
 }
