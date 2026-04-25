@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use crate::executor::Executor;
 use csa_acp::SessionConfig;
 
-use super::{AcpTransport, LegacyTransport, Transport, TransportCapabilities};
+use super::{
+    AcpTransport, ClaudeCodeCliTransport, LegacyTransport, Transport, TransportCapabilities,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -194,7 +196,18 @@ impl TransportFactory {
         session_config: Option<SessionConfig>,
     ) -> Result<Box<dyn Transport>> {
         match mode {
-            TransportMode::Legacy => Ok(Box::new(LegacyTransport::new(executor.clone()))),
+            // Claude-code in CLI mode goes through the dedicated
+            // ClaudeCodeCliTransport (Phase 3 PoC of #1103/#760), which
+            // advertises CLI-specific capabilities (resume + native fork +
+            // best-effort streaming via `--output-format stream-json`).
+            // Other tools' Legacy mode keeps using LegacyTransport — Phase 4
+            // will narrow per-tool as more dedicated CLI transports land.
+            TransportMode::Legacy => match executor {
+                Executor::ClaudeCode { .. } => {
+                    Ok(Box::new(ClaudeCodeCliTransport::new(executor.clone())))
+                }
+                _ => Ok(Box::new(LegacyTransport::new(executor.clone()))),
+            },
             TransportMode::Acp => Ok(Box::new(AcpTransport::new(
                 executor.tool_name(),
                 session_config,

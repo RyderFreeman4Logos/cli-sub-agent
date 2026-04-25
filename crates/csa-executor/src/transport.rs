@@ -68,6 +68,9 @@ pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
 #[path = "transport_factory.rs"]
 mod transport_factory;
 pub use transport_factory::{TransportFactory, TransportFactoryError, TransportMode};
+#[path = "transport_cli.rs"]
+mod transport_cli;
+pub use transport_cli::ClaudeCodeCliTransport;
 #[path = "transport_acp_payload_debug.rs"]
 mod transport_acp_payload_debug;
 use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};

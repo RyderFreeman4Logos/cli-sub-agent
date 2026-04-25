@@ -98,9 +98,16 @@ fn test_transport_factory_create_honors_claude_cli_runtime_transport_override() 
     };
     let cli_transport = TransportFactory::create(&cli_executor, Some(SessionConfig::default()))
         .expect("transport should build");
+    // Phase 3 PoC of #1103/#760: claude-code in CLI mode now routes through
+    // the dedicated ClaudeCodeCliTransport (which advertises
+    // streaming=true / session_fork=true), NOT the generic LegacyTransport
+    // path used by gemini-cli/opencode.
     assert!(
-        cli_transport.as_ref().as_any().is::<LegacyTransport>(),
-        "claude-code cli override should use LegacyTransport"
+        cli_transport
+            .as_ref()
+            .as_any()
+            .is::<crate::ClaudeCodeCliTransport>(),
+        "claude-code cli override should use the dedicated ClaudeCodeCliTransport"
     );
 }
 
