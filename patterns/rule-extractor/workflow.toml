@@ -88,6 +88,7 @@ invoke the pattern once per finding for multi-finding PRs.
 set -euo pipefail
 # Collect review findings from the merged PR
 FINDINGS_RAW=""
+FINDING_EMITTED=""
 if [ -n "${REVIEW_SESSION_ID:-}" ]; then
   # Extract findings.toml from the review session output directory
   SESSION_DIR=$(csa session result --session "${REVIEW_SESSION_ID}" --session-dir 2>/dev/null || true)
@@ -121,18 +122,21 @@ else
       echo "CSA_VAR:FINDING_DESCRIPTION=$COMMENT_DESC"
       echo "CSA_VAR:FINDING_SEVERITY=$COMMENT_SEV"
       echo "CSA_VAR:FINDING_FILE=${COMMENT_PATH:-unknown}"
+      FINDING_EMITTED=1
       echo "Extracted finding from PR comment: severity=$COMMENT_SEV file=$COMMENT_PATH"
     else
       echo "WARNING: No HIGH/CRITICAL findings in PR comments"
       echo "CSA_VAR:FINDING_DESCRIPTION="
       echo "CSA_VAR:FINDING_SEVERITY="
       echo "CSA_VAR:FINDING_FILE="
+      FINDING_EMITTED=1
     fi
   else
     echo "WARNING: Could not fetch PR comments"
     echo "CSA_VAR:FINDING_DESCRIPTION="
     echo "CSA_VAR:FINDING_SEVERITY="
     echo "CSA_VAR:FINDING_FILE="
+    FINDING_EMITTED=1
   fi
   # Skip the TOML parser below — CSA_VARs already emitted
   FINDINGS_RAW=""
@@ -157,6 +161,7 @@ if [ -n "$FINDINGS_RAW" ]; then
     echo "CSA_VAR:FINDING_DESCRIPTION=$FIRST_DESC"
     echo "CSA_VAR:FINDING_SEVERITY=${FIRST_SEV:-HIGH}"
     echo "CSA_VAR:FINDING_FILE=${FIRST_FILE:-unknown}"
+    FINDING_EMITTED=1
     echo "Extracted finding: severity=$FIRST_SEV file=$FIRST_FILE"
     echo "Description: $FIRST_DESC"
   else
@@ -164,8 +169,9 @@ if [ -n "$FINDINGS_RAW" ]; then
     echo "CSA_VAR:FINDING_DESCRIPTION="
     echo "CSA_VAR:FINDING_SEVERITY="
     echo "CSA_VAR:FINDING_FILE="
+    FINDING_EMITTED=1
   fi
-else
+elif [ -z "$FINDING_EMITTED" ]; then
   echo "WARNING: No findings data available from session or PR comments"
   echo "CSA_VAR:FINDING_DESCRIPTION="
   echo "CSA_VAR:FINDING_SEVERITY="
@@ -238,8 +244,8 @@ PROJECT_RULES_DIR=".agents/project-rules-ref"
 
 # Keyword grep across project-local rules
 PROJECT_MATCHES=""
-if [ -d "${PROJECT_RULES_DIR}" ]; then
-  PROJECT_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS}" "${PROJECT_RULES_DIR}/" 2>/dev/null || true)
+if [ -d "${PROJECT_RULES_DIR}" ] && [ -n "${BUG_CLASS_KEYWORDS:-}" ]; then
+  PROJECT_MATCHES=$(grep -rl "${BUG_CLASS_KEYWORDS:-}" "${PROJECT_RULES_DIR}/" 2>/dev/null || true)
 fi
 
 if [ -z "${PROJECT_MATCHES}" ]; then
