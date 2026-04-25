@@ -9,6 +9,9 @@ name = "BRANCH"
 name = "CODE_FILES"
 
 [[workflow.variables]]
+name = "COMMITS_AHEAD"
+
+[[workflow.variables]]
 name = "COMMIT_MSG"
 
 [[workflow.variables]]
@@ -25,6 +28,9 @@ name = "CURRENT_BRANCH"
 
 [[workflow.variables]]
 name = "DEFAULT_BRANCH"
+
+[[workflow.variables]]
+name = "DIFF_LINES"
 
 [[workflow.variables]]
 name = "DONE_MARKER"
@@ -66,7 +72,16 @@ name = "MARKER_BASE"
 name = "MARKER_DIR"
 
 [[workflow.variables]]
+name = "MKTD_EXIT"
+
+[[workflow.variables]]
+name = "MKTD_FAILURE_CONTEXT"
+
+[[workflow.variables]]
 name = "MKTD_INTENSITY"
+
+[[workflow.variables]]
+name = "MKTD_OUTPUT"
 
 [[workflow.variables]]
 name = "MKTD_TODO_TIMESTAMP"
@@ -102,25 +117,16 @@ name = "REMOTE_SHA"
 name = "REPO_SLUG"
 
 [[workflow.variables]]
-name = "REVIEW_OUTPUT"
-
-[[workflow.variables]]
-name = "REVIEW_OUTPUT_FILE"
-
-[[workflow.variables]]
-name = "REVIEW_STATUS"
-
-[[workflow.variables]]
 name = "TODO_PATH"
+
+[[workflow.variables]]
+name = "TOTAL_FILES"
 
 [[workflow.variables]]
 name = "TOTAL_INSERTIONS"
 
 [[workflow.variables]]
 name = "USER_LANGUAGE_OVERRIDE"
-
-[[workflow.variables]]
-name = "VERDICT_LINE"
 
 [[workflow.variables]]
 name = "VERSION"
@@ -158,7 +164,9 @@ title = "FAST_PATH Detection"
 tool = "bash"
 prompt = '''
 Detect whether changes are docs/config-only. When FAST_PATH=true,
-skip mktd/mktsk/debate but keep L1/L2 quality checks.
+skip mktd/mktsk/debate but keep L1/L2 quality checks. An empty diff
+vs the base branch is NOT docs-only; it must stay on the full plan
+path to avoid no-op commit/version-bump steps.
 
 ```bash
 set -euo pipefail
@@ -400,7 +408,12 @@ bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}"
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
-```'''
+```
+
+When global config sets `[review].batch_commits >= 2`, intermediate cumulative
+reviews can be skipped until the branch accumulates enough new commits after
+the last passed `main...HEAD` review. Set `CSA_REVIEW_NOW=1` to bypass batching
+for the current run.'''
 on_fail = "abort"
 condition = "!(${FAST_PATH})"
 
@@ -409,7 +422,15 @@ id = 12
 title = "Push Gate"
 tool = "bash"
 prompt = '''
-Hard gate: REVIEW_COMPLETED must be true before any push.
+Hard gates before any push:
+
+1. `REVIEW_COMPLETED` must be true.
+2. **Empty-diff structural guard (#1122)**: branch must have at least one
+   commit ahead of base AND the cumulative diff vs base must be non-empty.
+   An empty-diff branch is the lefthook-race fingerprint — it produces an
+   empty PR which can be silently squashed into an empty commit on main.
+   Aborting here surfaces `merge_blocked_empty_diff` to the orchestrator
+   instead of letting it propagate to pr-bot.
 
 ```bash
 if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
@@ -418,6 +439,19 @@ if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
   exit 1
 fi
 BRANCH="$(git branch --show-current)"
+COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
+if [ "${COMMITS_AHEAD}" -eq 0 ]; then
+  echo "ERROR: merge_blocked_empty_diff — branch has 0 commits ahead of ${DEFAULT_BRANCH}."
+  echo "Refusing to push an empty branch (#1122 structural guard)."
+  exit 1
+fi
+DIFF_LINES="$(git diff "${DEFAULT_BRANCH}...HEAD" --shortstat 2>/dev/null | grep -oE '[0-9]+ (insertion|deletion)' | wc -l)"
+if [ "${DIFF_LINES}" -eq 0 ]; then
+  echo "ERROR: merge_blocked_empty_diff — cumulative diff vs ${DEFAULT_BRANCH} is empty."
+  echo "Branch has commits but no actual changes — likely lefthook re-stage drift (#1122)."
+  echo "Investigate the working tree and the failed commit's intended files; do NOT escalate to squash merge."
+  exit 1
+fi
 git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 13)" required=true -->'

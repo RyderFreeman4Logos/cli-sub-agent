@@ -178,6 +178,109 @@ fn result_toml_path_contract_handles_verbose_multiline_output() {
 }
 
 #[test]
+fn result_toml_path_contract_trusts_success_status_artifact_when_last_line_is_prose() {
+    // #1121 regression: dev2merge sub-sessions wrote `output/result.toml` with
+    // `[result] status = "success"` and full `[artifacts]`, but the executor
+    // ended its final assistant message with non-path prose (e.g. "Binary
+    // installed."). The contract MUST honor the artifact's success status
+    // instead of flipping the verdict to failure based on the last line.
+    let session_dir = tempfile::tempdir().unwrap();
+    let output_dir = session_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let result_path = output_dir.join("result.toml");
+    fs::write(
+        &result_path,
+        r#"[result]
+status = "success"
+summary = "fix(executor): land mock clock retry queue (#67)"
+
+[artifacts]
+branch = "fix/issue-67-mock-clock-retry-queue"
+commits = ["abc123def456"]
+modified_files = ["crates/mempal-core/src/clock.rs"]
+
+[checks]
+pre_commit = "passed"
+test_added = true
+"#,
+    )
+    .unwrap();
+
+    let mut result = ExecutionResult {
+        // Verbose progress trail ending in non-path prose — exact shape of the
+        // three failed mempal sessions cited in #1121.
+        output: "Step 1: implemented mock clock retry queue\n\
+                 Step 2: ran just pre-commit\n\
+                 Step 3: committed changes\n\
+                 - binary installed to `/usr/local/bin/mempal`\n"
+            .to_string(),
+        stderr_output: String::new(),
+        summary: "Binary install running in background.".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        session_dir.path(),
+        &mut result,
+    );
+
+    assert_eq!(
+        result.exit_code, 0,
+        "artifact with [result] status=\"success\" must satisfy contract regardless of last assistant line"
+    );
+    assert!(
+        result.stderr_output.contains("[result] status=\"success\""),
+        "diagnostic must explicitly cite the success status to distinguish from generic TOML-validity fallback; got: {}",
+        result.stderr_output
+    );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(result_path.to_string_lossy().as_ref()),
+        "accepted artifact path must become the final output line so managers consume the verified path"
+    );
+}
+
+#[test]
+fn result_toml_path_contract_accepts_flat_schema_status_success_artifact() {
+    // Defensive coverage for the legacy flat schema (top-level `status = "..."`
+    // without a [result] table). The strong-semantic fallback must accept both
+    // schemas so older patterns/skills do not regress.
+    let session_dir = tempfile::tempdir().unwrap();
+    let output_dir = session_dir.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let result_path = output_dir.join("result.toml");
+    fs::write(
+        &result_path,
+        "status = \"success\"\nsummary = \"flat schema artifact\"\n",
+    )
+    .unwrap();
+
+    let mut result = ExecutionResult {
+        output: "trailing prose without any path\n".to_string(),
+        stderr_output: String::new(),
+        summary: "trailing prose summary".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        session_dir.path(),
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stderr_output.contains("[result] status=\"success\""),
+        "flat-schema status=success must take the strong-semantic fallback path"
+    );
+}
+
+#[test]
 fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_empty() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");

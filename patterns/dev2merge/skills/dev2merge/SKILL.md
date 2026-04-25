@@ -40,8 +40,41 @@ Push Gate → PR Creation → pr-bot Hard Gate → Post-Merge Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
-<prompt-guard name="no-verify-forbidden">
-ABSOLUTE PROHIBITION: You MUST NOT use `--no-verify` or `-n` with any `git commit` or `git push` command. All quality hooks (pre-commit, etc.) MUST be allowed to run. Bypassing hooks is a critical SOP violation. If hooks fail, fix the underlying code issues instead of bypassing.
+<prompt-guard name="hook-bypass-forbidden">
+ABSOLUTE PROHIBITION (#1123): All hook-bypass primitives are FORBIDDEN. Each disables registered git hooks (pre-commit / pre-push / commit-msg) and silently violates SOP:
+
+- `git commit --no-verify` / `-n`
+- `git push --no-verify`
+- `LEFTHOOK=0`, `LEFTHOOK_DISABLED=1`
+- `HUSKY=0`, `HUSKY_DISABLE=1`
+- `SKIP_HOOKS=1`, `SKIP_GIT_HOOKS=1`, `PRE_COMMIT_ALLOW_NO_CONFIG=1` (when used to skip)
+- `--no-gpg-sign` (signing bypass)
+- ANY equivalent env var or CLI flag that disables a registered hook
+
+If hooks fail, fix the underlying code issue. If `git commit` fails because lefthook (or another formatter hook) auto-formatted and re-staged files, the correct re-stage recovery primitive is:
+
+1. `git diff --staged --quiet` -- exit 0 means staging is clean (rare; normally files were re-staged)
+2. `git add -u` -- re-stage the formatted versions of already-tracked files
+3. Retry `git commit -m "..."` -- hooks accept the formatted version on the second pass
+4. If the recovery loop runs >=3 iterations without converging, surface `recovery_loop_exhausted` to the orchestrator. DO NOT escalate to any bypass primitive above.
+
+Bypassing hooks is a critical SOP violation. If you encounter this scenario, follow the re-stage recipe above. NEVER use any of the FORBIDDEN bypass primitives.
+</prompt-guard>
+
+<prompt-guard name="squash-merge-forbidden">
+ABSOLUTE PROHIBITION (#1122): Squash-merge primitives are FORBIDDEN at every level of dev2merge. Each destroys per-commit AI Reviewer Metadata, lefthook-gate evidence, author attribution (codex / gemini / main-agent split), and the iteration trail (review-then-fix rounds become invisible).
+
+- `gh pr merge --squash`
+- `gh pr merge -s` (short form)
+- `git merge --squash`
+- GitHub Web UI "Squash and merge" button
+- ANY `--squash` flag passed to a merge command
+
+dev2merge delegates the actual merge to pr-bot (Step 14). pr-bot reads `pr_review.merge_strategy` from config (default `merge`). If a normal `gh pr merge --merge` fails (e.g. lefthook re-stage race producing an empty-diff PR, or upstream advancing during the wait), DO NOT escalate to `--squash`. Surface `merge_blocked` (or the structural variant `merge_blocked_empty_diff`) to the orchestrator.
+
+EMPTY-DIFF GUARD: Before any merge, verify `gh pr diff <PR>` is non-empty. An empty-diff PR is the structural fingerprint of the lefthook-race scenario in #1122 -- the branch tip drifted, the PR body still references the intended fix, but the actual diff vs main is empty. Aborting at the empty-diff signal is the correct behavior. Squash-merging an empty-diff PR produces an empty squash commit on main and corrupts the audit trail; this is the exact bug #1122 documents.
+
+Once squashed, the original commits cannot be reconstructed from main. The audit cost is irreversible and silent.
 </prompt-guard>
 
 ### Prerequisites
