@@ -44,10 +44,26 @@ fn write_config_value(path: &std::path::Path, key: &str, value: &str) -> Result<
 
     set_document_config_value(&mut doc, key, value)?;
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("config path has no parent directory"))?;
+    std::fs::create_dir_all(parent)?;
+
+    // Preserve original file permissions if the file already exists.
+    let original_permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
+
+    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
+        anyhow::anyhow!("failed to create temp file in {}: {err}", parent.display())
+    })?;
+    std::io::Write::write_all(&mut tmp, doc.to_string().as_bytes())?;
+
+    if let Some(perms) = original_permissions {
+        tmp.as_file().set_permissions(perms)?;
     }
-    std::fs::write(path, doc.to_string())?;
+
+    tmp.persist(path)
+        .map_err(|err| anyhow::anyhow!("failed to atomically rename config: {err}"))?;
+
     Ok(())
 }
 
