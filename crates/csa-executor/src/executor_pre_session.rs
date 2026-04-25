@@ -31,9 +31,13 @@ impl Executor {
             tracing::debug!("pre_session hook already fired for this invocation");
             return Cow::Borrowed(prompt);
         }
-        let working_dir = std::env::current_dir()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| session.project_path.clone());
+        let working_dir = if session.project_path.is_empty() {
+            std::env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default()
+        } else {
+            session.project_path.clone()
+        };
         let context = csa_hooks::PreSessionHookContext {
             session_id: &session.meta_session_id,
             transport: self.tool_name(),
@@ -62,7 +66,7 @@ mod tests {
         MetaSessionState {
             meta_session_id: "01PRESESSION00000000000000".to_string(),
             description: Some("pre-session test".to_string()),
-            project_path: "/tmp/pre-session-test".to_string(),
+            project_path: "/tmp".to_string(),
             branch: None,
             created_at: now,
             last_accessed: now,
@@ -87,6 +91,40 @@ mod tests {
             vcs_identity: None,
             identity_version: 1,
         }
+    }
+
+    #[tokio::test]
+    async fn pre_session_hook_uses_session_project_path_as_cwd() {
+        // session.project_path should be preferred over std::env::current_dir()
+        // when determining hook working directory.
+        let config = csa_hooks::PreSessionHookConfig {
+            command: Some("pwd".to_string()),
+            transports: vec!["codex".to_string()],
+            timeout_seconds: 2,
+            ..Default::default()
+        };
+        let invocation = csa_hooks::PreSessionHookInvocation::new(config);
+        let options =
+            ExecuteOptions::new(StreamMode::BufferOnly, 60).with_pre_session_hook(invocation);
+        let executor = Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+        };
+        let mut session = test_session();
+        // Use /tmp which always exists and differs from process cwd
+        session.project_path = "/tmp".to_string();
+
+        let result = executor
+            .apply_pre_session_hook("hello", &session, &options)
+            .await;
+
+        // The hook output should contain /tmp (the session project_path),
+        // not the process's current working directory.
+        assert!(
+            result.contains("/tmp"),
+            "hook cwd should be session.project_path (/tmp), got: {result}"
+        );
     }
 
     #[tokio::test]
