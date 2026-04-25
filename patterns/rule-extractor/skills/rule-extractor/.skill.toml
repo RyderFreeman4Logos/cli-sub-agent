@@ -1,0 +1,4 @@
+[skill]
+name = "rule-extractor"
+description = "Auto-extract coding rules from HIGH/CRITICAL PR-bot findings"
+version = "0.1.0"
