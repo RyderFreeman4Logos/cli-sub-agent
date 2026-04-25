@@ -21,10 +21,9 @@ pub(crate) fn strip_difficulty_frontmatter(prompt: String) -> Result<ParsedPromp
         if line.trim_end() == "---" {
             let frontmatter = &prompt[body_start..line_start];
             let difficulty = parse_frontmatter_difficulty(frontmatter)?;
-            return Ok(ParsedPromptDifficulty {
-                difficulty,
-                prompt: prompt[line_end..].to_string(),
-            });
+            let mut prompt = prompt;
+            prompt.drain(..line_end);
+            return Ok(ParsedPromptDifficulty { difficulty, prompt });
         }
         line_start = line_end;
     }
@@ -54,13 +53,41 @@ fn parse_frontmatter_difficulty(frontmatter: &str) -> Result<Option<String>> {
         if key.trim() != "difficulty" {
             continue;
         }
-        let label = unquote_yaml_scalar(value.trim());
+        let value = strip_yaml_trailing_comment(value.trim());
+        let label = unquote_yaml_scalar(value);
         if label.trim().is_empty() {
             anyhow::bail!("Malformed YAML frontmatter: difficulty value cannot be empty");
         }
         difficulty = Some(label.to_string());
     }
     Ok(difficulty)
+}
+
+/// Strip a trailing `# comment` from a YAML scalar value, skipping `#` inside
+/// single- or double-quoted regions. Returns the trimmed value slice.
+fn strip_yaml_trailing_comment(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' | b'\'' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+                // skip closing quote
+                i += 1;
+            }
+            b'#' => {
+                return value[..i].trim_end();
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    value
 }
 
 fn unquote_yaml_scalar(value: &str) -> &str {
@@ -300,6 +327,55 @@ mod tests {
         assert!(msg.contains("Difficulty hint 'security_audit' not found in [tier_mapping]"));
         assert!(msg.contains("bug_fix"));
         assert!(msg.contains("quick_question"));
+    }
+
+    #[test]
+    fn strip_frontmatter_drains_in_place() {
+        let original = "---\ndifficulty: bug_fix\n---\nthe body here".to_string();
+        let original_ptr = original.as_ptr();
+        let parsed = strip_difficulty_frontmatter(original).expect("valid frontmatter");
+
+        assert_eq!(parsed.difficulty.as_deref(), Some("bug_fix"));
+        assert_eq!(parsed.prompt, "the body here");
+        // The returned string reuses the original allocation (drain in-place).
+        assert_eq!(parsed.prompt.as_ptr(), original_ptr);
+    }
+
+    #[test]
+    fn frontmatter_strips_trailing_yaml_comment() {
+        let parsed = strip_difficulty_frontmatter(
+            "---\ndifficulty: quick_question # 30%\n---\nbody".to_string(),
+        )
+        .expect("trailing comment should be stripped");
+
+        assert_eq!(parsed.difficulty.as_deref(), Some("quick_question"));
+        assert_eq!(parsed.prompt, "body");
+    }
+
+    #[test]
+    fn frontmatter_preserves_hash_inside_quotes() {
+        // Single-quoted value containing '#' must NOT be stripped.
+        let parsed = strip_difficulty_frontmatter(
+            "---\ndifficulty: 'quick#question'\n---\nbody".to_string(),
+        )
+        .expect("hash inside quotes must be preserved");
+        assert_eq!(parsed.difficulty.as_deref(), Some("quick#question"));
+
+        // Double-quoted value containing '#' must NOT be stripped.
+        let parsed = strip_difficulty_frontmatter(
+            "---\ndifficulty: \"quick#question\"\n---\nbody".to_string(),
+        )
+        .expect("hash inside double quotes must be preserved");
+        assert_eq!(parsed.difficulty.as_deref(), Some("quick#question"));
+    }
+
+    #[test]
+    fn frontmatter_quoted_value_with_trailing_comment() {
+        let parsed = strip_difficulty_frontmatter(
+            "---\ndifficulty: 'bug_fix' # a comment\n---\nbody".to_string(),
+        )
+        .expect("quoted value with trailing comment");
+        assert_eq!(parsed.difficulty.as_deref(), Some("bug_fix"));
     }
 
     #[test]
