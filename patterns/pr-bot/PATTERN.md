@@ -675,6 +675,15 @@ else
 fi
 # shellcheck source=patterns/pr-bot/scripts/pr-bot-quota-cache.sh
 . "${PR_BOT_QUOTA_CACHE_SCRIPT}"
+# SENTINEL-POLICY: rely on mktemp to provide a fresh path; do NOT rm -f beforehand.
+# Decision-anchor: PR #1083 R3 (gemini design-residual).  Race-safe mktemp
+# (`mktemp -t ... -p "$DIR"`) beats stale-cleanup (`rm -f`) because rm -f
+# racing with concurrent pr-bot invocations would clobber a sibling's
+# freshly-created tmpfile.  mktemp guarantees a unique path every call, so
+# there is no "stale leftover" scenario to guard against.
+#
+# If a future csa-review round re-litigates "add rm -f before mktemp",
+# point at this anchor instead of flipping policy.  See also: issue #1105.
 OUTPUT_FILE="$(mktemp -t pr-bot-wait-${PR_NUM}-XXXXXX.json)"
 # mktemp creates a 0-byte sentinel; the wrapper's poll loop below uses
 # [ -s ] (exists AND non-empty) so the empty sentinel does not trip the
