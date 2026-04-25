@@ -3,7 +3,10 @@ use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::Path;
 
-const DIAGNOSTIC_TAIL_BYTES: u64 = 8192;
+/// Maximum bytes to read from the tail of a diagnostic log file.
+/// Uses `take()` to cap the read even if the file grows between `metadata()` and `read`,
+/// preventing unbounded memory allocation on large/growing logs.
+const DIAGNOSTIC_TAIL_BYTES: u64 = 64 * 1024;
 const DIAGNOSTIC_VALUE_MAX_CHARS: usize = 500;
 
 pub(super) fn synthetic_failure_diagnostics(
@@ -109,11 +112,27 @@ fn read_tail_compact(path: &Path) -> Option<String> {
 fn read_tail_lossy(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(DIAGNOSTIC_TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let cap = DIAGNOSTIC_TAIL_BYTES;
+    if len <= cap {
+        // Small file — read the whole thing (no seek needed).
+        let mut buf = String::new();
+        file.read_to_string(&mut buf).ok()?;
+        return Some(buf);
+    }
+    // Seek to tail and cap the read with `take()` so a growing file cannot
+    // cause unbounded allocation.
+    file.seek(SeekFrom::Start(len - cap)).ok()?;
+    let mut bytes = Vec::with_capacity(cap as usize);
+    file.take(cap).read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    // The seek may land in the middle of a multi-byte UTF-8 char, producing a
+    // replacement char at the start. Drop everything up to (and including) the
+    // first newline so the returned tail starts at a clean line boundary.
+    let trimmed = match text.find('\n') {
+        Some(pos) => &text[pos + 1..],
+        None => &text,
+    };
+    Some(trimmed.to_string())
 }
 
 fn last_line_matching(path: &Path, predicate: impl Fn(&str) -> bool) -> Option<String> {
@@ -211,5 +230,42 @@ mod tests {
     #[test]
     fn diagnostic_hint_ignores_oom_substrings() {
         assert_eq!(classify_diagnostic_hint("room broom zoom"), None);
+    }
+
+    #[test]
+    fn read_tail_lossy_small_file_returns_full_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.log");
+        fs::write(&path, "hello\nworld\n").unwrap();
+        let result = read_tail_lossy(&path).unwrap();
+        assert_eq!(result, "hello\nworld\n");
+    }
+
+    #[test]
+    fn read_tail_lossy_large_file_returns_bounded_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.log");
+        // Write a file larger than DIAGNOSTIC_TAIL_BYTES (64 KiB).
+        let line = "A".repeat(80) + "\n"; // 81 bytes per line
+        let lines_needed = (DIAGNOSTIC_TAIL_BYTES as usize / line.len()) + 200;
+        let content: String = std::iter::repeat(line.as_str())
+            .take(lines_needed)
+            .collect();
+        assert!(content.len() as u64 > DIAGNOSTIC_TAIL_BYTES);
+        fs::write(&path, &content).unwrap();
+
+        let result = read_tail_lossy(&path).unwrap();
+        // Result must be smaller than cap (we drop the partial first line).
+        assert!(result.len() <= DIAGNOSTIC_TAIL_BYTES as usize);
+        // Result must not be empty.
+        assert!(!result.is_empty());
+        // Result must not start with a partial line (no replacement char).
+        assert!(!result.starts_with('\u{FFFD}'));
+    }
+
+    #[test]
+    fn read_tail_lossy_missing_file_returns_none() {
+        let result = read_tail_lossy(Path::new("/nonexistent/file.log"));
+        assert!(result.is_none());
     }
 }
