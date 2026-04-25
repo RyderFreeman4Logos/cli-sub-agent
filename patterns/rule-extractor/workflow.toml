@@ -48,9 +48,6 @@ name = "ANTI_PATTERN_EXAMPLES"
 name = "CORRECT_PATTERN"
 
 [[workflow.variables]]
-name = "SEVERITY"
-
-[[workflow.variables]]
 name = "RULE_CONTENT"
 
 [[workflow.variables]]
@@ -90,26 +87,24 @@ set -euo pipefail
 FINDINGS_RAW=""
 FINDING_EMITTED=""
 if [ -n "${REVIEW_SESSION_ID:-}" ]; then
-  # Extract findings.toml from the review session output directory
-  SESSION_DIR=$(csa session result --session "${REVIEW_SESSION_ID}" --session-dir 2>/dev/null || true)
-  if [ -n "$SESSION_DIR" ] && [ -f "$SESSION_DIR/output/findings.toml" ]; then
-    FINDINGS_RAW=$(cat "$SESSION_DIR/output/findings.toml")
-  else
-    # Fallback: read from session details text
-    FINDINGS_RAW=$(csa session result --session "${REVIEW_SESSION_ID}" --section details 2>/dev/null || true)
-  fi
+  # Read findings from the review session's structured output.
+  # --section details contains the review findings (including findings.toml content
+  # when the review pattern emits it). --full is a broader fallback.
+  FINDINGS_RAW=$(csa session result --session "${REVIEW_SESSION_ID}" --section details 2>/dev/null || \
+                 csa session result --session "${REVIEW_SESSION_ID}" --full 2>/dev/null || true)
 else
   # Fall back to PR comment history for bot findings.
   # Extract severity + description + path from PR comment bodies and emit
   # CSA_VARs directly (comment JSON shape differs from findings.toml).
   PR_COMMENTS=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/comments" 2>/dev/null || true)
   if [ -n "$PR_COMMENTS" ]; then
-    # Pick the first comment whose body mentions a HIGH/CRITICAL/P0/P1 severity
+    # Pick the first bot comment whose body mentions a HIGH/CRITICAL/P0/P1 severity.
+    # Filter by known bot logins to avoid misinterpreting human comments.
     COMMENT_BODY=$(echo "$PR_COMMENTS" \
-      | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL"; "i")) | .body' \
+      | jq -r '.[] | select(.user.login | test("codex|gemini-pr-bot|coderabbit|github-actions"; "i")) | select(.body | test("P0|P1|HIGH|CRITICAL"; "i")) | .body' \
       | head -1)
     COMMENT_PATH=$(echo "$PR_COMMENTS" \
-      | jq -r '.[] | select(.body | test("P0|P1|HIGH|CRITICAL"; "i")) | .path // "unknown"' \
+      | jq -r '.[] | select(.user.login | test("codex|gemini-pr-bot|coderabbit|github-actions"; "i")) | select(.body | test("P0|P1|HIGH|CRITICAL"; "i")) | .path // "unknown"' \
       | head -1)
     if [ -n "$COMMENT_BODY" ]; then
       # Infer severity from the comment text
@@ -331,7 +326,7 @@ DRAFT_SID=$(csa run --sa-mode true --tier tier-2-standard \
    6. Case Study: PR #${PR_NUM}
 
    Frontmatter: source: pr-bot-finding, pr: #${PR_NUM},
-   severity: ${SEVERITY}, extracted-at: $(date -u +%Y-%m-%d)
+   severity: ${FINDING_SEVERITY}, extracted-at: $(date -u +%Y-%m-%d)
 
    Output the complete rule file content between RULE_DRAFT_START and RULE_DRAFT_END markers.")
 csa session wait --session "$DRAFT_SID"
@@ -415,7 +410,7 @@ gh pr create \
   --body "## Rule Proposal (auto-extracted)
 
 Source PR: #${PR_NUM}
-Severity: ${SEVERITY}
+Severity: ${FINDING_SEVERITY}
 Bug class: ${BUG_CLASS_NAME}
 
 Auto-extracted by rule-extractor pattern (issue #661). Human review required.
