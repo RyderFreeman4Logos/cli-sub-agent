@@ -240,7 +240,7 @@ Emits CSA_VAR:SHOULD_DRAFT=yes when Step 4 should run.
 
 ```bash
 set -euo pipefail
-PROJECT_RULES_DIR=".agents/project-rules-ref"
+PROJECT_RULES_DIR="docs/rules-proposed"
 
 # Keyword grep across project-local rules
 PROJECT_MATCHES=""
@@ -347,7 +347,7 @@ if [ -z "$DRAFT_CONTENT" ]; then
 fi
 
 # Write draft to a temp file and emit its path
-DRAFT_FILE=".agents/project-rules-ref/.draft-${BUG_CLASS_SLUG}.md"
+DRAFT_FILE="docs/rules-proposed/.draft-${BUG_CLASS_SLUG}.md"
 mkdir -p "$(dirname "$DRAFT_FILE")"
 echo "$DRAFT_CONTENT" > "$DRAFT_FILE"
 echo "CSA_VAR:DRAFT_FILE=$DRAFT_FILE"
@@ -364,7 +364,7 @@ title = "Propose via PR"
 tool = "bash"
 prompt = """
 Create a proposal PR with the rule draft. NEVER auto-commit to main rules.
-Rules are written to project-local .agents/project-rules-ref/ (fork-only, rule 030).
+Rules are written to project-local docs/rules-proposed/ (fork-only, rule 030).
 Reads draft content from DRAFT_FILE produced by Step 4.
 
 ```bash
@@ -376,10 +376,10 @@ if [ ! -f "${DRAFT_FILE}" ]; then
   exit 1
 fi
 
-# RULE_DIR is project-local (.agents/project-rules-ref/) within the fork repo,
+# RULE_DIR is project-local (docs/rules-proposed/) within the fork repo,
 # so git-add is safe — this path is NOT covered by ~/.gitignore_noai (rule 036).
-# The .agents/project-rules-ref/ directory is fork-only content (rule 030).
-RULE_DIR=".agents/project-rules-ref/${LANG}"
+# The docs/rules-proposed/ directory is fork-only content (rule 030).
+RULE_DIR="docs/rules-proposed/${LANG}"
 mkdir -p "${RULE_DIR}"
 
 # Determine next rule number (safe for empty directory)

@@ -56,7 +56,7 @@ When operating under SA mode, ALL `csa` invocations MUST include `--sa-mode true
    - **ISOLATED_MISTAKE**: Single-line fix, unique to code path, no precedent.
 
 3. **Deduplicate against existing rules**: Search project-local rules
-   (`.agents/project-rules-ref/`). Use keyword grep + semantic LLM comparison
+   (`docs/rules-proposed/`). Use keyword grep + semantic LLM comparison
    with actual matched file content (both in a single bash block). Emits
    `CSA_VAR:SHOULD_DRAFT` and `CSA_VAR:DEDUPE_RESULT`.
    - EXACT_MATCH → skip (SHOULD_DRAFT empty).
@@ -116,7 +116,7 @@ Two-layer dedup prevents rule proliferation:
 
 - **Invoked by**: pr-bot (post-merge, opt-in)
 - **Depends on**: pr-bot review artifacts (findings, debate verdicts, fix commits)
-- **Outputs to**: `.agents/project-rules-ref/<lang>/` (project-local, fork-only per rule 030)
+- **Outputs to**: `docs/rules-proposed/<lang>/` (project-local, fork-only per rule 030)
 - **Constraint**: NEVER auto-commits. Always proposes via PR.
 - **Constraint**: AGENTS.md rule 030 (fork-only) — PRs target user's fork.
 

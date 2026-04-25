@@ -34,16 +34,20 @@ Tool: bash
 Read the merged PR's review artifacts and extract HIGH/CRITICAL findings.
 
 ```bash
+set -euo pipefail
 # Collect review findings from the merged PR and parse findings.toml.
 # Emits CSA_VAR:FINDING_DESCRIPTION, CSA_VAR:FINDING_SEVERITY, CSA_VAR:FINDING_FILE
 # for the first HIGH/CRITICAL finding. Pattern processes one finding per invocation;
 # invoke once per finding for multi-finding PRs.
+FINDINGS_RAW=""
+FINDING_EMITTED=""
 if [ -n "${REVIEW_SESSION_ID:-}" ]; then
   # Extract findings.toml from the review session output directory
   SESSION_DIR=$(csa session result --session "${REVIEW_SESSION_ID}" --session-dir 2>/dev/null || true)
   if [ -n "$SESSION_DIR" ] && [ -f "$SESSION_DIR/output/findings.toml" ]; then
     FINDINGS_RAW=$(cat "$SESSION_DIR/output/findings.toml")
   else
+    # Fallback: read from session details text
     FINDINGS_RAW=$(csa session result --session "${REVIEW_SESSION_ID}" --section details 2>/dev/null || true)
   fi
 else
@@ -70,22 +74,61 @@ else
       echo "CSA_VAR:FINDING_DESCRIPTION=$COMMENT_DESC"
       echo "CSA_VAR:FINDING_SEVERITY=$COMMENT_SEV"
       echo "CSA_VAR:FINDING_FILE=${COMMENT_PATH:-unknown}"
+      FINDING_EMITTED=1
+      echo "Extracted finding from PR comment: severity=$COMMENT_SEV file=$COMMENT_PATH"
     else
       echo "WARNING: No HIGH/CRITICAL findings in PR comments"
       echo "CSA_VAR:FINDING_DESCRIPTION="
       echo "CSA_VAR:FINDING_SEVERITY="
       echo "CSA_VAR:FINDING_FILE="
+      FINDING_EMITTED=1
     fi
   else
     echo "WARNING: Could not fetch PR comments"
     echo "CSA_VAR:FINDING_DESCRIPTION="
     echo "CSA_VAR:FINDING_SEVERITY="
     echo "CSA_VAR:FINDING_FILE="
+    FINDING_EMITTED=1
   fi
   # Skip the TOML parser below — CSA_VARs already emitted
   FINDINGS_RAW=""
 fi
-# Parse first HIGH/CRITICAL finding from TOML and emit CSA_VARs
+
+# Parse findings.toml for first HIGH/CRITICAL finding and emit CSA_VARs.
+# findings.toml uses [[findings]] sections with id, severity, description,
+# and file_ranges (array of {path, start, end}).
+if [ -n "$FINDINGS_RAW" ]; then
+  # Extract severity, description, and file path from first high/critical finding.
+  # The toml structure: severity = "high"|"critical", description = "...",
+  # file_ranges has path = "..." entries.
+  # Filter: only consider lines where severity is high or critical
+  FIRST_SEV=$(echo "$FINDINGS_RAW" | grep -iE '^severity\s*=\s*"(high|critical)"' | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/')
+  # Find the description from the same [[findings]] block as the matched severity.
+  # Since findings.toml is flat-ish (severity then description then file_ranges),
+  # we take the description line following the first high/critical severity line.
+  FIRST_DESC=$(echo "$FINDINGS_RAW" | grep -iA 20 '^severity\s*=\s*".*\(high\|critical\)"' | grep -i '^description' | head -1 | sed 's/.*= *"\(.*\)".*/\1/')
+  FIRST_FILE=$(echo "$FINDINGS_RAW" | grep -iA 30 '^severity\s*=\s*".*\(high\|critical\)"' | grep -i '^path' | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/')
+
+  if [ -n "$FIRST_DESC" ]; then
+    echo "CSA_VAR:FINDING_DESCRIPTION=$FIRST_DESC"
+    echo "CSA_VAR:FINDING_SEVERITY=${FIRST_SEV:-HIGH}"
+    echo "CSA_VAR:FINDING_FILE=${FIRST_FILE:-unknown}"
+    FINDING_EMITTED=1
+    echo "Extracted finding: severity=$FIRST_SEV file=$FIRST_FILE"
+    echo "Description: $FIRST_DESC"
+  else
+    echo "WARNING: No parseable findings in review session output"
+    echo "CSA_VAR:FINDING_DESCRIPTION="
+    echo "CSA_VAR:FINDING_SEVERITY="
+    echo "CSA_VAR:FINDING_FILE="
+    FINDING_EMITTED=1
+  fi
+elif [ -z "$FINDING_EMITTED" ]; then
+  echo "WARNING: No findings data available from session or PR comments"
+  echo "CSA_VAR:FINDING_DESCRIPTION="
+  echo "CSA_VAR:FINDING_SEVERITY="
+  echo "CSA_VAR:FINDING_FILE="
+fi
 ```
 
 Output: CSA_VAR:FINDING_DESCRIPTION, CSA_VAR:FINDING_SEVERITY, CSA_VAR:FINDING_FILE
@@ -150,13 +193,13 @@ fi
 Tool: bash
 
 Check whether an existing rule already covers this bug class. Search
-project-local rules (`.agents/project-rules-ref/`). Emits
+project-local rules (`docs/rules-proposed/`). Emits
 `CSA_VAR:SHOULD_DRAFT=yes` when Step 4 should run, and
 `CSA_VAR:DEDUPE_RESULT` with the semantic comparison outcome.
 
 ```bash
 set -euo pipefail
-PROJECT_RULES_DIR=".agents/project-rules-ref"
+PROJECT_RULES_DIR="docs/rules-proposed"
 
 # Keyword grep across project-local rules
 PROJECT_MATCHES=""
@@ -276,7 +319,7 @@ if [ -z "$DRAFT_CONTENT" ]; then
 fi
 
 # Write draft to a temp file and emit its path
-DRAFT_FILE=".agents/project-rules-ref/.draft-${BUG_CLASS_SLUG}.md"
+DRAFT_FILE="docs/rules-proposed/.draft-${BUG_CLASS_SLUG}.md"
 mkdir -p "$(dirname "$DRAFT_FILE")"
 echo "$DRAFT_CONTENT" > "$DRAFT_FILE"
 echo "CSA_VAR:DRAFT_FILE=$DRAFT_FILE"
@@ -301,7 +344,7 @@ if [ ! -f "${DRAFT_FILE}" ]; then
 fi
 
 # Determine target directory (project-local, fork-only per rule 030)
-RULE_DIR=".agents/project-rules-ref/${LANG}"
+RULE_DIR="docs/rules-proposed/${LANG}"
 mkdir -p "${RULE_DIR}"
 
 # Determine next rule number (safe for empty directory)
@@ -394,7 +437,7 @@ NNN|bug-class-slug|one-line summary of the rule
 
 - **Invoked by**: pr-bot (post-merge, opt-in) via `csa plan run --sa-mode true patterns/rule-extractor/workflow.toml`
 - **Depends on**: pr-bot review artifacts (findings, debate verdicts, fix commits)
-- **Outputs to**: `.agents/project-rules-ref/<lang>/` (project-local, fork-only per rule 030)
+- **Outputs to**: `docs/rules-proposed/<lang>/` (project-local, fork-only per rule 030)
 - **Constraint**: NEVER auto-commits. Always proposes via PR for human review.
 - **Constraint**: AGENTS.md rule 030 (fork-only) — PRs target user's fork.
 
