@@ -1,7 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-
-use anyhow::Context;
+use std::process::Command;
 
 use crate::filesystem_sandbox::FilesystemCapability;
 
@@ -35,15 +34,11 @@ pub(super) fn add_codex_home_for_tool(
             purpose: "Codex rollout recorder and arg0 PATH shim",
             config_hint: CODEX_SANDBOX_CONFIG_HINT,
         });
-    } else if codex_home.is_absolute() && codex_home.exists() {
-        if super::is_sensitive_system_path(&codex_home) {
-            tracing::warn!(
-                path = %codex_home.display(),
-                "rejecting writable path under sensitive system directory"
-            );
-        } else {
-            push_unique_path(writable_paths, codex_home);
-        }
+    } else if codex_home.is_absolute() && has_codex_on_path() {
+        // Codex is installed — route through `add_dir_or_creatable_parent` so
+        // the directory is pre-created when it doesn't exist yet (avoids
+        // read-only-fs in nested CSA sessions spawning a codex child).
+        super::add_dir_or_creatable_parent(writable_paths, &codex_home);
     }
 }
 
@@ -70,10 +65,21 @@ pub(super) fn codex_home_dir(home: &Path) -> (PathBuf, &'static str) {
     }
 }
 
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
+/// Check whether any codex binary (`codex` or `codex-acp`) is on `PATH`.
+pub(super) fn has_codex_on_path() -> bool {
+    for binary in &["codex", "codex-acp"] {
+        let found = Command::new("which")
+            .arg(binary)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if found {
+            return true;
+        }
     }
+    false
 }
 
 fn path_is_covered_by_writable_mount(path: &Path, writable_paths: &[PathBuf]) -> bool {
@@ -166,12 +172,16 @@ fn probe_writable_dir(path: &Path, required: &RequiredWritableDir) -> anyhow::Re
         let probe = path.join(format!(".csa-write-probe-{}-{attempt}", std::process::id()));
         match OpenOptions::new().write(true).create_new(true).open(&probe) {
             Ok(_) => {
-                fs::remove_file(&probe).with_context(|| {
-                    format!(
-                        "codex sandbox preflight failed: could not remove write probe {}",
-                        probe.display()
-                    )
-                })?;
+                // Write succeeded — that is the actual signal.  Cleanup failure
+                // is downgraded to a warning so flaky mounts (NFS, sshfs) don't
+                // fail the preflight for a non-critical hygiene step.
+                if let Err(error) = fs::remove_file(&probe) {
+                    tracing::warn!(
+                        probe = %probe.display(),
+                        %error,
+                        "could not remove write probe (non-fatal)"
+                    );
+                }
                 return Ok(());
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
