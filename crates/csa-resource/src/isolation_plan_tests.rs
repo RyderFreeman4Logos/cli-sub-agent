@@ -529,10 +529,19 @@ fn test_parent_tool_defaults_expose_existing_codex_home_for_nested_csa() {
         .build()
         .expect("should succeed");
 
-    assert!(
-        plan.writable_paths.contains(&codex_home),
-        "parent sandboxes should expose existing Codex home for nested Codex CSA sessions"
-    );
+    // Non-codex tools only expose CODEX_HOME when codex is on PATH (existence
+    // gating).  Skip the assertion in CI where codex may not be installed.
+    if codex_paths::has_codex_on_path() {
+        assert!(
+            plan.writable_paths.contains(&codex_home),
+            "parent sandboxes should expose existing Codex home for nested Codex CSA sessions"
+        );
+    } else {
+        assert!(
+            !plan.writable_paths.contains(&codex_home),
+            "without codex on PATH, parent sandboxes should NOT expose Codex home"
+        );
+    }
 }
 
 #[test]
