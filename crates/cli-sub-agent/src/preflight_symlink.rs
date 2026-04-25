@@ -74,17 +74,21 @@ fn validate_one_path(
             return None;
         }
 
-        let expects_directory = expects_directory_target(relative_path);
         match fs::metadata(&full_path) {
             Ok(target_metadata) => {
-                if expects_directory && target_metadata.is_file() {
+                // Target exists — use actual metadata for type-mismatch checks
+                // instead of the extension heuristic (which can misclassify
+                // user-configured extensionless file targets like README).
+                let is_known_dir_path = is_known_directory_path(relative_path);
+                if is_known_dir_path && target_metadata.is_file() {
                     let resolved_target = describe_symlink_target(&full_path);
                     return Some(format!(
                         "{relative_path:<32} points to regular file '{resolved_target}', expected directory target; choose a directory target before recreating the symlink"
                     ));
                 }
 
-                if !expects_directory && target_metadata.is_dir() {
+                let is_known_file_path = has_file_extension(relative_path);
+                if is_known_file_path && target_metadata.is_dir() {
                     let resolved_target = describe_symlink_target(&full_path);
                     return Some(format!(
                         "{relative_path:<32} points to directory '{resolved_target}', expected file target; choose a file target before recreating the symlink"
@@ -94,14 +98,14 @@ fn validate_one_path(
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 let resolved_target = match read_resolved_symlink_target(&full_path) {
                     Ok(target) => target,
-                    Err(target) => {
+                    Err(unreadable_msg) => {
                         return Some(format!(
-                            "{relative_path:<32} broken symlink: target {target} does not exist"
+                            "{relative_path:<32} broken symlink: {unreadable_msg}"
                         ));
                     }
                 };
 
-                if expects_directory {
+                if is_known_directory_path(relative_path) {
                     if try_auto_heal_missing_target_dir(relative_path, &full_path, &resolved_target)
                     {
                         return None;
@@ -115,7 +119,7 @@ fn validate_one_path(
                 }
 
                 return Some(format!(
-                    "{relative_path:<32} broken symlink: target file '{}' does not exist",
+                    "{relative_path:<32} broken symlink: target '{}' does not exist",
                     resolved_target.display()
                 ));
             }
@@ -175,7 +179,7 @@ fn try_auto_heal_missing_target_dir(
     link_path: &Path,
     resolved_target: &Path,
 ) -> bool {
-    if !expects_directory_target(relative_path) {
+    if !is_known_directory_path(relative_path) {
         return false;
     }
 
@@ -207,10 +211,24 @@ fn try_auto_heal_missing_target_dir(
     }
 }
 
-fn expects_directory_target(relative_path: &str) -> bool {
-    let path = Path::new(relative_path);
-    path.extension().is_none()
-        || path.extension().and_then(|extension| extension.to_str()) == Some("d")
+/// Known default paths whose targets are directories. Used instead of the
+/// fragile "no extension → directory" heuristic, which would misclassify
+/// user-configured extensionless file targets (README, LICENSE, Makefile).
+const KNOWN_DIRECTORY_PATHS: &[&str] = &[".agents/project-rules-ref", ".agents/rules-ref"];
+
+fn is_known_directory_path(relative_path: &str) -> bool {
+    KNOWN_DIRECTORY_PATHS.contains(&relative_path)
+        || Path::new(relative_path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            == Some("d")
+}
+
+fn has_file_extension(relative_path: &str) -> bool {
+    let ext = Path::new(relative_path)
+        .extension()
+        .and_then(|e| e.to_str());
+    matches!(ext, Some(e) if e != "d")
 }
 
 fn is_writable_directory(path: &Path) -> bool {
@@ -373,7 +391,7 @@ mod tests {
 
         let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("broken -> err");
 
-        assert!(err.to_string().contains("target file"), "got: {err}");
+        assert!(err.to_string().contains("does not exist"), "got: {err}");
         assert!(!err.to_string().contains("mkdir -p"), "got: {err}");
         assert!(!err.to_string().contains("target directory"), "got: {err}");
     }
@@ -391,7 +409,7 @@ mod tests {
 
         let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("broken -> err");
 
-        assert!(err.to_string().contains("target file"), "got: {err}");
+        assert!(err.to_string().contains("does not exist"), "got: {err}");
         assert!(
             !target.exists(),
             "file-target symlink must not create a directory at the missing file path"
@@ -468,6 +486,56 @@ mod tests {
                 .contains("AGENTS.md                        is "),
             "got: {err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extensionless_user_path_broken_symlink_not_treated_as_directory() {
+        // Regression test for #1089: extensionless user-configured file targets
+        // (README, LICENSE, Makefile) must not be misclassified as directories.
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("nonexistent-readme");
+        std::os::unix::fs::symlink(&target, d.path().join("README")).unwrap();
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            paths: Some(vec!["README".to_string()]),
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("broken -> err");
+
+        // Must NOT suggest mkdir (would have under the old heuristic)
+        assert!(!err.to_string().contains("mkdir -p"), "got: {err}");
+        assert!(!err.to_string().contains("target directory"), "got: {err}");
+        assert!(err.to_string().contains("does not exist"), "got: {err}");
+        // Target must not have been auto-healed into a directory
+        assert!(
+            !target.exists(),
+            "extensionless file target must not be auto-healed as directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_symlink_error_not_redundantly_wrapped() {
+        // Regression test for #1089: when read_link fails, the error message
+        // should not redundantly wrap it with "target ... does not exist".
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("ghost");
+        std::os::unix::fs::symlink(&target, d.path().join("AGENTS.md")).unwrap();
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("broken -> err");
+        let msg = err.to_string();
+
+        // The message should say "broken symlink: target '...' does not exist"
+        // NOT "broken symlink: target <unreadable symlink target: ...> does not exist"
+        // (this case has a readable target, so it produces the clean message)
+        assert!(msg.contains("broken symlink:"), "got: {msg}");
+        assert!(!msg.contains("<unreadable symlink target"), "got: {msg}");
     }
 
     #[cfg(windows)]
