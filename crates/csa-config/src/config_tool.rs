@@ -321,4 +321,33 @@ transport = "cli"
             Some(TransportKind::Cli)
         );
     }
+
+    /// Phase 3 PoC contract for #1103: parsing
+    /// `[tools.claude-code] transport = "cli"` MUST yield
+    /// `TransportKind::Cli`, not silently coerce back to ACP.  The
+    /// `ClaudeCodeCliTransport` in `csa-executor` keys off this exact
+    /// resolution.
+    #[test]
+    fn test_resolve_transport_claude_code_cli_round_trips() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            tools: HashMap<String, ToolConfig>,
+        }
+        let toml_str = r#"
+[tools.claude-code]
+transport = "cli"
+"#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("parse claude-code cli toml");
+        let tool = wrapper
+            .tools
+            .get("claude-code")
+            .expect("claude-code tool entry missing");
+
+        assert_eq!(tool.transport, Some(TransportKind::Cli));
+        assert_eq!(
+            tool.resolve_transport("claude-code"),
+            Some(TransportKind::Cli),
+            "explicit transport=\"cli\" must resolve to CLI, not the build default"
+        );
+    }
 }
