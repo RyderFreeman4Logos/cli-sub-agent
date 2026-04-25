@@ -540,10 +540,10 @@ fn build_downshifted_args_replaces_existing_effort() {
 fn idle_disconnect_downshift_covers_all_levels() {
     use crate::model_spec::ThinkingBudget;
 
-    // Max → Xhigh
+    // Max → High (skips Xhigh — both map to "xhigh" in codex_effort, #1101)
     assert!(matches!(
         ThinkingBudget::Max.idle_disconnect_downshift(),
-        Some(ThinkingBudget::Xhigh)
+        Some(ThinkingBudget::High)
     ));
     // Xhigh → High
     assert!(matches!(
@@ -574,4 +574,23 @@ fn idle_disconnect_downshift_covers_all_levels() {
             .idle_disconnect_downshift()
             .is_none()
     );
+}
+
+/// Verify that Max.downshift() actually changes codex_effort() (#1101).
+#[test]
+fn max_downshift_changes_codex_effort() {
+    use crate::model_spec::ThinkingBudget;
+
+    let max_effort = ThinkingBudget::Max.codex_effort();
+    let downshifted = ThinkingBudget::Max
+        .idle_disconnect_downshift()
+        .expect("Max should have a downshift target");
+    let downshifted_effort = downshifted.codex_effort();
+
+    assert_ne!(
+        max_effort, downshifted_effort,
+        "Max.downshift() must produce a different codex_effort; \
+         both were '{max_effort}' — the downshift is a no-op on codex"
+    );
+    assert_eq!(downshifted_effort, "high");
 }

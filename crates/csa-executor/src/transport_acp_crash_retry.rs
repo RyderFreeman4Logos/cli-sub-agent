@@ -546,8 +546,9 @@ pub(super) async fn execute_with_crash_retry(
                              downshifted thinking budget (#766)"
                         );
                         tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
-                        // Single retry with downshifted args.
-                        let retry_result = transport
+                        // Single retry with downshifted args — route through
+                        // classification instead of returning early (#1101).
+                        match transport
                             .execute_acp_attempt(
                                 prompt,
                                 session,
@@ -556,8 +557,42 @@ pub(super) async fn execute_with_crash_retry(
                                 &downshifted_args,
                                 None, // fresh process, no resume
                             )
-                            .await;
-                        return retry_result;
+                            .await
+                        {
+                            Ok(tr) => return Ok(tr),
+                            Err(error) => {
+                                let error_display = format!("{error:#}");
+                                let memory_max_mb = options
+                                    .sandbox
+                                    .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
+                                if is_auth_error(&error_display) {
+                                    return Err(format_auth_failure(error, &transport.tool_name));
+                                }
+                                if transport.tool_name == "codex"
+                                    && is_crash_lowered(&error_display.to_lowercase())
+                                {
+                                    let classification = classify_codex_acp_crash(
+                                        &error_display,
+                                        extract_crash_exit_code(&error_display),
+                                        None,
+                                        memory_max_mb,
+                                    );
+                                    return Err(format_codex_acp_crash(
+                                        &classification,
+                                        error,
+                                        attempt + 1,
+                                    ));
+                                }
+                                if is_oom_error(&error_display) {
+                                    return Err(format_oom_crash(
+                                        error,
+                                        &transport.tool_name,
+                                        memory_max_mb,
+                                    ));
+                                }
+                                return Err(error);
+                            }
+                        }
                     }
                     // No downshift target (already at lowest) — fall through to return as-is.
                     tracing::warn!(
