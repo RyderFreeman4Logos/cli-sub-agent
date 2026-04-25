@@ -266,7 +266,8 @@ pub struct ReviewConfig {
     /// With an active review tier, the tier model spec remains authoritative unless CLI `--model` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Default thinking budget for `csa review` (`low`, `medium`, `high`, `xhigh`).
+    /// Default thinking budget for `csa review` (`low`, `medium`, `high`, `xhigh`, `max`,
+    /// or a token count).
     /// `csa review --thinking <LEVEL>` (when supported) overrides this.
     /// With an active review tier, the tier thinking budget remains authoritative unless CLI `--thinking` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -390,7 +391,8 @@ pub struct DebateConfig {
     /// With an active debate tier, the tier model spec remains authoritative unless CLI `--model` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Default thinking budget for `csa debate` (`low`, `medium`, `high`, `xhigh`).
+    /// Default thinking budget for `csa debate` (`low`, `medium`, `high`, `xhigh`, `max`,
+    /// or a token count).
     /// `csa debate --thinking <LEVEL>` overrides this per invocation.
     /// With an active debate tier, the tier thinking budget remains authoritative unless CLI `--thinking` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
