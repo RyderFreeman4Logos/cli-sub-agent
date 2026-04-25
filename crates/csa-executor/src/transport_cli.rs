@@ -50,8 +50,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use csa_acp::{SessionEvent, StreamingMetadata};
 use csa_process::{
-    SpawnOptions, StreamMode, spawn_tool_with_options, wait_and_capture_with_idle_timeout,
+    SpawnOptions, StreamMode, spawn_tool_sandboxed, wait_and_capture_with_idle_timeout,
 };
+use csa_resource::isolation_plan::IsolationPlan;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::Deserialize;
 use tokio::process::Command;
@@ -59,8 +60,8 @@ use tokio::process::Command;
 use crate::executor::Executor;
 
 use super::{
-    ResolvedTimeout, Transport, TransportCapabilities, TransportMode, TransportOptions,
-    TransportResult,
+    ResolvedTimeout, SandboxTransportConfig, Transport, TransportCapabilities, TransportMode,
+    TransportOptions, TransportResult,
 };
 
 /// Native `claude` CLI transport — the Phase 3 PoC alternative to
@@ -82,7 +83,8 @@ impl ClaudeCodeCliTransport {
 
     /// Build the argv for a prompt invocation.
     ///
-    /// Layout: `claude <yolo> --output-format stream-json --verbose -p <prompt>
+    /// Layout: `claude <yolo> --output-format stream-json --verbose
+    /// [--model <model>] [--thinking-budget <tokens>] -p <prompt>
     /// [--resume <session-id>]`.
     ///
     /// `--verbose` is required by the claude CLI as a precondition for
@@ -91,12 +93,25 @@ impl ClaudeCodeCliTransport {
     /// off for Phase 3 — partial chunks would inflate the event stream
     /// without measurably improving downstream consumer behaviour at this
     /// stage.
-    pub(crate) fn build_argv(prompt: &str, resume_session_id: Option<&str>) -> Vec<String> {
-        let mut args = Vec::with_capacity(8);
+    ///
+    /// `--model` and `--thinking-budget` are sourced from the [`Executor`]
+    /// to mirror what the legacy CLI path emits via
+    /// [`crate::executor::Executor::append_model_args`]; without them, tier
+    /// model selection silently degrades to the claude default and thinking
+    /// budgets configured in CSA tiers are dropped entirely.
+    pub(crate) fn build_argv(
+        executor: &Executor,
+        prompt: &str,
+        resume_session_id: Option<&str>,
+    ) -> Vec<String> {
+        let mut args = Vec::with_capacity(12);
         args.push("--dangerously-skip-permissions".to_string());
         args.push("--output-format".to_string());
         args.push("stream-json".to_string());
         args.push("--verbose".to_string());
+        for arg in claude_model_args(executor) {
+            args.push(arg);
+        }
         args.push("-p".to_string());
         args.push(prompt.to_string());
         if let Some(id) = resume_session_id {
@@ -126,7 +141,7 @@ impl ClaudeCodeCliTransport {
                 cmd.env(key, value);
             }
         }
-        for arg in Self::build_argv(prompt, resume_session_id) {
+        for arg in Self::build_argv(&self.executor, prompt, resume_session_id) {
             cmd.arg(arg);
         }
         cmd.stdin(Stdio::null())
@@ -142,7 +157,26 @@ impl ClaudeCodeCliTransport {
             request.resume_session_id,
             request.extra_env,
         );
-        let child = spawn_tool_with_options(cmd, None, request.spawn_options).await?;
+        // Mirror `LegacyTransport::execute_single_attempt` (transport.rs L313):
+        // route every spawn through `spawn_tool_sandboxed` so cgroup/bwrap/
+        // landlock isolation from `TransportOptions.sandbox` is honoured even
+        // when this transport is selected.  Calling `spawn_tool_with_options`
+        // directly silently dropped the sandbox plan and let CLI-mode sessions
+        // run unisolated even when callers had configured an isolation plan.
+        let SandboxComponents {
+            isolation_plan,
+            tool_name,
+            session_id,
+        } = sandbox_components(request.sandbox);
+        let (child, _sandbox_handle) = spawn_tool_sandboxed(
+            cmd,
+            None,
+            request.spawn_options,
+            isolation_plan,
+            tool_name,
+            session_id,
+        )
+        .await?;
         let execution = wait_and_capture_with_idle_timeout(
             child,
             request.stream_mode,
@@ -184,6 +218,10 @@ struct ExecuteOnceRequest<'a> {
     initial_response_timeout: ResolvedTimeout,
     spawn_options: SpawnOptions,
     output_spool: Option<&'a Path>,
+    /// Sandbox configuration propagated from [`TransportOptions::sandbox`].
+    /// `None` matches the unsandboxed `execute_in` (testing) path; `Some`
+    /// matches the production `execute` path when a sandbox is configured.
+    sandbox: Option<&'a SandboxTransportConfig>,
 }
 
 #[async_trait]
@@ -236,6 +274,7 @@ impl Transport for ClaudeCodeCliTransport {
             initial_response_timeout: options.initial_response_timeout,
             spawn_options,
             output_spool: options.output_spool,
+            sandbox: options.sandbox,
         })
         .await
     }
@@ -259,6 +298,7 @@ impl Transport for ClaudeCodeCliTransport {
             initial_response_timeout,
             spawn_options: SpawnOptions::default(),
             output_spool: None,
+            sandbox: None,
         })
         .await
     }
@@ -267,6 +307,67 @@ impl Transport for ClaudeCodeCliTransport {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+/// Decomposition of [`SandboxTransportConfig`] into the four positional
+/// arguments that [`csa_process::spawn_tool_sandboxed`] consumes.
+///
+/// Extracted as a named helper so unit tests can assert that
+/// `TransportOptions.sandbox` is threaded all the way to the spawn call —
+/// without actually spawning a child process.
+struct SandboxComponents<'a> {
+    isolation_plan: Option<&'a IsolationPlan>,
+    tool_name: &'a str,
+    session_id: &'a str,
+}
+
+/// Decompose `Option<&SandboxTransportConfig>` into the positional arguments
+/// expected by `spawn_tool_sandboxed`.
+///
+/// Mirrors the LegacyTransport contract (`transport.rs` L292-L299): when the
+/// caller passes `Some(SandboxTransportConfig)`, the isolation plan is honoured
+/// and the tool/session identifiers are propagated for cgroup scope naming;
+/// when the caller passes `None`, the spawn proceeds unsandboxed and the
+/// downstream call ends up equivalent to `spawn_tool_with_options`.
+fn sandbox_components(sandbox: Option<&SandboxTransportConfig>) -> SandboxComponents<'_> {
+    match sandbox {
+        Some(s) => SandboxComponents {
+            isolation_plan: Some(&s.isolation_plan),
+            tool_name: s.tool_name.as_str(),
+            session_id: s.session_id.as_str(),
+        },
+        None => SandboxComponents {
+            isolation_plan: None,
+            tool_name: "",
+            session_id: "",
+        },
+    }
+}
+
+/// Emit the model / thinking-budget flag pairs for a `claude` CLI invocation.
+///
+/// Mirrors [`crate::executor::Executor::append_model_args`] for the
+/// [`Executor::ClaudeCode`] arm: any non-`ClaudeCode` executor handed in here
+/// returns an empty list (Phase 3 only routes `claude-code` through this
+/// transport, but defensive emptiness keeps Phase 4 widening safe).
+fn claude_model_args(executor: &Executor) -> Vec<String> {
+    let mut out = Vec::with_capacity(4);
+    if let Executor::ClaudeCode {
+        model_override,
+        thinking_budget,
+        ..
+    } = executor
+    {
+        if let Some(model) = model_override {
+            out.push("--model".to_string());
+            out.push(model.clone());
+        }
+        if let Some(budget) = thinking_budget {
+            out.push("--thinking-budget".to_string());
+            out.push(budget.token_count().to_string());
+        }
+    }
+    out
 }
 
 /// Environment variable allowlist for the CLI transport.
@@ -314,6 +415,16 @@ struct StreamEnvelope {
     tool_use_id: Option<String>,
     name: Option<String>,
     status: Option<String>,
+    /// Tool-call payload for `tool_use` envelopes.
+    ///
+    /// Claude's stream-json emits Bash-class tool calls as
+    /// `{"type":"tool_use","name":"Bash","input":{"command":"git ..."}}`.
+    /// Without capturing this, the title for `tool_use` events degrades to
+    /// the bare tool name (e.g., `"Bash"`) and `extracted_commands` records
+    /// the tool name instead of the actual command text — defeating the
+    /// downstream forbidden-command policy that scans the command ring buffer
+    /// for `git commit --no-verify`-class commands.
+    input: Option<serde_json::Value>,
 }
 
 /// Parse a stream-json output buffer into a [`StreamParseResult`].
@@ -409,9 +520,18 @@ fn envelope_to_event(envelope: &StreamEnvelope, raw_line: &str) -> SessionEvent 
                 .tool_use_id
                 .clone()
                 .unwrap_or_else(|| envelope.name.clone().unwrap_or_default());
-            let title = envelope
-                .name
-                .clone()
+            // Prefer the actual command string from `input.command` for
+            // Bash-class tool calls so downstream
+            // `metadata.extracted_commands` captures the real command text
+            // (e.g., `git commit --no-verify`) rather than the tool name
+            // ("Bash").  Without this, the post-run forbidden-command policy
+            // sees "Bash" and lets unsafe commands through.
+            //
+            // Falls back to `name`/`tool` when `input.command` is absent —
+            // matches the previous behaviour for non-Bash tool calls
+            // (Edit/Read/etc.) whose payload schema differs.
+            let title = extract_tool_input_command(envelope.input.as_ref())
+                .or_else(|| envelope.name.clone())
                 .or_else(|| envelope.tool.clone())
                 .unwrap_or_default();
             let kind = envelope.subtype.clone().unwrap_or_else(|| "tool".into());
@@ -438,6 +558,26 @@ fn envelope_to_event(envelope: &StreamEnvelope, raw_line: &str) -> SessionEvent 
         // direct ACP equivalent so we surface them as Other for transparency.
         // Same for `result`/`final` envelopes that close the stream.
         _ => SessionEvent::Other(raw_line.to_string()),
+    }
+}
+
+/// Extract the command string from a tool_use `input` payload, when present.
+///
+/// Claude's stream-json represents Bash-class tool calls as
+/// `{"input": {"command": "..."}}`.  This helper returns the inner
+/// `command` value when it is a non-empty string, and `None` otherwise (e.g.,
+/// non-Bash tools like `Edit` whose `input` is `{"file_path": ..., ...}`).
+///
+/// Trimming is applied to defeat trailing whitespace that would otherwise
+/// confuse the downstream `command_looks_like_no_verify_commit` heuristic in
+/// `csa-acp::client`.
+fn extract_tool_input_command(input: Option<&serde_json::Value>) -> Option<String> {
+    let value = input?;
+    let command = value.get("command")?.as_str()?.trim();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command.to_string())
     }
 }
 
@@ -474,238 +614,5 @@ fn extract_message_text(message: &Option<serde_json::Value>) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::claude_runtime::{ClaudeCodeRuntimeMetadata, ClaudeCodeTransport as CcTransport};
-    use crate::executor::Executor;
-    // `TransportFactory` is re-exported from `csa-executor::transport`
-    // (transport.rs nests transport_factory.rs via `#[path]` and re-exports
-    // its public items at the crate root).  Reach for the crate-level
-    // re-export rather than the private nested-mod path.
-    use crate::TransportFactory;
-
-    fn make_executor() -> Executor {
-        Executor::ClaudeCode {
-            model_override: None,
-            thinking_budget: None,
-            runtime_metadata: ClaudeCodeRuntimeMetadata::from_transport(CcTransport::Cli),
-        }
-    }
-
-    // ---- Construction wiring ----
-
-    #[test]
-    fn factory_returns_cli_transport_for_claude_code_cli_mode() {
-        let executor = make_executor();
-        let transport = TransportFactory::create(&executor, None).expect("factory create");
-
-        // The transport must declare Legacy mode (the canonical CLI mode tag),
-        // not ACP, so downstream consumers do not double-spawn an ACP adapter.
-        assert_eq!(transport.mode(), TransportMode::Legacy);
-
-        // And it must be specifically ClaudeCodeCliTransport, not the generic
-        // LegacyTransport — these have different capability matrices and fork
-        // semantics.
-        let cli_transport = transport
-            .as_any()
-            .downcast_ref::<ClaudeCodeCliTransport>()
-            .expect("factory should return ClaudeCodeCliTransport for claude-code + cli");
-        // The downcasted handle should still report Legacy mode (idempotent).
-        assert_eq!(cli_transport.mode(), TransportMode::Legacy);
-    }
-
-    #[test]
-    fn factory_returns_acp_for_claude_code_default() {
-        // Default (no explicit transport override) MUST stay on ACP — the
-        // PoC change must NOT regress existing claude-code users.
-        let executor = Executor::ClaudeCode {
-            model_override: None,
-            thinking_budget: None,
-            runtime_metadata: ClaudeCodeRuntimeMetadata::from_transport(CcTransport::Acp),
-        };
-        let transport = TransportFactory::create(&executor, None).expect("factory create");
-        assert_eq!(transport.mode(), TransportMode::Acp);
-    }
-
-    #[test]
-    fn capabilities_advertise_resume_fork_streaming() {
-        let transport = ClaudeCodeCliTransport::new(make_executor());
-        let caps = transport.capabilities();
-        assert!(caps.session_resume, "claude --resume <id> works");
-        assert!(caps.session_fork, "claude --fork-session works");
-        assert!(caps.streaming, "claude --output-format stream-json works");
-        assert!(caps.typed_events, "stream-json yields typed events");
-    }
-
-    // ---- Resume-id propagation ----
-
-    #[test]
-    fn build_argv_no_resume_omits_resume_flag() {
-        let argv = ClaudeCodeCliTransport::build_argv("hello", None);
-        assert!(
-            !argv.iter().any(|a| a == "--resume"),
-            "no resume id => --resume must not appear in argv: {argv:?}"
-        );
-        assert!(argv.iter().any(|a| a == "-p"));
-        assert!(argv.iter().any(|a| a == "stream-json"));
-    }
-
-    #[test]
-    fn build_argv_with_resume_includes_flag_and_id() {
-        let argv = ClaudeCodeCliTransport::build_argv("ping", Some("abc-123"));
-        let resume_index = argv
-            .iter()
-            .position(|a| a == "--resume")
-            .expect("--resume must be present when resume id is given");
-        assert_eq!(
-            argv.get(resume_index + 1).map(String::as_str),
-            Some("abc-123"),
-            "session id must follow --resume directly: {argv:?}"
-        );
-    }
-
-    #[test]
-    fn build_argv_includes_streaming_flags() {
-        let argv = ClaudeCodeCliTransport::build_argv(".", None);
-        assert!(argv.iter().any(|a| a == "--output-format"));
-        assert!(argv.iter().any(|a| a == "stream-json"));
-        assert!(
-            argv.iter().any(|a| a == "--verbose"),
-            "stream-json requires --verbose per claude CLI; argv={argv:?}"
-        );
-    }
-
-    // ---- stream-json parsing ----
-
-    #[test]
-    fn parse_stream_json_happy_path_emits_events() {
-        let stream = concat!(
-            r#"{"type":"system","session_id":"sess-1","subtype":"init"}"#,
-            "\n",
-            r#"{"type":"assistant","session_id":"sess-1","message":{"content":[{"type":"text","text":"Hello"}]}}"#,
-            "\n",
-            r#"{"type":"tool_use","session_id":"sess-1","tool_use_id":"tu-1","name":"Bash","subtype":"execute"}"#,
-            "\n",
-            r#"{"type":"tool_result","session_id":"sess-1","tool_use_id":"tu-1","status":"success"}"#,
-            "\n",
-            r#"{"type":"result","session_id":"sess-1","subtype":"final"}"#,
-            "\n",
-        );
-        let parsed = parse_stream_json(stream);
-        assert_eq!(parsed.provider_session_id.as_deref(), Some("sess-1"));
-        assert_eq!(parsed.events.len(), 5, "5 envelopes => 5 events");
-
-        // The assistant envelope must lift to AgentMessage with the inner text.
-        let msg_count = parsed
-            .events
-            .iter()
-            .filter(|e| matches!(e, SessionEvent::AgentMessage(text) if text == "Hello"))
-            .count();
-        assert_eq!(msg_count, 1, "one AgentMessage with text 'Hello'");
-
-        // The tool_use envelope must lift to ToolCallStarted, with the
-        // execute subtype reflected so downstream consumers can extract the
-        // command.
-        let exec_started = parsed.events.iter().any(|e| {
-            matches!(
-                e,
-                SessionEvent::ToolCallStarted { kind, .. } if kind.eq_ignore_ascii_case("execute")
-            )
-        });
-        assert!(exec_started, "execute tool call must be detected");
-
-        assert!(parsed.metadata.has_tool_calls);
-        assert!(parsed.metadata.has_execute_tool_calls);
-        assert_eq!(parsed.metadata.total_events_count, 5);
-        assert_eq!(parsed.metadata.message_text, "Hello");
-    }
-
-    #[test]
-    fn parse_stream_json_malformed_line_is_skipped_not_panicked() {
-        let stream = concat!(
-            r#"{"type":"assistant","session_id":"sess-9","message":{"content":[{"type":"text","text":"a"}]}}"#,
-            "\n",
-            "this is not json at all\n",
-            r#"{not even valid json"#,
-            "\n",
-            r#"{"type":"assistant","session_id":"sess-9","message":{"content":[{"type":"text","text":"b"}]}}"#,
-            "\n",
-        );
-        let parsed = parse_stream_json(stream);
-
-        // The two well-formed lines must produce events; the two garbage
-        // lines must be skipped without panicking.
-        assert_eq!(
-            parsed.events.len(),
-            2,
-            "only well-formed lines yield events"
-        );
-        assert_eq!(parsed.provider_session_id.as_deref(), Some("sess-9"));
-        let messages: Vec<&str> = parsed
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                SessionEvent::AgentMessage(t) => Some(t.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(messages, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn parse_stream_json_empty_buffer_returns_empty_result() {
-        let parsed = parse_stream_json("");
-        assert!(parsed.events.is_empty());
-        assert!(parsed.provider_session_id.is_none());
-        assert_eq!(parsed.metadata.total_events_count, 0);
-    }
-
-    #[test]
-    fn parse_stream_json_unknown_event_type_falls_through_to_other() {
-        let stream =
-            r#"{"type":"future_event_kind_xyz","session_id":"s","note":"new in claude 9999"}"#;
-        let parsed = parse_stream_json(stream);
-        assert_eq!(parsed.events.len(), 1);
-        assert!(matches!(&parsed.events[0], SessionEvent::Other(_)));
-    }
-
-    #[test]
-    fn parse_stream_json_session_id_camel_case_accepted() {
-        let stream = r#"{"type":"system","sessionId":"camel-id"}"#;
-        let parsed = parse_stream_json(stream);
-        assert_eq!(parsed.provider_session_id.as_deref(), Some("camel-id"));
-    }
-
-    // ---- Optional integration test (gated; CI-friendly) ----
-
-    /// Optional: actually spawn `claude` and verify the CLI transport produces
-    /// a non-error result.  Skipped when the binary isn't installed (so this
-    /// test never causes false-red on CI without claude).
-    #[ignore = "requires claude CLI installed; run manually with `cargo test -p csa-executor -- --ignored claude_cli_smoke`"]
-    #[tokio::test]
-    async fn claude_cli_smoke() {
-        if which::which("claude").is_err() {
-            eprintln!("claude binary not on PATH; skipping smoke");
-            return;
-        }
-        let executor = make_executor();
-        let transport = ClaudeCodeCliTransport::new(executor);
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let result = transport
-            .execute_in(
-                "say 'hello from cli transport'",
-                tmp.path(),
-                None,
-                StreamMode::BufferOnly,
-                30,
-                ResolvedTimeout::of(60),
-            )
-            .await;
-        // We don't assert on content (depends on user auth and network); we
-        // only assert the call did not bubble an unrelated error.
-        assert!(
-            result.is_ok(),
-            "smoke: transport.execute_in failed: {result:?}"
-        );
-    }
-}
+#[path = "transport_cli_tests.rs"]
+mod tests;
