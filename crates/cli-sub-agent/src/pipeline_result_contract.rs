@@ -59,6 +59,31 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
+    // Strong-semantic fallback (#1121): an inner `output/result.toml` whose
+    // `[result] status` field is "success" is canonical proof of completion,
+    // independent of what the executor's final assistant line said. This path
+    // emits a more specific diagnostic than the generic TOML-validity fallback
+    // below so post-mortem readers can distinguish "trusted because status was
+    // success" from "trusted because TOML parsed".
+    if result_artifact_status_is_success(&expected_contract_output_path) {
+        let warning = format!(
+            "contract warning: output/summary path mismatch; accepted artifact with [result] status=\"success\" at '{}'",
+            expected_contract_output_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            artifact = %expected_contract_output_path.display(),
+            "Session output path did not match contract; accepting verified output/result.toml whose [result] status is success"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&warning);
+        result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_contract_output_path);
+        return;
+    }
+
     if sidecar_result_fallback_is_valid(&expected_contract_output_path) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
@@ -338,6 +363,32 @@ fn sidecar_result_fallback_is_valid(path: &Path) -> bool {
         toml::from_str::<toml::Value>(&contents),
         Ok(toml::Value::Table(table)) if !table.is_empty()
     )
+}
+
+/// Returns true when the artifact at `path` is a valid result.toml whose
+/// `[result] status` field equals `"success"` (case-insensitive). Used by the
+/// strong-semantic fallback (#1121) so a successful inner artifact is honored
+/// even when the executor's final assistant line is non-path prose.
+///
+/// Accepts both the legacy flat schema (`status = "success"` at top level) and
+/// the canonical nested schema (`[result] status = "success"`).
+fn result_artifact_status_is_success(path: &Path) -> bool {
+    if !expected_contract_file_is_valid(path) {
+        return false;
+    }
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(toml::Value::Table(table)) = toml::from_str::<toml::Value>(&contents) else {
+        return false;
+    };
+    let nested = table
+        .get("result")
+        .and_then(|v| v.as_table())
+        .and_then(|t| t.get("status"))
+        .and_then(|v| v.as_str());
+    let flat = table.get("status").and_then(|v| v.as_str());
+    matches!(nested.or(flat), Some(s) if s.eq_ignore_ascii_case("success"))
 }
 
 /// Validates session-dir result.toml as a disk-based fallback when the path

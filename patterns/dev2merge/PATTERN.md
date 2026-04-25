@@ -22,6 +22,56 @@ the PR manually or via `gh pr merge`. The pr-bot workflow handles the merge.
 Agents that stop after Step 13 leave the PR unmerged — this is a known failure
 mode that this invariant exists to prevent.
 
+### ABSOLUTE PROHIBITIONS
+
+These prohibitions apply at EVERY level of dev2merge (orchestrator, mktsk
+executor, fix-loop). They are the recovery-path rules whose violation
+produced #1121, #1122, and #1123. Surface failures upward instead of
+escalating to any prohibited primitive.
+
+#### Hook-bypass primitives (#1123)
+
+FORBIDDEN — all of these silently disable registered git hooks:
+
+- `git commit --no-verify` / `-n`
+- `git push --no-verify`
+- `LEFTHOOK=0`, `LEFTHOOK_DISABLED=1`
+- `HUSKY=0`, `HUSKY_DISABLE=1`
+- `SKIP_HOOKS=1`, `SKIP_GIT_HOOKS=1`
+- `--no-gpg-sign`
+- ANY equivalent env var or CLI flag that disables a registered hook
+
+**Re-stage recovery primitive** (when `git commit` fails because lefthook
+re-staged auto-formatted files):
+
+1. `git diff --staged --quiet` — exit 0 means clean (rare)
+2. `git add -u` — re-stage the formatter's output
+3. Retry `git commit -m "..."` — hooks accept the formatted version on the second pass
+4. If recovery loops >=3 iterations without converging, surface `recovery_loop_exhausted`. NEVER escalate to bypass.
+
+#### Squash-merge primitives (#1122)
+
+FORBIDDEN — all of these destroy per-commit audit trails:
+
+- `gh pr merge --squash`
+- `gh pr merge -s`
+- `git merge --squash`
+- GitHub Web UI "Squash and merge"
+- ANY `--squash` flag on a merge command
+
+**Empty-diff structural guard**: Before any merge (or before delegating to
+pr-bot), verify `gh pr diff <PR>` is non-empty AND the branch has commits
+ahead of main with a non-empty cumulative diff. An empty-diff PR is the
+structural fingerprint of the lefthook re-stage race documented in #1122 —
+when seen, surface `merge_blocked_empty_diff` instead of pushing through.
+Squash-merging an empty-diff PR produces an empty squash commit on main;
+this is the exact corruption #1122 documents.
+
+dev2merge delegates merging to pr-bot (Step 14), which reads
+`pr_review.merge_strategy` from config (default `merge`). Even if a normal
+`--merge` fails, DO NOT escalate to `--squash`. Surface `merge_blocked` to
+the orchestrator.
+
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
 ## Step 1: Validate Branch
@@ -299,7 +349,15 @@ for the current run.
 Tool: bash
 OnFail: abort
 
-Hard gate: REVIEW_COMPLETED must be true before any push.
+Hard gates before any push:
+
+1. `REVIEW_COMPLETED` must be true.
+2. **Empty-diff structural guard (#1122)**: branch must have at least one
+   commit ahead of base AND the cumulative diff vs base must be non-empty.
+   An empty-diff branch is the lefthook-race fingerprint — it produces an
+   empty PR which can be silently squashed into an empty commit on main.
+   Aborting here surfaces `merge_blocked_empty_diff` to the orchestrator
+   instead of letting it propagate to pr-bot.
 
 ```bash
 if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
@@ -308,6 +366,19 @@ if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
   exit 1
 fi
 BRANCH="$(git branch --show-current)"
+COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
+if [ "${COMMITS_AHEAD}" -eq 0 ]; then
+  echo "ERROR: merge_blocked_empty_diff — branch has 0 commits ahead of ${DEFAULT_BRANCH}."
+  echo "Refusing to push an empty branch (#1122 structural guard)."
+  exit 1
+fi
+DIFF_LINES="$(git diff "${DEFAULT_BRANCH}...HEAD" --shortstat 2>/dev/null | grep -oE '[0-9]+ (insertion|deletion)' | wc -l)"
+if [ "${DIFF_LINES}" -eq 0 ]; then
+  echo "ERROR: merge_blocked_empty_diff — cumulative diff vs ${DEFAULT_BRANCH} is empty."
+  echo "Branch has commits but no actual changes — likely lefthook re-stage drift (#1122)."
+  echo "Investigate the working tree and the failed commit's intended files; do NOT escalate to squash merge."
+  exit 1
+fi
 git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 13)" required=true -->'
