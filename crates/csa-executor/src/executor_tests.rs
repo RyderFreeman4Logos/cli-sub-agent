@@ -447,8 +447,21 @@ fn test_thinking_budget_custom_value() {
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
     let debug_str = format!("{cmd:?}");
-    assert!(debug_str.contains("--thinking-budget"));
-    assert!(debug_str.contains("10000"));
+    // claude-code 2.x exposes thinking via `--effort <level>`, not the
+    // removed `--thinking-budget <tokens>` flag (#1124). `Custom(n)` has no
+    // direct level so it folds into "high" (mirrors codex_effort).
+    assert!(
+        !debug_str.contains("--thinking-budget"),
+        "Should not emit removed --thinking-budget flag (#1124): {debug_str}"
+    );
+    assert!(
+        debug_str.contains("--effort"),
+        "Should emit --effort: {debug_str}"
+    );
+    assert!(
+        debug_str.contains("high"),
+        "Custom(10000) maps to --effort high: {debug_str}"
+    );
 }
 
 #[test]
@@ -669,9 +682,15 @@ fn test_execute_in_preserves_model_override() {
                     debug_str.contains("claude-opus"),
                     "ClaudeCode missing model: {debug_str}"
                 );
+                // claude-code 2.x: thinking control via --effort <level>,
+                // not the removed --thinking-budget <tokens> (#1124).
                 assert!(
-                    debug_str.contains("--thinking-budget"),
-                    "ClaudeCode missing thinking: {debug_str}"
+                    !debug_str.contains("--thinking-budget"),
+                    "ClaudeCode must not emit removed --thinking-budget (#1124): {debug_str}"
+                );
+                assert!(
+                    debug_str.contains("--effort"),
+                    "ClaudeCode missing thinking effort flag: {debug_str}"
                 );
             }
             Executor::Opencode { .. } => {

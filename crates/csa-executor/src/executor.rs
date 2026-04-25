@@ -761,9 +761,16 @@ impl Executor {
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);
                 }
-                if let Some(budget) = thinking_budget {
-                    cmd.arg("--thinking-budget")
-                        .arg(budget.token_count().to_string());
+                // claude-code 2.x exposes thinking control via `--effort
+                // <level>` (low/medium/high/xhigh/max); the legacy
+                // `--thinking-budget <tokens>` flag was removed and any
+                // emission of it makes the binary exit with `unknown option`
+                // (#1124). `DefaultBudget` deliberately omits the flag so the
+                // tool applies its built-in default.
+                if let Some(budget) = thinking_budget
+                    && let Some(level) = budget.claude_effort()
+                {
+                    cmd.arg("--effort").arg(level);
                 }
             }
             Self::OpenaiCompat { .. } => {} // HTTP-only: model/thinking via API body

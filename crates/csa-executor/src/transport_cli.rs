@@ -84,7 +84,7 @@ impl ClaudeCodeCliTransport {
     /// Build the argv for a prompt invocation.
     ///
     /// Layout: `claude <yolo> --output-format stream-json --verbose
-    /// [--model <model>] [--thinking-budget <tokens>] -p <prompt>
+    /// [--model <model>] [--effort <level>] -p <prompt>
     /// [--resume <session-id>]`.
     ///
     /// `--verbose` is required by the claude CLI as a precondition for
@@ -94,11 +94,14 @@ impl ClaudeCodeCliTransport {
     /// without measurably improving downstream consumer behaviour at this
     /// stage.
     ///
-    /// `--model` and `--thinking-budget` are sourced from the [`Executor`]
-    /// to mirror what the legacy CLI path emits via
+    /// `--model` and `--effort` are sourced from the [`Executor`] to mirror
+    /// what the legacy CLI path emits via
     /// [`crate::executor::Executor::append_model_args`]; without them, tier
     /// model selection silently degrades to the claude default and thinking
     /// budgets configured in CSA tiers are dropped entirely.
+    /// claude-code 2.x replaced the older `--thinking-budget <tokens>` flag
+    /// with `--effort <level>`; emitting the old flag fails with `unknown
+    /// option` (#1124).
     pub(crate) fn build_argv(
         executor: &Executor,
         prompt: &str,
@@ -344,12 +347,18 @@ fn sandbox_components(sandbox: Option<&SandboxTransportConfig>) -> SandboxCompon
     }
 }
 
-/// Emit the model / thinking-budget flag pairs for a `claude` CLI invocation.
+/// Emit the model / effort flag pairs for a `claude` CLI invocation.
 ///
 /// Mirrors [`crate::executor::Executor::append_model_args`] for the
 /// [`Executor::ClaudeCode`] arm: any non-`ClaudeCode` executor handed in here
 /// returns an empty list (Phase 3 only routes `claude-code` through this
 /// transport, but defensive emptiness keeps Phase 4 widening safe).
+///
+/// claude-code 2.x exposes thinking control via `--effort <level>`
+/// (low/medium/high/xhigh/max); the legacy `--thinking-budget <tokens>` flag
+/// was removed and any emission of it makes the binary exit with `unknown
+/// option` (#1124). `DefaultBudget` deliberately omits the flag so the tool
+/// applies its built-in default.
 fn claude_model_args(executor: &Executor) -> Vec<String> {
     let mut out = Vec::with_capacity(4);
     if let Executor::ClaudeCode {
@@ -362,9 +371,11 @@ fn claude_model_args(executor: &Executor) -> Vec<String> {
             out.push("--model".to_string());
             out.push(model.clone());
         }
-        if let Some(budget) = thinking_budget {
-            out.push("--thinking-budget".to_string());
-            out.push(budget.token_count().to_string());
+        if let Some(budget) = thinking_budget
+            && let Some(level) = budget.claude_effort()
+        {
+            out.push("--effort".to_string());
+            out.push(level.to_string());
         }
     }
     out

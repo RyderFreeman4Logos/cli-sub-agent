@@ -311,17 +311,21 @@ fn test_sandbox_passthrough() {
     assert_eq!(components.session_id, "01HSANDBOXPASSTHROUGH00000001");
 }
 
-// ---- Codex P1 review fix: model + thinking-budget flags (Bug 2) ----
+// ---- Codex P1 review fix: model + effort flags (Bug 2, updated for #1124) ----
 
-/// `build_argv` MUST emit `--model <model>` and `--thinking-budget
-/// <tokens>` flag pairs when the [`Executor`] carries them, mirroring the
-/// legacy `Executor::append_model_args` path.  Before this fix, both
-/// flags were silently dropped because `build_argv` hardcoded only
+/// `build_argv` MUST emit `--model <model>` and `--effort <level>` flag pairs
+/// when the [`Executor`] carries them, mirroring the legacy
+/// `Executor::append_model_args` path.  Before the original P1 review fix,
+/// both flags were silently dropped because `build_argv` hardcoded only
 /// `--dangerously-skip-permissions`/`--output-format`/`--verbose`/`-p` and
 /// never consulted the executor — so tier model selection and thinking
 /// budgets had no effect on the actual claude CLI invocation.
+///
+/// claude-code 2.x replaced the older `--thinking-budget <tokens>` form with
+/// `--effort <level>`; emitting the old flag now fails with `unknown option`,
+/// breaking every CSA-spawned claude-code invocation post PR #1120 (#1124).
 #[test]
-fn test_argv_includes_model_and_thinking() {
+fn test_argv_includes_model_and_effort() {
     let executor = make_executor_with_model_and_thinking("claude-opus-4-7", ThinkingBudget::High);
     let argv = ClaudeCodeCliTransport::build_argv(&executor, "hi", None);
 
@@ -335,20 +339,22 @@ fn test_argv_includes_model_and_thinking() {
         "model name must follow --model directly: {argv:?}"
     );
 
-    let budget_index = argv
+    let effort_index = argv
         .iter()
-        .position(|a| a == "--thinking-budget")
-        .expect("--thinking-budget must appear in argv when Executor has thinking_budget set");
-    // High budget converts to a numeric token count via
-    // `ThinkingBudget::token_count()`; we only care that the value is
-    // numeric (matches the legacy CLI flag spelling) — not the exact
-    // mapping, which is owned by the model_spec module.
-    let budget_value = argv
-        .get(budget_index + 1)
-        .expect("--thinking-budget must be followed by a value");
+        .position(|a| a == "--effort")
+        .expect("--effort must appear in argv when Executor has thinking_budget set");
+    // ThinkingBudget::High maps to claude-code 2.x's "high" effort level.
+    assert_eq!(
+        argv.get(effort_index + 1).map(String::as_str),
+        Some("high"),
+        "ThinkingBudget::High must produce --effort high: {argv:?}"
+    );
+
+    // The removed --thinking-budget flag must not be present (#1124 regression
+    // guard): claude-code 2.x rejects it as `unknown option`.
     assert!(
-        budget_value.parse::<u32>().is_ok(),
-        "--thinking-budget value must be numeric (token count); got {budget_value:?}"
+        !argv.iter().any(|a| a == "--thinking-budget"),
+        "--thinking-budget must not be emitted (claude-code 2.x rejects it, #1124): {argv:?}"
     );
 
     // Backwards-compat sanity: the streaming flags must still be present.
@@ -357,11 +363,12 @@ fn test_argv_includes_model_and_thinking() {
 }
 
 /// When the [`Executor`] has neither model nor thinking budget set, the
-/// argv MUST NOT contain `--model` or `--thinking-budget` (so the claude
-/// CLI uses its built-in defaults).  Guards against an over-eager fix
-/// that always emits the flags with empty / zero values.
+/// argv MUST NOT contain `--model`, `--effort`, or the obsolete
+/// `--thinking-budget` (so the claude CLI uses its built-in defaults).
+/// Guards against an over-eager fix that always emits the flags with empty
+/// / zero values.
 #[test]
-fn test_argv_omits_model_and_thinking_when_executor_has_none() {
+fn test_argv_omits_model_and_effort_when_executor_has_none() {
     let executor = make_executor();
     let argv = ClaudeCodeCliTransport::build_argv(&executor, "hi", None);
     assert!(
@@ -369,9 +376,64 @@ fn test_argv_omits_model_and_thinking_when_executor_has_none() {
         "--model must be absent when Executor.model_override is None: {argv:?}"
     );
     assert!(
-        !argv.iter().any(|a| a == "--thinking-budget"),
-        "--thinking-budget must be absent when Executor.thinking_budget is None: {argv:?}"
+        !argv.iter().any(|a| a == "--effort"),
+        "--effort must be absent when Executor.thinking_budget is None: {argv:?}"
     );
+    assert!(
+        !argv.iter().any(|a| a == "--thinking-budget"),
+        "--thinking-budget must never be emitted (#1124): {argv:?}"
+    );
+}
+
+/// `ThinkingBudget::DefaultBudget` carries explicit "use the tool's default"
+/// semantics, so even when a thinking budget is set in the executor, no
+/// `--effort` flag should be emitted — claude-code is free to apply its own
+/// default. Guards against `DefaultBudget` accidentally mapping to a concrete
+/// effort level. Companion to `ThinkingBudget::claude_effort` returning
+/// `None` for `DefaultBudget`.
+#[test]
+fn test_argv_omits_effort_for_default_budget() {
+    let executor =
+        make_executor_with_model_and_thinking("claude-opus-4-7", ThinkingBudget::DefaultBudget);
+    let argv = ClaudeCodeCliTransport::build_argv(&executor, "hi", None);
+    assert!(
+        argv.iter().any(|a| a == "--model"),
+        "--model must still appear for DefaultBudget: {argv:?}"
+    );
+    assert!(
+        !argv.iter().any(|a| a == "--effort"),
+        "--effort must be omitted for ThinkingBudget::DefaultBudget: {argv:?}"
+    );
+}
+
+/// Each `ThinkingBudget` keyword must map to exactly the claude-code 2.x
+/// `--effort` level the tool accepts (`low/medium/high/xhigh/max`). Guards
+/// against silent drift in `ThinkingBudget::claude_effort` causing
+/// rejections at runtime.
+#[test]
+fn test_argv_effort_levels_for_each_budget() {
+    let cases: &[(ThinkingBudget, &str)] = &[
+        (ThinkingBudget::Low, "low"),
+        (ThinkingBudget::Medium, "medium"),
+        (ThinkingBudget::High, "high"),
+        (ThinkingBudget::Xhigh, "xhigh"),
+        (ThinkingBudget::Max, "max"),
+        // Custom(n) has no native level — mirror codex_effort and pick "high".
+        (ThinkingBudget::Custom(123), "high"),
+    ];
+    for (budget, expected_level) in cases {
+        let executor = make_executor_with_model_and_thinking("claude-opus-4-7", budget.clone());
+        let argv = ClaudeCodeCliTransport::build_argv(&executor, "hi", None);
+        let idx = argv
+            .iter()
+            .position(|a| a == "--effort")
+            .unwrap_or_else(|| panic!("--effort must be emitted for {budget:?}: {argv:?}"));
+        assert_eq!(
+            argv.get(idx + 1).map(String::as_str),
+            Some(*expected_level),
+            "ThinkingBudget::{budget:?} must map to --effort {expected_level}: {argv:?}"
+        );
+    }
 }
 
 // ---- Codex P1 review fix: extract Bash command for execute title (Bug 3) ----
