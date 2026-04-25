@@ -88,13 +88,17 @@ impl TransportFactory {
                 }
             },
             Executor::ClaudeCode { .. } => match executor.claude_code_transport() {
-                Some(crate::ClaudeCodeTransport::Cli) => {
-                    Self::validate_mode_for_executor(executor, TransportMode::Legacy)?;
-                    Ok(TransportMode::Legacy)
-                }
-                Some(crate::ClaudeCodeTransport::Acp) | None => {
+                // ACP transport for claude-code is gated behind the `claude-code-acp` cargo
+                // feature (disabled by default) due to startup-crash bugs #1115/#1117.
+                // Only an explicit `Some(Acp)` request attempts ACP; `None` and `Some(Cli)`
+                // both route through the CLI transport.
+                Some(crate::ClaudeCodeTransport::Acp) => {
                     Self::validate_mode_for_executor(executor, TransportMode::Acp)?;
                     Ok(TransportMode::Acp)
+                }
+                Some(crate::ClaudeCodeTransport::Cli) | None => {
+                    Self::validate_mode_for_executor(executor, TransportMode::Legacy)?;
+                    Ok(TransportMode::Legacy)
                 }
             },
             _ => {
@@ -110,13 +114,13 @@ impl TransportFactory {
     ///
     /// Compatibility matrix (source of truth):
     ///
-    /// | Executor     | Legacy | Acp                      | OpenaiCompat |
-    /// |--------------|--------|--------------------------| -------------|
-    /// | ClaudeCode   | Yes    | Yes                      | No           |
-    /// | Codex        | Yes    | Yes                      | No           |
-    /// | GeminiCli    | Yes    | Yes                      | No           |
-    /// | Opencode     | Yes    | No                       | No           |
-    /// | OpenaiCompat | No     | No                       | Yes          |
+    /// | Executor     | Legacy | Acp                                      | OpenaiCompat |
+    /// |--------------|--------|------------------------------------------| -------------|
+    /// | ClaudeCode   | Yes    | Yes (requires `claude-code-acp` feature) | No           |
+    /// | Codex        | Yes    | Yes                                      | No           |
+    /// | GeminiCli    | Yes    | Yes                                      | No           |
+    /// | Opencode     | Yes    | No                                       | No           |
+    /// | OpenaiCompat | No     | No                                       | Yes          |
     fn validate_mode_for_executor(
         executor: &Executor,
         mode: TransportMode,
@@ -130,7 +134,16 @@ impl TransportFactory {
         };
 
         match (executor, mode) {
-            // ClaudeCode: Legacy CLI and ACP are both supported
+            // ClaudeCode + ACP: gated behind the `claude-code-acp` cargo feature.
+            // ACP for claude-code crashes at session startup (turn_count=0, #1115/#1117).
+            // Build with `--features claude-code-acp` to re-enable this path.
+            #[cfg(not(feature = "claude-code-acp"))]
+            (Executor::ClaudeCode { .. }, TransportMode::Acp) => err(
+                "claude-code ACP transport requires the `claude-code-acp` cargo feature \
+                     (disabled by default due to startup-crash bugs #1115/#1117); \
+                     rebuild with `--features claude-code-acp` to enable",
+            ),
+            #[cfg(feature = "claude-code-acp")]
             (Executor::ClaudeCode { .. }, TransportMode::Acp) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::Legacy) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::OpenaiCompat) => {
@@ -208,10 +221,25 @@ impl TransportFactory {
                 }
                 _ => Ok(Box::new(LegacyTransport::new(executor.clone()))),
             },
-            TransportMode::Acp => Ok(Box::new(AcpTransport::new(
-                executor.tool_name(),
-                session_config,
-            ))),
+            TransportMode::Acp => {
+                // claude-code ACP transport is gated behind the `claude-code-acp` cargo
+                // feature (disabled by default, #1115/#1117). All other tools' ACP
+                // paths are always available.
+                #[cfg(not(feature = "claude-code-acp"))]
+                if matches!(executor, Executor::ClaudeCode { .. }) {
+                    anyhow::bail!(
+                        "claude-code ACP transport is disabled (cargo feature `claude-code-acp` \
+                         is not enabled). This path was gated because ACP silently crashes at \
+                         session startup (turn_count=0, output_log=0B, #1115/#1117). \
+                         Rebuild csa-executor with `--features claude-code-acp` to enable \
+                         this transport for investigation."
+                    );
+                }
+                Ok(Box::new(AcpTransport::new(
+                    executor.tool_name(),
+                    session_config,
+                )))
+            }
             TransportMode::OpenaiCompat => {
                 let default_model = if let Executor::OpenaiCompat { model_override, .. } = executor
                 {
@@ -231,4 +259,23 @@ impl TransportFactory {
     ) -> Box<dyn Transport> {
         Box::new(crate::transport_openai_compat::OpenaiCompatTransport::with_config(config))
     }
+
+    /// Test-only: expose the private `mode_for_executor` to sibling test modules.
+    #[cfg(test)]
+    pub fn mode_for_executor_pub(executor: &Executor) -> Result<TransportMode> {
+        Self::mode_for_executor(executor)
+    }
+
+    /// Test-only: expose the private `validate_mode_for_executor` to sibling test modules.
+    #[cfg(test)]
+    pub fn validate_mode_for_executor_pub(
+        executor: &Executor,
+        mode: TransportMode,
+    ) -> Result<(), TransportFactoryError> {
+        Self::validate_mode_for_executor(executor, mode)
+    }
 }
+
+#[cfg(test)]
+#[path = "transport_factory_tests.rs"]
+mod tests;

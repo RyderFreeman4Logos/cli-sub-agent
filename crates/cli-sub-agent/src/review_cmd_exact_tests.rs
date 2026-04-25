@@ -268,9 +268,11 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
         "codex",
         "#!/bin/sh\nprintf 'HTTP 401 Invalid API key\\n' >&2\nexit 1\n",
     );
+    // claude-code now defaults to CLI transport (#1115/#1117 workaround);
+    // the binary to stub is `claude` (not `claude-code-acp`).
     exact_test_write_executable(
         &bin_dir,
-        "claude-code-acp",
+        "claude",
         "#!/bin/sh\nprintf 'HTTP 403 Forbidden\\n' >&2\nexit 1\n",
     );
 

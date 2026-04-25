@@ -308,12 +308,14 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
         )
         .unwrap();
     }
+    // claude-code now defaults to CLI transport (#1115/#1117 workaround);
+    // stub `claude` (not `claude-code-acp`) to simulate the claude-code failure.
     std::fs::write(
-        bin_dir.join("claude-code-acp"),
+        bin_dir.join("claude"),
         "#!/bin/sh\nprintf 'HTTP 403 Forbidden\\n' >&2\nexit 1\n",
     )
     .unwrap();
-    for binary in ["gemini", "codex", "codex-acp", "claude-code-acp"] {
+    for binary in ["gemini", "codex", "codex-acp", "claude"] {
         let path = bin_dir.join(binary);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);

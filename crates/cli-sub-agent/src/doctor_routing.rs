@@ -543,7 +543,9 @@ mod tests {
 
         assert_eq!(tool_exe_name("gemini-cli", &config), "gemini");
         assert_eq!(tool_exe_name("codex", &config), "codex-acp");
-        assert_eq!(tool_exe_name("claude-code", &config), "claude-code-acp");
+        // claude-code now defaults to CLI transport (#1115/#1117 workaround);
+        // the CLI binary is `claude`, not `claude-code-acp`.
+        assert_eq!(tool_exe_name("claude-code", &config), "claude");
         assert_eq!(tool_exe_name("opencode", &config), "opencode");
         assert_eq!(tool_exe_name("unknown-tool", &config), "unknown-tool");
     }

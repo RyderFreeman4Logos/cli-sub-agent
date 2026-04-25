@@ -207,9 +207,11 @@ fn build_executor_claude_code_transport_respects_explicit_acp_override() {
     }
 }
 
+/// claude-code now defaults to CLI transport (#1115/#1117 workaround).
+/// When transport is unset, `claude` (not `claude-code-acp`) is probed.
 #[cfg(unix)]
 #[test]
-fn auto_selection_uses_claude_code_acp_when_transport_is_unset() {
+fn auto_selection_uses_claude_cli_when_transport_is_unset() {
     use crate::test_env_lock::ScopedTestEnvVar;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -217,12 +219,12 @@ fn auto_selection_uses_claude_code_acp_when_transport_is_unset() {
     let td = tempfile::tempdir().expect("tempdir");
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
-    let claude_path = bin_dir.join("claude-code-acp");
-    fs::write(&claude_path, "#!/bin/sh\necho 'claude-code-acp 9.9.9'\n")
-        .expect("write claude-code-acp stub");
+    // Place the CLI binary (`claude`), not the ACP adapter.
+    let claude_path = bin_dir.join("claude");
+    fs::write(&claude_path, "#!/bin/sh\necho 'claude 9.9.9'\n").expect("write claude stub");
     let mut perms = fs::metadata(&claude_path).expect("metadata").permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&claude_path, perms).expect("chmod claude-code-acp");
+    fs::set_permissions(&claude_path, perms).expect("chmod claude");
 
     let path = std::env::var_os("PATH").unwrap_or_default();
     let joined =
@@ -255,7 +257,7 @@ fn auto_selection_uses_claude_code_acp_when_transport_is_unset() {
 
     assert!(
         is_tool_binary_available_for_config("claude-code", Some(&config)),
-        "unset claude-code transport should probe `claude-code-acp`, not `claude`"
+        "unset claude-code transport should probe `claude` (CLI binary), not `claude-code-acp`"
     );
 
     let (tool, model_spec, model) = resolve_tool_and_model(

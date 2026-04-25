@@ -1,7 +1,10 @@
 use super::build_executor;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
-use csa_executor::{Executor, SessionConfig, TransportFactory, TransportMode};
+use csa_executor::{
+    ClaudeCodeRuntimeMetadata, ClaudeCodeTransport, Executor, SessionConfig, TransportFactory,
+    TransportMode,
+};
 use std::fs;
 use std::path::Path;
 
@@ -32,24 +35,17 @@ fn assert_legacy_transport(executor: Executor, expected_binary: &str) {
     );
 }
 
-fn assert_acp_transport(executor: Executor, expected_binary: &str) {
-    let tool_name = executor.tool_name();
-    let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
-        .expect("transport should build");
-
-    assert_eq!(transport.mode(), TransportMode::Acp);
-    assert_eq!(
-        executor.runtime_binary_name(),
-        expected_binary,
-        "unexpected runtime binary for {tool_name}"
-    );
-}
-
 fn assert_non_codex_transport_defaults() {
-    assert_acp_transport(
-        Executor::from_tool_name(&ToolName::ClaudeCode, None, None),
-        "claude-code-acp",
-    );
+    // claude-code defaults to CLI transport now (#1115/#1117 workaround).
+    // `Executor::from_tool_name` uses the metadata-level default (Acp) which
+    // would fail the feature gate without `claude-code-acp`. Build explicitly
+    // with Cli metadata to test the effective default routing.
+    let claude_executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::from_transport(ClaudeCodeTransport::Cli),
+    };
+    assert_legacy_transport(claude_executor, "claude");
     assert_legacy_transport(
         Executor::from_tool_name(&ToolName::GeminiCli, None, None),
         "gemini",

@@ -778,7 +778,8 @@ fn tool_transport_reads_tool_override() {
     );
 
     assert_eq!(cfg.tool_transport("codex"), Some(TransportKind::Cli));
-    assert_eq!(cfg.tool_transport("claude-code"), Some(TransportKind::Acp));
+    // claude-code defaults to CLI transport now (#1115/#1117 workaround).
+    assert_eq!(cfg.tool_transport("claude-code"), Some(TransportKind::Cli));
 }
 
 // FS sandbox tests moved to config_runtime_fs_sandbox_tests.rs

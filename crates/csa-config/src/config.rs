@@ -432,11 +432,22 @@ impl ProjectConfig {
             return Ok(());
         }
         if !self.is_tool_enabled(tool) {
+            // Build a list of other enabled tools to guide the caller to alternatives.
+            let alternatives: Vec<&str> = crate::global::all_known_tools()
+                .iter()
+                .map(|t| t.as_str())
+                .filter(|&name| name != tool && self.is_tool_enabled(name))
+                .collect();
+            let alternatives_hint = if alternatives.is_empty() {
+                String::new()
+            } else {
+                format!("\nCurrently enabled tools: {}.", alternatives.join(", "))
+            };
             anyhow::bail!(
                 "Error: tool '{tool}' is disabled in user configuration.\n\
                  The user may have temporarily disabled this tool. Respect their preference.\n\
                  To override, use --force-override-user-config (not recommended unless\n\
-                 the user explicitly requested this specific tool)."
+                 the user explicitly requested this specific tool).{alternatives_hint}"
             );
         }
         Ok(())

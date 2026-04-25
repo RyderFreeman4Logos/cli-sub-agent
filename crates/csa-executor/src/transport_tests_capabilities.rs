@@ -184,9 +184,22 @@ fn assert_supported(executor: &crate::executor::Executor, mode: super::Transport
 
 // --- ClaudeCode ---
 
+// ACP for claude-code requires the `claude-code-acp` cargo feature (default OFF,
+// gated due to startup-crash bugs #1115/#1117).
 #[test]
+#[cfg(feature = "claude-code-acp")]
 fn test_matrix_claude_code_acp_supported() {
     assert_supported(&make_claude_code(), super::TransportMode::Acp);
+}
+
+#[test]
+#[cfg(not(feature = "claude-code-acp"))]
+fn test_matrix_claude_code_acp_rejected_without_feature() {
+    assert_unsupported(
+        &make_claude_code(),
+        super::TransportMode::Acp,
+        "claude-code-acp",
+    );
 }
 
 #[test]

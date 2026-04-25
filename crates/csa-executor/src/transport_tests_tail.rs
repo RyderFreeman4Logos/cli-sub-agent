@@ -20,30 +20,40 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
         );
     }
 
-    let acp_tools = vec![
-        Executor::ClaudeCode {
-            model_override: None,
-            thinking_budget: None,
-            runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
-        },
-        Executor::Codex {
-            model_override: None,
-            thinking_budget: None,
-            runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
-        },
-    ];
-    for executor in acp_tools {
-        let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
-            .expect("transport should build");
-        assert!(
-            transport.as_ref().as_any().is::<AcpTransport>(),
-            "Expected AcpTransport for {}",
-            executor.tool_name()
-        );
-    }
+    // claude-code defaults to CLI transport now (#1115/#1117 workaround). The
+    // ClaudeCodeCliTransport is used for the default path.
+    let claude_executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::ClaudeCodeRuntimeMetadata::from_transport(
+            crate::claude_runtime::ClaudeCodeTransport::Cli,
+        ),
+    };
+    let transport = TransportFactory::create(&claude_executor, None)
+        .expect("transport should build for ClaudeCode+Cli");
+    assert!(
+        transport.as_ref().as_any().is::<ClaudeCodeCliTransport>(),
+        "Expected ClaudeCodeCliTransport for claude-code default"
+    );
+
+    // codex still uses ACP by default
+    let codex_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+    let transport = TransportFactory::create(&codex_executor, Some(SessionConfig::default()))
+        .expect("transport should build for Codex+Acp");
+    assert!(
+        transport.as_ref().as_any().is::<AcpTransport>(),
+        "Expected AcpTransport for codex"
+    );
 }
 
+/// ACP session config passing for claude-code requires the `claude-code-acp`
+/// feature (disabled by default, gated due to startup-crash bugs #1115/#1117).
 #[test]
+#[cfg(feature = "claude-code-acp")]
 fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
     let executor = Executor::ClaudeCode {
         model_override: None,
@@ -68,6 +78,25 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
         .expect("expected AcpTransport");
 
     assert_eq!(acp.session_config, Some(session_config));
+}
+
+/// Without `claude-code-acp` feature, session config is passed to CLI transport.
+/// This test covers the default path (CLI transport, no ACP session config).
+#[test]
+#[cfg(not(feature = "claude-code-acp"))]
+fn test_transport_factory_create_cli_transport_for_claude_code_default() {
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::ClaudeCodeRuntimeMetadata::from_transport(
+            crate::claude_runtime::ClaudeCodeTransport::Cli,
+        ),
+    };
+    let transport = TransportFactory::create(&executor, None).expect("transport should build");
+    assert!(
+        transport.as_ref().as_any().is::<ClaudeCodeCliTransport>(),
+        "expected ClaudeCodeCliTransport for default claude-code path"
+    );
 }
 
 #[test]
