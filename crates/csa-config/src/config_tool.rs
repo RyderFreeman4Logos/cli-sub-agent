@@ -18,7 +18,12 @@ pub enum TransportKind {
 
 pub fn default_transport_for_tool(tool_name: &str) -> Option<TransportKind> {
     match tool_name {
-        "claude-code" | "codex" => Some(TransportKind::Acp),
+        // codex still defaults to ACP.
+        // claude-code defaults to CLI as a workaround for ACP startup-crash bugs
+        // (#1115/#1117). ACP is still reachable via explicit config + the
+        // `claude-code-acp` cargo feature on `csa-executor`.
+        "claude-code" => Some(TransportKind::Cli),
+        "codex" => Some(TransportKind::Acp),
         "gemini-cli" | "opencode" => Some(TransportKind::Cli),
         _ => None,
     }
@@ -301,9 +306,10 @@ transport = "cli"
             ..Default::default()
         };
 
+        // claude-code now defaults to CLI transport (#1115/#1117 workaround).
         assert_eq!(
             config.resolve_transport("claude-code"),
-            Some(TransportKind::Acp)
+            Some(TransportKind::Cli)
         );
         assert_eq!(
             config.resolve_transport("gemini-cli"),

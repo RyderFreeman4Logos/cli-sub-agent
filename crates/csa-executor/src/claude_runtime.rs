@@ -1,9 +1,15 @@
 //! Build-dependent runtime metadata for the claude-code tool.
 //!
-//! Claude Code defaults to ACP for now, but callers can opt into the native
-//! CLI transport (`claude -p/--print`) via config. Keeping transport metadata
-//! here lets availability checks and executor dispatch agree on the runtime
-//! binary without hardcoded string forks.
+//! Claude Code now defaults to the CLI transport (`ClaudeCodeCliTransport`,
+//! `TransportMode::Legacy`) as a workaround for ACP startup-crash bugs
+//! (#1115/#1117). The ACP path is still compiled in but gated behind the
+//! `claude-code-acp` cargo feature (default OFF) on `csa-executor`. Callers
+//! can request ACP explicitly via config (`transport = "acp"`) with the
+//! feature enabled; without the feature, an explicit ACP request is rejected
+//! with a clear error pointing to the rebuild flag.
+//!
+//! Keeping transport metadata here lets availability checks and executor
+//! dispatch agree on the runtime binary without hardcoded string forks.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +24,14 @@ pub enum ClaudeCodeTransport {
 }
 
 impl ClaudeCodeTransport {
-    /// Current default transport for this build.
+    /// Default transport for serialization and fallback deserialization.
+    ///
+    /// NOTE: `default_for_build` returns `Acp` at the metadata level, but
+    /// `TransportFactory::mode_for_executor` routes `claude-code` to
+    /// `TransportMode::Legacy` (CLI) by default as a workaround for ACP
+    /// startup-crash bugs (#1115/#1117). ACP is only reachable for claude-code
+    /// when the `claude-code-acp` cargo feature is enabled AND the executor
+    /// carries explicit `Some(Acp)` transport metadata.
     #[must_use]
     pub const fn default_for_build() -> Self {
         Self::Acp
@@ -112,8 +125,11 @@ mod tests {
         assert_eq!(meta.runtime_binary_name(), "claude-code-acp");
     }
 
+    // NOTE: The metadata-level default is still `Acp` for serde deserialization
+    // compatibility. The actual runtime routing to CLI happens in
+    // `TransportFactory::mode_for_executor` (#1115/#1117 workaround).
     #[test]
-    fn current_build_defaults_to_acp() {
+    fn metadata_default_for_build_is_acp() {
         let meta = claude_runtime_metadata();
 
         assert_eq!(meta.transport_mode(), ClaudeCodeTransport::Acp);

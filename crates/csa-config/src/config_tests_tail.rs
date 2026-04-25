@@ -404,3 +404,118 @@ idle_timeout_seconds = 250
     let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.initial_response_timeout_seconds, None);
 }
+
+// ---------------------------------------------------------------------------
+// enforce_tool_enabled: "Currently enabled tools:" alternatives hint
+// ---------------------------------------------------------------------------
+
+/// When a tool is disabled but other tools are enabled, the error message must
+/// include a "Currently enabled tools:" line listing the alternatives.
+#[test]
+fn test_enforce_tool_enabled_includes_alternatives_when_others_enabled() {
+    let mut tools = HashMap::new();
+    // Disable codex; leave all others implicitly enabled (not in the map defaults to enabled).
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    let result = config.enforce_tool_enabled("codex", false);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Currently enabled tools:"),
+        "error should contain 'Currently enabled tools:' hint; got: {msg}"
+    );
+    // codex must NOT appear in the alternatives list
+    let alternatives_line = msg
+        .lines()
+        .find(|l| l.contains("Currently enabled tools:"))
+        .unwrap_or("");
+    assert!(
+        !alternatives_line.contains("codex"),
+        "rejected tool 'codex' must not appear in alternatives: {alternatives_line}"
+    );
+}
+
+/// When all known tools are disabled, the "Currently enabled tools:" line must
+/// be omitted entirely — no point listing an empty set.
+#[test]
+fn test_enforce_tool_enabled_omits_hint_when_no_alternatives() {
+    let known_tools = [
+        "gemini-cli",
+        "opencode",
+        "codex",
+        "claude-code",
+        "openai-compat",
+    ];
+    let mut tools = HashMap::new();
+    for name in &known_tools {
+        tools.insert(
+            name.to_string(),
+            ToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+    }
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    let result = config.enforce_tool_enabled("codex", false);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        !msg.contains("Currently enabled tools:"),
+        "hint line must be absent when no alternatives exist; got: {msg}"
+    );
+}

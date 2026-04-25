@@ -76,10 +76,11 @@ fn factory_returns_cli_transport_for_claude_code_cli_mode() {
     assert_eq!(cli_transport.mode(), TransportMode::Legacy);
 }
 
+/// ACP transport for claude-code is only reachable with the `claude-code-acp`
+/// feature enabled. This guards against the startup-crash bugs #1115/#1117.
 #[test]
-fn factory_returns_acp_for_claude_code_default() {
-    // Default (no explicit transport override) MUST stay on ACP — the
-    // PoC change must NOT regress existing claude-code users.
+#[cfg(feature = "claude-code-acp")]
+fn factory_returns_acp_for_claude_code_acp_metadata_with_feature() {
     let executor = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
@@ -87,6 +88,28 @@ fn factory_returns_acp_for_claude_code_default() {
     };
     let transport = TransportFactory::create(&executor, None).expect("factory create");
     assert_eq!(transport.mode(), TransportMode::Acp);
+}
+
+/// Without `claude-code-acp` feature, even an explicit ACP metadata request
+/// must fail — the feature gate is the safety net for #1115/#1117.
+#[test]
+#[cfg(not(feature = "claude-code-acp"))]
+fn factory_rejects_acp_for_claude_code_without_feature() {
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::from_transport(CcTransport::Acp),
+    };
+    let result = TransportFactory::create(&executor, None);
+    assert!(
+        result.is_err(),
+        "factory should reject ClaudeCode+Acp without claude-code-acp feature"
+    );
+    let msg = format!("{:#}", result.err().unwrap());
+    assert!(
+        msg.contains("claude-code-acp") || msg.contains("1115"),
+        "error should mention the feature flag or issue; got: {msg}"
+    );
 }
 
 #[test]

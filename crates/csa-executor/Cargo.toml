@@ -30,6 +30,10 @@ reqwest.workspace = true
 default = []
 codex-acp = []
 codex-pty-fork = ["csa-process/codex-pty-fork"]
+# Gate claude-code ACP transport behind this feature.
+# Disabled by default due to startup-crash bugs (#1115, #1117).
+# Enable with `--features claude-code-acp` when investigating the ACP path.
+claude-code-acp = []
 
 [dev-dependencies]
 tempfile.workspace = true
