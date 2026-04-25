@@ -64,11 +64,11 @@ else
     if [ -n "$COMMENT_BODY" ]; then
       # Infer severity from the comment text
       COMMENT_SEV="HIGH"
-      if echo "$COMMENT_BODY" | grep -qi "CRITICAL\|P0"; then
+      if echo "$COMMENT_BODY" | grep -qiE "CRITICAL|P0"; then
         COMMENT_SEV="CRITICAL"
       fi
       # Use first line of comment body as description (strip markdown headers)
-      COMMENT_DESC=$(echo "$COMMENT_BODY" | grep -v '^#' | grep -v '^\s*$' | head -1 | sed 's/^[[:space:]]*//')
+      COMMENT_DESC=$(echo "$COMMENT_BODY" | grep -v '^#' | grep -v '^[[:space:]]*$' | head -1 | sed 's/^[[:space:]]*//')
       echo "CSA_VAR:FINDING_DESCRIPTION=$COMMENT_DESC"
       echo "CSA_VAR:FINDING_SEVERITY=$COMMENT_SEV"
       echo "CSA_VAR:FINDING_FILE=${COMMENT_PATH:-unknown}"
@@ -100,12 +100,12 @@ if [ -n "$FINDINGS_RAW" ]; then
   # The toml structure: severity = "high"|"critical", description = "...",
   # file_ranges has path = "..." entries.
   # Filter: only consider lines where severity is high or critical
-  FIRST_SEV=$(echo "$FINDINGS_RAW" | grep -iE '^severity\s*=\s*"(high|critical)"' | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/')
+  FIRST_SEV=$(echo "$FINDINGS_RAW" | grep -iE '^severity[[:space:]]*=[[:space:]]*"(high|critical)"' | head -1 | sed -E 's/.*= *"([^"]*)".*/\1/')
   # Find the description from the same [[findings]] block as the matched severity.
   # Since findings.toml is flat-ish (severity then description then file_ranges),
   # we take the description line following the first high/critical severity line.
-  FIRST_DESC=$(echo "$FINDINGS_RAW" | grep -iA 20 '^severity\s*=\s*".*\(high\|critical\)"' | grep -i '^description' | head -1 | sed 's/.*= *"\(.*\)".*/\1/')
-  FIRST_FILE=$(echo "$FINDINGS_RAW" | grep -iA 30 '^severity\s*=\s*".*\(high\|critical\)"' | grep -i '^path' | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/')
+  FIRST_DESC=$(echo "$FINDINGS_RAW" | grep -iEA 20 '^severity[[:space:]]*=[[:space:]]*".*(high|critical)"' | grep -i '^description' | head -1 | sed -E 's/.*= *"(.*)".*/\1/')
+  FIRST_FILE=$(echo "$FINDINGS_RAW" | grep -iEA 30 '^severity[[:space:]]*=[[:space:]]*".*(high|critical)"' | grep -i '^path' | head -1 | sed -E 's/.*= *"([^"]*)".*/\1/')
 
   if [ -n "$FIRST_DESC" ]; then
     echo "CSA_VAR:FINDING_DESCRIPTION=$FIRST_DESC"
@@ -173,14 +173,49 @@ CLASSIFY_SID=$(csa run --sa-mode true --tier tier-2-standard \
    - Cannot generalize to other locations
    - No historical precedent
 
-   Output exactly one line: CLASSIFICATION=BUG_CLASS or CLASSIFICATION=ISOLATED_MISTAKE
-   Then output RATIONALE: <one paragraph explaining why>")
+   Output EXACTLY these lines (one per line, no quoting, no extra whitespace):
+   CLASSIFICATION=BUG_CLASS or CLASSIFICATION=ISOLATED_MISTAKE
+   RATIONALE=<one paragraph explaining why>
+
+   If CLASSIFICATION=BUG_CLASS, also output these ADDITIONAL lines:
+   BUG_CLASS_NAME=<human-readable name, e.g. Unbound Shell Variable>
+   BUG_CLASS_SLUG=<kebab-case slug, e.g. unbound-shell-variable>
+   BUG_CLASS_KEYWORDS=<space-separated grep keywords, e.g. unbound variable set -u>
+   BUG_CLASS_DESCRIPTION=<single-line paragraph describing the bug class>
+   ANTI_PATTERN_EXAMPLES_B64=<base64-encoded multi-line anti-pattern code examples>
+   CORRECT_PATTERN_B64=<base64-encoded multi-line correct pattern code examples>
+
+   If CLASSIFICATION=ISOLATED_MISTAKE, do NOT output the BUG_CLASS_* lines.")
 csa session wait --session "$CLASSIFY_SID"
 
-# Read classifier result and emit CSA_VAR for condition gating
-CLASSIFY_OUTPUT=$(csa session result --session "$CLASSIFY_SID" --section summary 2>/dev/null || true)
+# Read classifier result and emit CSA_VAR for condition gating.
+# When classification is BUG_CLASS, also parse and emit the 6 BUG_CLASS_*
+# fields that Steps 3-5 reference.
+CLASSIFY_OUTPUT=$(csa session result --session "$CLASSIFY_SID" --section summary 2>/dev/null || \
+                  csa session result --session "$CLASSIFY_SID" --full 2>/dev/null || true)
 if echo "$CLASSIFY_OUTPUT" | grep -q "CLASSIFICATION=BUG_CLASS"; then
   echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS=yes"
+
+  # Extract the 6 BUG_CLASS fields from LLM output (one per line, KEY=VALUE format)
+  BC_NAME=$(echo "$CLASSIFY_OUTPUT" | grep -E '^BUG_CLASS_NAME=' | head -1 | sed 's/^BUG_CLASS_NAME=//')
+  BC_SLUG=$(echo "$CLASSIFY_OUTPUT" | grep -E '^BUG_CLASS_SLUG=' | head -1 | sed 's/^BUG_CLASS_SLUG=//')
+  BC_KEYWORDS=$(echo "$CLASSIFY_OUTPUT" | grep -E '^BUG_CLASS_KEYWORDS=' | head -1 | sed 's/^BUG_CLASS_KEYWORDS=//')
+  BC_DESC=$(echo "$CLASSIFY_OUTPUT" | grep -E '^BUG_CLASS_DESCRIPTION=' | head -1 | sed 's/^BUG_CLASS_DESCRIPTION=//')
+  BC_ANTI_B64=$(echo "$CLASSIFY_OUTPUT" | grep -E '^ANTI_PATTERN_EXAMPLES_B64=' | head -1 | sed 's/^ANTI_PATTERN_EXAMPLES_B64=//')
+  BC_CORRECT_B64=$(echo "$CLASSIFY_OUTPUT" | grep -E '^CORRECT_PATTERN_B64=' | head -1 | sed 's/^CORRECT_PATTERN_B64=//')
+
+  # Fallback defaults when LLM omits optional fields
+  : "${BC_NAME:=unknown-bug-class}"
+  : "${BC_SLUG:=unknown-bug-class}"
+  : "${BC_KEYWORDS:=bug class}"
+  : "${BC_DESC:=${FINDING_DESCRIPTION}}"
+
+  echo "CSA_VAR:BUG_CLASS_NAME=$BC_NAME"
+  echo "CSA_VAR:BUG_CLASS_SLUG=$BC_SLUG"
+  echo "CSA_VAR:BUG_CLASS_KEYWORDS=$BC_KEYWORDS"
+  echo "CSA_VAR:BUG_CLASS_DESCRIPTION=$BC_DESC"
+  echo "CSA_VAR:ANTI_PATTERN_EXAMPLES_B64=${BC_ANTI_B64:-}"
+  echo "CSA_VAR:CORRECT_PATTERN_B64=${BC_CORRECT_B64:-}"
 else
   echo "CSA_VAR:HAS_BUG_CLASS_FINDINGS="
 fi
@@ -281,14 +316,30 @@ finding-ids: [<list of finding IDs>]
 
 ```bash
 set -euo pipefail
+
+# Decode base64-encoded multi-line fields from Step 2
+ANTI_PATTERN_DECODED=""
+if [ -n "${ANTI_PATTERN_EXAMPLES_B64:-}" ]; then
+  ANTI_PATTERN_DECODED=$(echo "${ANTI_PATTERN_EXAMPLES_B64}" | base64 -d 2>/dev/null || true)
+fi
+: "${ANTI_PATTERN_DECODED:=No anti-pattern examples provided.}"
+
+CORRECT_PATTERN_DECODED=""
+if [ -n "${CORRECT_PATTERN_B64:-}" ]; then
+  CORRECT_PATTERN_DECODED=$(echo "${CORRECT_PATTERN_B64}" | base64 -d 2>/dev/null || true)
+fi
+: "${CORRECT_PATTERN_DECODED:=No correct pattern examples provided.}"
+
 DRAFT_SID=$(csa run --sa-mode true --tier tier-2-standard \
   --description "draft-rule: ${BUG_CLASS_NAME}" \
   "Generate a coding rule file for the following bug class.
 
    Bug class: ${BUG_CLASS_DESCRIPTION}
    Language: ${LANG}
-   Anti-pattern examples: ${ANTI_PATTERN_EXAMPLES}
-   Correct pattern: ${CORRECT_PATTERN}
+   Anti-pattern examples:
+${ANTI_PATTERN_DECODED}
+   Correct pattern:
+${CORRECT_PATTERN_DECODED}
    PR: #${PR_NUM}
    Fix commit: ${FIX_COMMIT_SHA}
 
@@ -415,8 +466,10 @@ NNN|bug-class-slug|one-line summary of the rule
 - `${BUG_CLASS_KEYWORDS}`: Keywords for grep-based deduplication.
 - `${BUG_CLASS_SLUG}`: URL-safe slug for file naming.
 - `${LANG}`: Target language directory (rust, go, py, ts, all-lang).
-- `${ANTI_PATTERN_EXAMPLES}`: Code examples of the anti-pattern.
-- `${CORRECT_PATTERN}`: Code examples of the correct pattern.
+- `${ANTI_PATTERN_EXAMPLES}`: Code examples of the anti-pattern (deprecated — use B64 variant).
+- `${ANTI_PATTERN_EXAMPLES_B64}`: Base64-encoded multi-line anti-pattern code examples (emitted by Step 2, decoded in Step 4).
+- `${CORRECT_PATTERN}`: Code examples of the correct pattern (deprecated — use B64 variant).
+- `${CORRECT_PATTERN_B64}`: Base64-encoded multi-line correct pattern code examples (emitted by Step 2, decoded in Step 4).
 - `${RULE_CONTENT}`: Generated rule file content (deprecated — use DRAFT_FILE).
 - `${SHOULD_DRAFT}`: Set to "yes" by Step 3 when Step 4 should run (empty on EXACT_MATCH).
 - `${DEDUPE_RESULT}`: Deduplication outcome from Step 3 (EXACT_MATCH|PARTIAL_MATCH|NO_MATCH).
