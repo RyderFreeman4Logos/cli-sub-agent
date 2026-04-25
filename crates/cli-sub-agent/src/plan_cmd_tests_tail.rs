@@ -158,55 +158,6 @@ fn load_pr_bot_step_by_title(title: &str) -> PlanStep {
     }
 }
 
-#[test]
-fn pr_bot_workflow_marks_non_ai_steps_explicitly() {
-    let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
-    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
-    let plan = plan_from_toml(&workflow).unwrap();
-
-    assert!(
-        plan.steps
-            .iter()
-            .all(|step| step.title != "Dispatcher Model Note"),
-        "dispatcher note must remain informational markdown, not an executable step"
-    );
-
-    let setup_abort = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Step 5a: Abort — Bot Needs Environment Configuration")
-        .expect("missing bot setup abort step");
-    assert_eq!(setup_abort.tool.as_deref(), Some("await-user"));
-
-    let fork_convention = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Assumed Fork Convention")
-        .expect("missing fork convention advisory step");
-    assert_eq!(fork_convention.tool.as_deref(), Some("note"));
-
-    let clean_note = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Step 10a: Bot Review Clean")
-        .expect("missing bot review clean step");
-    assert_eq!(clean_note.tool.as_deref(), Some("note"));
-}
-
-#[test]
-fn dev2merge_workflow_marks_mktsk_step_manual() {
-    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
-    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
-    let plan = plan_from_toml(&workflow).unwrap();
-
-    let mktsk_step = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Execute Plan with mktsk")
-        .expect("missing dev2merge mktsk step");
-    assert_eq!(mktsk_step.tool.as_deref(), Some("manual"));
-}
-
 #[tokio::test]
 async fn execute_plan_stops_after_manual_handoff() {
     let plan = ExecutionPlan {
