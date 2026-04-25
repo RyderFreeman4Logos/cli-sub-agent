@@ -4,8 +4,9 @@ use super::{
     display_log_files, ensure_terminal_result_for_dead_active_session,
     ensure_terminal_result_for_dead_active_session_with_before_write,
     filter_sessions_by_csa_version, handle_session_is_alive, handle_session_kill,
-    handle_session_list, handle_session_wait, print_content_with_tail, select_sessions_for_list,
-    session_to_json, status_from_phase_and_result, truncate_with_ellipsis,
+    handle_session_list, handle_session_wait, is_session_stale_for_test, print_content_with_tail,
+    resolve_session_status, select_sessions_for_list, session_to_json,
+    status_from_phase_and_result, truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};
 use crate::session_cmds_daemon::{
@@ -171,6 +172,100 @@ fn retired_phase_shows_retired_when_result_succeeded() {
         status_from_phase_and_result(&SessionPhase::Retired, Some(&success)),
         "Retired"
     );
+}
+
+// #1118 part D ────────────────────────────────────────────────────────────────
+//
+// Active sessions whose `last_accessed` has not advanced for >= the stale
+// threshold are reported as `Stale` so operators can `csa session kill` them.
+// The threshold is `2 * kv_cache.long_poll_seconds` (default 480s).
+
+#[test]
+fn is_session_stale_returns_false_for_recent_active_session() {
+    let now = Utc::now();
+    let mut session = sample_session_state();
+    session.phase = SessionPhase::Active;
+    session.last_accessed = now - chrono::Duration::seconds(60);
+
+    assert!(
+        !is_session_stale_for_test(&session, 480, now),
+        "session accessed 60s ago should not be stale at threshold 480s",
+    );
+}
+
+#[test]
+fn is_session_stale_returns_true_for_stale_active_session() {
+    let now = Utc::now();
+    let mut session = sample_session_state();
+    session.phase = SessionPhase::Active;
+    session.last_accessed = now - chrono::Duration::seconds(1_000);
+
+    assert!(
+        is_session_stale_for_test(&session, 480, now),
+        "session accessed 1000s ago should be stale at threshold 480s",
+    );
+}
+
+#[test]
+fn is_session_stale_ignores_non_active_phase() {
+    let now = Utc::now();
+    let mut session = sample_session_state();
+    session.last_accessed = now - chrono::Duration::seconds(1_000);
+
+    for phase in [SessionPhase::Available, SessionPhase::Retired] {
+        let phase_label = format!("{phase:?}");
+        session.phase = phase;
+        assert!(
+            !is_session_stale_for_test(&session, 480, now),
+            "non-Active session should never be reported as stale (phase={phase_label})",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_session_status_reports_stale_for_active_session_without_progress() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path();
+
+    let s = create_session(project, Some("stale-detection"), None, Some("codex")).unwrap();
+    let mut session = load_session(project, &s.meta_session_id).unwrap();
+    session.phase = SessionPhase::Active;
+    // Backdate last_accessed past the worst-case threshold (Max-tier Opus
+    // 3000s long-poll → 6000s stale threshold).
+    session.last_accessed = Utc::now() - chrono::Duration::seconds(7_200);
+    save_session(&session).unwrap();
+
+    // The dead-active reconciler synthesizes a `Failed` result.toml for any
+    // Active session whose process is gone (#540), pre-empting the stale path.
+    // Spawn a real long-lived child and write its PID into `locks/codex.lock`
+    // so liveness checks see the session as alive — only then can stale
+    // detection (#1118 part D) surface.
+    let session_dir = get_session_dir(project, &s.meta_session_id).unwrap();
+    let mut child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("spawn keepalive child");
+    let locks_dir = session_dir.join("locks");
+    std::fs::create_dir_all(&locks_dir).unwrap();
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!(r#"{{"pid": {}}}"#, child.id()),
+    )
+    .unwrap();
+
+    let resolved = resolve_session_status(&session);
+
+    child.kill().ok();
+    child.wait().ok();
+
+    assert_eq!(
+        resolved, "Stale",
+        "stale Active session with live process and no progress should resolve to 'Stale'"
+    );
+
+    delete_session(project, &s.meta_session_id).unwrap();
 }
 
 fn sample_session_state() -> MetaSessionState {
@@ -607,164 +702,14 @@ fn print_content_with_tail_no_panic_on_large_tail() {
 
 // ── CLI --summary/--section/--full flag parsing ───────────────────
 
-#[test]
-fn session_result_cli_parses_summary_flag() {
-    let cli = Cli::try_parse_from([
-        "csa",
-        "session",
-        "result",
-        "--session",
-        "01ABCDEF",
-        "--summary",
-    ])
-    .unwrap();
-    match cli.command {
-        Commands::Session {
-            cmd:
-                SessionCommands::Result {
-                    summary,
-                    section,
-                    full,
-                    ..
-                },
-        } => {
-            assert!(summary);
-            assert!(section.is_none());
-            assert!(!full);
-        }
-        _ => panic!("expected session result command"),
-    }
-}
-
-#[test]
-fn session_result_cli_parses_section_flag() {
-    let cli = Cli::try_parse_from([
-        "csa",
-        "session",
-        "result",
-        "--session",
-        "01ABCDEF",
-        "--section",
-        "details",
-    ])
-    .unwrap();
-    match cli.command {
-        Commands::Session {
-            cmd:
-                SessionCommands::Result {
-                    summary,
-                    section,
-                    full,
-                    ..
-                },
-        } => {
-            assert!(!summary);
-            assert_eq!(section.as_deref(), Some("details"));
-            assert!(!full);
-        }
-        _ => panic!("expected session result command"),
-    }
-}
-
-#[test]
-fn session_result_cli_parses_full_flag() {
-    let cli = Cli::try_parse_from([
-        "csa",
-        "session",
-        "result",
-        "--session",
-        "01ABCDEF",
-        "--full",
-    ])
-    .unwrap();
-    match cli.command {
-        Commands::Session {
-            cmd:
-                SessionCommands::Result {
-                    summary,
-                    section,
-                    full,
-                    ..
-                },
-        } => {
-            assert!(!summary);
-            assert!(section.is_none());
-            assert!(full);
-        }
-        _ => panic!("expected session result command"),
-    }
-}
-
-#[test]
-fn session_result_cli_rejects_conflicting_flags() {
-    // --summary and --full conflict
-    let result = Cli::try_parse_from([
-        "csa",
-        "session",
-        "result",
-        "-s",
-        "01ABC",
-        "--summary",
-        "--full",
-    ]);
-    assert!(result.is_err());
-
-    // --summary and --section conflict
-    let result = Cli::try_parse_from([
-        "csa",
-        "session",
-        "result",
-        "-s",
-        "01ABC",
-        "--summary",
-        "--section",
-        "x",
-    ]);
-    assert!(result.is_err());
-
-    // --section and --full conflict
-    let result = Cli::try_parse_from([
-        "csa",
-        "session",
-        "result",
-        "-s",
-        "01ABC",
-        "--section",
-        "x",
-        "--full",
-    ]);
-    assert!(result.is_err());
-}
-
-#[test]
-fn session_result_cli_defaults_no_structured_flags() {
-    let cli = Cli::try_parse_from(["csa", "session", "result", "--session", "01ABCDEF"]).unwrap();
-    match cli.command {
-        Commands::Session {
-            cmd:
-                SessionCommands::Result {
-                    summary,
-                    section,
-                    full,
-                    json,
-                    ..
-                },
-        } => {
-            assert!(!summary);
-            assert!(section.is_none());
-            assert!(!full);
-            assert!(!json);
-        }
-        _ => panic!("expected session result command"),
-    }
-}
-
 include!("session_cmds_tests_fork_tail.rs");
 
 #[path = "session_cmds_tests_daemon_pid_tail.rs"]
 mod daemon_pid_tail_tests;
 #[path = "session_cmds_tests_list_format.rs"]
 mod list_format_tests;
+#[path = "session_cmds_tests_result_cli.rs"]
+mod result_cli_tests;
 #[path = "session_cmds_tests_tail.rs"]
 mod tail_tests;
 #[path = "session_cmds_tests_tail_recovery.rs"]

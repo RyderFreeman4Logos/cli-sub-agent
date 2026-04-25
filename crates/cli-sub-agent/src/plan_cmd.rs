@@ -678,6 +678,10 @@ mod tests;
 mod tests_tail;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_workflows.rs"]
+mod tests_workflows;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_pr_bot.rs"]
 mod tests_pr_bot;
 

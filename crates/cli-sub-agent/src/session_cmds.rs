@@ -25,13 +25,13 @@ pub(crate) use resolve::{
 
 #[path = "session_cmds_list.rs"]
 mod list;
-#[cfg(test)]
-use list::status_from_phase_and_result;
 use list::{
     filter_sessions_by_csa_version, format_elapsed, format_started_at, resolve_session_status,
     select_sessions_for_list, select_sessions_for_list_all_projects, session_created_at,
     session_to_json, truncate_with_ellipsis,
 };
+#[cfg(test)]
+use list::{is_session_stale_for_test, status_from_phase_and_result};
 
 #[path = "session_cmds_reconcile.rs"]
 mod reconcile;

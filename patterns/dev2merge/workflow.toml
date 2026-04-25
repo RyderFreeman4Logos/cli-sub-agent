@@ -84,6 +84,9 @@ name = "MKTD_INTENSITY"
 name = "MKTD_OUTPUT"
 
 [[workflow.variables]]
+name = "MKTD_TIMEOUT_SECONDS"
+
+[[workflow.variables]]
 name = "MKTD_TODO_TIMESTAMP"
 
 [[workflow.variables]]
@@ -264,9 +267,16 @@ id = 7
 title = "Plan with mktd"
 tool = "bash"
 prompt = '''
-Generate a TODO plan via mktd. Auto-selects intensity based on change size:
-- `light` when code_files ≤ 2 AND total_insertions < 50 (small changes)
-- `full` otherwise (default, includes threat model + debate)
+Generate a TODO plan via mktd. Hard-capped at MKTD_TIMEOUT_SECONDS (default
+600s) to prevent runaway debate-loop sub-sessions (#1118). Auto-selects
+intensity based on:
+
+- **Brief specificity** (#1118 part B): if `FEATURE_INPUT` is short (< 4096
+  chars) and already names ≥ 2 concrete `path/file.{rs,toml,md}:LINE`
+  references, default to `light` — the user already provided the change
+  shape and a debate-loop adds no value.
+- **Change size**: `light` when code_files ≤ 2 AND total_insertions < 50.
+- Otherwise: `full` (includes threat model + debate).
 
 ```bash
 set -euo pipefail
@@ -274,6 +284,7 @@ CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-codex}}" # Default codex; gemini-cli ACP blocked by #778/#755
+MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-600}" # #1118 part A: hard cap on mktd wall-clock
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
   MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 else
@@ -284,17 +295,28 @@ LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
 LIGHT_THRESHOLD_LINES="${PLANNING_LIGHT_THRESHOLD_LINES:-50}"
 PLAN_CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
 PLAN_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
+# Brief-specificity heuristic (#1118 part B): when the user's brief already
+# pins down concrete file:line targets, the planner does not need a debate-
+# loop to decide change shape — light intensity is enough.
+FEATURE_INPUT_LEN=${#FEATURE_INPUT}
+FEATURE_FILE_LINE_HITS="$(printf '%s' "${FEATURE_INPUT}" | grep -oE '[A-Za-z0-9_./-]+\.(rs|toml|md):[0-9]+' | wc -l | xargs)"
 # Audit note: empty diff also lands in "light", but that is fine here because this
 # block only chooses mktd intensity after Step 2 has already forced the full plan path.
-if [ "${PLAN_CODE_FILES}" -le "${LIGHT_THRESHOLD_FILES}" ] && [ "${PLAN_INSERTIONS:-0}" -lt "${LIGHT_THRESHOLD_LINES}" ]; then
+if [ "${FEATURE_INPUT_LEN}" -lt 4096 ] && [ "${FEATURE_FILE_LINE_HITS}" -ge 2 ]; then
+  MKTD_INTENSITY="light"
+  echo "Planning intensity: light (brief specificity: ${FEATURE_FILE_LINE_HITS} file:line refs in ${FEATURE_INPUT_LEN}-char brief)"
+elif [ "${PLAN_CODE_FILES}" -le "${LIGHT_THRESHOLD_FILES}" ] && [ "${PLAN_INSERTIONS:-0}" -lt "${LIGHT_THRESHOLD_LINES}" ]; then
   MKTD_INTENSITY="light"
   echo "Planning intensity: light (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
 else
   MKTD_INTENSITY="full"
   echo "Planning intensity: full (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
 fi
+echo "mktd hard-timeout: ${MKTD_TIMEOUT_SECONDS}s"
 set +e
-MKTD_OUTPUT="$(csa plan run --sa-mode true patterns/mktd/workflow.toml \
+# `timeout -k 30` sends SIGTERM at the cap, then SIGKILL after a 30s grace
+# if the inner process still has not exited. Exit code 124 = SIGTERM hit.
+MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode true patterns/mktd/workflow.toml \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
@@ -322,6 +344,15 @@ fail_step7_gate() {
   fi
   exit 1
 }
+# Hard timeout (#1118 part A): exit 124 means SIGTERM was sent at the cap;
+# 137 (= 128+SIGKILL) means the grace expired. Either way, abort with the
+# partial planning artifacts surfaced above for orchestrator triage.
+if [ "${MKTD_EXIT}" -eq 124 ] || [ "${MKTD_EXIT}" -eq 137 ]; then
+  echo "ERROR: mktd hard-timeout after ${MKTD_TIMEOUT_SECONDS}s (#1118 part A)." >&2
+  echo "Inspect runaway sub-sessions with 'csa session list' and clean up via 'csa session kill'." >&2
+  print_mktd_failure_context
+  exit 1
+fi
 LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
 if [ -z "${LATEST_TS}" ]; then
   fail_step7_gate "mktd did not produce a TODO for branch ${CURRENT_BRANCH}."

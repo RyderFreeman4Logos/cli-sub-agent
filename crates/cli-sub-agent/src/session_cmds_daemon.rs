@@ -276,30 +276,43 @@ pub(crate) fn handle_session_attach(
     }
 }
 
-/// Kill a daemon session with SIGTERM, then SIGKILL after a 5-second grace period if needed.
+/// Kill a session with SIGTERM, then SIGKILL after a 5-second grace period if needed.
+///
+/// Resolution order for the target PID (#1118 part C):
+/// 1. Live daemon leader from `daemon.pid` (matches PID + start-time).
+/// 2. Stale `daemon.pid` → bail (refuses to signal a potentially reused PID).
+/// 3. Inline (non-daemon) tool process from session lock files in `locks/`.
+///    The lock-holding tool process is its own session leader (spawned via
+///    `setsid`), so `kill(-pid, SIG)` propagates to the whole process group
+///    just like the daemon path.
 pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
 
-    let pid = if let Some(pid) = csa_process::ToolLiveness::daemon_pid_for_signal(&session_dir) {
-        pid
+    let (pid, kind) = if let Some(pid) =
+        csa_process::ToolLiveness::daemon_pid_for_signal(&session_dir)
+    {
+        (pid, "daemon")
     } else if let Some(stale_pid) = read_daemon_pid(&session_dir) {
         anyhow::bail!(
             "Stored daemon PID {} for session {} no longer matches a live session process; refusing to signal a potentially reused PID",
             stale_pid,
             resolved.session_id,
         );
+    } else if let Some(pid) = csa_process::ToolLiveness::live_process_pid(&session_dir) {
+        (pid, "inline")
     } else {
         anyhow::bail!(
-            "No daemon PID found for session {} — may not be a daemon session",
+            "No live PID found for session {} — session has neither a daemon.pid file nor a live tool lock file in {}/locks/",
             resolved.session_id,
+            session_dir.display(),
         );
     };
 
     if pid <= 1 {
         anyhow::bail!(
-            "Refusing to kill PID {} — invalid daemon PID (would target init or caller's process group)",
+            "Refusing to kill PID {} — invalid PID (would target init or caller's process group)",
             pid,
         );
     }
@@ -314,8 +327,8 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
 
     // Send SIGTERM to the process group (negative PID).
     eprintln!(
-        "Sending SIGTERM to session {} (PID {})...",
-        resolved.session_id, pid,
+        "Sending SIGTERM to {} session {} (PID {})...",
+        kind, resolved.session_id, pid,
     );
     // SAFETY: kill(-pid, SIGTERM) sends to the entire process group.
     let pgid = -(pid as libc::pid_t);
@@ -358,6 +371,9 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "session_cmds_daemon_attach_proptest.rs"]
+mod session_cmds_daemon_attach_proptest;
 #[cfg(test)]
 #[path = "session_cmds_daemon_routing_proptest.rs"]
 mod session_cmds_daemon_routing_proptest;

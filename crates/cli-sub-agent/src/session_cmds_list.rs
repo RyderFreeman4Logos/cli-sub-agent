@@ -2,11 +2,33 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Local, Utc};
 use std::path::Path;
 
+use csa_config::GlobalConfig;
 #[cfg(test)]
 use csa_session::decode_session_created_at;
 use csa_session::{MetaSessionState, SessionPhase, SessionResult, list_sessions, load_result};
 
 use super::{ensure_terminal_result_for_dead_active_session, retire_if_dead_with_result};
+
+/// Threshold (seconds) after which an `Active`-phase session whose `last_accessed`
+/// has not advanced is considered stale (#1118 part D). The threshold is `2 *
+/// kv_cache.long_poll_seconds` because an alive `csa session wait` re-stamps
+/// `last_accessed` on each long-poll wake; missing two consecutive wakes is a
+/// strong signal that the daemon hung or its child sub-sessions are runaway.
+fn stale_threshold_seconds() -> u64 {
+    GlobalConfig::resolve_session_wait_long_poll_seconds().saturating_mul(2)
+}
+
+/// Whether an `Active`-phase session has gone stale (no `last_accessed` advance
+/// within `stale_threshold_seconds`). Surfaced to operators via `csa session
+/// list` so they can `csa session kill` runaway sessions instead of resorting
+/// to `pkill -f` (#1118).
+fn is_session_stale(session: &MetaSessionState, threshold_secs: u64, now: DateTime<Utc>) -> bool {
+    if !matches!(session.phase, SessionPhase::Active) {
+        return false;
+    }
+    let elapsed = now.signed_duration_since(session.last_accessed);
+    elapsed > Duration::seconds(threshold_secs as i64)
+}
 
 pub(super) fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
@@ -150,6 +172,15 @@ pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
             if let Err(err) = reconciled {
                 tracing::warn!(session_id = %sid, error = %err, "Failed to reconcile session");
             }
+            // Stale detection (#1118 part D): the dead-active reconciler above
+            // catches sessions whose process has exited; this branch catches
+            // sessions whose process is still alive but has not made progress
+            // for >= 2 * kv_cache.long_poll_seconds. These are the runaway
+            // sub-sessions from #1118 — surface them as `Stale` so operators
+            // can `csa session kill` them instead of fighting the kill path.
+            if is_session_stale(session, stale_threshold_seconds(), Utc::now()) {
+                return "Stale".to_string();
+            }
             phase_label(&session.phase).to_string()
         }
         Err(err) => {
@@ -157,6 +188,15 @@ pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
             "Error".to_string()
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn is_session_stale_for_test(
+    session: &MetaSessionState,
+    threshold_secs: u64,
+    now: DateTime<Utc>,
+) -> bool {
+    is_session_stale(session, threshold_secs, now)
 }
 
 pub(super) fn select_sessions_for_list(
