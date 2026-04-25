@@ -148,6 +148,29 @@ impl ThinkingBudget {
             Self::Custom(_) => "high", // custom values map to high
         }
     }
+
+    /// Returns the effort level keyword for claude-code 2.x's `--effort` flag.
+    ///
+    /// claude-code 2.1.119 accepts `--effort <level>` with `low/medium/high/
+    /// xhigh/max` (no token-count form like the legacy `--thinking-budget`).
+    /// `DefaultBudget` returns `None` so callers can omit the flag and let
+    /// claude-code apply its built-in default. Numeric `Custom(n)` values have
+    /// no direct level equivalent and map to `high` (mirroring `codex_effort`'s
+    /// treatment for the same case).
+    ///
+    /// Replaces the pre-PR-#1120 `--thinking-budget <tokens>` emission, which
+    /// claude-code 2.x rejects as `unknown option` (see issue #1124).
+    pub fn claude_effort(&self) -> Option<&'static str> {
+        match self {
+            Self::DefaultBudget => None,
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::Xhigh => Some("xhigh"),
+            Self::Max => Some("max"),
+            Self::Custom(_) => Some("high"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +311,21 @@ mod tests {
         assert_eq!(ThinkingBudget::High.codex_effort(), "high");
         assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "xhigh");
         assert_eq!(ThinkingBudget::Custom(10000).codex_effort(), "high"); // fallback to high
+    }
+
+    #[test]
+    fn test_thinking_budget_claude_effort() {
+        // DefaultBudget = "let claude-code apply its own default" =>
+        // omit the flag entirely (None).
+        assert_eq!(ThinkingBudget::DefaultBudget.claude_effort(), None);
+        assert_eq!(ThinkingBudget::Low.claude_effort(), Some("low"));
+        assert_eq!(ThinkingBudget::Medium.claude_effort(), Some("medium"));
+        assert_eq!(ThinkingBudget::High.claude_effort(), Some("high"));
+        assert_eq!(ThinkingBudget::Xhigh.claude_effort(), Some("xhigh"));
+        assert_eq!(ThinkingBudget::Max.claude_effort(), Some("max"));
+        // Custom(n) has no level form in claude-code 2.x's --effort flag;
+        // mirror codex_effort and pick "high" so the value stays accepted.
+        assert_eq!(ThinkingBudget::Custom(10000).claude_effort(), Some("high"));
     }
 
     #[test]

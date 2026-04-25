@@ -186,7 +186,11 @@ fn test_build_command_no_model_override_omits_model_flag() {
     );
     assert!(
         !args.contains(&"--thinking-budget".to_string()),
-        "Should not have --thinking-budget when thinking_budget is None"
+        "Should not have removed --thinking-budget flag (#1124)"
+    );
+    assert!(
+        !args.contains(&"--effort".to_string()),
+        "Should not have --effort when thinking_budget is None"
     );
 }
 

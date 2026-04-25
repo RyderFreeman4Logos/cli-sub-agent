@@ -550,13 +550,20 @@ fn test_build_command_claude_args_structure() {
         args.contains(&"claude-opus".to_string()),
         "Should have model name"
     );
+    // claude-code 2.x: thinking is exposed via --effort <level>, not
+    // --thinking-budget <tokens>. The old flag must not be emitted because
+    // claude rejects it as an unknown option (#1124).
     assert!(
-        args.contains(&"--thinking-budget".to_string()),
-        "Should have --thinking-budget"
+        !args.contains(&"--thinking-budget".to_string()),
+        "Should not emit removed --thinking-budget flag (#1124)"
     );
     assert!(
-        args.contains(&"8192".to_string()),
-        "Medium budget = 8192 tokens"
+        args.contains(&"--effort".to_string()),
+        "Should have --effort"
+    );
+    assert!(
+        args.contains(&"medium".to_string()),
+        "ThinkingBudget::Medium maps to --effort medium"
     );
     assert!(args.contains(&"-p".to_string()), "Should have -p flag");
     assert!(args.contains(&"do stuff".to_string()), "Should have prompt");
