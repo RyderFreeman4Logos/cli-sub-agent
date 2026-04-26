@@ -52,12 +52,11 @@ fn validate_tool_transport_matrix_matches_phase_3_contract() {
             expected_message: None,
         },
         Case {
+            // codex CLI is now accepted (#760 / #1128 transport flip).
             tool: "codex",
             value: "cli",
-            should_pass: false,
-            expected_message: Some(
-                "codex does not yet support CLI transport — will be added in #643 Phase 4",
-            ),
+            should_pass: true,
+            expected_message: None,
         },
         Case {
             tool: "gemini-cli",

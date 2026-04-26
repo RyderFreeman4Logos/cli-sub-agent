@@ -1,8 +1,15 @@
-//! Build-dependent runtime metadata for the codex tool.
+//! Codex now defaults to the CLI transport (`LegacyTransport`,
+//! `TransportMode::Legacy`) using `codex exec resume <session_id>` (codex-cli
+//! 0.125.0+). The native CLI resume is empirically equivalent to ACP
+//! `loadSession` on server-side cache reuse (54%, 44,800/83,503 input tokens,
+//! #760 / #1128). The ACP path is still compiled in but gated behind the
+//! `codex-acp` cargo feature (default OFF) on `csa-executor`. Callers can
+//! request ACP explicitly via config (`transport = "acp"`) with the feature
+//! enabled; without the feature, an explicit ACP request is rejected with a
+//! clear error pointing to the rebuild flag.
 //!
-//! T1 centralizes codex runtime metadata here without flipping the default
-//! transport yet. Later tasks can rewire downstream callers to consult this
-//! module instead of duplicating hardcoded `"codex-acp"` assumptions.
+//! Keeping transport metadata here lets availability checks and executor
+//! dispatch agree on the runtime binary without hardcoded string forks.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +22,14 @@ pub enum CodexTransport {
 }
 
 impl CodexTransport {
-    /// Current default transport for this build.
+    /// Default transport for serialization and fallback deserialization.
+    ///
+    /// NOTE: `default_for_build` returns `Acp` at the metadata level, but
+    /// `TransportFactory::mode_for_executor` routes `codex` to
+    /// `TransportMode::Legacy` (CLI) by default in favour of native
+    /// `codex exec resume <id>` (#760 / #1128). ACP is only reachable for
+    /// codex when the `codex-acp` cargo feature is enabled AND the executor
+    /// carries explicit `Some(Acp)` transport metadata.
     #[must_use]
     pub const fn default_for_build() -> Self {
         Self::Acp
@@ -119,8 +133,11 @@ mod tests {
         );
     }
 
+    // NOTE: The metadata-level default is still `Acp` for serde deserialization
+    // compatibility. The actual runtime routing to CLI happens in
+    // `TransportFactory::mode_for_executor` (#760 / #1128 transport flip).
     #[test]
-    fn current_build_defaults_to_acp_when_feature_enabled() {
+    fn metadata_default_for_build_is_acp() {
         let meta = codex_runtime_metadata();
 
         assert_eq!(meta.transport_mode(), CodexTransport::Acp);
