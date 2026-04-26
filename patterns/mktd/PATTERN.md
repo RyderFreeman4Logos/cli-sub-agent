@@ -391,7 +391,7 @@ identifiers, or other shell-sensitive content.
 
 ```bash
 LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
-PROMPT_FILE="$(mktemp)"
+PROMPT_FILE="$(mktemp)" || exit 1
 trap 'rm -f "$PROMPT_FILE"' EXIT
 {
   printf '%s\n' "Critically evaluate this draft TODO plan, generated spec, and threat model. Act as a devil's advocate."
