@@ -12,14 +12,47 @@ const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
 const SESSION_CMDS_DAEMON_WAIT_SRC: &str = include_str!("session_cmds_daemon_wait.rs");
 
+/// Extract the body of every `<!-- CSA:CALLER_HINT action=... -->` block in a
+/// source string.
+///
+/// Splits on the literal prefix `<!-- CSA:CALLER_HINT` (the emitted marker is
+/// the only legitimate occurrence of this exact prefix) so that incidental
+/// mentions of `CSA:CALLER_HINT` in comments or doc-strings cannot produce
+/// spurious matches and break the contract assertions in this module.
 fn caller_hint_blocks(src: &str) -> Vec<&str> {
-    src.split("CSA:CALLER_HINT")
+    src.split("<!-- CSA:CALLER_HINT")
         .skip(1)
         .map(|tail| {
             let end = tail.find("-->").unwrap_or(tail.len());
             &tail[..end]
         })
         .collect()
+}
+
+#[test]
+fn caller_hint_blocks_ignores_unrelated_mentions_in_comments() {
+    // A doc/line comment that mentions the marker name MUST NOT be parsed
+    // as a hint block; only the exact emitted marker prefix counts.
+    let src = r#"
+        // see CSA:CALLER_HINT for the wire-format spec
+        /// CSA:CALLER_HINT action="wait" — described elsewhere in docs
+        fn emit() {
+            eprintln!(
+                "<!-- CSA:CALLER_HINT action=\"wait\" \
+                 rule=\"do NOT stack ScheduleWakeup, /loop, or sleep loops on top\" -->"
+            );
+        }
+    "#;
+    let blocks = caller_hint_blocks(src);
+    assert_eq!(
+        blocks.len(),
+        1,
+        "only the eprintln-emitted hint block must be parsed; comments must be ignored"
+    );
+    assert!(
+        blocks[0].contains("action=\\\"wait\\\""),
+        "the parsed block is the real hint, not a comment"
+    );
 }
 
 #[test]
