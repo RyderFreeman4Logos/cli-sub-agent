@@ -151,9 +151,21 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 ```bash
 set -euo pipefail
 just test
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+if git diff --cached --quiet && git diff --quiet; then
+  COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
+  if [ "${COMMITS_AHEAD}" -gt 0 ]; then
+    echo "FAST_PATH Commit: existing commits detected, working tree clean — skipping commit step"
+    echo "CSA_VAR:FAST_PATH_COMMITTED=true"
+    exit 0
+  else
+    echo "ERROR: No commits and no staged files."
+    exit 1
+  fi
+fi
 git add -A
 if ! git diff --cached --name-only | grep -q .; then
-  echo "ERROR: No staged files."
+  echo "ERROR: No staged files after staging dirty working tree."
   exit 1
 fi
 COMMIT_MSG="$(scripts/gen_commit_msg.sh "${SCOPE:-}" 2>/dev/null || echo "docs: update documentation")"
