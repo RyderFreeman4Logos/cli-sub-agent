@@ -299,7 +299,7 @@ PLAN_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail
 # pins down concrete file:line targets, the planner does not need a debate-
 # loop to decide change shape — light intensity is enough.
 FEATURE_INPUT_LEN=${#FEATURE_INPUT}
-FEATURE_FILE_LINE_HITS="$(printf '%s' "${FEATURE_INPUT}" | grep -oE '[A-Za-z0-9_./-]+\.(rs|toml|md):[0-9]+' | wc -l | xargs)"
+FEATURE_FILE_LINE_HITS="$(printf '%s' "${FEATURE_INPUT}" | grep -oE '[A-Za-z0-9_./-]+\.(rs|toml|md):[0-9]+' | wc -l | xargs || true)"
 # Audit note: empty diff also lands in "light", but that is fine here because this
 # block only chooses mktd intensity after Step 2 has already forced the full plan path.
 if [ "${FEATURE_INPUT_LEN}" -lt 4096 ] && [ "${FEATURE_FILE_LINE_HITS}" -ge 2 ]; then
