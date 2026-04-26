@@ -30,8 +30,22 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
 fn verdict_token_pass_or_clean(text: &str) -> bool {
     text.lines().any(|line| {
         let trimmed = line.trim();
-        is_verdict_token(trimmed) || line_has_labeled_verdict_token(trimmed)
+        let unwrapped = strip_markdown_emphasis(trimmed);
+        is_verdict_token(trimmed)
+            || is_verdict_token(unwrapped)
+            || has_emphasized_verdict_token_prefix(trimmed)
+            || line_has_labeled_verdict_token(trimmed)
     })
+}
+
+fn strip_markdown_emphasis(text: &str) -> &str {
+    text.strip_prefix("**")
+        .and_then(|inner| inner.strip_suffix("**"))
+        .or_else(|| {
+            text.strip_prefix("__")
+                .and_then(|inner| inner.strip_suffix("__"))
+        })
+        .unwrap_or(text)
 }
 
 fn is_verdict_token(text: &str) -> bool {
@@ -71,6 +85,25 @@ fn has_verdict_token_prefix(text: &str) -> bool {
         rest.chars()
             .next()
             .is_none_or(|next| !is_verdict_token_continuation(next))
+    })
+}
+
+fn has_emphasized_verdict_token_prefix(text: &str) -> bool {
+    ["**", "__"].iter().any(|marker| {
+        ["PASS", "CLEAN"].iter().any(|token| {
+            let Some(rest) = text.strip_prefix(marker) else {
+                return false;
+            };
+            let Some(rest) = rest.strip_prefix(token) else {
+                return false;
+            };
+            let Some(rest) = rest.strip_prefix(marker) else {
+                return false;
+            };
+            rest.chars()
+                .next()
+                .is_none_or(|next| !is_verdict_token_continuation(next))
+        })
     })
 }
 
@@ -222,6 +255,13 @@ mod tests {
     #[test]
     fn verdict_token_standalone_pass_line_matches() {
         assert!(verdict_token_pass_or_clean("details\nPASS\nnotes"));
+    }
+
+    #[test]
+    fn verdict_token_markdown_emphasized_pass_matches() {
+        assert!(verdict_token_pass_or_clean("**PASS**"));
+        assert!(verdict_token_pass_or_clean("__CLEAN__"));
+        assert!(verdict_token_pass_or_clean("**PASS** — clean fix"));
     }
 
     #[test]
