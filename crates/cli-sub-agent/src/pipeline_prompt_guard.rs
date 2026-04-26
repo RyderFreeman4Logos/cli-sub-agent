@@ -106,6 +106,18 @@ FORBIDDEN (SA contract violation — do NOT perform these actions):
 • Inspect diffs or code content (git diff, git show, etc.)
 • Read CSA transcripts or artifact contents directly
 
+NARROW EXCEPTION (orchestration loops only — pr-bot, dev2merge, similar):
+• <=5-line mechanical fixes prescribed verbatim by cloud-bot/reviewer findings
+  ('add this line', 'tighten this match', 'rename for consistency') MAY be
+  applied directly when CSA cold-start cost would dwarf the actual change.
+  Includes bot-prescribed test cleanup additions, mechanical case-sensitivity
+  tightening, obvious typo fixes.
+• Direct Edit is STILL FORBIDDEN for: (a) >5 lines, (b) cross-file changes,
+  (c) any design judgment (which approach? which abstraction?),
+  (d) substantive feature implementation, (e) when the user explicitly
+  invoked /sa or csa run --sa-mode true as the top-level dispatch
+  (they're paying for the audit).
+
 ALLOWED:
 • Dispatch work via `csa run --sa-mode true`
 • Read result.toml (structured report from CSA session)
