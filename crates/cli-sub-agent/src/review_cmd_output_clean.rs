@@ -75,7 +75,7 @@ fn has_verdict_token_prefix(text: &str) -> bool {
 }
 
 fn is_verdict_token_continuation(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '/'
 }
 
 fn is_ascii_word_byte(byte: u8) -> bool {
@@ -276,5 +276,13 @@ mod tests {
     fn verdict_token_labeled_compound_does_not_match() {
         assert!(!verdict_token_pass_or_clean("Verdict: PASS-FAIL"));
         assert!(!verdict_token_pass_or_clean("Status: CLEAN_UP"));
+    }
+
+    #[test]
+    fn verdict_token_labeled_slash_compound_does_not_match() {
+        // gemini round-2 finding: PASS/FAIL list-of-criteria phrasing must not
+        // be treated as a verdict declaration.
+        assert!(!verdict_token_pass_or_clean("Verdict: PASS/FAIL"));
+        assert!(!verdict_token_pass_or_clean("Status: CLEAN/DIRTY"));
     }
 }
