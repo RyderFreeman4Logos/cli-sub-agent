@@ -212,6 +212,14 @@ mod tests {
             "missing closing tag"
         );
         assert!(guard.contains("FORBIDDEN"), "missing FORBIDDEN section");
+        assert!(
+            guard.contains("NARROW EXCEPTION"),
+            "missing narrow exception section"
+        );
+        assert!(
+            guard.contains("<=5-line mechanical fixes"),
+            "missing trivial-fix carve-out"
+        );
         assert!(guard.contains("ALLOWED"), "missing ALLOWED section");
         assert!(guard.contains("Layer 0 Manager"), "missing role identifier");
         assert!(
