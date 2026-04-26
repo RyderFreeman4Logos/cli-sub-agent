@@ -216,7 +216,7 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 set -euo pipefail
 just test
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
-if git diff --cached --quiet && git diff --quiet; then
+if [ -z "$(git status --porcelain)" ]; then
   COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
   if [ "${COMMITS_AHEAD}" -gt 0 ]; then
     echo "FAST_PATH Commit: existing commits detected, working tree clean — skipping commit step"
