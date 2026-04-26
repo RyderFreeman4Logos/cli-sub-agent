@@ -87,8 +87,8 @@ fn dev2merge_plan_step_has_mktd_timeout_seconds_variable() {
         "Step 7 prompt must wrap `csa plan run` with the shell `timeout` command"
     );
     assert!(
-        prompt.contains("MKTD_TIMEOUT_SECONDS:-600"),
-        "MKTD_TIMEOUT_SECONDS must default to 600 seconds"
+        prompt.contains("MKTD_TIMEOUT_SECONDS:-1800"),
+        "MKTD_TIMEOUT_SECONDS must default to 1800 seconds (aligned with execution.min_timeout_seconds per #1137)"
     );
     assert!(
         prompt.contains("124") && prompt.contains("137"),

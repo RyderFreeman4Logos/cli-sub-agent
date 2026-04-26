@@ -268,7 +268,8 @@ title = "Plan with mktd"
 tool = "bash"
 prompt = '''
 Generate a TODO plan via mktd. Hard-capped at MKTD_TIMEOUT_SECONDS (default
-600s) to prevent runaway debate-loop sub-sessions (#1118). Auto-selects
+1800s, aligned with execution.min_timeout_seconds per #1137) to prevent
+runaway debate-loop sub-sessions (#1118). Auto-selects
 intensity based on:
 
 - **Brief specificity** (#1118 part B): if `FEATURE_INPUT` is short (< 4096
@@ -284,7 +285,7 @@ CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-codex}}" # Default codex; gemini-cli ACP blocked by #778/#755
-MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-600}" # #1118 part A: hard cap on mktd wall-clock
+MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}" # #1118 part A + #1137: hard cap on mktd wall-clock, aligned with csa CLI execution.min_timeout_seconds (1800s)
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
   MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 else
