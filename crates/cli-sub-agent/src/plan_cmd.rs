@@ -371,6 +371,12 @@ pub(crate) struct PlanRunArgs {
 }
 
 /// Handle `csa plan run <file>` or `csa plan run --pattern <name>`.
+///
+/// Foreground entry point: runs the workflow synchronously in the calling
+/// process. Used by `--foreground` callers, `--dry-run`, `--chunked`,
+/// `--resume`, the daemon-child path (after env priming), and any nested
+/// invocation detected by [`plan_cmd_daemon::dispatch`] (depth>0 / parent
+/// session env), which depend on the synchronous exit-code contract.
 pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
     let PlanRunArgs {
         file,

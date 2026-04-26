@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use csa_core::types::{OutputFormat, ToolArg, ToolName};
+use csa_core::types::{OutputFormat, ToolArg};
 
 #[path = "cli_session.rs"]
 mod cli_session;
@@ -22,6 +22,9 @@ pub use cli_tokuin::*;
 #[path = "cli_xurl.rs"]
 mod cli_xurl;
 pub use cli_xurl::*;
+#[path = "cli_plan.rs"]
+mod cli_plan;
+pub use cli_plan::*;
 
 /// Build version string combining Cargo.toml version and git describe.
 fn build_version() -> &'static str {
@@ -754,45 +757,5 @@ pub enum McpHubCommands {
         /// Override hub socket path
         #[arg(long)]
         socket: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum PlanCommands {
-    /// Execute a weave workflow file
-    Run {
-        /// Path to workflow TOML file (omit when using --pattern)
-        file: Option<String>,
-
-        /// Resolve a pattern by name and use its workflow.toml
-        #[arg(long, conflicts_with = "file")]
-        pattern: Option<String>,
-
-        /// Autonomous mode flag (REQUIRED for root callers)
-        #[arg(long, value_name = "BOOL")]
-        sa_mode: Option<bool>,
-        /// Variable override (KEY=VALUE, repeatable)
-        #[arg(long = "var", value_name = "KEY=VALUE")]
-        vars: Vec<String>,
-
-        /// Override tool for all CSA steps (ignores tier routing)
-        #[arg(long)]
-        tool: Option<ToolName>,
-
-        /// Show execution plan without running
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Execute only one step then return (caller polls with --resume)
-        #[arg(long)]
-        chunked: bool,
-
-        /// Resume from a journal state file (path to journal JSON file)
-        #[arg(long, conflicts_with = "file", conflicts_with = "pattern")]
-        resume: Option<String>,
-
-        /// Working directory
-        #[arg(long)]
-        cd: Option<String>,
     },
 }

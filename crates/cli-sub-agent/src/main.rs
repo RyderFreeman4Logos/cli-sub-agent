@@ -36,6 +36,7 @@ mod pipeline_project_key;
 mod pipeline_sandbox;
 mod pipeline_transcript;
 mod plan_cmd;
+mod plan_cmd_daemon;
 mod plan_condition;
 mod plan_display;
 mod preflight_state_dir;
@@ -89,8 +90,8 @@ include!("review_round10_exact_tests.rs");
 include!("debate_cmd_exact_tests.rs");
 
 use cli::{
-    Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, PlanCommands, SetupCommands,
-    SkillCommands, TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
+    Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, SetupCommands, SkillCommands,
+    TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
     validate_command_args,
 };
 use csa_core::types::OutputFormat;
@@ -737,37 +738,15 @@ async fn run() -> Result<()> {
                 }
             },
         },
-        Commands::Plan { cmd } => match cmd {
-            PlanCommands::Run {
-                file,
-                pattern,
-                sa_mode: _,
-                vars,
-                tool,
-                dry_run,
-                chunked,
-                resume,
-                cd,
-            } => {
-                plan_cmd::handle_plan_run(plan_cmd::PlanRunArgs {
-                    file,
-                    pattern,
-                    vars,
-                    tool_override: tool,
-                    dry_run,
-                    chunked,
-                    resume,
-                    cd,
-                    current_depth,
-                })
-                .await?;
-                crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
-                    sa_mode_active,
-                    current_depth,
-                    matches!(output_format, OutputFormat::Text),
-                );
-            }
-        },
+        Commands::Plan { cmd } => {
+            plan_cmd_daemon::dispatch(
+                cmd,
+                current_depth,
+                sa_mode_active,
+                matches!(output_format, OutputFormat::Text),
+            )
+            .await?;
+        }
         Commands::Migrate { dry_run, status } => {
             migrate_cmd::handle_migrate(dry_run, status)?;
         }
