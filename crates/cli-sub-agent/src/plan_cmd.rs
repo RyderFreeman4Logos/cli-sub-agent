@@ -374,12 +374,10 @@ pub(crate) struct PlanRunArgs {
 ///
 /// Foreground entry point: runs the workflow synchronously in the calling
 /// process. Used by `--foreground` callers, `--dry-run`, `--chunked`,
-/// `--resume`, and the daemon-child path (after env priming).
+/// `--resume`, the daemon-child path (after env priming), and any nested
+/// invocation detected by [`plan_cmd_daemon::dispatch`] (depth>0 / parent
+/// session env), which depend on the synchronous exit-code contract.
 pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
-    run_workflow_inline(args).await
-}
-
-async fn run_workflow_inline(args: PlanRunArgs) -> Result<()> {
     let PlanRunArgs {
         file,
         pattern,

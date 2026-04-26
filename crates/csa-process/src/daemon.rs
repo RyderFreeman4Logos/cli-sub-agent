@@ -139,7 +139,16 @@ mod tests {
     use super::*;
     use std::io::Read;
 
-    /// Write a wrapper that skips daemon-child prefix args, evals after `--`.
+    /// Write a wrapper that LOGS every received arg on its own line, then
+    /// skips daemon-child prefix args until `--` and evals the rest.
+    ///
+    /// The per-arg `arg=<token>` log is what
+    /// `test_daemon_spawn_supports_multi_word_subcommand` inspects to prove
+    /// that the multi-word subcommand was actually split into distinct
+    /// argv tokens (`plan` and `run`), not passed as a single
+    /// `"plan run"` token. Without this, the wrapper's pre-`--` consume
+    /// loop would discard the evidence and the assertion would pass
+    /// vacuously.
     fn write_wrapper_script(dir: &std::path::Path, name: &str) -> PathBuf {
         use std::io::Write;
         let script = dir.join(name);
@@ -150,8 +159,16 @@ mod tests {
             .mode(0o755)
             .open(&script)
             .expect("create wrapper script");
-        f.write_all(b"#!/bin/sh\n# skip all args until '--', then eval the rest\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in --) shift; break;; *) shift;; esac\ndone\neval \"$@\"\n")
-            .expect("write wrapper script");
+        f.write_all(
+            b"#!/bin/sh\n\
+              # Log every received arg first (one per line) so tests can\n\
+              # assert on how the spawner split the subcommand path.\n\
+              for tok in \"$@\"; do\n  echo \"arg=$tok\"\ndone\n\
+              # Then skip all args until '--' and eval the rest.\n\
+              while [ \"$#\" -gt 0 ]; do\n  case \"$1\" in --) shift; break;; *) shift;; esac\ndone\n\
+              eval \"$@\"\n",
+        )
+        .expect("write wrapper script");
         f.sync_all().expect("sync wrapper script");
         drop(f);
         script
@@ -221,15 +238,35 @@ mod tests {
             .read_to_string(&mut contents)
             .expect("read stdout.log");
 
-        // Wrapper records the first 5 args after `--`, which are the args the
-        // wrapper script saw before our `--` injected `--`. Since the wrapper
-        // skips until `--`, the actual exec was:
+        // The wrapper logs every received arg as `arg=<token>` on its own
+        // line BEFORE consuming up to `--`. The actual exec was:
         //   <wrapper> plan run --daemon-child --session-id TEST_MULTI -- echo got=...
-        // After wrapper consumes everything until `--`, $1..$5 are unset →
-        // output should still confirm exec succeeded.
+        // Assert on the split: `plan` and `run` MUST appear on DISTINCT
+        // arg= lines. Without distinct lines, `subcommand: "plan run"`
+        // could have been passed as a single argv token and we wouldn't
+        // notice — that was the original test's vacuous-pass bug
+        // (#1130 PR-1 review F2).
+        let arg_lines: Vec<&str> = contents.lines().filter(|l| l.starts_with("arg=")).collect();
+        assert!(
+            arg_lines.iter().any(|l| *l == "arg=plan"),
+            "expected a distinct `arg=plan` line proving the subcommand was \
+             split, got arg lines: {arg_lines:?}"
+        );
+        assert!(
+            arg_lines.iter().any(|l| *l == "arg=run"),
+            "expected a distinct `arg=run` line proving the subcommand was \
+             split, got arg lines: {arg_lines:?}"
+        );
+        // Sanity: the daemon-child prefix the spawner injects must also be
+        // present so we know we're inspecting the real exec, not a noop.
+        assert!(
+            arg_lines.iter().any(|l| *l == "arg=--daemon-child"),
+            "expected `arg=--daemon-child` from the spawner injection, got \
+             arg lines: {arg_lines:?}"
+        );
         assert!(
             contents.contains("got="),
-            "stdout should contain 'got=' (exec ran), got: {contents:?}"
+            "stdout should still contain 'got=' (exec ran), got: {contents:?}"
         );
     }
 

@@ -86,10 +86,14 @@ pub(crate) async fn dispatch(
         anyhow::bail!("--session-id is an internal flag and must not be used directly");
     }
 
-    // --dry-run/--chunked/--resume need synchronous stdout (printed plan,
-    // JSON status, awaiting-user prompts), so they force foreground.
-    let needs_foreground =
-        foreground || plan_args.dry_run || plan_args.chunked || plan_args.resume.is_some();
+    let needs_foreground = decide_needs_foreground(ForegroundDecisionInput {
+        foreground,
+        dry_run: plan_args.dry_run,
+        chunked: plan_args.chunked,
+        has_resume: plan_args.resume.is_some(),
+        current_depth,
+        nested_env: nested_session_env_present(),
+    });
 
     if !needs_foreground {
         spawn_and_exit(&plan_args)?;
@@ -336,13 +340,81 @@ fn retire_plan_session(project_root: &Path, session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Input snapshot for [`decide_needs_foreground`]. Bundling these into a
+/// struct keeps the decision pure (no env reads, no globals) so the gating
+/// logic can be tested in isolation without `unsafe { set_var }` plumbing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ForegroundDecisionInput {
+    pub foreground: bool,
+    pub dry_run: bool,
+    pub chunked: bool,
+    pub has_resume: bool,
+    pub current_depth: u32,
+    pub nested_env: bool,
+}
+
+/// Decide whether `csa plan run` must execute foreground (block on the
+/// inline workflow run) or may daemonize (default for the top-level user
+/// invocation).
+///
+/// Forces foreground when:
+/// - `--foreground` was explicitly requested by the user, or
+/// - `--dry-run`/`--chunked`/`--resume` need synchronous stdout (printed
+///   plan, JSON status, awaiting-user prompts), or
+/// - nested invocation detected (`current_depth > 0` or
+///   `CSA_*_SESSION_ID` env present). Nested callers — workflow.toml bash
+///   steps, post-PR-create hooks, anything spawned from inside another
+///   csa session — depend on the synchronous exit-code contract; e.g.
+///   `dev2merge` step 14 (`if csa plan run patterns/pr-bot/workflow.toml;
+///   then ...`) and `MKTD_OUTPUT="$(... csa plan run patterns/mktd/...)"`.
+///   Daemonizing those silently bypasses the gate. See #1130 PR-1
+///   cumulative review F1.
+pub(crate) fn decide_needs_foreground(input: ForegroundDecisionInput) -> bool {
+    let nested_invocation = input.current_depth > 0 || input.nested_env;
+    nested_invocation || input.foreground || input.dry_run || input.chunked || input.has_resume
+}
+
+/// True when the current process appears to be running inside another CSA
+/// session (a nested invocation). Used to gate the default daemon flip so
+/// only the top-level user invocation daemonizes; nested callers preserve
+/// the synchronous exit-code contract their if/$(...)/timeout patterns
+/// depend on.
+///
+/// Checks several markers, any of which indicates "we are inside CSA":
+/// - `CSA_SESSION_ID` — set by `handle_plan_run_daemon_child` and the
+///   ACP transport for genealogy attribution
+/// - `CSA_DAEMON_SESSION_ID` — set by every daemon-child path
+/// - `CSA_PARENT_SESSION_ID` — set when an executor spawns a sub-csa
+fn nested_session_env_present() -> bool {
+    const MARKERS: &[&str] = &[
+        "CSA_SESSION_ID",
+        "CSA_DAEMON_SESSION_ID",
+        "CSA_PARENT_SESSION_ID",
+    ];
+    MARKERS.iter().any(|key| {
+        std::env::var(key)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    })
+}
+
 /// Build daemon-child args from the parent's argv.
 ///
 /// `argv` looks like `["csa", ...global, "plan", "run", ...rest]`. We strip
-/// everything up through `plan run`, drop `--foreground` (the child is the
-/// actual worker, not a separate one), and forward the remainder. The daemon
-/// spawner re-injects `--daemon-child --session-id <ID>` between `run` and
-/// the rest.
+/// everything up through `plan run`, drop the `--foreground` opt-out (the
+/// child is the actual worker, not a re-spawn that should opt out again),
+/// and forward the remainder. The daemon spawner re-injects
+/// `--daemon-child --session-id <ID>` between `run` and the rest.
+///
+/// Filter contract: `--foreground` is the ONLY token stripped here, and
+/// only because (a) clap parsed it as a top-level boolean flag with no
+/// value-position semantics, and (b) it's a parent-only opt-out the daemon
+/// child must not see. The filter stops at the first `--` so any literal
+/// `--foreground` that appears AFTER a `--` positional separator (e.g. a
+/// future workflow argument that happens to share the spelling) is left
+/// untouched. DO NOT add other flag strips here without preserving this
+/// `--`-aware behavior — naive `*a != "--xxx"` filters break value-position
+/// usage and `--`-escaped positionals.
 fn build_forwarded_plan_args(all_args: &[String]) -> Vec<String> {
     let plan_pos = all_args.iter().position(|a| a == "plan");
     let Some(plan_pos) = plan_pos else {
@@ -358,12 +430,24 @@ fn build_forwarded_plan_args(all_args: &[String]) -> Vec<String> {
         .map(|(idx, _)| idx + 1)
         .unwrap_or(after_plan);
 
-    all_args
-        .iter()
-        .skip(after_run)
-        .filter(|a| *a != "--foreground")
-        .cloned()
-        .collect()
+    let mut forwarded = Vec::with_capacity(all_args.len().saturating_sub(after_run));
+    let mut past_double_dash = false;
+    for token in all_args.iter().skip(after_run) {
+        if past_double_dash {
+            forwarded.push(token.clone());
+            continue;
+        }
+        if token == "--" {
+            past_double_dash = true;
+            forwarded.push(token.clone());
+            continue;
+        }
+        if token == "--foreground" {
+            continue;
+        }
+        forwarded.push(token.clone());
+    }
+    forwarded
 }
 
 #[cfg(test)]
