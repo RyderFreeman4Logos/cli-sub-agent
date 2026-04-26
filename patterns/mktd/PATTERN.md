@@ -392,7 +392,7 @@ identifiers, or other shell-sensitive content.
 ```bash
 LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
 PROMPT_FILE="$(mktemp)" || exit 1
-trap 'rm -f "$PROMPT_FILE"' EXIT
+trap 'rm -f "$PROMPT_FILE"' EXIT INT TERM
 {
   printf '%s\n' "Critically evaluate this draft TODO plan, generated spec, and threat model. Act as a devil's advocate."
   echo ""
@@ -411,7 +411,7 @@ trap 'rm -f "$PROMPT_FILE"' EXIT
   echo ""
   printf '%s\n' "## Output Requirements"
   printf '%s\n' "Provide explicit verdict and confidence in your conclusion."
-} > "$PROMPT_FILE"
+} > "$PROMPT_FILE" || { echo "Failed to write prompt file" >&2; exit 1; }
 SID=$(csa debate --sa-mode true --rounds 3 --format json --idle-timeout 600 --no-stream-stdout --prompt-file "$PROMPT_FILE") || { echo "csa debate failed" >&2; exit 1; }
 DEBATE_JSON="$(csa session wait --session "$SID" 2>&1)" || { echo "csa debate failed" >&2; exit 1; }
 [[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
