@@ -31,7 +31,7 @@ For `csa` commands within pattern steps (e.g., `csa review --diff`), add
 
 ## While awaiting review/fix session
 
-This is the while-waiting checklist. When you background a `csa session wait` via `run_in_background: true`, the next task-notification wakes you up automatically. Do not add manual sleep or polling on top.
+This is the while-waiting checklist. When you background a `csa session wait` via `run_in_background: true`, the next task-notification wakes you up automatically. Do not add manual sleep, polling, a redundant `ScheduleWakeup`, or `/loop` on top.
 
 **Safe parallel work**:
 1. Draft the PR body or changelog entry for the current branch as local text only; do not run `gh pr create` yet.
@@ -44,7 +44,7 @@ This is the while-waiting checklist. When you background a `csa session wait` vi
 - Start new `csa run` or `csa review` sessions that could race on git branch or checkout state with the waiting one (single-checkout sequential rule, AGENTS.md 028).
 - Edit source files while the main agent is acting as the Layer 0 orchestrator; that violates the SA-mode separation this wait is protecting.
 - Run state-mutating git commands such as `git commit`, `git checkout <other-branch>`, or `git push`.
-- Stack a ScheduleWakeup backup on top of the backgrounded wait; the task-notification is already the wake signal (AGENTS.md 042f).
+- Stack a ScheduleWakeup or /loop backup on top of the backgrounded wait; the task-notification is already the wake signal (AGENTS.md 042f / 046).
 
 If there is no useful parallel work available, return control and wait for the notification. Do not invent speculative work just to stay busy.
 

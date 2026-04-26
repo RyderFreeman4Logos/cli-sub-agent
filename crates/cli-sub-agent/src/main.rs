@@ -7,6 +7,7 @@ mod audit;
 mod audit_cmds;
 mod batch;
 mod bug_class;
+mod caller_hints_tests;
 mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;

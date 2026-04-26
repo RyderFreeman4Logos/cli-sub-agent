@@ -356,7 +356,8 @@ where
                 "<!-- CSA:CALLER_HINT action=\"retry_wait\" \
                  rule=\"Process this output NOW and generate tokens to warm your KV cache, \
                  then call 'csa session wait --session {sid}{cd}' again in a NEW Bash call. \
-                 NEVER batch multiple session waits in one Bash call.\" -->",
+                 NEVER batch multiple session waits in one Bash call. \
+                 If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens.\" -->",
                 sid = resolved.session_id,
                 cd = cd
                     .as_ref()
@@ -555,7 +556,8 @@ fn emit_wait_completion_signal(
         "<!-- CSA:CALLER_HINT action=\"next_session\" \
          rule=\"If you have more sessions to wait for, call each 'csa session wait' \
          in a SEPARATE Bash call. NEVER batch. \
-         Generate tokens between waits to keep your KV cache warm.\" -->"
+         Generate tokens between waits to keep your KV cache warm. \
+         If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens.\" -->"
     );
 }
 
