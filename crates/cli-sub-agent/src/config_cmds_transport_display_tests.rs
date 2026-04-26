@@ -14,7 +14,8 @@ transport = "auto"
     let rendered = toml::to_string_pretty(&build_project_display_toml(&config).unwrap()).unwrap();
 
     assert!(rendered.contains("[tools.codex]"));
-    assert!(rendered.contains("transport = \"acp\""));
+    // codex now defaults to CLI transport (#760 / #1128 transport flip).
+    assert!(rendered.contains("transport = \"cli\""));
 }
 
 #[test]
@@ -36,6 +37,7 @@ transport = "auto"
             .and_then(|value| value.get("codex"))
             .and_then(|value| value.get("transport"))
             .and_then(|value| value.as_str()),
-        Some("acp")
+        // codex now defaults to CLI transport (#760 / #1128 transport flip).
+        Some("cli")
     );
 }

@@ -180,6 +180,8 @@ fn test_merged_schema_version_uses_max_when_explicit() {
     assert_eq!(config.schema_version, 1);
 }
 
+/// Uses gemini-cli + acp as the still-invalid combination after #1128 flipped
+/// codex CLI to a legal value. gemini-cli has no ACP transport.
 #[test]
 fn test_invalid_user_transport_override_fails_before_merge() {
     let tmp = tempdir().unwrap();
@@ -190,8 +192,8 @@ fn test_invalid_user_transport_override_fails_before_merge() {
         &user_path,
         r#"
 schema_version = 1
-[tools.codex]
-transport = "cli"
+[tools.gemini-cli]
+transport = "acp"
 "#,
     )
     .unwrap();
@@ -200,8 +202,8 @@ transport = "cli"
         &project_path,
         r#"
 schema_version = 1
-[tools.codex]
-transport = "acp"
+[tools.gemini-cli]
+transport = "auto"
 "#,
     )
     .unwrap();
@@ -219,11 +221,13 @@ transport = "acp"
         "error should include the user config path: {rendered}"
     );
     assert!(
-        rendered.contains("tools.codex.transport"),
+        rendered.contains("tools.gemini-cli.transport"),
         "error should surface the invalid user transport key: {rendered}"
     );
 }
 
+/// Uses gemini-cli + acp as the still-invalid combination after #1128 flipped
+/// codex CLI to a legal value. gemini-cli has no ACP transport.
 #[test]
 fn test_invalid_project_transport_override_fails_before_merge() {
     let tmp = tempdir().unwrap();
@@ -234,8 +238,8 @@ fn test_invalid_project_transport_override_fails_before_merge() {
         &user_path,
         r#"
 schema_version = 1
-[tools.codex]
-transport = "acp"
+[tools.gemini-cli]
+transport = "auto"
 "#,
     )
     .unwrap();
@@ -244,8 +248,8 @@ transport = "acp"
         &project_path,
         r#"
 schema_version = 1
-[tools.codex]
-transport = "cli"
+[tools.gemini-cli]
+transport = "acp"
 "#,
     )
     .unwrap();
@@ -263,7 +267,7 @@ transport = "cli"
         "error should include the project config path: {rendered}"
     );
     assert!(
-        rendered.contains("tools.codex.transport"),
+        rendered.contains("tools.gemini-cli.transport"),
         "error should surface the invalid project transport key: {rendered}"
     );
 }

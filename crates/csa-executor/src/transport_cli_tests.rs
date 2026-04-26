@@ -14,7 +14,7 @@ use crate::model_spec::ThinkingBudget;
 // (transport.rs nests transport_factory.rs via `#[path]` and re-exports
 // its public items at the crate root).  Reach for the crate-level
 // re-export rather than the private nested-mod path.
-use crate::TransportFactory;
+use crate::{LegacyTransport, TransportFactory};
 use csa_resource::filesystem_sandbox::FilesystemCapability;
 use csa_resource::isolation_plan::IsolationPlan;
 use csa_resource::sandbox::ResourceCapability;
@@ -108,6 +108,69 @@ fn factory_rejects_acp_for_claude_code_without_feature() {
     let msg = format!("{:#}", result.err().unwrap());
     assert!(
         msg.contains("claude-code-acp") || msg.contains("1115"),
+        "error should mention the feature flag or issue; got: {msg}"
+    );
+}
+
+// ---- Codex transport routing (mirrors claude-code) ----
+
+/// codex with explicit `Cli` transport must route through the generic
+/// `LegacyTransport` (codex does not have a dedicated CLI transport struct
+/// like claude-code does). The `Legacy` mode tag is the canonical CLI tag.
+#[test]
+fn factory_returns_legacy_for_codex_default() {
+    use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport as CdxTransport};
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::from_transport(CdxTransport::Cli),
+    };
+    let transport = TransportFactory::create(&executor, None).expect("factory create");
+    assert_eq!(transport.mode(), TransportMode::Legacy);
+    assert!(
+        transport
+            .as_any()
+            .downcast_ref::<LegacyTransport>()
+            .is_some(),
+        "codex CLI default should produce LegacyTransport"
+    );
+}
+
+/// ACP transport for codex is only reachable with the `codex-acp` feature
+/// enabled. Mirrors `factory_returns_acp_for_claude_code_acp_metadata_with_feature`.
+#[test]
+#[cfg(feature = "codex-acp")]
+fn factory_returns_acp_for_codex_acp_metadata_with_feature() {
+    use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport as CdxTransport};
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::from_transport(CdxTransport::Acp),
+    };
+    let transport = TransportFactory::create(&executor, None).expect("factory create");
+    assert_eq!(transport.mode(), TransportMode::Acp);
+}
+
+/// Without `codex-acp` feature, even an explicit ACP metadata request must
+/// fail — the feature gate is the safety net for the #760 / #1128 transport
+/// flip. Mirrors `factory_rejects_acp_for_claude_code_without_feature`.
+#[test]
+#[cfg(not(feature = "codex-acp"))]
+fn factory_rejects_acp_for_codex_without_feature() {
+    use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport as CdxTransport};
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::from_transport(CdxTransport::Acp),
+    };
+    let result = TransportFactory::create(&executor, None);
+    assert!(
+        result.is_err(),
+        "factory should reject Codex+Acp without codex-acp feature"
+    );
+    let msg = format!("{:#}", result.err().unwrap());
+    assert!(
+        msg.contains("codex-acp") || msg.contains("760") || msg.contains("1128"),
         "error should mention the feature flag or issue; got: {msg}"
     );
 }

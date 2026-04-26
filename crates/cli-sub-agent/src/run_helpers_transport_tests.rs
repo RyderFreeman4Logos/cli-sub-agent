@@ -33,8 +33,12 @@ fn project_config_with_tool(tool_name: &str, tool_config: ToolConfig) -> Project
     }
 }
 
+/// codex now defaults to CLI transport (#760 / #1128 transport flip).
+/// When transport is unset, the resolved runtime metadata is CLI, not the
+/// metadata-level `default_for_build()` (which still returns Acp for serde
+/// deserialization compatibility).
 #[test]
-fn build_executor_codex_transport_defaults_to_build_setting_when_unset() {
+fn build_executor_codex_transport_defaults_to_cli_when_unset() {
     let config = project_config_with_tool("codex", ToolConfig::default());
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
 
@@ -44,7 +48,8 @@ fn build_executor_codex_transport_defaults_to_build_setting_when_unset() {
         } => {
             assert_eq!(
                 runtime_metadata.transport_mode(),
-                CodexTransport::default_for_build()
+                CodexTransport::Cli,
+                "unset codex transport should resolve to CLI per default_transport_for_tool"
             );
         }
         other => panic!("expected codex executor, got: {other:?}"),
@@ -93,9 +98,11 @@ fn build_executor_codex_transport_respects_explicit_acp_override() {
     }
 }
 
+/// codex now defaults to CLI transport (#760 / #1128 transport flip).
+/// When transport is unset, `codex` (not `codex-acp`) is probed.
 #[cfg(unix)]
 #[test]
-fn auto_selection_uses_codex_acp_when_transport_is_unset() {
+fn auto_selection_uses_codex_cli_when_transport_is_unset() {
     use crate::test_env_lock::ScopedTestEnvVar;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -103,11 +110,12 @@ fn auto_selection_uses_codex_acp_when_transport_is_unset() {
     let td = tempfile::tempdir().expect("tempdir");
     let bin_dir = td.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
-    let codex_path = bin_dir.join("codex-acp");
-    fs::write(&codex_path, "#!/bin/sh\necho 'codex-acp 9.9.9'\n").expect("write codex-acp stub");
+    // Place the CLI binary (`codex`), not the ACP adapter.
+    let codex_path = bin_dir.join("codex");
+    fs::write(&codex_path, "#!/bin/sh\necho 'codex 9.9.9'\n").expect("write codex stub");
     let mut perms = fs::metadata(&codex_path).expect("metadata").permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&codex_path, perms).expect("chmod codex-acp");
+    fs::set_permissions(&codex_path, perms).expect("chmod codex");
 
     let path = std::env::var_os("PATH").unwrap_or_default();
     let joined =
@@ -140,7 +148,7 @@ fn auto_selection_uses_codex_acp_when_transport_is_unset() {
 
     assert!(
         is_tool_binary_available_for_config("codex", Some(&config)),
-        "unset codex transport should probe `codex-acp`, not `codex`"
+        "unset codex transport should probe `codex` (CLI binary), not `codex-acp`"
     );
 
     let (tool, model_spec, model) = resolve_tool_and_model(

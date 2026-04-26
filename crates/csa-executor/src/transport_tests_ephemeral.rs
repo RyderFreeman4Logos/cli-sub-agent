@@ -197,6 +197,7 @@ fn test_executor_ephemeral_transport_honors_codex_cli_runtime_transport_override
 }
 
 #[test]
+#[cfg(feature = "codex-acp")]
 fn test_executor_ephemeral_transport_honors_codex_acp_runtime_transport_override() {
     let acp_executor = Executor::Codex {
         model_override: None,
@@ -211,5 +212,29 @@ fn test_executor_ephemeral_transport_honors_codex_acp_runtime_transport_override
     assert!(
         acp_transport.as_ref().as_any().is::<AcpTransport>(),
         "codex acp override should keep ephemeral paths on AcpTransport"
+    );
+}
+
+/// Without the `codex-acp` feature the ephemeral path must reject ACP for
+/// codex (mirrors #760 / #1128 transport flip).
+#[test]
+#[cfg(not(feature = "codex-acp"))]
+fn test_executor_ephemeral_transport_rejects_codex_acp_without_feature() {
+    let acp_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Acp,
+        ),
+    };
+    let result = acp_executor.transport(None);
+    assert!(
+        result.is_err(),
+        "codex+ACP must be rejected without codex-acp feature"
+    );
+    let msg = format!("{:#}", result.err().unwrap());
+    assert!(
+        msg.contains("codex-acp") || msg.contains("760") || msg.contains("1128"),
+        "error must cite the feature flag or issue number; got: {msg}"
     );
 }

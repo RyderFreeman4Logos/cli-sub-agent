@@ -80,11 +80,19 @@ impl TransportFactory {
 
     fn mode_for_executor(executor: &Executor) -> Result<TransportMode> {
         match executor {
+            // ACP transport for codex is gated behind the `codex-acp` cargo
+            // feature (disabled by default) in favour of native CLI resume
+            // (`codex exec resume <id>`, codex-cli 0.125.0+, #760 / #1128).
+            // Only an explicit `Some(Acp)` request attempts ACP; `None` and
+            // `Some(Cli)` both route through the CLI transport.
             Executor::Codex { .. } => match executor.codex_transport() {
-                Some(crate::CodexTransport::Cli) | None => Ok(TransportMode::Legacy),
                 Some(crate::CodexTransport::Acp) => {
                     Self::validate_mode_for_executor(executor, TransportMode::Acp)?;
                     Ok(TransportMode::Acp)
+                }
+                Some(crate::CodexTransport::Cli) | None => {
+                    Self::validate_mode_for_executor(executor, TransportMode::Legacy)?;
+                    Ok(TransportMode::Legacy)
                 }
             },
             Executor::ClaudeCode { .. } => match executor.claude_code_transport() {
@@ -117,7 +125,7 @@ impl TransportFactory {
     /// | Executor     | Legacy | Acp                                      | OpenaiCompat |
     /// |--------------|--------|------------------------------------------| -------------|
     /// | ClaudeCode   | Yes    | Yes (requires `claude-code-acp` feature) | No           |
-    /// | Codex        | Yes    | Yes                                      | No           |
+    /// | Codex        | Yes    | Yes (requires `codex-acp` feature)       | No           |
     /// | GeminiCli    | Yes    | Yes                                      | No           |
     /// | Opencode     | Yes    | No                                       | No           |
     /// | OpenaiCompat | No     | No                                       | Yes          |
@@ -150,8 +158,19 @@ impl TransportFactory {
                 err("claude-code only supports cli or acp transport")
             }
 
-            // Codex: Legacy and ACP are both supported
+            // Codex + ACP: gated behind the `codex-acp` cargo feature.
+            // Native CLI resume (`codex exec resume <id>`, codex-cli 0.125.0+)
+            // is the default and is empirically equivalent to ACP loadSession
+            // on server-side cache reuse (#760 / #1128).
+            // Build with `--features codex-acp` to re-enable this path.
             (Executor::Codex { .. }, TransportMode::Legacy) => Ok(()),
+            #[cfg(not(feature = "codex-acp"))]
+            (Executor::Codex { .. }, TransportMode::Acp) => err(
+                "codex ACP transport requires the `codex-acp` cargo feature \
+                     (disabled by default in favour of native `codex exec resume <id>`, \
+                     #760/#1128); rebuild with `--features codex-acp` to enable",
+            ),
+            #[cfg(feature = "codex-acp")]
             (Executor::Codex { .. }, TransportMode::Acp) => Ok(()),
             (Executor::Codex { .. }, TransportMode::OpenaiCompat) => {
                 err("codex only supports cli or acp transport")
@@ -233,6 +252,21 @@ impl TransportFactory {
                          session startup (turn_count=0, output_log=0B, #1115/#1117). \
                          Rebuild csa-executor with `--features claude-code-acp` to enable \
                          this transport for investigation."
+                    );
+                }
+                // codex ACP transport is gated behind the `codex-acp` cargo feature
+                // (disabled by default, #760 / #1128) because native CLI resume
+                // (`codex exec resume <id>`, codex-cli 0.125.0+) is empirically
+                // equivalent on server-side cache reuse.
+                #[cfg(not(feature = "codex-acp"))]
+                if matches!(executor, Executor::Codex { .. }) {
+                    anyhow::bail!(
+                        "codex ACP transport is disabled (cargo feature `codex-acp` is not \
+                         enabled). This path was gated because native `codex exec resume <id>` \
+                         (codex-cli 0.125.0+) is empirically equivalent to ACP loadSession on \
+                         server-side cache reuse (54%, 44,800/83,503 input tokens, #760 / #1128). \
+                         Rebuild csa-executor with `--features codex-acp` to enable this \
+                         transport for investigation."
                     );
                 }
                 Ok(Box::new(AcpTransport::new(

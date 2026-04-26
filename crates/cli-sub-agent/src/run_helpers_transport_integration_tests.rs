@@ -56,20 +56,34 @@ fn assert_non_codex_transport_defaults() {
     );
 }
 
+/// codex now defaults to CLI transport (#760 / #1128 transport flip). The
+/// resolved binary is `codex`, not `codex-acp`, and the transport routes to
+/// Legacy.
+///
+/// The test passes an empty project config (rather than `None`) so the
+/// resolver routes through `tool_transport()` → `default_transport_for_tool()`,
+/// which is the path that exercises the post-#1128 default. The `None`-config
+/// branch still falls back to the metadata-level `default_for_build()` (kept
+/// at Acp for serde back-compat) — that's a known papercut mirrored from
+/// PR #1120's claude-code treatment, not a regression introduced here.
 #[test]
-fn codex_defaults_to_acp_transport_end_to_end() {
-    let executor = build_executor(&ToolName::Codex, None, None, None, None, true)
+fn codex_defaults_to_cli_transport_end_to_end() {
+    let config = load_project_config("schema_version = 1\n");
+    let executor = build_executor(&ToolName::Codex, None, None, None, Some(&config), true)
         .expect("build default codex executor");
     let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
         .expect("create codex transport");
 
-    assert_eq!(transport.mode(), TransportMode::Acp);
-    assert_eq!(executor.runtime_binary_name(), "codex-acp");
+    assert_eq!(transport.mode(), TransportMode::Legacy);
+    assert_eq!(executor.runtime_binary_name(), "codex");
 
     assert_non_codex_transport_defaults();
 }
 
+/// Explicit `transport = "acp"` for codex must build an ACP transport — but
+/// only when the `codex-acp` cargo feature is enabled (#1128 feature gate).
 #[test]
+#[cfg(feature = "codex-acp")]
 fn codex_acp_project_config_builds_acp_transport_end_to_end() {
     let config = load_project_config(
         r#"
@@ -88,26 +102,48 @@ transport = "acp"
     assert_non_codex_transport_defaults();
 }
 
+/// Without the `codex-acp` feature, an explicit `transport = "acp"` codex
+/// config must fail at executor/transport build time with a clear error
+/// citing the feature flag and #760/#1128.
 #[test]
-fn codex_cli_project_config_is_rejected_before_executor_build() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    write_project_config(
-        dir.path(),
+#[cfg(not(feature = "codex-acp"))]
+fn codex_acp_project_config_is_rejected_without_feature() {
+    let config = load_project_config(
+        r#"
+[tools.codex]
+transport = "acp"
+"#,
+    );
+    let executor = build_executor(&ToolName::Codex, None, None, None, Some(&config), true)
+        .expect("build codex executor");
+    let result = TransportFactory::create(&executor, Some(SessionConfig::default()));
+
+    let err = match result {
+        Ok(_) => panic!("codex+ACP must fail without codex-acp feature"),
+        Err(e) => e,
+    };
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("codex-acp") || message.contains("760") || message.contains("1128"),
+        "error must cite the feature flag or issue number: {message}"
+    );
+}
+
+/// Explicit `transport = "cli"` for codex is now accepted (#760 / #1128
+/// transport flip). The resolved binary is `codex` and routing is Legacy.
+#[test]
+fn codex_cli_project_config_builds_legacy_transport_end_to_end() {
+    let config = load_project_config(
         r#"
 [tools.codex]
 transport = "cli"
 "#,
     );
+    let executor = build_executor(&ToolName::Codex, None, None, None, Some(&config), true)
+        .expect("build codex executor");
+    let transport = TransportFactory::create(&executor, Some(SessionConfig::default()))
+        .expect("create codex transport");
 
-    let err = ProjectConfig::load_project_only(dir.path()).expect_err("config should fail");
-    let message = format!("{err:#}");
-
-    assert!(
-        message.contains("tools.codex.transport"),
-        "error should point to the codex transport key: {message}"
-    );
-    assert!(
-        message.contains("#643 Phase 4"),
-        "error should mention the codex CLI follow-up phase: {message}"
-    );
+    assert_eq!(transport.mode(), TransportMode::Legacy);
+    assert_eq!(executor.runtime_binary_name(), "codex");
 }

@@ -91,8 +91,12 @@ fn load_and_validate_within_depth_returns_some() {
     );
 }
 
+/// Pipeline must surface transport validation errors with the offending key path.
+/// Uses gemini-cli + ACP because it is still rejected post-#1128 (gemini-cli has
+/// no ACP transport). The original codex+cli rejection became obsolete after the
+/// codex CLI default flip (#760 / #1128).
 #[test]
-fn load_and_validate_rejects_invalid_codex_transport_override() {
+fn load_and_validate_rejects_invalid_tool_transport_override() {
     let tmp = tempfile::tempdir().unwrap();
     let _sandbox = sandbox_pipeline_config_env(&tmp);
     let config_dir = tmp.path().join(".csa");
@@ -100,8 +104,8 @@ fn load_and_validate_rejects_invalid_codex_transport_override() {
     fs::write(
         config_dir.join("config.toml"),
         r#"
-[tools.codex]
-transport = "cli"
+[tools.gemini-cli]
+transport = "acp"
 "#,
     )
     .unwrap();
@@ -110,12 +114,12 @@ transport = "cli"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("tools.codex.transport"),
+        message.contains("tools.gemini-cli.transport"),
         "pipeline should surface the exact config key: {message}"
     );
     assert!(
-        message.contains("#643 Phase 4"),
-        "pipeline should surface the codex CLI phase guidance: {message}"
+        message.contains("does not support ACP transport"),
+        "pipeline should surface the transport contract message: {message}"
     );
 }
 

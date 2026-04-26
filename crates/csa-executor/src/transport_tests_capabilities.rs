@@ -64,6 +64,7 @@ fn test_create_with_mode_explicit_override() {
 }
 
 #[test]
+#[cfg(feature = "codex-acp")]
 fn test_create_with_mode_allows_codex_acp() {
     let executor = crate::executor::Executor::Codex {
         model_override: None,
@@ -73,7 +74,27 @@ fn test_create_with_mode_allows_codex_acp() {
 
     let result =
         super::TransportFactory::create_with_mode(&executor, super::TransportMode::Acp, None);
-    assert!(result.is_ok(), "codex ACP transport should be supported");
+    assert!(
+        result.is_ok(),
+        "codex ACP transport should be supported when codex-acp feature is on"
+    );
+}
+
+#[test]
+#[cfg(not(feature = "codex-acp"))]
+fn test_create_with_mode_rejects_codex_acp_without_feature() {
+    let executor = crate::executor::Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+
+    let result =
+        super::TransportFactory::create_with_mode(&executor, super::TransportMode::Acp, None);
+    assert!(
+        result.is_err(),
+        "codex ACP transport should be rejected without codex-acp feature"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -82,13 +103,13 @@ fn test_create_with_mode_allows_codex_acp() {
 //
 // Compatibility matrix:
 //
-// | Executor     | Legacy | Acp                       | OpenaiCompat |
-// |--------------|--------|---------------------------| -------------|
-// | ClaudeCode   | Yes    | Yes                       | No           |
-// | Codex        | Yes    | Yes (feature `codex-acp`) | No           |
-// | GeminiCli    | Yes    | Yes                       | No           |
-// | Opencode     | Yes    | No                        | No           |
-// | OpenaiCompat | No     | No                        | Yes          |
+// | Executor     | Legacy | Acp                              | OpenaiCompat |
+// |--------------|--------|----------------------------------| -------------|
+// | ClaudeCode   | Yes    | Yes (feature `claude-code-acp`)  | No           |
+// | Codex        | Yes    | Yes (feature `codex-acp`)        | No           |
+// | GeminiCli    | Yes    | Yes                              | No           |
+// | Opencode     | Yes    | No                               | No           |
+// | OpenaiCompat | No     | No                               | Yes          |
 
 fn make_claude_code() -> crate::executor::Executor {
     crate::executor::Executor::ClaudeCode {
@@ -223,9 +244,18 @@ fn test_matrix_codex_legacy_supported() {
     assert_supported(&make_codex(), super::TransportMode::Legacy);
 }
 
+// ACP for codex requires the `codex-acp` cargo feature (default OFF, gated in
+// favour of native `codex exec resume <id>` per #760 / #1128).
 #[test]
+#[cfg(feature = "codex-acp")]
 fn test_matrix_codex_acp_supported() {
     assert_supported(&make_codex(), super::TransportMode::Acp);
+}
+
+#[test]
+#[cfg(not(feature = "codex-acp"))]
+fn test_matrix_codex_acp_rejected_without_feature() {
+    assert_unsupported(&make_codex(), super::TransportMode::Acp, "codex-acp");
 }
 
 #[test]
@@ -309,6 +339,7 @@ fn test_matrix_openai_compat_acp_rejected() {
 }
 
 #[test]
+#[cfg(feature = "codex-acp")]
 fn test_create_feature_gate_structured_error() {
     let executor = crate::executor::Executor::Codex {
         model_override: None,
@@ -319,7 +350,33 @@ fn test_create_feature_gate_structured_error() {
     };
 
     let result = super::TransportFactory::create(&executor, None);
-    assert!(result.is_ok(), "codex ACP transport should build in auto mode");
+    assert!(
+        result.is_ok(),
+        "codex ACP transport should build in auto mode when codex-acp feature is on"
+    );
+}
+
+#[test]
+#[cfg(not(feature = "codex-acp"))]
+fn test_create_feature_gate_codex_acp_errors_without_feature() {
+    let executor = crate::executor::Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Acp,
+        ),
+    };
+
+    let result = super::TransportFactory::create(&executor, None);
+    assert!(
+        result.is_err(),
+        "codex ACP transport must error in auto mode without codex-acp feature"
+    );
+    let msg = format!("{:#}", result.err().unwrap());
+    assert!(
+        msg.contains("codex-acp") || msg.contains("760") || msg.contains("1128"),
+        "error should mention the feature flag or issue number; got: {msg}"
+    );
 }
 
 #[test]

@@ -259,10 +259,7 @@ fn validate_tool_transport_override_with_raw(
             TransportKind::Auto | TransportKind::Cli | TransportKind::Acp => Ok(()),
         },
         "codex" => match transport {
-            TransportKind::Auto | TransportKind::Acp => Ok(()),
-            TransportKind::Cli => bail!(
-                "Invalid {key} = \"{raw_transport}\": codex does not yet support CLI transport — will be added in #643 Phase 4."
-            ),
+            TransportKind::Auto | TransportKind::Cli | TransportKind::Acp => Ok(()),
         },
         "gemini-cli" | "opencode" => match transport {
             TransportKind::Auto | TransportKind::Cli => Ok(()),

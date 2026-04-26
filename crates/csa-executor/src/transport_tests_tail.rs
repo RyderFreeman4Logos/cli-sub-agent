@@ -36,17 +36,20 @@ fn test_transport_factory_create_routes_tools_to_expected_transport() {
         "Expected ClaudeCodeCliTransport for claude-code default"
     );
 
-    // codex still uses ACP by default
+    // codex defaults to CLI transport now (#760 / #1128 transport flip).
+    // Use explicit Cli metadata to represent the "user did not request ACP" case.
     let codex_executor = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
     };
     let transport = TransportFactory::create(&codex_executor, Some(SessionConfig::default()))
-        .expect("transport should build for Codex+Acp");
+        .expect("transport should build for Codex+Cli");
     assert!(
-        transport.as_ref().as_any().is::<AcpTransport>(),
-        "Expected AcpTransport for codex"
+        transport.as_ref().as_any().is::<LegacyTransport>(),
+        "Expected LegacyTransport for codex default"
     );
 }
 
@@ -140,7 +143,11 @@ fn test_transport_factory_create_honors_claude_cli_runtime_transport_override() 
     );
 }
 
+/// With `codex-acp` feature ON, an explicit ACP override on a codex executor
+/// must produce an `AcpTransport` instance — the override path is the only way
+/// to opt into ACP after the #760 / #1128 transport flip.
 #[test]
+#[cfg(feature = "codex-acp")]
 fn test_transport_factory_create_honors_codex_acp_runtime_transport_override() {
     let acp_executor = Executor::Codex {
         model_override: None,
@@ -150,10 +157,35 @@ fn test_transport_factory_create_honors_codex_acp_runtime_transport_override() {
         ),
     };
     let acp_transport = TransportFactory::create(&acp_executor, Some(SessionConfig::default()))
-        .expect("transport should build");
+        .expect("transport should build with codex-acp feature");
     assert!(
         acp_transport.as_ref().as_any().is::<AcpTransport>(),
         "codex acp override should use AcpTransport"
+    );
+}
+
+/// Without `codex-acp` feature, an explicit ACP override on a codex executor
+/// must fail at factory time — the feature gate is the safety net for
+/// #760 / #1128 (CLI is now the empirically-equivalent default).
+#[test]
+#[cfg(not(feature = "codex-acp"))]
+fn test_transport_factory_create_rejects_codex_acp_override_without_feature() {
+    let acp_executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Acp,
+        ),
+    };
+    let result = TransportFactory::create(&acp_executor, Some(SessionConfig::default()));
+    assert!(
+        result.is_err(),
+        "factory should reject Codex+Acp override without codex-acp feature"
+    );
+    let msg = format!("{:#}", result.err().unwrap());
+    assert!(
+        msg.contains("codex-acp") || msg.contains("760") || msg.contains("1128"),
+        "error should mention the feature flag or issue; got: {msg}"
     );
 }
 

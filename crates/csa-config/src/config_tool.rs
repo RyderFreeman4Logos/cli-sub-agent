@@ -18,12 +18,15 @@ pub enum TransportKind {
 
 pub fn default_transport_for_tool(tool_name: &str) -> Option<TransportKind> {
     match tool_name {
-        // codex still defaults to ACP.
         // claude-code defaults to CLI as a workaround for ACP startup-crash bugs
         // (#1115/#1117). ACP is still reachable via explicit config + the
         // `claude-code-acp` cargo feature on `csa-executor`.
         "claude-code" => Some(TransportKind::Cli),
-        "codex" => Some(TransportKind::Acp),
+        // codex defaults to CLI in favour of native `codex exec resume <id>`
+        // (codex-cli 0.125.0+), empirically equivalent to ACP loadSession on
+        // server-side cache reuse (#760 / #1128). ACP is still reachable via
+        // explicit config + the `codex-acp` cargo feature on `csa-executor`.
+        "codex" => Some(TransportKind::Cli),
         "gemini-cli" | "opencode" => Some(TransportKind::Cli),
         _ => None,
     }
@@ -321,10 +324,40 @@ transport = "cli"
     fn test_resolve_transport_uses_default_when_unset() {
         let config = ToolConfig::default();
 
-        assert_eq!(config.resolve_transport("codex"), Some(TransportKind::Acp));
+        // codex now defaults to CLI transport (#760 / #1128 transport flip).
+        assert_eq!(config.resolve_transport("codex"), Some(TransportKind::Cli));
         assert_eq!(
             config.resolve_transport("opencode"),
             Some(TransportKind::Cli)
+        );
+    }
+
+    /// Mirrors `test_resolve_transport_claude_code_cli_round_trips` for codex.
+    /// Parsing `[tools.codex] transport = "acp"` MUST yield `TransportKind::Acp`,
+    /// not silently coerce back to CLI. The codex ACP path keys off this exact
+    /// resolution and is then gated by the `codex-acp` cargo feature on
+    /// `csa-executor`.
+    #[test]
+    fn test_resolve_transport_codex_acp_round_trips() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            tools: HashMap<String, ToolConfig>,
+        }
+        let toml_str = r#"
+[tools.codex]
+transport = "acp"
+"#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("parse codex acp toml");
+        let tool = wrapper
+            .tools
+            .get("codex")
+            .expect("codex tool entry missing");
+
+        assert_eq!(tool.transport, Some(TransportKind::Acp));
+        assert_eq!(
+            tool.resolve_transport("codex"),
+            Some(TransportKind::Acp),
+            "explicit transport=\"acp\" must resolve to ACP, not the build default"
         );
     }
 

@@ -542,7 +542,9 @@ mod tests {
         let config: ProjectConfig = toml::from_str("").unwrap();
 
         assert_eq!(tool_exe_name("gemini-cli", &config), "gemini");
-        assert_eq!(tool_exe_name("codex", &config), "codex-acp");
+        // codex now defaults to CLI transport (#760 / #1128 transport flip);
+        // the CLI binary is `codex`, not `codex-acp`.
+        assert_eq!(tool_exe_name("codex", &config), "codex");
         // claude-code now defaults to CLI transport (#1115/#1117 workaround);
         // the CLI binary is `claude`, not `claude-code-acp`.
         assert_eq!(tool_exe_name("claude-code", &config), "claude");
@@ -698,11 +700,16 @@ mod tests {
         let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
         std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
             .expect("create user config dir");
+        // Use gemini-cli + acp as the still-invalid combination after #1128 flipped
+        // codex CLI to a legal value. gemini-cli has no ACP transport, so the merge
+        // still produces a validation error tagged on the offending key. The invalid
+        // value lives in USER config; project config stays valid so the project view
+        // remains Valid in isolation.
         std::fs::write(
             &user_config_path,
             r#"
-[tools.codex]
-transport = "cli"
+[tools.gemini-cli]
+transport = "acp"
 "#,
         )
         .expect("write invalid user config");
@@ -710,8 +717,8 @@ transport = "cli"
         write_project_config(
             td.path(),
             r#"
-[tools.codex]
-transport = "acp"
+[tools.gemini-cli]
+transport = "auto"
 
 [tiers.tier-1]
 description = "Test"
@@ -738,7 +745,7 @@ default = "tier-1"
         assert!(
             report.diagnostics[0]
                 .message
-                .contains("tools.codex.transport"),
+                .contains("tools.gemini-cli.transport"),
             "diagnostic should surface the merged-config key: {:?}",
             report.diagnostics[0]
         );
@@ -768,7 +775,7 @@ default = "tier-1"
             json["diagnostics"][0]["message"]
                 .as_str()
                 .expect("routing json diagnostic message")
-                .contains("tools.codex.transport"),
+                .contains("tools.gemini-cli.transport"),
             "json output should surface the merged-config key: {json}"
         );
         assert_eq!(json["context"]["vcs_backend"], serde_json::json!("git"));
