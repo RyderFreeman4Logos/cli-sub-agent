@@ -590,11 +590,10 @@ fn derive_decision_from_severity_counts(
     if let Some(meta @ (ReviewDecision::Skip | ReviewDecision::Unavailable)) = meta_decision {
         return Ok(meta);
     }
-    let severity_counts_total: u32 = severity_counts.values().copied().sum();
     let needs_prose_tiebreak = matches!(
         meta_decision,
         Some(ReviewDecision::Uncertain | ReviewDecision::Fail)
-    ) && severity_counts_total == 0;
+    ) && severity_counts_are_zero(severity_counts);
 
     // #1140/#1144: when meta.decision is Uncertain or legacy Fail but the
     // structured findings are empty and severity counts are all zero, trust

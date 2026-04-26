@@ -30,26 +30,16 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
 fn verdict_token_pass_or_clean(text: &str) -> bool {
     text.lines().any(|line| {
         let trimmed = line.trim();
-        let unwrapped = strip_markdown_emphasis(trimmed);
         is_verdict_token(trimmed)
-            || is_verdict_token(unwrapped)
             || has_emphasized_verdict_token_prefix(trimmed)
             || line_has_labeled_verdict_token(trimmed)
     })
 }
 
-fn strip_markdown_emphasis(text: &str) -> &str {
-    text.strip_prefix("**")
-        .and_then(|inner| inner.strip_suffix("**"))
-        .or_else(|| {
-            text.strip_prefix("__")
-                .and_then(|inner| inner.strip_suffix("__"))
-        })
-        .unwrap_or(text)
-}
-
 fn is_verdict_token(text: &str) -> bool {
-    matches!(text, "PASS" | "CLEAN")
+    let trimmed =
+        text.trim_matches(|c: char| c.is_whitespace() || c == '*' || c == '_' || c == '.');
+    matches!(trimmed, "PASS" | "CLEAN")
 }
 
 fn line_has_labeled_verdict_token(line: &str) -> bool {
@@ -66,8 +56,16 @@ fn line_has_labeled_verdict_token(line: &str) -> bool {
             if bytes[index..].len() < label_bytes.len() {
                 continue;
             }
-            if bytes[index..index + label_bytes.len()].eq_ignore_ascii_case(label_bytes)
-                && has_verdict_token_prefix(line[index + label_bytes.len()..].trim_start())
+            if !bytes[index..index + label_bytes.len()].eq_ignore_ascii_case(label_bytes) {
+                continue;
+            }
+
+            let rest = &line[index + label_bytes.len()..];
+            if is_verdict_token(rest)
+                || has_emphasized_verdict_token_prefix(rest.trim_start())
+                || has_verdict_token_prefix(
+                    rest.trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '_'),
+                )
             {
                 return true;
             }
@@ -82,33 +80,35 @@ fn has_verdict_token_prefix(text: &str) -> bool {
         let Some(rest) = text.strip_prefix(token) else {
             return false;
         };
-        rest.chars()
-            .next()
-            .is_none_or(|next| !is_verdict_token_continuation(next))
+        verdict_token_is_bounded(rest)
     })
 }
 
 fn has_emphasized_verdict_token_prefix(text: &str) -> bool {
     ["**", "__"].iter().any(|marker| {
         ["PASS", "CLEAN"].iter().any(|token| {
-            let Some(rest) = text.strip_prefix(marker) else {
-                return false;
-            };
-            let Some(rest) = rest.strip_prefix(token) else {
-                return false;
-            };
-            let Some(rest) = rest.strip_prefix(marker) else {
-                return false;
-            };
-            rest.chars()
-                .next()
-                .is_none_or(|next| !is_verdict_token_continuation(next))
+            text.strip_prefix(marker)
+                .and_then(|rest| rest.strip_prefix(token))
+                .and_then(|rest| rest.strip_prefix(marker))
+                .is_some_and(verdict_token_is_bounded)
         })
     })
 }
 
 fn is_verdict_token_continuation(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '/'
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+fn verdict_token_is_bounded(rest: &str) -> bool {
+    let mut chars = rest.chars();
+    match chars.next() {
+        None => true,
+        Some(c) if is_verdict_token_continuation(c) => false,
+        Some('-') | Some('/') => chars
+            .next()
+            .is_none_or(|next| !is_verdict_token_continuation(next)),
+        _ => true,
+    }
 }
 
 fn is_ascii_word_byte(byte: u8) -> bool {
@@ -262,11 +262,20 @@ mod tests {
         assert!(verdict_token_pass_or_clean("**PASS**"));
         assert!(verdict_token_pass_or_clean("__CLEAN__"));
         assert!(verdict_token_pass_or_clean("**PASS** — clean fix"));
+        assert!(verdict_token_pass_or_clean("Verdict: **PASS**"));
+    }
+
+    #[test]
+    fn verdict_token_labeled_underscore_emphasis_matches() {
+        assert!(verdict_token_pass_or_clean("Verdict: __PASS__"));
+        assert!(verdict_token_pass_or_clean("Status: __CLEAN__"));
+        assert!(verdict_token_pass_or_clean("Verdict: __PASS__ - all good"));
     }
 
     #[test]
     fn verdict_token_labeled_clean_with_punctuation_matches() {
         assert!(verdict_token_pass_or_clean("Status: CLEAN."));
+        assert!(verdict_token_pass_or_clean("PASS."));
     }
 
     #[test]
@@ -316,6 +325,20 @@ mod tests {
     fn verdict_token_labeled_compound_does_not_match() {
         assert!(!verdict_token_pass_or_clean("Verdict: PASS-FAIL"));
         assert!(!verdict_token_pass_or_clean("Status: CLEAN_UP"));
+    }
+
+    #[test]
+    fn verdict_token_labeled_separator_hyphen_matches() {
+        assert!(verdict_token_pass_or_clean(
+            "Verdict: PASS - all tests passed"
+        ));
+    }
+
+    #[test]
+    fn verdict_token_labeled_separator_slash_matches() {
+        assert!(verdict_token_pass_or_clean(
+            "Verdict: PASS/ something - separator-not-compound"
+        ));
     }
 
     #[test]
