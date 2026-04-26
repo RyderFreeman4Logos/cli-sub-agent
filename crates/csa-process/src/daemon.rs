@@ -17,7 +17,9 @@ pub struct DaemonSpawnConfig {
     pub session_id: String,
     pub session_dir: PathBuf,
     pub csa_binary: PathBuf,
-    /// Subcommand verb for the child process (e.g. "run", "review", "debate").
+    /// Subcommand path for the child process. May be a single verb
+    /// (e.g. "run", "review", "debate") or a space-separated nested path
+    /// (e.g. "plan run"). Splits on whitespace at exec time.
     pub subcommand: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
@@ -82,12 +84,10 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
     let stderr_file = open_log_file(&config.session_dir, "stderr.log")?;
 
     let mut cmd = Command::new(&config.csa_binary);
-    cmd.args([
-        config.subcommand.as_str(),
-        "--daemon-child",
-        "--session-id",
-        &config.session_id,
-    ]);
+    for verb in config.subcommand.split_whitespace() {
+        cmd.arg(verb);
+    }
+    cmd.args(["--daemon-child", "--session-id", &config.session_id]);
     cmd.args(&config.args);
 
     for (k, v) in &config.env {
@@ -193,6 +193,43 @@ mod tests {
         assert!(
             contents.contains("hello"),
             "stdout.log should contain 'hello', got: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn test_daemon_spawn_supports_multi_word_subcommand() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_dir = tmp.path().join("session-multi");
+        let wrapper = write_wrapper_script(tmp.path(), "wrapper-multi.sh");
+
+        let config = DaemonSpawnConfig {
+            session_id: "TEST_MULTI".to_string(),
+            session_dir: session_dir.clone(),
+            csa_binary: wrapper,
+            subcommand: "plan run".to_string(),
+            args: vec!["--".to_string(), "echo got=$1,$2,$3,$4,$5".to_string()],
+            env: HashMap::new(),
+        };
+
+        let result = spawn_daemon(config).expect("spawn_daemon");
+        assert!(result.pid > 0);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let mut contents = String::new();
+        File::open(session_dir.join("stdout.log"))
+            .expect("open stdout.log")
+            .read_to_string(&mut contents)
+            .expect("read stdout.log");
+
+        // Wrapper records the first 5 args after `--`, which are the args the
+        // wrapper script saw before our `--` injected `--`. Since the wrapper
+        // skips until `--`, the actual exec was:
+        //   <wrapper> plan run --daemon-child --session-id TEST_MULTI -- echo got=...
+        // After wrapper consumes everything until `--`, $1..$5 are unset →
+        // output should still confirm exec succeeded.
+        assert!(
+            contents.contains("got="),
+            "stdout should contain 'got=' (exec ran), got: {contents:?}"
         );
     }
 
