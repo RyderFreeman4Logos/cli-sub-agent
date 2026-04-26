@@ -382,27 +382,37 @@ Run explicit adversarial debate via `csa debate`.
 Capture debate stdout, then normalize into a structured evidence packet
 for mechanical validation in Step 11.
 
+The debate prompt is now written to a temporary file created with `mktemp`,
+then passed through `csa debate --prompt-file "$PROMPT_FILE"` instead of
+embedding the full markdown payload as a single shell argument. This avoids
+bash variable-expansion and shell-quoting hazards when the generated TODO,
+spec, or threat model contains markdown with backticks, dollar-prefixed
+identifiers, or other shell-sensitive content.
+
 ```bash
 LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
-DEBATE_PROMPT="$(printf '%s\n' \
-"Critically evaluate this draft TODO plan, generated spec, and threat model. Act as a devil's advocate." \
-"" \
-"## Draft TODO Plan" \
-"${STEP_7_OUTPUT}" \
-"" \
-"## Generated Spec (Step 8)" \
-"${STEP_8_OUTPUT}" \
-"" \
-"## Threat Model (Step 9)" \
-"${STEP_9_OUTPUT}" \
-"" \
-"## Required Red-Team Coverage" \
-"Enumerate every assumption made in the TODO plan." \
-"For each assumption, construct at least one scenario where it is false and explain the resulting failure mode or missing mitigation." \
-"" \
-"## Output Requirements" \
-"Provide explicit verdict and confidence in your conclusion." )"
-SID=$(csa debate --sa-mode true --rounds 3 --format json --idle-timeout 600 --no-stream-stdout "${DEBATE_PROMPT}") || { echo "csa debate failed" >&2; exit 1; }
+PROMPT_FILE="$(mktemp)" || exit 1
+trap 'rm -f "$PROMPT_FILE"' EXIT INT TERM
+{
+  printf '%s\n' "Critically evaluate this draft TODO plan, generated spec, and threat model. Act as a devil's advocate."
+  echo ""
+  printf '%s\n' "## Draft TODO Plan"
+  printf '%s\n' "${STEP_7_OUTPUT}"
+  echo ""
+  printf '%s\n' "## Generated Spec (Step 8)"
+  printf '%s\n' "${STEP_8_OUTPUT}"
+  echo ""
+  printf '%s\n' "## Threat Model (Step 9)"
+  printf '%s\n' "${STEP_9_OUTPUT}"
+  echo ""
+  printf '%s\n' "## Required Red-Team Coverage"
+  printf '%s\n' "Enumerate every assumption made in the TODO plan."
+  printf '%s\n' "For each assumption, construct at least one scenario where it is false and explain the resulting failure mode or missing mitigation."
+  echo ""
+  printf '%s\n' "## Output Requirements"
+  printf '%s\n' "Provide explicit verdict and confidence in your conclusion."
+} > "$PROMPT_FILE" || { echo "Failed to write prompt file" >&2; exit 1; }
+SID=$(csa debate --sa-mode true --rounds 3 --format json --idle-timeout 600 --no-stream-stdout --prompt-file "$PROMPT_FILE") || { echo "csa debate failed" >&2; exit 1; }
 DEBATE_JSON="$(csa session wait --session "$SID" 2>&1)" || { echo "csa debate failed" >&2; exit 1; }
 [[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
 RAW_VERDICT="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.verdict // "UNKNOWN"' | tr '[:lower:]' '[:upper:]')"
