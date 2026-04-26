@@ -24,6 +24,62 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
             ]
             .iter()
             .any(|noun| lower.contains(noun)))
+        || verdict_token_pass_or_clean(text)
+}
+
+fn verdict_token_pass_or_clean(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        is_verdict_token(trimmed) || line_has_labeled_verdict_token(trimmed)
+    })
+}
+
+fn is_verdict_token(text: &str) -> bool {
+    matches!(text, "PASS" | "CLEAN")
+}
+
+fn line_has_labeled_verdict_token(line: &str) -> bool {
+    const LABELS: &[&str] = &["Verdict:", "Decision:", "Status:", "Result:", "Review:"];
+
+    let bytes = line.as_bytes();
+    for index in 0..bytes.len() {
+        if index > 0 && is_ascii_word_byte(bytes[index - 1]) {
+            continue;
+        }
+
+        for label in LABELS {
+            let label_bytes = label.as_bytes();
+            if bytes[index..].len() < label_bytes.len() {
+                continue;
+            }
+            if bytes[index..index + label_bytes.len()].eq_ignore_ascii_case(label_bytes)
+                && has_verdict_token_prefix(line[index + label_bytes.len()..].trim_start())
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn has_verdict_token_prefix(text: &str) -> bool {
+    ["PASS", "CLEAN"].iter().any(|token| {
+        let Some(rest) = text.strip_prefix(token) else {
+            return false;
+        };
+        rest.chars()
+            .next()
+            .is_none_or(|next| !is_verdict_token_continuation(next))
+    })
+}
+
+fn is_verdict_token_continuation(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '/'
+}
+
+fn is_ascii_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 pub(super) fn review_contains_prose_clean_conclusion(session_dir: &Path) -> Result<bool> {
@@ -137,4 +193,96 @@ fn contains_positive_no_issue_clause(lower: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verdict_token_pass_or_clean;
+
+    #[test]
+    fn verdict_token_uppercase_pass_matches() {
+        assert!(verdict_token_pass_or_clean("Verdict: PASS"));
+        assert!(verdict_token_pass_or_clean("PASS"));
+    }
+
+    #[test]
+    fn verdict_token_uppercase_clean_matches() {
+        assert!(verdict_token_pass_or_clean("Verdict: CLEAN"));
+        assert!(verdict_token_pass_or_clean("Status: CLEAN."));
+        assert!(verdict_token_pass_or_clean("CLEAN"));
+    }
+
+    #[test]
+    fn verdict_token_label_is_case_insensitive() {
+        assert!(verdict_token_pass_or_clean("decision: PASS"));
+        assert!(verdict_token_pass_or_clean("RESULT: CLEAN"));
+        assert!(verdict_token_pass_or_clean("Review: PASS"));
+    }
+
+    #[test]
+    fn verdict_token_standalone_pass_line_matches() {
+        assert!(verdict_token_pass_or_clean("details\nPASS\nnotes"));
+    }
+
+    #[test]
+    fn verdict_token_labeled_clean_with_punctuation_matches() {
+        assert!(verdict_token_pass_or_clean("Status: CLEAN."));
+    }
+
+    #[test]
+    fn verdict_token_lowercase_negative_prose_does_not_match() {
+        // codex finding: prior eq_ignore_ascii_case impl misclassified these
+        // as clean conclusions and unblocked merges on uncertain evidence.
+        assert!(!verdict_token_pass_or_clean("cannot pass yet"));
+        assert!(!verdict_token_pass_or_clean(
+            "review incomplete, cannot pass yet"
+        ));
+        assert!(!verdict_token_pass_or_clean("result is not clean"));
+        assert!(!verdict_token_pass_or_clean(
+            "I'll pass on judging this until tests run"
+        ));
+    }
+
+    #[test]
+    fn verdict_token_mixed_case_does_not_match() {
+        assert!(!verdict_token_pass_or_clean("Verdict: Pass"));
+        assert!(!verdict_token_pass_or_clean("Status: Clean"));
+    }
+
+    #[test]
+    fn verdict_token_hyphenated_bypass_does_not_match() {
+        assert!(!verdict_token_pass_or_clean("BY-PASS"));
+    }
+
+    #[test]
+    fn verdict_token_hyphenated_pass_fail_does_not_match() {
+        assert!(!verdict_token_pass_or_clean("PASS-FAIL criteria"));
+    }
+
+    #[test]
+    fn verdict_token_unlabeled_pass_sentence_does_not_match() {
+        assert!(!verdict_token_pass_or_clean("The review is PASS."));
+        assert!(!verdict_token_pass_or_clean("The test PASS rate is 100%"));
+    }
+
+    #[test]
+    fn verdict_token_unlabeled_clean_imperative_does_not_match() {
+        assert!(!verdict_token_pass_or_clean(
+            "Please CLEAN the build directory"
+        ));
+    }
+
+    #[test]
+    fn verdict_token_labeled_compound_does_not_match() {
+        assert!(!verdict_token_pass_or_clean("Verdict: PASS-FAIL"));
+        assert!(!verdict_token_pass_or_clean("Status: CLEAN_UP"));
+    }
+
+    #[test]
+    fn verdict_token_labeled_slash_compound_does_not_match() {
+        // gemini round-2 finding: PASS/FAIL list-of-criteria phrasing must not
+        // be treated as a verdict declaration.
+        assert!(!verdict_token_pass_or_clean("Verdict: PASS/FAIL"));
+        assert!(!verdict_token_pass_or_clean("Status: CLEAN/DIRTY"));
+    }
 }
