@@ -56,10 +56,16 @@ fn line_has_labeled_verdict_token(line: &str) -> bool {
             if bytes[index..].len() < label_bytes.len() {
                 continue;
             }
-            if bytes[index..index + label_bytes.len()].eq_ignore_ascii_case(label_bytes)
-                && has_verdict_token_prefix(
-                    line[index + label_bytes.len()..]
-                        .trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '_'),
+            if !bytes[index..index + label_bytes.len()].eq_ignore_ascii_case(label_bytes) {
+                continue;
+            }
+
+            let rest = &line[index + label_bytes.len()..];
+            if is_verdict_token(rest)
+                || has_emphasized_verdict_token_prefix(rest.trim_start())
+                || has_verdict_token_prefix(rest.trim_start())
+                || has_verdict_token_prefix(
+                    rest.trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '_'),
                 )
             {
                 return true;
@@ -258,6 +264,13 @@ mod tests {
         assert!(verdict_token_pass_or_clean("__CLEAN__"));
         assert!(verdict_token_pass_or_clean("**PASS** — clean fix"));
         assert!(verdict_token_pass_or_clean("Verdict: **PASS**"));
+    }
+
+    #[test]
+    fn verdict_token_labeled_underscore_emphasis_matches() {
+        assert!(verdict_token_pass_or_clean("Verdict: __PASS__"));
+        assert!(verdict_token_pass_or_clean("Status: __CLEAN__"));
+        assert!(verdict_token_pass_or_clean("Verdict: __PASS__ - all good"));
     }
 
     #[test]
