@@ -196,6 +196,8 @@ fn persist_review_verdict_uncertain_meta_without_pass_prose_preserves_uncertain(
         ReviewDecision::Uncertain,
         "Uncertain meta with no PASS/CLEAN prose must remain Uncertain (no silent merge)"
     );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
 #[test]

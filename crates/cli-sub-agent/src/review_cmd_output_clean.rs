@@ -28,8 +28,12 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
 }
 
 fn verdict_token_pass_or_clean(text: &str) -> bool {
+    // Strict uppercase match: avoid false positives in negative prose like
+    // "cannot pass yet" / "result is not clean" where the token appears
+    // lowercase. Real verdict prose ("Verdict: PASS", "The review is PASS")
+    // uppercases the token.
     text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .any(|part| part.eq_ignore_ascii_case("PASS") || part.eq_ignore_ascii_case("CLEAN"))
+        .any(|part| part == "PASS" || part == "CLEAN")
 }
 
 pub(super) fn review_contains_prose_clean_conclusion(session_dir: &Path) -> Result<bool> {
@@ -143,4 +147,42 @@ fn contains_positive_no_issue_clause(lower: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verdict_token_pass_or_clean;
+
+    #[test]
+    fn verdict_token_uppercase_pass_matches() {
+        assert!(verdict_token_pass_or_clean("Verdict: PASS"));
+        assert!(verdict_token_pass_or_clean("The review is PASS."));
+        assert!(verdict_token_pass_or_clean("PASS"));
+    }
+
+    #[test]
+    fn verdict_token_uppercase_clean_matches() {
+        assert!(verdict_token_pass_or_clean("Verdict: CLEAN"));
+        assert!(verdict_token_pass_or_clean("Status: CLEAN."));
+        assert!(verdict_token_pass_or_clean("CLEAN"));
+    }
+
+    #[test]
+    fn verdict_token_lowercase_negative_prose_does_not_match() {
+        // codex finding: prior eq_ignore_ascii_case impl misclassified these
+        // as clean conclusions and unblocked merges on uncertain evidence.
+        assert!(!verdict_token_pass_or_clean(
+            "review incomplete, cannot pass yet"
+        ));
+        assert!(!verdict_token_pass_or_clean("result is not clean"));
+        assert!(!verdict_token_pass_or_clean(
+            "I'll pass on judging this until tests run"
+        ));
+    }
+
+    #[test]
+    fn verdict_token_mixed_case_does_not_match() {
+        assert!(!verdict_token_pass_or_clean("Verdict: Pass"));
+        assert!(!verdict_token_pass_or_clean("Status: Clean"));
+    }
 }
