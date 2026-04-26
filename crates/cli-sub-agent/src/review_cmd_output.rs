@@ -551,14 +551,10 @@ fn parse_overall_risk_from_text(text: &str) -> Option<String> {
         .map(|level| level.as_str().to_ascii_lowercase())
 }
 
-/// Derive the review decision from structured severity counts.
-///
-/// Core invariant (#1045): the decision is derived from `severity_counts`, not from
-/// summary-text keywords or stale `meta.decision` values.
-///
-/// - critical > 0 or high > 0 or medium > 0 → `Fail` / `HAS_ISSUES`
-/// - low > 0 only → `Pass` / `CLEAN` (LOWs don't block merge)
-/// - all zero + findings empty → `Pass` / `CLEAN`
+/// Derive the review decision from structured severity counts, not summary-text
+/// keywords or stale `meta.decision` values (#1045).
+/// Blocking severities fail; low-only findings pass; zero findings and zero
+/// severity counts defer to the explicit tie-break rules below.
 fn derive_decision_from_severity_counts(
     severity_counts: &std::collections::BTreeMap<Severity, u32>,
     findings_empty: bool,
@@ -583,8 +579,6 @@ fn derive_decision_from_severity_counts(
         return Ok(ReviewDecision::Fail);
     }
 
-    // From here: findings list is empty AND severity_counts are all zero.
-
     // Honour overall_risk as a fail-closed signal when it's severe.
     if overall_risk.is_some_and(|risk| {
         risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
@@ -596,14 +590,21 @@ fn derive_decision_from_severity_counts(
     if let Some(meta @ (ReviewDecision::Skip | ReviewDecision::Unavailable)) = meta_decision {
         return Ok(meta);
     }
-    // Uncertain (#1140): downgrade to Pass only when prose clearly says
-    // PASS/CLEAN; otherwise preserve Uncertain so callers don't merge on
-    // incomplete evidence.
-    if meta_decision == Some(ReviewDecision::Uncertain) {
+    let severity_counts_total: u32 = severity_counts.values().copied().sum();
+    let needs_prose_tiebreak = matches!(
+        meta_decision,
+        Some(ReviewDecision::Uncertain | ReviewDecision::Fail)
+    ) && severity_counts_total == 0;
+
+    // #1140/#1144: when meta.decision is Uncertain or legacy Fail but the
+    // structured findings are empty and severity counts are all zero, trust
+    // explicit PASS/CLEAN prose as the tiebreaker; otherwise preserve the
+    // caller-provided meta decision.
+    if needs_prose_tiebreak {
         return Ok(if prose_clean_check()? {
             ReviewDecision::Pass
         } else {
-            ReviewDecision::Uncertain
+            meta_decision.unwrap_or(ReviewDecision::Uncertain)
         });
     }
 
@@ -614,10 +615,9 @@ fn derive_decision_from_severity_counts(
         return Ok(ReviewDecision::Pass);
     }
 
-    // No findings, no prose clean marker, meta_decision is Fail or None.
-    // Zero findings + meta_decision=fail is the exact bug scenario (#1045):
-    // the caller parsed "fail" from summary prose, but there are no actual findings.
-    // The invariant says: zero severity_counts → pass.
+    // No findings, no prose clean marker, meta_decision is Fail or None:
+    // keep the legacy zero-findings fallback as Pass unless the tie-break above
+    // already preserved an explicit Fail/Uncertain meta decision.
     Ok(ReviewDecision::Pass)
 }
 
