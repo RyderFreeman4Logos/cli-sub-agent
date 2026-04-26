@@ -63,7 +63,6 @@ fn line_has_labeled_verdict_token(line: &str) -> bool {
             let rest = &line[index + label_bytes.len()..];
             if is_verdict_token(rest)
                 || has_emphasized_verdict_token_prefix(rest.trim_start())
-                || has_verdict_token_prefix(rest.trim_start())
                 || has_verdict_token_prefix(
                     rest.trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '_'),
                 )
