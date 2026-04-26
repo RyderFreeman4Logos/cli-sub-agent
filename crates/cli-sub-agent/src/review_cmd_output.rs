@@ -592,13 +592,19 @@ fn derive_decision_from_severity_counts(
         return Ok(ReviewDecision::Fail);
     }
 
-    // Preserve non-fail meta decisions (skip, uncertain, unavailable) as-is:
-    // these represent infrastructure/scope signals, not finding-based verdicts.
-    if let Some(
-        meta @ (ReviewDecision::Skip | ReviewDecision::Uncertain | ReviewDecision::Unavailable),
-    ) = meta_decision
-    {
+    // Skip/Unavailable: deliberate infrastructure signals, propagate as-is.
+    if let Some(meta @ (ReviewDecision::Skip | ReviewDecision::Unavailable)) = meta_decision {
         return Ok(meta);
+    }
+    // Uncertain (#1140): downgrade to Pass only when prose clearly says
+    // PASS/CLEAN; otherwise preserve Uncertain so callers don't merge on
+    // incomplete evidence.
+    if meta_decision == Some(ReviewDecision::Uncertain) {
+        return Ok(if prose_clean_check()? {
+            ReviewDecision::Pass
+        } else {
+            ReviewDecision::Uncertain
+        });
     }
 
     // At this point: zero severity counts, empty findings, non-severe overall_risk,

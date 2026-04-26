@@ -24,6 +24,12 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
             ]
             .iter()
             .any(|noun| lower.contains(noun)))
+        || verdict_token_pass_or_clean(text)
+}
+
+fn verdict_token_pass_or_clean(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|part| part.eq_ignore_ascii_case("PASS") || part.eq_ignore_ascii_case("CLEAN"))
 }
 
 pub(super) fn review_contains_prose_clean_conclusion(session_dir: &Path) -> Result<bool> {
