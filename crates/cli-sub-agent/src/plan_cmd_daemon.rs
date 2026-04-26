@@ -167,7 +167,8 @@ pub(crate) fn spawn_and_exit(args: &PlanRunArgs) -> Result<()> {
         "<!-- CSA:CALLER_HINT action=\"wait\" \
          rule=\"Call 'csa session wait --session {id}{cd}' in a SEPARATE Bash call. \
          NEVER batch multiple waits in a for/while loop. \
-         Each wait returns periodically so you can generate tokens and keep your KV cache warm.\" -->",
+         Each wait returns periodically so you can generate tokens and keep your KV cache warm. \
+         If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens.\" -->",
         id = result.session_id,
         cd = cd_hint,
     );
