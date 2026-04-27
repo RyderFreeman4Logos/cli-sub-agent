@@ -468,15 +468,16 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
 
     let model_part = parts[2];
     if csa_core::model_catalog::model_validation_enabled(tool_part) {
-        let valid_models = csa_core::model_catalog::valid_models(tool_part);
+        let valid_models = csa_core::model_catalog::valid_models(tool_part, provider_part);
         if !valid_models.contains(&model_part) {
             bail!(
-                "Tier '{}' has model spec '{}' with unknown model '{}' for tool '{}'. \
+                "Tier '{}' has model spec '{}' with unknown model '{}' for tool '{}' provider '{}'. \
                  Known models: [{}].",
                 tier_name,
                 model_spec,
                 model_part,
                 tool_part,
+                provider_part,
                 valid_models.join(", ")
             );
         }
@@ -504,6 +505,10 @@ mod tests;
 #[cfg(test)]
 #[path = "validate_tests_tail.rs"]
 mod tests_tail;
+
+#[cfg(test)]
+#[path = "validate_tests_model_catalog.rs"]
+mod tests_model_catalog;
 
 #[cfg(test)]
 #[path = "validate_tests_transport.rs"]

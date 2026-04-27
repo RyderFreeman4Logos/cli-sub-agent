@@ -28,9 +28,12 @@ pub enum ModelSpecValidationError {
         got: String,
         valid: Vec<&'static str>,
     },
-    #[error("unknown model '{got}' for tool '{tool}': valid models are {valid:?}")]
+    #[error(
+        "unknown model '{got}' for tool '{tool}' provider '{provider}': valid models are {valid:?}"
+    )]
     UnknownModel {
         tool: String,
+        provider: String,
         got: String,
         valid: Vec<&'static str>,
     },
@@ -98,10 +101,11 @@ impl ModelSpec {
             }
         }
         if model_catalog::model_validation_enabled(&self.tool) {
-            let valid = model_catalog::valid_models(&self.tool);
+            let valid = model_catalog::valid_models(&self.tool, &self.provider);
             if !valid.contains(&self.model.as_str()) {
                 return Err(ModelSpecValidationError::UnknownModel {
                     tool: self.tool.clone(),
+                    provider: self.provider.clone(),
                     got: self.model.clone(),
                     valid: valid.to_vec(),
                 });
@@ -280,6 +284,45 @@ mod tests {
     fn validate_with_catalog_accepts_known_spec() {
         let spec = ModelSpec::parse("codex/openai/gpt-5.5/xhigh").unwrap();
         assert!(spec.validate_with_catalog(&["codex", "gemini-cli"]).is_ok());
+    }
+
+    #[test]
+    fn rejects_opencode_cross_provider_gemini_under_openai() {
+        let spec = ModelSpec::parse("opencode/openai/gemini-2.5-pro/high").unwrap();
+        let err = spec.validate_with_catalog(&["opencode"]).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("gemini-2.5-pro"));
+        assert!(message.contains("openai"));
+        assert!(message.contains("gpt-5"));
+        assert!(!message.contains("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn rejects_opencode_cross_provider_claude_under_google() {
+        let spec = ModelSpec::parse("opencode/google/claude-opus-4-7/high").unwrap();
+        let err = spec.validate_with_catalog(&["opencode"]).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("claude-opus-4-7"));
+        assert!(message.contains("google"));
+        assert!(message.contains("gemini-2.5-pro"));
+        assert!(!message.contains("gpt-5"));
+    }
+
+    #[test]
+    fn accepts_opencode_correct_pairing() {
+        for raw in [
+            "opencode/openai/gpt-5/high",
+            "opencode/google/gemini-2.5-pro/high",
+            "opencode/anthropic/claude-opus-4-7/high",
+        ] {
+            let spec = ModelSpec::parse(raw).unwrap();
+            assert!(
+                spec.validate_with_catalog(&["opencode"]).is_ok(),
+                "{raw} should validate"
+            );
+        }
     }
 
     #[test]
