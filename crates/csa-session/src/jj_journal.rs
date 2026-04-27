@@ -135,13 +135,12 @@ impl JjJournal {
                     message: err.to_string(),
                 })?;
 
-        let current_state = self.read_state()?.unwrap_or_default();
+        let mut current_state = self.read_state()?.unwrap_or_default();
         let revision = revision_supplier(message)?;
 
         if current_state.session_start_revision.is_none() {
-            self.write_state(&JournalState {
-                session_start_revision: Some(revision.clone()),
-            })?;
+            current_state.session_start_revision = Some(revision.clone());
+            self.write_state(&current_state)?;
         }
 
         Ok(revision)
