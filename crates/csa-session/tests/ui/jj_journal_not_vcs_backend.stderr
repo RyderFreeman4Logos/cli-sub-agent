@@ -1,0 +1,15 @@
+error[E0277]: the trait bound `JjJournal: VcsBackend` is not satisfied
+ --> tests/ui/jj_journal_not_vcs_backend.rs:9:23
+  |
+9 |     needs_vcs_backend(&journal);
+  |                       ^^^^^^^^ the trait `VcsBackend` is not implemented for `JjJournal`
+  |
+help: the following other types implement trait `VcsBackend`
+ --> src/vcs_backends.rs
+  |
+  | impl VcsBackend for GitBackend {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `GitBackend`
+...
+  | impl VcsBackend for JjBackend {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `JjBackend`
+  = note: required for the cast from `&JjJournal` to `&dyn VcsBackend`
