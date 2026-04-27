@@ -16,6 +16,7 @@ pub(crate) enum BranchGuardBypassSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VcsBranchState {
+    NoRepository,
     OnBranch {
         current: String,
         detected_default: Option<String>,
@@ -171,6 +172,7 @@ pub(crate) fn evaluate_branch_guard(request: BranchGuardRequest) -> BranchGuardD
             })
         }
         VcsBranchState::OnBranch { .. } => BranchGuardDecision::Allow { source: None },
+        VcsBranchState::NoRepository => BranchGuardDecision::Allow { source: None },
         VcsBranchState::Indeterminate {
             current,
             detected_default,
@@ -189,9 +191,24 @@ pub(crate) fn observe_branch_state(
     project_config: Option<&ProjectConfig>,
 ) -> VcsBranchState {
     let vcs_config = project_config.map(|config| &config.vcs);
-    let backend = csa_session::vcs_backends::create_vcs_backend_with_config(
+    let kind = match csa_session::vcs_backends::detect_vcs_kind_with_config(
         project_root,
         vcs_config.and_then(|config| config.backend),
+        vcs_config.and_then(|config| config.colocated_default),
+    ) {
+        Ok(Some(kind)) => kind,
+        Ok(None) => return VcsBranchState::NoRepository,
+        Err(err) => {
+            return VcsBranchState::Indeterminate {
+                current: None,
+                detected_default: None,
+                reason: format!("repository probe failed: {err}"),
+            };
+        }
+    };
+    let backend = csa_session::vcs_backends::create_vcs_backend_with_config(
+        project_root,
+        Some(kind),
         vcs_config.and_then(|config| config.colocated_default),
     );
     let current = match backend.current_branch(project_root) {
@@ -288,6 +305,13 @@ mod tests {
             current: "feat/work".to_string(),
             detected_default: Some("main".to_string()),
         }));
+        assert_eq!(decision, BranchGuardDecision::Allow { source: None });
+    }
+
+    #[test]
+    fn no_repository_allowed() {
+        let decision = evaluate_branch_guard(request(VcsBranchState::NoRepository));
+
         assert_eq!(decision, BranchGuardDecision::Allow { source: None });
     }
 

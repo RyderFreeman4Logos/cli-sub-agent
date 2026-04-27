@@ -9,6 +9,7 @@
 //! Template strings for jj `-T` flags are hardcoded constants.
 
 use csa_core::vcs::{VcsBackend, VcsIdentity, VcsKind};
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -187,13 +188,7 @@ impl VcsBackend for JjBackend {
         }
 
         let bookmarks = parse_utf8_stdout(output.stdout, "jj bookmark list")?;
-        // First line is the primary bookmark name (before any ':' or whitespace)
-        bookmarks
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().next())
-            .filter(|s| !s.is_empty())
-            .map_or(Ok(None), |b| Ok(Some(b.to_string())))
+        Ok(parse_jj_current_bookmark(&bookmarks))
     }
 
     fn default_branch(&self, project_root: &Path) -> Result<Option<String>, String> {
@@ -367,6 +362,19 @@ fn parse_utf8_stdout(stdout: Vec<u8>, context: &str) -> Result<String, String> {
         .map_err(|err| format!("{context} produced non-UTF-8 output: {err}"))
 }
 
+fn parse_jj_current_bookmark(bookmarks: &str) -> Option<String> {
+    bookmarks.lines().find_map(|line| {
+        let name = line
+            .split_once(':')
+            .map_or(line, |(bookmark, _)| bookmark)
+            .trim();
+        name.split_whitespace()
+            .next()
+            .filter(|bookmark| !bookmark.is_empty())
+            .map(str::to_string)
+    })
+}
+
 fn git_output(project_root: &Path, args: &[&str]) -> Result<Output, String> {
     Command::new("git")
         .args(args)
@@ -505,6 +513,64 @@ pub fn create_vcs_backend_with_config(
     }
 }
 
+/// Detect whether `project_root` is inside a real VCS repository.
+///
+/// Unlike [`create_vcs_backend_with_config`], this returns `None` when neither
+/// Git nor Jj can find a repository in the parent chain. It is intended for
+/// guard paths that must distinguish ordinary non-VCS directories from
+/// repositories with an indeterminate current branch.
+pub fn detect_vcs_kind_with_config(
+    project_root: &Path,
+    backend_override: Option<VcsKind>,
+    colocated_default: Option<VcsKind>,
+) -> Result<Option<VcsKind>, String> {
+    let has_jj = jj_repository_exists(project_root)?;
+    let has_git = git_repository_exists(project_root)?;
+
+    if let Some(kind) = backend_override {
+        return Ok((has_jj || has_git).then_some(kind));
+    }
+
+    Ok(match (has_jj, has_git) {
+        (true, true) => Some(colocated_default.unwrap_or(VcsKind::Git)),
+        (true, false) => Some(VcsKind::Jj),
+        (false, true) => Some(VcsKind::Git),
+        (false, false) => None,
+    })
+}
+
+fn git_repository_exists(project_root: &Path) -> Result<bool, String> {
+    if command_succeeds(project_root, "git", &["rev-parse", "--show-toplevel"])? {
+        return Ok(true);
+    }
+    Ok(has_ancestor_entry(project_root, ".git"))
+}
+
+fn jj_repository_exists(project_root: &Path) -> Result<bool, String> {
+    if command_succeeds(project_root, "jj", &["root"])? {
+        return Ok(true);
+    }
+    Ok(has_ancestor_entry(project_root, ".jj"))
+}
+
+fn command_succeeds(project_root: &Path, program: &str, args: &[&str]) -> Result<bool, String> {
+    match Command::new(program)
+        .args(args)
+        .current_dir(project_root)
+        .output()
+    {
+        Ok(output) => Ok(output.status.success()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("Failed to run {program} {}: {err}", args.join(" "))),
+    }
+}
+
+fn has_ancestor_entry(project_root: &Path, entry_name: &str) -> bool {
+    project_root
+        .ancestors()
+        .any(|ancestor| ancestor.join(entry_name).exists())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +620,36 @@ mod tests {
         assert_eq!(backend.kind(), VcsKind::Jj);
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn jj_current_bookmark_strips_colon_delimited_metadata() {
+        let bookmark = parse_jj_current_bookmark("main: abc123def\n");
+
+        assert_eq!(bookmark.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn detect_vcs_kind_walks_git_parent_chain() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        init_git_repo(temp.path(), "main");
+        let child = temp.path().join("crates").join("csa-session");
+        fs::create_dir_all(&child).expect("create child dir");
+
+        let kind = detect_vcs_kind_with_config(&child, None, None)
+            .expect("repository probe should succeed");
+
+        assert_eq!(kind, Some(VcsKind::Git));
+    }
+
+    #[test]
+    fn detect_vcs_kind_returns_none_outside_repo() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let kind = detect_vcs_kind_with_config(temp.path(), None, None)
+            .expect("repository probe should not fail");
+
+        assert_eq!(kind, None);
     }
 
     fn run_git(project_root: &Path, args: &[&str]) {

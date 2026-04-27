@@ -59,6 +59,46 @@ fn init_git_repo(project_root: &Path, default_branch: &str) {
     run_git(project_root, &["commit", "-m", "initial"]);
 }
 
+#[cfg(unix)]
+fn install_fake_jj(bin_dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(bin_dir).expect("create fake jj bin dir");
+    let jj_path = bin_dir.join("jj");
+    std::fs::write(
+        &jj_path,
+        r#"#!/bin/sh
+if [ "$1" = "root" ]; then
+  pwd
+  exit 0
+fi
+if [ "$1" = "bookmark" ] && [ "$2" = "list" ]; then
+  printf 'main: abc123def\n'
+  exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "get" ]; then
+  exit 1
+fi
+exit 1
+"#,
+    )
+    .expect("write fake jj");
+    let mut permissions = std::fs::metadata(&jj_path)
+        .expect("fake jj metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&jj_path, permissions).expect("chmod fake jj");
+    jj_path
+}
+
+#[cfg(unix)]
+fn prepend_path(bin_dir: &Path) -> OsString {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![bin_dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&current));
+    std::env::join_paths(paths).expect("join PATH")
+}
+
 fn run_csa_with_missing_tool_mode(
     tmp: &Path,
     project_root: &Path,
@@ -350,6 +390,39 @@ fn run_on_feature_branch_allows_guard_to_later_tool_error() {
     let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &[]);
 
     assert_branch_guard_allowed_to_later_error(&output);
+}
+
+#[test]
+fn run_from_non_vcs_directory_allows_guard_to_later_tool_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &[]);
+
+    assert_branch_guard_allowed_to_later_error(&output);
+}
+
+#[test]
+#[cfg(unix)]
+fn run_in_jj_repo_on_colon_delimited_main_bookmark_refuses_before_tool_execution() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(tmp.path().join(".jj")).expect("create jj marker");
+    let fake_bin = tmp.path().join("fake-bin");
+    install_fake_jj(&fake_bin);
+
+    let output = csa_cmd(tmp.path())
+        .arg("run")
+        .arg("--no-daemon")
+        .args(["--sa-mode", "true", "--tool", "missing-tool-alias"])
+        .arg("inspect repository")
+        .env("PATH", prepend_path(&fake_bin))
+        .current_dir(tmp.path())
+        .output()
+        .expect("csa run should execute");
+
+    assert_branch_guard_refused(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("\"main\""), "stderr: {stderr}");
+    assert!(!stderr.contains("main:"), "stderr: {stderr}");
 }
 
 #[test]
