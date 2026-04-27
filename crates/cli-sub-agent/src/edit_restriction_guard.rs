@@ -615,16 +615,7 @@ mod tests {
 
     fn git_binary() -> &'static Path {
         static GIT_BINARY: OnceLock<PathBuf> = OnceLock::new();
-        GIT_BINARY.get_or_init(|| {
-            option_env!("PATH")
-                .and_then(|path| {
-                    path.split(':')
-                        .filter(|dir| !dir.is_empty())
-                        .map(|dir| Path::new(dir).join("git"))
-                        .find(|candidate| candidate.is_file())
-                })
-                .unwrap_or_else(|| PathBuf::from("git"))
-        })
+        GIT_BINARY.get_or_init(|| which::which("git").unwrap_or_else(|_| PathBuf::from("git")))
     }
 
     fn run_git(repo: &Path, args: &[&str]) {
