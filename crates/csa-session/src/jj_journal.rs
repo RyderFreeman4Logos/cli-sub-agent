@@ -31,7 +31,7 @@ struct JournalState {
 
 impl JjJournal {
     pub fn new(project_root: impl AsRef<Path>) -> Result<Self, JournalError> {
-        let project_root = project_root.as_ref().to_path_buf();
+        let project_root = absolutize_project_root(project_root.as_ref())?;
         let state_path = derive_state_path()?;
         Ok(Self {
             project_root,
@@ -42,7 +42,8 @@ impl JjJournal {
     #[cfg(test)]
     fn with_state_path(project_root: impl AsRef<Path>, state_path: impl AsRef<Path>) -> Self {
         Self {
-            project_root: project_root.as_ref().to_path_buf(),
+            project_root: std::path::absolute(project_root.as_ref())
+                .unwrap_or_else(|_| project_root.as_ref().to_path_buf()),
             state_path: state_path.as_ref().to_path_buf(),
         }
     }
@@ -192,6 +193,11 @@ fn sanitize_snapshot_message(message: &str) -> Result<String, JournalError> {
     Ok(bounded)
 }
 
+fn absolutize_project_root(project_root: &Path) -> Result<PathBuf, JournalError> {
+    std::path::absolute(project_root)
+        .map_err(|err| JournalError::Io(format!("failed to resolve project root: {err}")))
+}
+
 fn derive_state_path() -> Result<PathBuf, JournalError> {
     std::env::var_os(SESSION_DIR_ENV)
         .map(|session_dir| PathBuf::from(session_dir).join(STATE_FILE_NAME))
@@ -241,6 +247,9 @@ fn write_state_atomically_inner(
     }
 
     fs::rename(&tmp_path, path)?;
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 

@@ -254,7 +254,21 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::fs;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
+
+    /// Process-wide mutex serializing tests that mutate `HOME` / `XDG_STATE_HOME`.
+    ///
+    /// `std::env::set_var` / `std::env::remove_var` are not thread-safe; cargo runs
+    /// tests in parallel within one binary, so env-mutating tests would race
+    /// without this guard.
+    fn env_test_lock() -> MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     struct EnvVarGuard {
         key: &'static str,
@@ -497,6 +511,7 @@ mod tests {
 
     #[test]
     fn test_project_resource_lock_conflicts_for_same_project_root() {
+        let _env_lock = env_test_lock();
         let home_dir = tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set_os("HOME", home_dir.path());
         let _xdg_guard = EnvVarGuard::unset("XDG_STATE_HOME");
@@ -524,6 +539,7 @@ mod tests {
 
     #[test]
     fn test_project_resource_lock_allows_different_project_roots() {
+        let _env_lock = env_test_lock();
         let state_home = tempdir().expect("state-home tempdir");
         let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
