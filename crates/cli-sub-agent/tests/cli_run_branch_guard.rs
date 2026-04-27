@@ -218,6 +218,29 @@ fn run_on_feature_branch_allows_guard_to_later_tool_error() {
 }
 
 #[test]
+fn run_with_cd_subdirectory_on_main_refuses_before_tool_execution() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+    std::fs::create_dir(tmp.path().join("crates")).expect("create subdirectory");
+
+    let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &["--cd", "crates"]);
+
+    assert_branch_guard_refused(&output);
+}
+
+#[test]
+fn run_with_cd_subdirectory_on_feature_branch_allows_guard_to_later_tool_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+    run_git(tmp.path(), &["checkout", "-b", "feat/branch-guard"]);
+    std::fs::create_dir(tmp.path().join("crates")).expect("create subdirectory");
+
+    let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &["--cd", "crates"]);
+
+    assert_branch_guard_allowed_to_later_error(&output);
+}
+
+#[test]
 fn run_on_main_with_cli_bypass_allows_guard_to_later_tool_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_git_repo(tmp.path(), "main");

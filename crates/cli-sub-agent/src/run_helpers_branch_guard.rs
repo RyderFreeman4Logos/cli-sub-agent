@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::vcs::detect_vcs_kind;
 
 pub(crate) const BRANCH_GUARD_EXIT_CODE: i32 = 2;
 
@@ -17,7 +16,6 @@ pub(crate) enum BranchGuardBypassSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VcsBranchState {
-    NoRepository,
     OnBranch {
         current: String,
         detected_default: Option<String>,
@@ -166,7 +164,6 @@ pub(crate) fn evaluate_branch_guard(request: BranchGuardRequest) -> BranchGuardD
     }
 
     match request.branch_state {
-        VcsBranchState::NoRepository => BranchGuardDecision::Allow { source: None },
         VcsBranchState::OnBranch {
             current,
             detected_default,
@@ -197,10 +194,6 @@ pub(crate) fn observe_branch_state(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
 ) -> VcsBranchState {
-    if detect_vcs_kind(project_root).is_none() {
-        return VcsBranchState::NoRepository;
-    }
-
     let vcs_config = project_config.map(|config| &config.vcs);
     let backend = csa_session::vcs_backends::create_vcs_backend_with_config(
         project_root,

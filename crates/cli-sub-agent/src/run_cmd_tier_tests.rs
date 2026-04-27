@@ -128,7 +128,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         None,
         None,
         false,
-        false,
+        true,
         Some(project_dir.path().display().to_string()),
         None,
         None,
