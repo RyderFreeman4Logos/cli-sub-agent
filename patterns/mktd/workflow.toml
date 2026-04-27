@@ -292,6 +292,7 @@ session = "${STEP_1_OUTPUT}"
 [[workflow.steps]]
 id = 7
 title = "Phase 2 — DRAFT TODO"
+tier = "tier-3-complex"
 prompt = """
 Synthesize CSA findings into a structured TODO plan.
 
@@ -331,6 +332,7 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 8
 title = "Phase 2.25 — Spec Generation"
+tier = "tier-3-complex"
 prompt = """
 Extract verifiable acceptance criteria from the draft TODO plan.
 
