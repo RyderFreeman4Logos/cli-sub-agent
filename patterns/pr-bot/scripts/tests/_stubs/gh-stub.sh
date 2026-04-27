@@ -70,6 +70,13 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
         printf '[]\n'
       fi
       ;;
+    stale-already-exists)
+      if [ "${list_call}" -ge 3 ]; then
+        printf '[{"number":808,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      else
+        printf '[]\n'
+      fi
+      ;;
     ambiguous)
       printf '[{"number":404,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}},{"number":405,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
       ;;
@@ -107,7 +114,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
     create-success|cross-owner)
       printf 'https://github.com/test-owner/test-repo/pull/101\n'
       ;;
-    missed-already-exists)
+    missed-already-exists|stale-already-exists)
       echo "a pull request for branch \"test-owner:fix/1171\" into branch \"main\" already exists" >&2
       exit 1
       ;;

@@ -399,6 +399,9 @@ name = "WAIT_SLEEP_PID"
 name = "WORKFLOW_BRANCH"
 
 [[workflow.variables]]
+name = "attempt"
+
+[[workflow.variables]]
 name = "count"
 
 [[workflow.variables]]
@@ -414,6 +417,9 @@ name = "latest_trigger_ts"
 name = "matches"
 
 [[workflow.variables]]
+name = "pr_num"
+
+[[workflow.variables]]
 name = "quota_body"
 
 [[workflow.variables]]
@@ -424,6 +430,9 @@ name = "quota_now_utc"
 
 [[workflow.variables]]
 name = "quota_section_header"
+
+[[workflow.variables]]
+name = "rc"
 
 [[workflow.variables]]
 name = "remaining"
@@ -691,6 +700,28 @@ find_branch_pr() {
   fi
 }
 
+find_branch_pr_with_retry() {
+  local attempt pr_num rc
+  rc=2
+  for attempt in 1 2 3 4 5; do
+    set +e
+    pr_num="$(find_branch_pr)"
+    rc=$?
+    set -e
+    if [ "${rc}" = "0" ] && [ -n "${pr_num}" ]; then
+      printf '%s\n' "${pr_num}"
+      return 0
+    fi
+    if [ "${rc}" = "1" ]; then
+      return 1
+    fi
+    if [ "${attempt}" != "5" ]; then
+      sleep 2
+    fi
+  done
+  return "${rc}"
+}
+
 set +e
 PR_NUM="$(find_branch_pr)"
 FIND_RC=$?
@@ -708,7 +739,7 @@ else
     if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
       echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
       set +e
-      PR_NUM="$(find_branch_pr)"
+      PR_NUM="$(find_branch_pr_with_retry)"
       FIND_RC=$?
       set -e
       if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
@@ -723,21 +754,10 @@ else
     fi
   fi
   if [ "${CREATE_RC}" = "0" ]; then
-    FIND_RC=2
-    PR_NUM=""
-    for attempt in 1 2 3 4 5; do
-      set +e
-      PR_NUM="$(find_branch_pr)"
-      FIND_RC=$?
-      set -e
-      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-        break
-      fi
-      if [ "${FIND_RC}" = "1" ]; then
-        break
-      fi
-      sleep 2
-    done
+    set +e
+    PR_NUM="$(find_branch_pr_with_retry)"
+    FIND_RC=$?
+    set -e
     if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
       echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
       exit 1

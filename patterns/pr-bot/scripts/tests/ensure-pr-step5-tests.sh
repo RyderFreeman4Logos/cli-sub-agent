@@ -108,6 +108,7 @@ run_case "branch-pushed-create" "true" "create-success" "0" "101" "1"
 run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0"
 run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
 run_case "create-already-exists-reresolve" "true" "missed-already-exists" "0" "303" "1" "PR already exists for test-owner:fix/1171; re-resolving"
+run_case "stale-list-create-race-recovery" "true" "stale-already-exists" "0" "808" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple open PRs found for test-owner:fix/1171"
 run_case "quoted-branch-reuse" "true" "quoted-branch" "0" "707" "0" "" 'feat/has"quote'
 

@@ -252,7 +252,7 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
         .find("find_branch_pr() {")
         .expect("Step 5 must define find_branch_pr");
     let find_branch_pr_end = step5[find_branch_pr_start..]
-        .find("\n}\n\nset +e")
+        .find("\n}\n\nfind_branch_pr_with_retry()")
         .map(|offset| find_branch_pr_start + offset)
         .expect("Step 5 must close find_branch_pr before invoking it");
     let find_branch_pr = &step5[find_branch_pr_start..find_branch_pr_end];
@@ -298,6 +298,17 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
     assert!(
         step5.contains("a pull request for branch .* already exists"),
         "Step 5 must recover from gh pr create reporting that the PR already exists"
+    );
+    assert!(
+        step5.contains("find_branch_pr_with_retry() {"),
+        "Step 5 must define one shared retry helper for stale gh pr list results"
+    );
+    assert!(
+        step5
+            .matches(r#"PR_NUM="$(find_branch_pr_with_retry)""#)
+            .count()
+            == 2,
+        "Step 5 must use the shared retry helper in both create-race and create-success paths"
     );
 }
 
