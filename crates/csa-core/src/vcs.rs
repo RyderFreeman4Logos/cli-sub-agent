@@ -96,6 +96,69 @@ impl std::fmt::Display for VcsIdentity {
     }
 }
 
+/// Opaque journal revision identifier.
+///
+/// This is intentionally distinct from [`VcsIdentity`]: snapshot journals only
+/// need a stable handle for their sidecar history, while canonical repository
+/// operations may need richer git/jj identity metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RevisionId(pub String);
+
+impl RevisionId {
+    /// Returns the underlying revision identifier as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RevisionId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for RevisionId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl std::fmt::Display for RevisionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Errors returned by snapshot journal implementations.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum JournalError {
+    /// The configured journal backend is unavailable in the current environment.
+    #[error("snapshot journal unavailable: {0}")]
+    Unavailable(String),
+
+    /// An operating-system or filesystem failure occurred.
+    #[error("snapshot journal I/O failure: {0}")]
+    Io(String),
+
+    /// The journal command failed.
+    #[error("{command} failed: {message}")]
+    CommandFailed { command: String, message: String },
+
+    /// The journal state file contents were invalid.
+    #[error("snapshot journal state invalid: {0}")]
+    InvalidState(String),
+
+    /// The requested snapshot message was invalid after sanitization.
+    #[error("snapshot journal message invalid: {0}")]
+    InvalidMessage(String),
+}
+
+impl From<std::io::Error> for JournalError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value.to_string())
+    }
+}
+
 /// Common VCS operations required by CSA session and todo management.
 ///
 /// Each method returns `Result<T, String>` since csa-core does not depend on anyhow.
@@ -139,6 +202,18 @@ pub trait VcsBackend: Send + Sync {
             op_id: None,
         })
     }
+}
+
+/// Sidecar snapshot journaling contract.
+///
+/// [`VcsBackend`] handles canonical repository operations; `SnapshotJournal` is
+/// a parallel sidecar contract for journaling. They are NOT supertypes.
+pub trait SnapshotJournal: Send + Sync {
+    /// Capture the current working-tree state into the sidecar journal.
+    fn snapshot(&self, message: &str) -> Result<RevisionId, JournalError>;
+
+    /// Return the first journal revision recorded for the current session, if any.
+    fn session_start_revision(&self) -> Result<Option<RevisionId>, JournalError>;
 }
 
 /// Detect which VCS backend to use for the given project root.
@@ -258,5 +333,39 @@ mod tests {
         let json = serde_json::to_string(&id).unwrap();
         let roundtripped: VcsIdentity = serde_json::from_str(&json).unwrap();
         assert_eq!(id, roundtripped);
+    }
+
+    #[derive(Default)]
+    struct DummyJournal;
+
+    impl SnapshotJournal for DummyJournal {
+        fn snapshot(&self, message: &str) -> Result<RevisionId, JournalError> {
+            Ok(RevisionId::from(format!("snap:{message}")))
+        }
+
+        fn session_start_revision(&self) -> Result<Option<RevisionId>, JournalError> {
+            Ok(Some(RevisionId::from("start-rev")))
+        }
+    }
+
+    #[test]
+    fn snapshot_journal_trait_surface_roundtrips_revision_ids() {
+        let journal: &dyn SnapshotJournal = &DummyJournal;
+        let revision = journal.snapshot("hello").expect("snapshot should succeed");
+        let start = journal
+            .session_start_revision()
+            .expect("state read should succeed")
+            .expect("start revision should exist");
+
+        assert_eq!(revision.as_str(), "snap:hello");
+        assert_eq!(start.as_str(), "start-rev");
+    }
+
+    #[test]
+    fn revision_id_serde_roundtrip() {
+        let revision = RevisionId::from("kqosnzyt");
+        let json = serde_json::to_string(&revision).expect("serialize revision id");
+        let decoded: RevisionId = serde_json::from_str(&json).expect("deserialize revision id");
+        assert_eq!(decoded, revision);
     }
 }

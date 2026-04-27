@@ -7,6 +7,7 @@ pub mod event_writer;
 pub mod finding_id;
 pub mod genealogy;
 pub mod git;
+pub mod jj_journal;
 pub mod manager;
 pub mod metadata;
 pub mod output_parser;
@@ -57,6 +58,7 @@ pub use metadata::SessionMetadata;
 
 pub use event_writer::{EventWriteStats, EventWriter};
 pub use finding_id::{FindingId, anchor_hash, normalize_path};
+pub use jj_journal::JjJournal;
 pub use output_parser::{
     estimate_tokens, load_output_index, parse_return_packet, persist_structured_output,
     persist_structured_output_from_file, read_all_sections, read_section,
