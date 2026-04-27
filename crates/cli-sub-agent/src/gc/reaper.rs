@@ -6,7 +6,8 @@ use std::path::Path;
 use tracing::{info, warn};
 
 use csa_session::{
-    MetaSessionState, SessionPhase, list_sessions_from_root, list_sessions_from_root_readonly,
+    MetaSessionState, PhaseEvent, SessionPhase, list_sessions_from_root,
+    list_sessions_from_root_readonly,
 };
 
 use super::RUNTIME_DIR_NAME;
@@ -113,7 +114,7 @@ pub(super) fn reap_runtime_payloads_in_root(
 
         let session_dir = session_root.join("sessions").join(&session.meta_session_id);
         if session_has_live_lock(&session_dir)? {
-            info!(
+            warn!(
                 session = %session.meta_session_id,
                 "Skipping runtime reap for locked session"
             );
@@ -160,6 +161,12 @@ pub(super) fn reap_runtime_payloads_in_root(
 
         if !dry_run {
             fs::remove_dir_all(&runtime_dir)?;
+            info!(
+                session = %session.meta_session_id,
+                path = %runtime_dir.display(),
+                bytes_reclaimed,
+                "Reaped retired session runtime directory"
+            );
         }
 
         stats.sessions_reaped = stats.sessions_reaped.saturating_add(1);
@@ -174,7 +181,28 @@ pub(super) fn reap_runtime_payloads_in_root(
     Ok(stats)
 }
 
-fn merge_runtime_reap_stats(total: &mut RuntimeReapStats, stats: RuntimeReapStats) {
+pub(super) fn sessions_with_dry_run_retirements(
+    sessions: &[MetaSessionState],
+    now: chrono::DateTime<chrono::Utc>,
+    retire_after_days: i64,
+) -> Vec<MetaSessionState> {
+    sessions
+        .iter()
+        .cloned()
+        .map(|mut session| {
+            let age = now.signed_duration_since(session.last_accessed);
+            if !session.tools.is_empty()
+                && age.num_days() > retire_after_days
+                && let Ok(retired_phase) = session.phase.transition(&PhaseEvent::Retired)
+            {
+                session.phase = retired_phase;
+            }
+            session
+        })
+        .collect()
+}
+
+pub(super) fn merge_runtime_reap_stats(total: &mut RuntimeReapStats, stats: RuntimeReapStats) {
     total.sessions_reaped = total.sessions_reaped.saturating_add(stats.sessions_reaped);
     total.bytes_reclaimed = total.bytes_reclaimed.saturating_add(stats.bytes_reclaimed);
     total.entries.extend(stats.entries);

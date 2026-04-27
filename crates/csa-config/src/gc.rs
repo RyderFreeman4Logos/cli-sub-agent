@@ -10,6 +10,8 @@ pub struct GcConfig {
     pub transcript_max_age_days: u64,
     #[serde(default = "default_transcript_max_size_mb")]
     pub transcript_max_size_mb: u64,
+    #[serde(default = "default_reap_runtime_dirs")]
+    pub reap_runtime_dirs: bool,
 }
 
 impl Default for GcConfig {
@@ -17,6 +19,7 @@ impl Default for GcConfig {
         Self {
             transcript_max_age_days: default_transcript_max_age_days(),
             transcript_max_size_mb: default_transcript_max_size_mb(),
+            reap_runtime_dirs: default_reap_runtime_dirs(),
         }
     }
 }
@@ -25,6 +28,7 @@ impl GcConfig {
     pub fn is_default(&self) -> bool {
         self.transcript_max_age_days == default_transcript_max_age_days()
             && self.transcript_max_size_mb == default_transcript_max_size_mb()
+            && self.reap_runtime_dirs == default_reap_runtime_dirs()
     }
 
     /// Load effective GC config for a project.
@@ -78,6 +82,10 @@ fn default_transcript_max_size_mb() -> u64 {
     500
 }
 
+fn default_reap_runtime_dirs() -> bool {
+    true
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct GcConfigEnvelope {
     #[serde(default)]
@@ -93,5 +101,32 @@ mod tests {
         let cfg = GcConfig::default();
         assert_eq!(cfg.transcript_max_age_days, 30);
         assert_eq!(cfg.transcript_max_size_mb, 500);
+        assert!(cfg.reap_runtime_dirs);
+    }
+
+    #[test]
+    fn gc_reap_runtime_dirs_defaults_true_when_omitted() {
+        let cfg: super::GcConfigEnvelope = toml::from_str(
+            r#"
+            [gc]
+            transcript_max_age_days = 10
+            "#,
+        )
+        .unwrap();
+
+        assert!(cfg.gc.reap_runtime_dirs);
+    }
+
+    #[test]
+    fn gc_reap_runtime_dirs_can_be_disabled() {
+        let cfg: super::GcConfigEnvelope = toml::from_str(
+            r#"
+            [gc]
+            reap_runtime_dirs = false
+            "#,
+        )
+        .unwrap();
+
+        assert!(!cfg.gc.reap_runtime_dirs);
     }
 }
