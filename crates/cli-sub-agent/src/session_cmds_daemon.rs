@@ -75,6 +75,49 @@ fn session_has_terminal_process(session_dir: &Path) -> bool {
         || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
 }
 
+fn session_log_has_content(session_dir: &Path, log_name: &str) -> bool {
+    fs::metadata(session_dir.join(log_name))
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+}
+
+fn visible_output_logs_have_content(session_dir: &Path, output_log_visible: bool) -> bool {
+    session_log_has_content(session_dir, "stdout.log")
+        || (output_log_visible && session_log_has_content(session_dir, "output.log"))
+}
+
+fn failure_summary_for_empty_output(
+    session_dir: &Path,
+    output_streamed: bool,
+    output_log_visible: bool,
+) -> Option<String> {
+    if output_streamed || visible_output_logs_have_content(session_dir, output_log_visible) {
+        return None;
+    }
+
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    let contents = fs::read_to_string(result_path).ok()?;
+    let result = toml::from_str::<csa_session::result::SessionResult>(&contents).ok()?;
+    if result.status != "failure" || result.exit_code == 0 || result.summary.trim().is_empty() {
+        return None;
+    }
+
+    Some(result.summary)
+}
+
+fn emit_failure_summary_for_empty_output(
+    session_dir: &Path,
+    output_streamed: bool,
+    output_log_visible: bool,
+) {
+    let Some(summary) =
+        failure_summary_for_empty_output(session_dir, output_streamed, output_log_visible)
+    else {
+        return;
+    };
+    eprintln!("{summary}");
+}
+
 /// Read the daemon PID from `daemon.pid`, falling back to legacy stderr directives.
 fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
     // Primary: daemon.pid file (written by spawn_daemon since v0.1.198).
@@ -181,7 +224,13 @@ pub(crate) fn handle_session_attach(
         std::thread::sleep,
     )?;
     let Some(live_stdout_path) = live_stdout_path else {
-        return resolve_attach_terminal_exit(&project_root, &session_dir, &resolved.session_id);
+        return resolve_attach_terminal_exit(
+            &project_root,
+            &session_dir,
+            &resolved.session_id,
+            false,
+            false,
+        );
     };
 
     let live_streams_output_log = live_stdout_path == output_path;
@@ -201,6 +250,7 @@ pub(crate) fn handle_session_attach(
 
     let mut buf = [0u8; 8192];
     let poll_interval = std::time::Duration::from_millis(100);
+    let mut streamed_output = false;
 
     loop {
         let mut any_output = false;
@@ -210,6 +260,7 @@ pub(crate) fn handle_session_attach(
             std::io::stdout().write_all(&buf[..n])?;
             std::io::stdout().flush()?;
             any_output = true;
+            streamed_output = true;
         }
 
         // Lazy-open stderr if it appeared after we started.
@@ -222,6 +273,7 @@ pub(crate) fn handle_session_attach(
                 std::io::stderr().write_all(&buf[..n])?;
                 std::io::stderr().flush()?;
                 any_output = true;
+                streamed_output = true;
             }
         }
 
@@ -235,6 +287,7 @@ pub(crate) fn handle_session_attach(
                     break;
                 }
                 std::io::stdout().write_all(&buf[..n])?;
+                streamed_output = true;
             }
             if live_streams_output_log {
                 if completion_stdout_file.is_none() && stdout_path.exists() {
@@ -247,6 +300,7 @@ pub(crate) fn handle_session_attach(
                             break;
                         }
                         std::io::stdout().write_all(&buf[..n])?;
+                        streamed_output = true;
                     }
                 }
             }
@@ -259,15 +313,27 @@ pub(crate) fn handle_session_attach(
                         break;
                     }
                     std::io::stderr().write_all(&buf[..n])?;
+                    streamed_output = true;
                 }
                 std::io::stderr().flush()?;
             }
+            emit_failure_summary_for_empty_output(
+                &session_dir,
+                streamed_output,
+                live_streams_output_log,
+            );
             // Return the session's exit code from result.toml.
             return Ok(completion.exit_code);
         }
 
         if !session_has_terminal_process(&session_dir) {
-            return resolve_attach_terminal_exit(&project_root, &session_dir, &resolved.session_id);
+            return resolve_attach_terminal_exit(
+                &project_root,
+                &session_dir,
+                &resolved.session_id,
+                streamed_output,
+                live_streams_output_log,
+            );
         }
 
         if !any_output {
