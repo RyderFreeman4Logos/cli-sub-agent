@@ -19,6 +19,7 @@ enum RunStdinPrompt {
     None,
     Omitted,
     PositionalSentinel,
+    PromptFileSentinel,
 }
 
 impl DaemonSpawnOptions {
@@ -28,15 +29,29 @@ impl DaemonSpawnOptions {
         prompt_flag: Option<&str>,
         prompt_file: Option<&Path>,
     ) -> Self {
-        let run_stdin_prompt = if prompt_file.is_some() || prompt_flag.is_some() {
-            RunStdinPrompt::None
-        } else if prompt == Some("-") {
-            RunStdinPrompt::PositionalSentinel
-        } else if prompt.is_none() && skill.is_none() {
-            RunStdinPrompt::Omitted
-        } else {
-            RunStdinPrompt::None
-        };
+        let run_stdin_prompt =
+            if prompt_file.is_some_and(crate::run_helpers::is_prompt_file_stdin_sentinel) {
+                RunStdinPrompt::PromptFileSentinel
+            } else if prompt_file.is_some() || prompt_flag.is_some() {
+                RunStdinPrompt::None
+            } else if prompt == Some("-") {
+                RunStdinPrompt::PositionalSentinel
+            } else if prompt.is_none() && skill.is_none() {
+                RunStdinPrompt::Omitted
+            } else {
+                RunStdinPrompt::None
+            };
+
+        Self { run_stdin_prompt }
+    }
+
+    pub(crate) fn for_prompt_file(prompt_file: Option<&Path>) -> Self {
+        let run_stdin_prompt =
+            if prompt_file.is_some_and(crate::run_helpers::is_prompt_file_stdin_sentinel) {
+                RunStdinPrompt::PromptFileSentinel
+            } else {
+                RunStdinPrompt::None
+            };
 
         Self { run_stdin_prompt }
     }
@@ -335,12 +350,36 @@ fn build_forwarded_args(
         }
     }
 
+    if spawn_options.run_stdin_prompt == RunStdinPrompt::PromptFileSentinel {
+        remove_prompt_file_sentinel_arg(&mut forwarded_args);
+    }
+
     if let Some(prompt_file) = stdin_prompt_file {
         forwarded_args.push("--prompt-file".to_string());
         forwarded_args.push(prompt_file.display().to_string());
     }
 
     forwarded_args
+}
+
+fn remove_prompt_file_sentinel_arg(args: &mut Vec<String>) {
+    let Some(pos) = args.iter().position(|arg| {
+        arg.strip_prefix("--prompt-file=").is_some_and(|value| {
+            crate::run_helpers::is_prompt_file_stdin_sentinel(Path::new(value))
+        }) || arg == "--prompt-file"
+    }) else {
+        return;
+    };
+
+    if args[pos] == "--prompt-file" {
+        if args.get(pos + 1).is_some_and(|value| {
+            crate::run_helpers::is_prompt_file_stdin_sentinel(Path::new(value))
+        }) {
+            args.drain(pos..=pos + 1);
+        }
+    } else {
+        args.remove(pos);
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +402,18 @@ mod tests {
     fn run_daemon_options_detect_positional_stdin_sentinel() {
         let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None);
         assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PositionalSentinel);
+    }
+
+    #[test]
+    fn run_daemon_options_detect_prompt_file_stdin_sentinel() {
+        let options = DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")));
+        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
+    }
+
+    #[test]
+    fn prompt_file_daemon_options_detect_dev_stdin() {
+        let options = DaemonSpawnOptions::for_prompt_file(Some(Path::new("/dev/stdin")));
+        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
     }
 
     #[test]
@@ -411,6 +462,69 @@ mod tests {
             "run",
             DaemonSpawnOptions {
                 run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
+            },
+            Some(prompt_file),
+        );
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--sa-mode",
+                "true",
+                "--prompt-file",
+                "/state/session/input/stdin-prompt.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn forwarded_args_replace_prompt_file_stdin_sentinel_with_prompt_file() {
+        let all_args = vec![
+            "csa".to_string(),
+            "debate".to_string(),
+            "--sa-mode".to_string(),
+            "true".to_string(),
+            "--prompt-file".to_string(),
+            "/dev/stdin".to_string(),
+        ];
+        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
+
+        let forwarded = build_forwarded_args(
+            &all_args,
+            "debate",
+            DaemonSpawnOptions {
+                run_stdin_prompt: RunStdinPrompt::PromptFileSentinel,
+            },
+            Some(prompt_file),
+        );
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--sa-mode",
+                "true",
+                "--prompt-file",
+                "/state/session/input/stdin-prompt.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn forwarded_args_replace_prompt_file_equals_stdin_sentinel_with_prompt_file() {
+        let all_args = vec![
+            "csa".to_string(),
+            "run".to_string(),
+            "--sa-mode".to_string(),
+            "true".to_string(),
+            "--prompt-file=-".to_string(),
+        ];
+        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
+
+        let forwarded = build_forwarded_args(
+            &all_args,
+            "run",
+            DaemonSpawnOptions {
+                run_stdin_prompt: RunStdinPrompt::PromptFileSentinel,
             },
             Some(prompt_file),
         );

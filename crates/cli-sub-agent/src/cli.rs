@@ -120,7 +120,8 @@ pub enum Commands {
         /// Task prompt (flag form; same as the positional prompt)
         #[arg(long = "prompt", value_name = "PROMPT", conflicts_with_all = ["prompt", "prompt_file"])]
         prompt_flag: Option<String>,
-        /// Read prompt from a file (bypasses shell quoting issues with complex prompts)
+        /// Read prompt from a file (bypasses shell quoting issues with complex prompts).
+        /// Use `-` or `/dev/stdin` to read the prompt from stdin (heredoc or pipe).
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         prompt_file: Option<PathBuf>,
         /// Prepend summary/details/findings from a prior review session into the employee prompt
