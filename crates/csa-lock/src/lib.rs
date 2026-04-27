@@ -14,6 +14,7 @@ pub mod slot;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
@@ -86,7 +87,11 @@ fn sanitize_lock_component(input: &str) -> String {
     }
 }
 
-fn acquire_lock_at_path(lock_path: &Path, lock_name: &str, reason: &str) -> Result<SessionLock> {
+pub fn acquire_lock_at_path(
+    lock_path: &Path,
+    lock_name: &str,
+    reason: &str,
+) -> Result<SessionLock> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create locks directory: {}", parent.display()))?;
@@ -195,11 +200,92 @@ pub fn acquire_parent_fork_lock(
     acquire_lock_at_path(&lock_path, &lock_name, reason)
 }
 
+fn resolve_state_root() -> Result<PathBuf> {
+    if let Some(state_root) = std::env::var_os("XDG_STATE_HOME") {
+        return Ok(PathBuf::from(state_root));
+    }
+
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow::anyhow!("XDG_STATE_HOME and HOME are both unset"))?;
+    Ok(PathBuf::from(home).join(".local/state"))
+}
+
+/// Acquire a per-project resource lock for cross-session coordination.
+///
+/// Lock path:
+/// `${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/<resource_kind>-locks/<sha256(canonical(project_root))>/<tool_name>.lock`
+///
+/// Used when two CSA sessions in the same project_root must serialize on a
+/// shared resource (e.g., the underlying jj or git repository).
+pub fn acquire_project_resource_lock(
+    project_root: &Path,
+    resource_kind: &str,
+    tool_name: &str,
+    reason: &str,
+) -> Result<SessionLock> {
+    let kind = resource_kind.trim();
+    if kind.is_empty() {
+        anyhow::bail!("resource kind cannot be empty");
+    }
+
+    let tool = tool_name.trim();
+    if tool.is_empty() {
+        anyhow::bail!("tool name cannot be empty");
+    }
+
+    let canonical = fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_os_str().as_encoded_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    let safe_kind = sanitize_lock_component(kind);
+    let safe_tool = sanitize_lock_component(tool);
+    let lock_path = resolve_state_root()?
+        .join("cli-sub-agent")
+        .join(format!("{safe_kind}-locks"))
+        .join(digest)
+        .join(format!("{safe_tool}.lock"));
+    let lock_name = format!("{kind}:{tool}");
+    acquire_lock_at_path(&lock_path, &lock_name, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::fs;
     use tempfile::tempdir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_os(key: &'static str, value: &Path) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: test-scoped env mutation is isolated to the current test.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: test-scoped env mutation is isolated to the current test.
+            unsafe { std::env::remove_var(key) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                // SAFETY: test-scoped env restoration is isolated to the current test.
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                // SAFETY: test-scoped env restoration is isolated to the current test.
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
 
     #[test]
     fn test_acquire_lock_succeeds() {
@@ -403,6 +489,50 @@ mod tests {
 
         let lock_a = acquire_parent_fork_lock(state_root, "01PARENTA", "fork-call");
         let lock_b = acquire_parent_fork_lock(state_root, "01PARENTB", "fork-call");
+
+        assert!(lock_a.is_ok());
+        assert!(lock_b.is_ok());
+    }
+
+    #[test]
+    fn test_project_resource_lock_conflicts_for_same_project_root() {
+        let home_dir = tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set_os("HOME", home_dir.path());
+        let _xdg_guard = EnvVarGuard::unset("XDG_STATE_HOME");
+
+        let project_root = tempdir().expect("project tempdir");
+        let _lock1 = acquire_project_resource_lock(
+            project_root.path(),
+            "jj-journal",
+            "snapshot",
+            "first snapshot",
+        )
+        .expect("first project lock should succeed");
+
+        let err = acquire_project_resource_lock(
+            project_root.path(),
+            "jj-journal",
+            "snapshot",
+            "second snapshot",
+        )
+        .expect_err("second project lock on same project_root should fail")
+        .to_string();
+
+        assert!(err.contains("jj-journal:snapshot"));
+    }
+
+    #[test]
+    fn test_project_resource_lock_allows_different_project_roots() {
+        let state_home = tempdir().expect("state-home tempdir");
+        let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
+
+        let project_a = tempdir().expect("project a tempdir");
+        let project_b = tempdir().expect("project b tempdir");
+
+        let lock_a =
+            acquire_project_resource_lock(project_a.path(), "jj-journal", "snapshot", "first");
+        let lock_b =
+            acquire_project_resource_lock(project_b.path(), "jj-journal", "snapshot", "second");
 
         assert!(lock_a.is_ok());
         assert!(lock_b.is_ok());
