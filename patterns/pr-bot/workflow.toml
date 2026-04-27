@@ -627,9 +627,10 @@ prompt = '''
   `ERROR: Local review found unresolved issues. Fix them before PR creation.`
 - FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
 
-PR lookup is strictly owner-aware: query only `${SOURCE_OWNER}:${WORKFLOW_BRANCH}`,
-verify returned rows by `headRepositoryOwner.login` and `headRefName`, and never
-fall back to unqualified `--head "${WORKFLOW_BRANCH}"`. If `gh pr create`
+PR lookup is strictly owner-aware: query `--head "${WORKFLOW_BRANCH}"`,
+then verify returned rows by `headRepositoryOwner.login` and `headRefName`.
+Never rely on `--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}"`; `gh pr list --head`
+accepts a branch name only. If `gh pr create`
 reports `a pull request for branch ... already exists`, re-resolve via the same
 owner-aware lookup and reuse the existing PR.
 
@@ -668,7 +669,7 @@ find_branch_pr() {
       --repo "${REPO_SLUG}" \
       --base "${DEFAULT_BRANCH}" \
       --state open \
-      --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" \
+      --head "${WORKFLOW_BRANCH}" \
       --json number,headRefName,headRepositoryOwner \
       --jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\" and .headRepositoryOwner.login == \"${SOURCE_OWNER}\") | .number" \
       2>/dev/null || true

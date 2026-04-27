@@ -203,21 +203,42 @@ fn pr_bot_archive_includes_helper_scripts() {
 fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
     let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
     let step5 = extract_pr_bot_step_prompt(&workflow, 5, "patterns/pr-bot/workflow.toml");
+    let find_branch_pr_start = step5
+        .find("find_branch_pr() {")
+        .expect("Step 5 must define find_branch_pr");
+    let find_branch_pr_end = step5[find_branch_pr_start..]
+        .find("\n}\n\nset +e")
+        .map(|offset| find_branch_pr_start + offset)
+        .expect("Step 5 must close find_branch_pr before invoking it");
+    let find_branch_pr = &step5[find_branch_pr_start..find_branch_pr_end];
 
     assert!(
         step5.contains("--json number,headRefName,headRepositoryOwner"),
         "Step 5 must request head owner metadata for client-side PR owner verification"
     );
     assert!(
+        find_branch_pr.contains(r#"--head "${WORKFLOW_BRANCH}""#),
+        "Step 5 must query gh pr list with branch-only --head"
+    );
+    assert!(
+        !find_branch_pr.contains(r#"--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}""#),
+        "Step 5 must not pass owner-qualified syntax to gh pr list --head"
+    );
+    assert!(
+        find_branch_pr.contains(r#".headRefName == \"${WORKFLOW_BRANCH}\""#)
+            && find_branch_pr.contains(r#".headRepositoryOwner.login == \"${SOURCE_OWNER}\""#),
+        "Step 5 jq filter must strictly match both head branch and head owner"
+    );
+    assert!(
         step5.contains("headRepositoryOwner.login == "),
         "Step 5 must strictly filter PR lookup results by head owner"
     );
     assert!(
-        step5.lines().all(
-            |line| !line.trim().starts_with(r#"--head "${WORKFLOW_BRANCH}""#)
-                && !line.contains(r#" --head "${WORKFLOW_BRANCH}""#)
-        ),
-        "Step 5 must not use an unqualified --head \"${{WORKFLOW_BRANCH}}\" fallback"
+        find_branch_pr
+            .matches(r#"--head "${WORKFLOW_BRANCH}""#)
+            .count()
+            == 1,
+        "Step 5 must have exactly one branch-only gh pr list --head lookup, not a fallback chain"
     );
     assert!(
         step5.contains("a pull request for branch .* already exists"),

@@ -60,7 +60,8 @@ run_case() {
     GIT_STUB_SOURCE_OWNER="test-owner" \
     GH_STUB_STATE_DIR="${case_dir}" \
     GH_STUB_SCENARIO="${scenario}" \
-    GH_STUB_EXPECTED_HEAD="test-owner:fix/1171" \
+    GH_STUB_EXPECTED_LIST_HEAD="fix/1171" \
+    GH_STUB_EXPECTED_CREATE_HEAD="test-owner:fix/1171" \
     GH_STUB_EXPECTED_BASE="main" \
     REVIEW_COMPLETED="true" \
     REMOTE_NAME="origin" \
@@ -97,6 +98,7 @@ run_case() {
 run_case "branch-unpushed-create" "false" "create-success" "0" "101" "1"
 run_case "branch-pushed-create" "true" "create-success" "0" "101" "1"
 run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0"
+run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
 run_case "create-already-exists-reresolve" "true" "missed-already-exists" "0" "303" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple open PRs found for test-owner:fix/1171"
 

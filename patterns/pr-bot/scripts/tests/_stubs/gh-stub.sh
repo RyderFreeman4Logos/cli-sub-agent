@@ -4,7 +4,8 @@ set -euo pipefail
 
 state_dir="${GH_STUB_STATE_DIR:?}"
 scenario="${GH_STUB_SCENARIO:?}"
-expected_head="${GH_STUB_EXPECTED_HEAD:?}"
+expected_list_head="${GH_STUB_EXPECTED_LIST_HEAD:?}"
+expected_create_head="${GH_STUB_EXPECTED_CREATE_HEAD:?}"
 expected_base="${GH_STUB_EXPECTED_BASE:?}"
 
 count_call() {
@@ -37,7 +38,8 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   head_arg="$(arg_value "--head" "$@")"
   base_arg="$(arg_value "--base" "$@")"
   json_arg="$(arg_value "--json" "$@")"
-  if [ "${head_arg}" != "${expected_head}" ]; then
+  jq_arg="$(arg_value "--jq" "$@")"
+  if [ "${head_arg}" != "${expected_list_head}" ]; then
     echo "unexpected --head: ${head_arg}" >&2
     exit 1
   fi
@@ -49,37 +51,52 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
     echo "unexpected --json: ${json_arg}" >&2
     exit 1
   fi
+  if [ -z "${jq_arg}" ]; then
+    echo "missing --jq" >&2
+    exit 1
+  fi
 
   list_call="$(count_call pr-list)"
   case "${scenario}" in
     create-success)
       if [ "${list_call}" -ge 2 ]; then
-        printf '101\n'
+        printf '[{"number":101,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      else
+        printf '[]\n'
       fi
       ;;
     preexisting)
-      printf '202\n'
+      printf '[{"number":202,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
       ;;
     missed-already-exists)
       if [ "${list_call}" -ge 2 ]; then
-        printf '303\n'
+        printf '[{"number":303,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      else
+        printf '[]\n'
       fi
       ;;
     ambiguous)
-      printf '404\n405\n'
+      printf '[{"number":404,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}},{"number":405,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      ;;
+    cross-owner)
+      if [ "${list_call}" -ge 2 ]; then
+        printf '[{"number":101,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      else
+        printf '[{"number":606,"headRefName":"fix/1171","headRepositoryOwner":{"login":"other-owner"}}]\n'
+      fi
       ;;
     *)
       echo "unknown GH_STUB_SCENARIO: ${scenario}" >&2
       exit 1
       ;;
-  esac
+  esac | jq -r "${jq_arg}"
   exit 0
 fi
 
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
   head_arg="$(arg_value "--head" "$@")"
   base_arg="$(arg_value "--base" "$@")"
-  if [ "${head_arg}" != "${expected_head}" ]; then
+  if [ "${head_arg}" != "${expected_create_head}" ]; then
     echo "unexpected create --head: ${head_arg}" >&2
     exit 1
   fi
@@ -89,7 +106,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
   fi
   count_call pr-create >/dev/null
   case "${scenario}" in
-    create-success)
+    create-success|cross-owner)
       printf 'https://github.com/test-owner/test-repo/pull/101\n'
       ;;
     missed-already-exists)
