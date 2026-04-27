@@ -68,7 +68,8 @@ impl JjJournal {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let collected: Vec<OsString> = args.into_iter().map(Into::into).collect();
+        let mut collected: Vec<OsString> = vec!["--no-pager".into()];
+        collected.extend(args.into_iter().map(Into::into));
         let output = Command::new("jj")
             .args(&collected)
             .current_dir(&self.project_root)
@@ -371,7 +372,7 @@ mod tests {
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, ref message }
-                if command == "jj describe -m snapshot me"
+                if command == "jj --no-pager describe -m snapshot me"
                     && message.contains("mock jj unavailable")
         ));
         assert!(
@@ -388,7 +389,7 @@ mod tests {
         let arg_log = repo.path().join("jj-args.bin");
         let script = format!(
             "#!/bin/sh\n\
-             if [ \"$1\" = \"log\" ]; then\n\
+             if [ \"$2\" = \"log\" ]; then\n\
                printf 'rev-from-log\\n'\n\
                exit 0\n\
              fi\n\
@@ -426,11 +427,12 @@ mod tests {
             .map(|chunk| String::from_utf8_lossy(chunk).to_string())
             .collect::<Vec<_>>();
 
-        assert!(parts.windows(4).any(|window| {
+        assert!(parts.windows(5).any(|window| {
             window[0] == "CALL"
-                && window[1] == "describe"
-                && window[2] == "-m"
-                && window[3] == "msg;$(touch hacked)`echo no` / second line"
+                && window[1] == "--no-pager"
+                && window[2] == "describe"
+                && window[3] == "-m"
+                && window[4] == "msg;$(touch hacked)`echo no` / second line"
         }));
         assert!(
             !repo.path().join("hacked").exists(),

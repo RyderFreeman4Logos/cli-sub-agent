@@ -838,6 +838,7 @@ version = "0.1.590"
 dependencies = [
  "anyhow",
  "chrono",
+ "directories",
  "libc",
  "serde",
  "serde_json",

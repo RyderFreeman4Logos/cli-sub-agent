@@ -201,13 +201,12 @@ pub fn acquire_parent_fork_lock(
 }
 
 fn resolve_state_root() -> Result<PathBuf> {
-    if let Some(state_root) = std::env::var_os("XDG_STATE_HOME") {
-        return Ok(PathBuf::from(state_root));
-    }
-
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| anyhow::anyhow!("XDG_STATE_HOME and HOME are both unset"))?;
-    Ok(PathBuf::from(home).join(".local/state"))
+    let base_dirs = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("could not determine platform base directories"))?;
+    Ok(base_dirs
+        .state_dir()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| base_dirs.data_local_dir().to_path_buf()))
 }
 
 /// Acquire a per-project resource lock for cross-session coordination.
