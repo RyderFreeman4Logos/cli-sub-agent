@@ -1983,4 +1983,6 @@ echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false --
 
 ## Post-Merge Extensions
 
+Tool: note
+
 > Post-merge rule-extractor pattern is available at `patterns/rule-extractor/` — integration pending separate PR. Invoke via `csa plan run patterns/rule-extractor/workflow.toml` after successful merge when HIGH/CRITICAL findings exist.

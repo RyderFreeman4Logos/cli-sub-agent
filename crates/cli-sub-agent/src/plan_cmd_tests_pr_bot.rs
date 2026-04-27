@@ -188,6 +188,7 @@ fn pr_bot_workflow_resolves_helpers_from_pattern_dir() {
 #[test]
 fn pr_bot_workflow_advisory_steps_have_tool_note() {
     let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
+    let pattern = pr_bot_artifact_text("patterns/pr-bot/PATTERN.md");
     let plan = plan_from_toml(&workflow).unwrap();
 
     let non_note_advisory_steps: Vec<usize> = plan
@@ -211,6 +212,21 @@ fn pr_bot_workflow_advisory_steps_have_tool_note() {
     assert!(
         non_note_advisory_steps.is_empty(),
         "pr-bot advisory steps must use tool = \"note\"; offenders: {non_note_advisory_steps:?}"
+    );
+
+    let post_merge_extensions = pattern
+        .find("## Post-Merge Extensions")
+        .expect("PATTERN.md must contain Post-Merge Extensions section");
+    let post_merge_hint_window = pattern[post_merge_extensions..]
+        .lines()
+        .take(5)
+        .collect::<Vec<_>>();
+
+    assert!(
+        post_merge_hint_window
+            .iter()
+            .any(|line| line.trim() == "Tool: note"),
+        "Post-Merge Extensions in PATTERN.md must include Tool: note near the heading"
     );
 }
 
