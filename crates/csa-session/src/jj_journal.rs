@@ -5,7 +5,7 @@
 //! optional sidecar journal.
 
 use csa_core::vcs::{JournalError, RevisionId, SnapshotJournal};
-use csa_lock::acquire_lock;
+use csa_lock::acquire_project_resource_lock;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs;
@@ -124,20 +124,14 @@ impl JjJournal {
         F: FnOnce(&str) -> Result<RevisionId, JournalError>,
     {
         let sanitized = sanitize_snapshot_message(message)?;
-        let session_dir = self.state_path.parent().ok_or_else(|| {
-            JournalError::InvalidState(format!(
-                "state path has no parent: {}",
-                self.state_path.display()
-            ))
-        })?;
         let truncated_reason: String = sanitized.chars().take(64).collect();
         let reason = format!("snapshot: {truncated_reason}");
-        let _lock = acquire_lock(session_dir, "jj-journal-snapshot", &reason).map_err(|err| {
-            JournalError::CommandFailed {
-                command: "acquire_lock(jj-journal-snapshot)".to_string(),
-                message: err.to_string(),
-            }
-        })?;
+        let _lock =
+            acquire_project_resource_lock(&self.project_root, "jj-journal", "snapshot", &reason)
+                .map_err(|err| JournalError::CommandFailed {
+                    command: "acquire_project_resource_lock(jj-journal/snapshot)".to_string(),
+                    message: err.to_string(),
+                })?;
 
         let current_state = self.read_state()?.unwrap_or_default();
         let revision = revision_supplier(message)?;
@@ -268,18 +262,33 @@ mod tests {
         path
     }
 
-    fn set_path_for_test(path: &Path) {
-        // SAFETY: these tests hold TEST_ENV_LOCK for the full mutation window,
-        // so no concurrent environment access can race with PATH changes.
-        unsafe { std::env::set_var("PATH", path) };
+    struct PathGuard {
+        original: Option<OsString>,
     }
 
-    fn restore_path_for_test(original_path: Option<OsString>) {
-        match original_path {
-            // SAFETY: guarded by TEST_ENV_LOCK; see set_path_for_test().
-            Some(path) => unsafe { std::env::set_var("PATH", path) },
-            // SAFETY: guarded by TEST_ENV_LOCK; see set_path_for_test().
-            None => unsafe { std::env::remove_var("PATH") },
+    impl PathGuard {
+        fn prepend(bin_dir: &Path) -> Self {
+            let original = std::env::var_os("PATH");
+            let mut paths = vec![bin_dir.to_path_buf()];
+            if let Some(existing) = original.as_ref() {
+                paths.extend(std::env::split_paths(existing));
+            }
+            let joined = std::env::join_paths(paths).expect("join PATH");
+            // SAFETY: these tests hold TEST_ENV_LOCK for the full mutation window,
+            // so no concurrent environment access can race with PATH changes.
+            unsafe { std::env::set_var("PATH", joined) };
+            Self { original }
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                // SAFETY: guarded by TEST_ENV_LOCK; see PathGuard::prepend().
+                Some(path) => unsafe { std::env::set_var("PATH", path) },
+                // SAFETY: guarded by TEST_ENV_LOCK; see PathGuard::prepend().
+                None => unsafe { std::env::remove_var("PATH") },
+            }
         }
     }
 
@@ -349,34 +358,26 @@ mod tests {
         let _guard = TEST_ENV_LOCK.lock().expect("lock env");
         let repo = tempdir().expect("repo tempdir");
         let bin_dir = tempdir().expect("bin tempdir");
-        let git_marker = repo.path().join("git-invoked");
-        let git_script = format!(
-            "#!/bin/sh\nprintf invoked > \"{}\"\nexit 0\n",
-            git_marker.display()
-        );
-        let git_path = bin_dir.path().join("git");
-        fs::write(&git_path, git_script).expect("write fake git");
-        let mut perms = fs::metadata(&git_path)
-            .expect("stat fake git")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&git_path, perms).expect("chmod fake git");
+        let fake_jj = "#!/bin/sh\nprintf 'mock jj unavailable\\n' >&2\nexit 127\n";
+        make_fake_jj(bin_dir.path(), fake_jj);
+        let _path_guard = PathGuard::prepend(bin_dir.path());
+        let state_path = repo.path().join("state").join(STATE_FILE_NAME);
 
-        let original_path = std::env::var_os("PATH");
-        set_path_for_test(bin_dir.path());
-
-        let journal = JjJournal::with_state_path(
-            repo.path(),
-            repo.path().join("state").join(STATE_FILE_NAME),
-        );
+        let journal = JjJournal::with_state_path(repo.path(), &state_path);
         let error = journal
             .snapshot("snapshot me")
-            .expect_err("jj should be missing");
+            .expect_err("fake jj should fail before any fallback");
 
-        assert!(matches!(error, JournalError::Unavailable(_)));
-        assert!(!git_marker.exists(), "git fallback must not run");
-
-        restore_path_for_test(original_path);
+        assert!(matches!(
+            error,
+            JournalError::CommandFailed { ref command, ref message }
+                if command == "jj describe -m snapshot me"
+                    && message.contains("mock jj unavailable")
+        ));
+        assert!(
+            !state_path.exists(),
+            "failed jj snapshot must not persist session state"
+        );
     }
 
     #[test]
@@ -400,8 +401,7 @@ mod tests {
         );
         make_fake_jj(bin_dir.path(), &script);
 
-        let original_path = std::env::var_os("PATH");
-        set_path_for_test(bin_dir.path());
+        let _path_guard = PathGuard::prepend(bin_dir.path());
 
         let journal = JjJournal::with_state_path(
             repo.path(),
@@ -436,8 +436,6 @@ mod tests {
             !repo.path().join("hacked").exists(),
             "metacharacters must not execute"
         );
-
-        restore_path_for_test(original_path);
     }
 
     #[test]
@@ -469,19 +467,22 @@ mod tests {
     #[test]
     fn concurrent_snapshot_rejected_by_lock() {
         let repo = tempdir().expect("repo tempdir");
-        let session_dir = tempdir().expect("session tempdir");
-        let journal = Arc::new(JjJournal::with_state_path(
+        let session_dir_a = tempdir().expect("session A tempdir");
+        let session_dir_b = tempdir().expect("session B tempdir");
+        let first_journal = Arc::new(JjJournal::with_state_path(
             repo.path(),
-            session_dir.path().join(STATE_FILE_NAME),
+            session_dir_a.path().join(STATE_FILE_NAME),
         ));
+        let second_journal =
+            JjJournal::with_state_path(repo.path(), session_dir_b.path().join(STATE_FILE_NAME));
         let entered_lock = Arc::new(Barrier::new(2));
         let release_lock = Arc::new(Barrier::new(2));
 
-        let first_journal = Arc::clone(&journal);
+        let first_snapshot_journal = Arc::clone(&first_journal);
         let first_entered = Arc::clone(&entered_lock);
         let first_release = Arc::clone(&release_lock);
         let first = thread::spawn(move || {
-            first_journal.snapshot_with_revision_supplier("first snapshot", |_| {
+            first_snapshot_journal.snapshot_with_revision_supplier("first snapshot", |_| {
                 first_entered.wait();
                 first_release.wait();
                 Ok(RevisionId::from("rev-first"))
@@ -490,14 +491,14 @@ mod tests {
 
         entered_lock.wait();
 
-        let error = journal
+        let error = second_journal
             .snapshot_with_revision_supplier("second snapshot", |_| Ok(RevisionId::from("rev-2")))
             .expect_err("second snapshot should fail on lock contention");
 
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, .. }
-                if command == "acquire_lock(jj-journal-snapshot)"
+                if command.contains("acquire_project_resource_lock")
         ));
 
         release_lock.wait();
@@ -508,7 +509,7 @@ mod tests {
             .expect("first snapshot should succeed");
         assert_eq!(first_revision, RevisionId::from("rev-first"));
         assert_eq!(
-            journal
+            first_journal
                 .session_start_revision()
                 .expect("state read should succeed"),
             Some(RevisionId::from("rev-first"))
