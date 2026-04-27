@@ -519,6 +519,7 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 12
 title = "Revise TODO"
+tier = "tier-3-complex"
 condition = "!(${INTENSITY_IS_LIGHT})"
 prompt = """
 Incorporate debate feedback and threat model findings into the TODO plan.
