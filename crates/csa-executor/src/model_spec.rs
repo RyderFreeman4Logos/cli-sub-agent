@@ -1,6 +1,7 @@
 //! Model specification parsing.
 
 use anyhow::{Result, bail};
+use csa_core::model_catalog;
 use serde::{Deserialize, Serialize};
 
 /// Unified model spec: tool/provider/model/thinking_budget
@@ -12,6 +13,27 @@ pub struct ModelSpec {
     pub provider: String,
     pub model: String,
     pub thinking_budget: ThinkingBudget,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ModelSpecValidationError {
+    #[error("unknown tool '{got}': valid tools are {valid:?}")]
+    UnknownTool {
+        got: String,
+        valid: Vec<&'static str>,
+    },
+    #[error("unknown provider '{got}' for tool '{tool}': valid providers are {valid:?}")]
+    UnknownProvider {
+        tool: String,
+        got: String,
+        valid: Vec<&'static str>,
+    },
+    #[error("unknown model '{got}' for tool '{tool}': valid models are {valid:?}")]
+    UnknownModel {
+        tool: String,
+        got: String,
+        valid: Vec<&'static str>,
+    },
 }
 
 /// Thinking budget for AI models.
@@ -40,6 +62,52 @@ impl ModelSpec {
             model: parts[2].to_string(),
             thinking_budget: ThinkingBudget::parse(parts[3])?,
         })
+    }
+
+    /// Parse and validate against the per-tool catalog in one step.
+    pub fn parse_and_validate(spec: &str, valid_tools: &[&'static str]) -> Result<Self> {
+        let parsed = Self::parse(spec)?;
+        parsed
+            .validate_with_catalog(valid_tools)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(parsed)
+    }
+
+    /// Validate parsed spec against the offline catalog.
+    ///
+    /// Skips provider/model checks for tools (for example `openai-compat`) where
+    /// the model space is user-defined.
+    pub fn validate_with_catalog(
+        &self,
+        valid_tools: &[&'static str],
+    ) -> std::result::Result<(), ModelSpecValidationError> {
+        if !valid_tools.contains(&self.tool.as_str()) {
+            return Err(ModelSpecValidationError::UnknownTool {
+                got: self.tool.clone(),
+                valid: valid_tools.to_vec(),
+            });
+        }
+        if model_catalog::provider_validation_enabled(&self.tool) {
+            let valid = model_catalog::valid_providers(&self.tool);
+            if !valid.contains(&self.provider.as_str()) {
+                return Err(ModelSpecValidationError::UnknownProvider {
+                    tool: self.tool.clone(),
+                    got: self.provider.clone(),
+                    valid: valid.to_vec(),
+                });
+            }
+        }
+        if model_catalog::model_validation_enabled(&self.tool) {
+            let valid = model_catalog::valid_models(&self.tool);
+            if !valid.contains(&self.model.as_str()) {
+                return Err(ModelSpecValidationError::UnknownModel {
+                    tool: self.tool.clone(),
+                    got: self.model.clone(),
+                    valid: valid.to_vec(),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -205,6 +273,42 @@ mod tests {
                 .to_string()
                 .contains("expected tool/provider/model/thinking_budget")
         );
+    }
+
+    #[test]
+    fn validate_with_catalog_accepts_known_spec() {
+        let spec = ModelSpec::parse("codex/openai/gpt-5.5/xhigh").unwrap();
+        assert!(spec.validate_with_catalog(&["codex", "gemini-cli"]).is_ok());
+    }
+
+    #[test]
+    fn validate_with_catalog_rejects_unknown_tool() {
+        let spec = ModelSpec::parse("unknown/openai/gpt-5.5/xhigh").unwrap();
+        let err = spec.validate_with_catalog(&["codex"]).unwrap_err();
+        assert!(err.to_string().contains("unknown"));
+        assert!(err.to_string().contains("codex"));
+    }
+
+    #[test]
+    fn validate_with_catalog_rejects_unknown_provider() {
+        let spec = ModelSpec::parse("codex/anthropic/gpt-5.5/xhigh").unwrap();
+        let err = spec.validate_with_catalog(&["codex"]).unwrap_err();
+        assert!(err.to_string().contains("anthropic"));
+        assert!(err.to_string().contains("openai"));
+    }
+
+    #[test]
+    fn validate_with_catalog_rejects_unknown_model() {
+        let spec = ModelSpec::parse("codex/openai/o3/xhigh").unwrap();
+        let err = spec.validate_with_catalog(&["codex"]).unwrap_err();
+        assert!(err.to_string().contains("o3"));
+        assert!(err.to_string().contains("gpt-5.5"));
+    }
+
+    #[test]
+    fn validate_with_catalog_skips_openai_compat_provider_and_model() {
+        let spec = ModelSpec::parse("openai-compat/local/my-fine-tune/medium").unwrap();
+        assert!(spec.validate_with_catalog(&["openai-compat"]).is_ok());
     }
 
     #[test]

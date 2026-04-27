@@ -610,10 +610,25 @@ fn remove_existing_path(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    use std::sync::OnceLock;
     use tempfile::TempDir;
 
+    fn git_binary() -> &'static Path {
+        static GIT_BINARY: OnceLock<PathBuf> = OnceLock::new();
+        GIT_BINARY.get_or_init(|| {
+            option_env!("PATH")
+                .and_then(|path| {
+                    path.split(':')
+                        .filter(|dir| !dir.is_empty())
+                        .map(|dir| Path::new(dir).join("git"))
+                        .find(|candidate| candidate.is_file())
+                })
+                .unwrap_or_else(|| PathBuf::from("git"))
+        })
+    }
+
     fn run_git(repo: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = Command::new(git_binary())
             .arg("-C")
             .arg(repo)
             .args(args)

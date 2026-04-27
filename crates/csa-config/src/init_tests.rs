@@ -108,13 +108,10 @@ fn test_smart_tiers_with_multiple_tools() {
         "gemini-cli/google/gemini-3-flash-preview/xhigh"
     );
 
-    // tier-2-standard should prefer codex sonnet (balanced)
+    // tier-2-standard should prefer codex frontier (balanced)
     let tier2 = tiers.get("tier-2-standard").unwrap();
     assert_eq!(tier2.models.len(), 1);
-    assert_eq!(
-        tier2.models[0],
-        "codex/anthropic/claude-sonnet-4-5-20250929/default"
-    );
+    assert_eq!(tier2.models[0], "codex/openai/gpt-5.5/high");
 
     // tier-3-complex should prefer claude-code opus (deep reasoning)
     let tier3 = tiers.get("tier-3-complex").unwrap();
@@ -227,17 +224,17 @@ fn test_build_smart_tiers_with_only_codex() {
     // tier-1-quick: codex (no gemini, so codex is first fallback)
     let tier1 = tiers.get("tier-1-quick").unwrap();
     assert!(tier1.models[0].starts_with("codex/"));
-    assert!(tier1.models[0].contains("sonnet"));
+    assert!(tier1.models[0].contains("gpt-5.4-mini"));
 
     // tier-2-standard: codex (preferred for standard)
     let tier2 = tiers.get("tier-2-standard").unwrap();
     assert!(tier2.models[0].starts_with("codex/"));
-    assert!(tier2.models[0].contains("sonnet"));
+    assert!(tier2.models[0].contains("gpt-5.5"));
 
     // tier-3-complex: codex (no claude-code, so codex is first fallback)
     let tier3 = tiers.get("tier-3-complex").unwrap();
     assert!(tier3.models[0].starts_with("codex/"));
-    assert!(tier3.models[0].contains("opus"));
+    assert!(tier3.models[0].contains("gpt-5.5"));
 }
 
 #[test]
@@ -299,10 +296,10 @@ fn test_build_smart_tiers_with_gemini_and_codex() {
     let tier2 = tiers.get("tier-2-standard").unwrap();
     assert!(tier2.models[0].starts_with("codex/"));
 
-    // tier-3-complex should use codex opus (no claude-code)
+    // tier-3-complex should use a high-reasoning codex model (no claude-code)
     let tier3 = tiers.get("tier-3-complex").unwrap();
     assert!(tier3.models[0].starts_with("codex/"));
-    assert!(tier3.models[0].contains("opus"));
+    assert!(tier3.models[0].contains("gpt-5.5"));
 }
 
 #[test]

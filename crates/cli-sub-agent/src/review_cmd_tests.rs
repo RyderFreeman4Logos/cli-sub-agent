@@ -651,8 +651,6 @@ fn review_cli_builds_multi_reviewer_config_from_args() {
     assert!(reviewer_tools.iter().all(|tool| *tool == ToolName::Codex));
 }
 
-// --- CLI parse tests for timeout/stream flags (#146) ---
-
 #[test]
 fn review_cli_parses_timeout_flag() {
     let args = parse_review_args(&["csa", "review", "--diff", "--timeout", "120"]);
@@ -789,6 +787,8 @@ fn has_structured_review_content_requires_non_empty_sections() {
 mod bug_class_tests;
 #[path = "review_cmd_tests_explicit_tool_tier_fallback.rs"]
 mod explicit_tool_tier_fallback_tests;
+#[path = "review_cmd_tests/model_spec_tests.rs"]
+mod model_spec_tests;
 #[path = "review_cmd_tests_no_failover.rs"]
 mod no_failover_tests;
 #[path = "review_cmd_tests_tail.rs"]

@@ -57,6 +57,57 @@ fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
 }
 
 #[test]
+fn run_rejects_unknown_codex_model_at_clap_parse() {
+    let result = try_parse_cli(&["csa", "run", "--model-spec", "codex/openai/o3/xhigh", "x"]);
+    let err = match result {
+        Ok(_) => panic!("unknown model should fail clap parsing"),
+        Err(err) => err,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("o3"), "missing offending model: {msg}");
+    assert!(msg.contains("gpt-5.5"), "missing valid alternative: {msg}");
+}
+
+#[test]
+fn run_accepts_valid_codex_model_at_clap_parse() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--model-spec",
+        "codex/openai/gpt-5.5/xhigh",
+        "x",
+    ]);
+    if let Err(err) = result {
+        panic!("should accept valid spec: {err}");
+    }
+}
+
+#[test]
+fn run_rejects_unknown_tool_at_clap_parse() {
+    let result = try_parse_cli(&["csa", "run", "--model-spec", "unknown-tool/x/y/medium", "x"]);
+    let err = match result {
+        Ok(_) => panic!("unknown tool should fail clap parsing"),
+        Err(err) => err,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("unknown-tool"), "{msg}");
+}
+
+#[test]
+fn run_accepts_openai_compat_with_arbitrary_model() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--model-spec",
+        "openai-compat/local/my-fine-tune/medium",
+        "x",
+    ]);
+    if let Err(err) = result {
+        panic!("openai-compat must skip model validation: {err}");
+    }
+}
+
+#[test]
 fn run_cli_hint_difficulty_parses() {
     let cli = try_parse_cli(&[
         "csa",

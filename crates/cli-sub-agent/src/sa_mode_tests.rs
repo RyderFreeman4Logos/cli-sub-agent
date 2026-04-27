@@ -69,6 +69,24 @@ mod tests {
     }
 
     #[test]
+    fn claude_sub_agent_rejects_unknown_codex_model_at_clap_parse() {
+        let result = Cli::try_parse_from([
+            "csa",
+            "claude-sub-agent",
+            "--model-spec",
+            "codex/openai/o3/xhigh",
+            "question",
+        ]);
+        let err = match result {
+            Ok(_) => panic!("unknown model should fail clap parsing"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("o3"), "missing offending model: {msg}");
+        assert!(msg.contains("gpt-5.5"), "missing valid alternative: {msg}");
+    }
+
+    #[test]
     fn validate_sa_mode_requires_root_execution_flag() {
         let _env_lock = SA_MODE_ENV_LOCK.lock().expect("sa-mode env lock poisoned");
         let original_internal = std::env::var("CSA_INTERNAL_INVOCATION").ok();

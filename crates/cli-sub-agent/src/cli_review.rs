@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{ArgGroup, ValueEnum};
 use csa_core::types::ToolName;
 
-use super::Commands;
+use super::{Commands, parse_model_spec_arg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -56,7 +56,7 @@ pub struct ReviewArgs {
 
     /// Exact model selector in `tool/provider/model/thinking` format.
     /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_model_spec_arg)]
     pub model_spec: Option<String>,
 
     /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
@@ -353,7 +353,7 @@ pub struct DebateArgs {
 
     /// Exact model selector in `tool/provider/model/thinking` format.
     /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_model_spec_arg)]
     pub model_spec: Option<String>,
 
     /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.

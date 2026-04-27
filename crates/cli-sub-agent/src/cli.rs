@@ -77,6 +77,16 @@ fn validate_return_to(value: &str) -> std::result::Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+fn parse_model_spec_arg(spec: &str) -> std::result::Result<String, String> {
+    let known_tools: Vec<&'static str> = csa_config::global::all_known_tools()
+        .iter()
+        .map(|tool| tool.as_str())
+        .collect();
+    csa_executor::ModelSpec::parse_and_validate(spec, &known_tools)
+        .map(|_| spec.to_string())
+        .map_err(|e| e.to_string())
+}
+
 fn validate_ulid(value: &str) -> std::result::Result<String, String> {
     csa_session::validate_session_id(value)
         .map(|_| value.to_string())
@@ -158,7 +168,7 @@ pub enum Commands {
         cd: Option<String>,
         /// Exact `tool/provider/model/thinking` selector for a single fixed model choice.
         /// Implicitly bypasses tier whitelist; no need to pair with --force-ignore-tier-setting.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_model_spec_arg)]
         model_spec: Option<String>,
         /// Override tool default model (opaque string, passed through to tool)
         #[arg(short, long)]
@@ -459,7 +469,7 @@ pub struct ClaudeSubAgentArgs {
     #[arg(short, long)]
     pub model: Option<String>,
     /// Model spec override
-    #[arg(long)]
+    #[arg(long, value_parser = parse_model_spec_arg)]
     pub model_spec: Option<String>,
     /// Working directory
     #[arg(long)]

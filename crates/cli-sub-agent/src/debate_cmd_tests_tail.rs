@@ -640,6 +640,26 @@ fn debate_cli_parses_model_spec_and_no_failover_flags() {
 }
 
 #[test]
+fn debate_rejects_unknown_codex_model_at_clap_parse() {
+    use clap::Parser;
+
+    let result = crate::cli::Cli::try_parse_from([
+        "csa",
+        "debate",
+        "--model-spec",
+        "codex/openai/o3/xhigh",
+        "question",
+    ]);
+    let err = match result {
+        Ok(_) => panic!("unknown model should fail clap parsing"),
+        Err(err) => err,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("o3"), "missing offending model: {msg}");
+    assert!(msg.contains("gpt-5.5"), "missing valid alternative: {msg}");
+}
+
+#[test]
 fn debate_cli_rounds_defaults_to_3() {
     let args = parse_debate_args(&["csa", "debate", "question"]);
     assert_eq!(args.rounds, 3);
