@@ -414,6 +414,7 @@ fn test_build_review_instruction_for_project_includes_rust_profile() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 
@@ -435,6 +436,7 @@ fn test_build_review_instruction_for_project_includes_unknown_profile_for_empty_
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 

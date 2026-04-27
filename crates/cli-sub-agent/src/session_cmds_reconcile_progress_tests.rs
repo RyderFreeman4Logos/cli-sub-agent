@@ -77,7 +77,7 @@ fn reconciler_does_not_clobber_runtime_liveness_snapshot() {
     let session_dir = td.path();
 
     fs::write(session_dir.join("output.log"), "fresh output bytes\n").expect("write output log");
-    write_liveness_snapshot(&session_dir, ["spool_bytes_written=19"]);
+    write_liveness_snapshot(session_dir, ["spool_bytes_written=19"]);
 
     let snapshot_path = session_dir.join(".liveness.snapshot");
     let before = fs::read(&snapshot_path).expect("read runtime snapshot before reconcile");
@@ -114,7 +114,7 @@ fn missing_current_sizes_do_not_count_as_reconcile_progress() {
     let session_dir = td.path();
 
     write_liveness_snapshot(
-        &session_dir,
+        session_dir,
         [
             "observed_spool_bytes_written=19",
             "acp_events_size=7",

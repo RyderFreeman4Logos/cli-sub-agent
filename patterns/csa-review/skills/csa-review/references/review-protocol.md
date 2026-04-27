@@ -86,6 +86,35 @@ git diff --no-color "{from}...{to}"
 git diff --no-color -- "{pathspec}"
 ```
 
+## Step 2.1: Touched-File Consistency Scan
+
+Consistency scope: {consistency_scope}
+
+Default behavior is `consistency_scope=diff-only`: use the collected diff as the
+review boundary and do not read full touched-file contents solely for consistency
+checking.
+
+When `consistency_scope=touched-files`, extend only the consistency scan:
+
+1. Collect touched paths for the selected scope before reading file contents:
+   - `uncommitted`: combine staged, unstaged, and untracked paths from
+     `git diff --name-status --staged`, `git diff --name-status`, and
+     `git ls-files --others --exclude-standard`.
+   - `base:<branch>`: use `git diff --name-status "$BASE_SHA"...HEAD`.
+   - `range:<from>...<to>`: use `git diff --name-status "{from}...{to}"`.
+   - `commit:<sha>`: use `git diff-tree --no-commit-id --name-status -r "{sha}"`.
+   - `files:<pathspec>`: use `git diff --name-status -- "{pathspec}"`.
+2. Read bounded full content only for touched paths that are non-binary,
+   undeleted, and still inside the repository.
+3. Skip and record any path that is deleted, binary, outside the repository, or
+   large (>200KB OR >5K lines).
+4. Use the bounded full-content set to check consistency issues that narrow diff
+   hunks often miss: field names, serialized wire names, section anchors, line
+   citations, and cross-file references.
+5. Do not expand to untouched files or the whole repository. If no touched files
+   are eligible, continue with the diff-only review.
+6. Report any unscanned touched paths in `open_questions` with the skip reason.
+
 ## Step 2.5: Plan / Spec Alignment (when context is provided)
 
 Context: {context}

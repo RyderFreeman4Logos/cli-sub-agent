@@ -22,7 +22,7 @@ async fn execute_review_reclassifies_complete_review_after_edit_restriction() {
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        &format!(
+        format!(
             "#!/bin/sh\n\
 printf '%s\\n' \
 '<!-- CSA:SECTION:summary -->' \

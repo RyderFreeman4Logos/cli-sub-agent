@@ -20,7 +20,7 @@ async fn execute_review_fails_when_repo_root_output_artifact_is_created() {
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        &format!(
+        format!(
             "#!/bin/sh\n\
 mkdir -p \"{}\"\n\
 printf 'repo-root leak\\n' > \"{}\"\n\
@@ -109,7 +109,7 @@ async fn execute_review_error_path_still_checks_artifact_contract() {
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        &format!(
+        format!(
             "#!/bin/sh\n\
 mkdir -p \"{}\"\n\
 printf 'repo-root leak\\n' > \"{}\"\n\
@@ -289,7 +289,7 @@ async fn execute_review_fails_when_repo_root_findings_artifact_is_created() {
     let fake_opencode = bin_dir.join("opencode");
     std::fs::write(
         &fake_opencode,
-        &format!(
+        format!(
             "#!/bin/sh\n\
 printf '{{\"findings\":[]}}\\n' > \"{}\"\n\
 printf '%s\\n' \

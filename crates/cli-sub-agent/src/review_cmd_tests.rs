@@ -417,6 +417,7 @@ fn default_review_args() -> ReviewArgs {
         thinking: None,
         no_failover: false,
         diff: false,
+        full_consistency: false,
         branch: None,
         commit: None,
         range: None,

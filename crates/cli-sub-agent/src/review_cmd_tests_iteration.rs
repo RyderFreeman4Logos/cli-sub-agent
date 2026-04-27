@@ -118,6 +118,7 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 
@@ -159,6 +160,7 @@ fn count_prior_reviews_zero_omits_iteration_block() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 
@@ -193,6 +195,7 @@ fn count_prior_reviews_one_injects_iteration_two() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 

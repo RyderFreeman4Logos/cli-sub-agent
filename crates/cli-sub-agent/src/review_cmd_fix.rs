@@ -497,7 +497,7 @@ mod tests {
 
     /// Mixed staleness (#1045 round 4): stale findings.toml with a MEDIUM finding
     /// + stale review-findings.json with a HIGH finding. Converge clean → both
-    /// must be cleared, verdict must be pass.
+    ///   must be cleared, verdict must be pass.
     #[test]
     fn persist_fix_final_artifacts_clears_both_stale_artifacts_on_clean() {
         let project_root = temp_project_root("persist-fix-both-stale");
