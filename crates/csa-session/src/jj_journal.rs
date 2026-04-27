@@ -132,7 +132,7 @@ impl JjJournal {
             "--ignore-working-copy",
             "--at-op=@",
             "--no-graph",
-            "-l",
+            "-n",
             "1",
             "-T",
             "self.id().short(12)",
@@ -140,7 +140,7 @@ impl JjJournal {
         let op_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if op_id.is_empty() {
             return Err(JournalError::CommandFailed {
-                command: "jj op log --ignore-working-copy --at-op=@ --no-graph -l 1 -T self.id().short(12)".to_string(),
+                command: "jj op log --ignore-working-copy --at-op=@ --no-graph -n 1 -T self.id().short(12)".to_string(),
                 message: "operation id was empty".to_string(),
             });
         }
@@ -460,12 +460,84 @@ mod tests {
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, ref message }
-                if command == "jj --no-pager --color=never op log --ignore-working-copy --at-op=@ --no-graph -l 1 -T self.id().short(12)"
+                if command == "jj --no-pager --color=never op log --ignore-working-copy --at-op=@ --no-graph -n 1 -T self.id().short(12)"
                     && message.contains("mock jj unavailable")
         ));
         assert!(
             !state_path.exists(),
             "failed jj snapshot must not persist session state"
+        );
+    }
+
+    #[test]
+    fn current_operation_id_uses_jj_limit_n() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+        let repo = tempdir().expect("repo tempdir");
+        let bin_dir = tempdir().expect("bin tempdir");
+        let arg_log = repo.path().join("jj-current-op-args.bin");
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$3\" = \"op\" ] && [ \"$4\" = \"log\" ]; then\n\
+               printf 'CALL\\0' >> \"{}\"\n\
+               previous=''\n\
+               has_ignore=0\n\
+               has_at_op=0\n\
+               has_limit=0\n\
+               has_deprecated_limit=0\n\
+               for arg in \"$@\"; do\n\
+                 printf '%s\\0' \"$arg\" >> \"{}\"\n\
+                 if [ \"$arg\" = \"--ignore-working-copy\" ]; then\n\
+                   has_ignore=1\n\
+                 fi\n\
+                 if [ \"$arg\" = \"--at-op=@\" ]; then\n\
+                   has_at_op=1\n\
+                 fi\n\
+                 if [ \"$previous\" = \"-n\" ] && [ \"$arg\" = \"1\" ]; then\n\
+                   has_limit=1\n\
+                 fi\n\
+                 if [ \"$arg\" = \"-l\" ]; then\n\
+                   has_deprecated_limit=1\n\
+                 fi\n\
+                 previous=\"$arg\"\n\
+               done\n\
+               if [ \"$has_ignore\" != \"1\" ] || [ \"$has_at_op\" != \"1\" ] || [ \"$has_limit\" != \"1\" ] || [ \"$has_deprecated_limit\" = \"1\" ]; then\n\
+                 printf 'invalid op log args\\n' >&2\n\
+                 exit 64\n\
+               fi\n\
+               printf 'op-stable\\n'\n\
+               exit 0\n\
+             fi\n\
+             printf 'unexpected jj command\\n' >&2\n\
+             exit 65\n",
+            arg_log.display(),
+            arg_log.display()
+        );
+        make_fake_jj(bin_dir.path(), &script);
+        let _path_guard = PathGuard::prepend(bin_dir.path());
+        let journal = JjJournal::with_state_path(
+            repo.path(),
+            repo.path().join("state").join(STATE_FILE_NAME),
+        );
+
+        let operation_id = journal
+            .current_operation_id()
+            .expect("current operation id should use supported jj flags");
+
+        assert_eq!(operation_id, "op-stable");
+        let raw = fs::read(&arg_log).expect("read arg log");
+        let parts = raw
+            .split(|byte| *byte == 0)
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| String::from_utf8_lossy(chunk).to_string())
+            .collect::<Vec<_>>();
+        let command_line = parts.join(" ");
+        assert!(
+            command_line.contains("op log --ignore-working-copy --at-op=@ --no-graph -n 1"),
+            "op log must use jj's supported -n limit flag: {command_line}"
+        );
+        assert!(
+            !command_line.contains(&format!(" {} {}", "-l", "1")),
+            "op log must not use the deprecated jj limit flag: {command_line}"
         );
     }
 
