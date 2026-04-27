@@ -27,30 +27,19 @@ use crate::run_cmd_tool_selection::{
 };
 #[path = "run_cmd_execute_routing.rs"]
 mod routing;
+#[path = "run_cmd_execute_context.rs"]
+mod run_context;
 use routing::{
     RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
     resolve_run_tier_context,
 };
+use run_context::{current_branch_name, finalize_prompt_text};
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
     detect_effective_repo, find_recent_interrupted_skill_session, resolve_run_timeout_seconds,
     skill_session_description,
 };
-
-fn finalize_prompt_text(
-    project_root: &Path,
-    prompt_text: String,
-    inline_context_from_review_session: Option<&str>,
-) -> Result<String> {
-    let prompt_with_review_context = crate::run_helpers::prepend_review_context_to_prompt(
-        project_root,
-        prompt_text,
-        inline_context_from_review_session,
-    )?;
-
-    Ok(crate::run_helpers::prepend_atomic_commit_discipline_to_prompt(prompt_with_review_context))
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PostExecGateCommandOutcome {
@@ -93,14 +82,6 @@ fn post_exec_gate_requires_changes(project_root: &Path, skip_on_no_changes: bool
     }
 
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
-}
-
-fn current_branch_name(project_root: &Path) -> String {
-    csa_session::vcs_backends::create_vcs_backend(project_root)
-        .current_branch(project_root)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "(unknown)".to_string())
 }
 
 fn execute_post_exec_gate_command(
@@ -245,6 +226,7 @@ pub(crate) async fn handle_run(
     return_to: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
+    allow_base_branch_commit: bool,
     cd: Option<String>,
     model_spec: Option<String>,
     model: Option<String>,
@@ -350,6 +332,20 @@ pub(crate) async fn handle_run(
     else {
         return Ok(1);
     };
+    let branch_guard = crate::run_helpers_branch_guard::BranchGuardRuntime::for_run(
+        &project_root,
+        current_depth,
+        allow_base_branch_commit,
+        config.as_ref(),
+        &global_config,
+    );
+    let branch_state =
+        crate::run_helpers_branch_guard::observe_branch_state(&project_root, config.as_ref());
+    if let Some(exit_code) =
+        crate::run_helpers_branch_guard::evaluate_and_emit_refusal(&branch_guard, branch_state)
+    {
+        return Ok(exit_code);
+    }
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     // Track whether user explicitly provided --tool on the CLI (before skill
     // resolution may override it).  This drives tier enforcement: explicit
@@ -690,6 +686,7 @@ pub(crate) async fn handle_run(
         no_fs_sandbox,
         extra_writable,
         extra_readable,
+        branch_guard,
     })
     .await?;
 

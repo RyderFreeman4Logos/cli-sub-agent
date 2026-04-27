@@ -58,6 +58,7 @@ mod run_cmd_fork;
 mod run_cmd_post;
 mod run_cmd_tool_selection;
 mod run_helpers;
+mod run_helpers_branch_guard;
 mod self_update;
 mod session_cmds;
 mod session_cmds_daemon;
@@ -353,6 +354,7 @@ async fn run() -> Result<()> {
             return_to,
             parent,
             ephemeral,
+            allow_base_branch_commit,
             cd,
             model_spec,
             model,
@@ -421,6 +423,7 @@ async fn run() -> Result<()> {
                 return_to,
                 parent,
                 ephemeral,
+                allow_base_branch_commit,
                 cd,
                 model_spec,
                 model,
