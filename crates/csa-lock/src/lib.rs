@@ -233,7 +233,9 @@ pub fn acquire_project_resource_lock(
         anyhow::bail!("tool name cannot be empty");
     }
 
-    let canonical = fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let canonical = fs::canonicalize(project_root).unwrap_or_else(|_| {
+        std::path::absolute(project_root).unwrap_or_else(|_| project_root.to_path_buf())
+    });
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_os_str().as_encoded_bytes());
     let digest = format!("{:x}", hasher.finalize());
