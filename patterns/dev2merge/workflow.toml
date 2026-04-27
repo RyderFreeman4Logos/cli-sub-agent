@@ -296,7 +296,7 @@ set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
-MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-codex}}" # Default codex; gemini-cli ACP blocked by #778/#755
+MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}" # Default empty so mktd's per-step tier annotations decide; override via env (closes #1169)
 MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}" # #1118 part A + #1137: hard cap on mktd wall-clock, aligned with csa CLI execution.min_timeout_seconds (1800s)
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
   MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
