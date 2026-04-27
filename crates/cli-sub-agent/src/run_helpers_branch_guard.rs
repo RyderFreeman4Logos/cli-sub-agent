@@ -254,10 +254,10 @@ pub(crate) fn verified_child_session(project_root: &Path, current_depth: u32) ->
     let Ok(expected_dir) = csa_session::get_session_dir(project_root, &session_id) else {
         return false;
     };
-    match std::env::var_os("CSA_SESSION_DIR") {
-        Some(actual_dir) => Path::new(&actual_dir) == expected_dir.as_path(),
-        None => true,
-    }
+    let Some(actual_dir) = std::env::var_os("CSA_SESSION_DIR") else {
+        return false;
+    };
+    Path::new(&actual_dir) == expected_dir.as_path()
 }
 
 pub(crate) fn emit_branch_guard_refusal(refusal: &BranchGuardRefusal) {

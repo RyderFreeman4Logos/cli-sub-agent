@@ -43,9 +43,6 @@ impl VcsBackend for GitBackend {
         if let Some(branch) = git_default_from_origin_head(project_root)? {
             return Ok(Some(branch));
         }
-        if let Some(branch) = git_default_from_upstream(project_root)? {
-            return Ok(Some(branch));
-        }
         if let Some(branch) = git_default_from_init_config(project_root)? {
             return Ok(Some(branch));
         }
@@ -406,23 +403,6 @@ fn git_default_from_origin_head(project_root: &Path) -> Result<Option<String>, S
     Ok(normalize_remote_branch_ref(&raw))
 }
 
-fn git_default_from_upstream(project_root: &Path) -> Result<Option<String>, String> {
-    let output = git_output(
-        project_root,
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
-    )?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let raw = parse_utf8_stdout(output.stdout, "git rev-parse @{upstream}")?;
-    Ok(normalize_remote_branch_ref(&raw))
-}
-
 fn git_default_from_init_config(project_root: &Path) -> Result<Option<String>, String> {
     let output = git_output(project_root, &["config", "--get", "init.defaultBranch"])?;
     if !output.status.success() {
@@ -649,6 +629,29 @@ mod tests {
             .expect("default branch probe should succeed");
 
         assert_eq!(branch.as_deref(), Some("trunk"));
+    }
+
+    #[test]
+    fn git_default_branch_ignores_current_branch_upstream_without_origin_head() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        init_git_repo(temp.path(), "main");
+        commit_file(temp.path());
+        run_git(temp.path(), &["checkout", "-b", "feat/foo"]);
+        run_git(
+            temp.path(),
+            &["update-ref", "refs/remotes/origin/feat/foo", "HEAD"],
+        );
+        run_git(temp.path(), &["config", "branch.feat/foo.remote", "origin"]);
+        run_git(
+            temp.path(),
+            &["config", "branch.feat/foo.merge", "refs/heads/feat/foo"],
+        );
+
+        let branch = GitBackend
+            .default_branch(temp.path())
+            .expect("default branch probe should succeed");
+
+        assert_eq!(branch.as_deref(), Some("main"));
     }
 
     #[test]

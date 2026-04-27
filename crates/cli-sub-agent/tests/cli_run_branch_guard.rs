@@ -9,7 +9,10 @@ fn csa_cmd(tmp: &Path) -> Command {
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
-        .env("TOKIO_WORKER_THREADS", "1");
+        .env("TOKIO_WORKER_THREADS", "1")
+        .env_remove("CSA_DEPTH")
+        .env_remove("CSA_SESSION_ID")
+        .env_remove("CSA_SESSION_DIR");
     cmd
 }
 
@@ -82,10 +85,12 @@ fn init_csa_project(tmp: &Path) {
 
 fn assert_branch_guard_refused(output: &Output) {
     assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout_without_guards = strip_caller_sa_guard_blocks(&stdout);
     assert!(
-        output.stdout.is_empty(),
+        stdout_without_guards.trim().is_empty(),
         "refusal should not write success data to stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
+        stdout
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -98,6 +103,27 @@ fn assert_branch_guard_refused(output: &Output) {
         stderr.contains("--allow-base-branch-commit"),
         "stderr: {stderr}"
     );
+}
+
+fn strip_caller_sa_guard_blocks(text: &str) -> String {
+    let mut cleaned = String::new();
+    let mut in_guard = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("<csa-caller-sa-guard") {
+            in_guard = true;
+            continue;
+        }
+        if trimmed == "</csa-caller-sa-guard>" {
+            in_guard = false;
+            continue;
+        }
+        if !in_guard {
+            cleaned.push_str(line);
+            cleaned.push('\n');
+        }
+    }
+    cleaned
 }
 
 fn assert_branch_guard_allowed_to_later_error(output: &Output) {
@@ -290,6 +316,76 @@ fn verified_child_session_allows_guard_to_later_tool_error() {
         .expect("csa run should execute");
 
     assert_branch_guard_allowed_to_later_error(&output);
+}
+
+#[test]
+#[serial]
+fn verified_child_session_without_session_dir_refuses() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+    let state_home = tmp.path().join(".local/state");
+    let config_home = tmp.path().join(".config");
+    let _env = EnvGuard::set(&[
+        ("HOME", tmp.path().as_os_str().to_os_string()),
+        ("XDG_STATE_HOME", state_home.as_os_str().to_os_string()),
+        ("XDG_CONFIG_HOME", config_home.as_os_str().to_os_string()),
+    ]);
+    let session = csa_session::create_session(tmp.path(), Some("parent"), None, Some("codex"))
+        .expect("create verified parent session");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "run",
+            "--no-daemon",
+            "--sa-mode",
+            "true",
+            "--tool",
+            "missing-tool-alias",
+            "inspect repository",
+        ])
+        .env("CSA_DEPTH", "1")
+        .env("CSA_SESSION_ID", &session.meta_session_id)
+        .env_remove("CSA_SESSION_DIR")
+        .current_dir(tmp.path())
+        .output()
+        .expect("csa run should execute");
+
+    assert_branch_guard_refused(&output);
+}
+
+#[test]
+#[serial]
+fn verified_child_session_with_mismatched_session_dir_refuses() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+    let state_home = tmp.path().join(".local/state");
+    let config_home = tmp.path().join(".config");
+    let _env = EnvGuard::set(&[
+        ("HOME", tmp.path().as_os_str().to_os_string()),
+        ("XDG_STATE_HOME", state_home.as_os_str().to_os_string()),
+        ("XDG_CONFIG_HOME", config_home.as_os_str().to_os_string()),
+    ]);
+    let session = csa_session::create_session(tmp.path(), Some("parent"), None, Some("codex"))
+        .expect("create verified parent session");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "run",
+            "--no-daemon",
+            "--sa-mode",
+            "true",
+            "--tool",
+            "missing-tool-alias",
+            "inspect repository",
+        ])
+        .env("CSA_DEPTH", "1")
+        .env("CSA_SESSION_ID", &session.meta_session_id)
+        .env("CSA_SESSION_DIR", tmp.path().join("wrong-session-dir"))
+        .current_dir(tmp.path())
+        .output()
+        .expect("csa run should execute");
+
+    assert_branch_guard_refused(&output);
 }
 
 #[test]
