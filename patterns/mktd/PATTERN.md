@@ -225,6 +225,7 @@ echo "RECON references persisted"
 > become available.
 
 ## Step 7: Phase 2 — DRAFT TODO
+Tier: tier-3-complex
 
 Synthesize CSA findings into a structured TODO plan.
 
@@ -282,6 +283,7 @@ CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
 The output is captured as `${STEP_7_OUTPUT}` for subsequent steps.
 
 ## Step 8: Phase 2.25 — Spec Generation
+Tier: tier-3-complex
 
 Extract verifiable acceptance criteria from the draft TODO plan.
 
@@ -468,6 +470,7 @@ printf '%s\n' "${STEP_10_OUTPUT}" | grep -q '^OVERALL_ASSESSMENT:' || { echo "ov
 ```
 
 ## Step 12: Revise TODO
+Tier: tier-3-complex
 
 **Condition**: Skip if `INTENSITY=light`.
 
