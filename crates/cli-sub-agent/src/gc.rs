@@ -23,6 +23,7 @@ pub use gc_args::GcArgs;
 pub(crate) use reaper::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS;
 use reaper::{
     print_runtime_reap_summary, reap_runtime_payloads_in_root, require_runtime_reap_max_age,
+    sessions_with_dry_run_retirements,
 };
 use transcript::{cleanup_project_transcripts, load_gc_config_for_sessions};
 
@@ -218,7 +219,7 @@ pub(crate) fn handle_gc(
     let runtime_reap_stats = runtime_reap_max_age_days
         .map(|days| {
             let sessions_for_reap = if dry_run {
-                sessions.clone()
+                sessions_with_dry_run_retirements(&sessions, now, RETIRE_AFTER_DAYS)
             } else {
                 list_sessions(&project_root, None)?
             };

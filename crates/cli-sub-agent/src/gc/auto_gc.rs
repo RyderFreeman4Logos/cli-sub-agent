@@ -13,6 +13,7 @@ use csa_session::{
 use super::load_gc_config_for_sessions;
 use super::reaper::{
     merge_runtime_reap_stats, print_runtime_reap_summary, reap_runtime_payloads_in_root,
+    sessions_with_dry_run_retirements,
 };
 use super::{
     RETIRE_AFTER_DAYS, STATE_DIR_SIZE_CACHE_FILENAME, extract_pid_from_lock,
@@ -255,7 +256,7 @@ pub(crate) fn handle_gc_global(
         {
             runtime_reap_enabled = true;
             let sessions_for_reap = if dry_run {
-                sessions.clone()
+                sessions_with_dry_run_retirements(&sessions, now, RETIRE_AFTER_DAYS)
             } else {
                 match list_sessions_from_root(session_root) {
                     Ok(sessions) => sessions,

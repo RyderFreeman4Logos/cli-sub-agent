@@ -310,6 +310,52 @@ fn test_reap_runtime_dry_run_reports_bytes_without_deleting() {
 }
 
 #[test]
+fn test_reap_runtime_dry_run_reports_runtime_for_session_retired_in_same_run() {
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    let (session_id, _, runtime_dir) = seed_runtime_session(
+        &project_root,
+        SessionPhase::Active,
+        chrono::Utc::now() - chrono::Duration::days(RETIRE_AFTER_DAYS + 1),
+        TWO_MIB,
+        false,
+    );
+    let session_root = get_session_root(&project_root).unwrap();
+    let sessions = list_sessions(&project_root, None).unwrap();
+    assert_eq!(sessions[0].phase, SessionPhase::Active);
+    let dry_run_sessions = super::reaper::sessions_with_dry_run_retirements(
+        &sessions,
+        chrono::Utc::now(),
+        RETIRE_AFTER_DAYS,
+    );
+
+    let stats = reap_runtime_payloads_in_root(
+        &session_root,
+        &dry_run_sessions,
+        true,
+        RETIRE_AFTER_DAYS as u64,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(stats.sessions_reaped, 1);
+    assert_eq!(stats.bytes_reclaimed, TWO_MIB);
+    assert!(
+        stats.entries.iter().any(|entry| {
+            entry.session_id == session_id
+                && entry.runtime_path == runtime_dir.display().to_string()
+        }),
+        "dry-run runtime reap output must include sessions that will be retired in the same run"
+    );
+    assert!(runtime_dir.exists(), "dry-run must not delete runtime/");
+    let sessions_after = list_sessions(&project_root, None).unwrap();
+    assert_eq!(sessions_after[0].phase, SessionPhase::Active);
+}
+
+#[test]
 fn test_reap_runtime_skips_active_flock_and_warns() {
     const TWO_MIB: u64 = 2 * 1024 * 1024;
 
