@@ -199,6 +199,14 @@ pub(crate) async fn process_execution_result(
             tool_state.last_action_summary = no_op_summary;
         }
     }
+    crate::pipeline_jj_journal::maybe_record_post_run_snapshot(
+        ctx.project_root,
+        &ctx.session_dir,
+        &session.meta_session_id,
+        ctx.executor.tool_name(),
+        &ctx.changed_paths,
+        result,
+    );
     audit::maybe_record_repo_write_audit(&ctx, session, &mut session_result);
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);

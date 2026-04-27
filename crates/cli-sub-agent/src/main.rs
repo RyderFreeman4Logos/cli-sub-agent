@@ -32,6 +32,7 @@ mod pipeline;
 mod pipeline_env;
 mod pipeline_execute;
 mod pipeline_handoff;
+mod pipeline_jj_journal;
 mod pipeline_post_exec;
 mod pipeline_project_key;
 mod pipeline_sandbox;

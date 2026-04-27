@@ -26,7 +26,13 @@ pub struct JjJournal {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct JournalState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    project_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     session_start_revision: Option<RevisionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_start_operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_operation_id: Option<String>,
 }
 
 impl JjJournal {
@@ -36,6 +42,17 @@ impl JjJournal {
         Ok(Self {
             project_root,
             state_path,
+        })
+    }
+
+    pub fn with_session_dir(
+        project_root: impl AsRef<Path>,
+        session_dir: impl AsRef<Path>,
+    ) -> Result<Self, JournalError> {
+        let project_root = absolutize_project_root(project_root.as_ref())?;
+        Ok(Self {
+            project_root,
+            state_path: session_dir.as_ref().join(STATE_FILE_NAME),
         })
     }
 
@@ -108,6 +125,26 @@ impl JjJournal {
         Ok(output)
     }
 
+    fn current_operation_id(&self) -> Result<String, JournalError> {
+        let output = self.run_jj([
+            "op",
+            "log",
+            "--no-graph",
+            "-l",
+            "1",
+            "-T",
+            "self.id().short(12)",
+        ])?;
+        let op_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if op_id.is_empty() {
+            return Err(JournalError::CommandFailed {
+                command: "jj op log --no-graph -l 1 -T self.id().short(12)".to_string(),
+                message: "operation id was empty".to_string(),
+            });
+        }
+        Ok(op_id)
+    }
+
     fn read_state(&self) -> Result<Option<JournalState>, JournalError> {
         match fs::read_to_string(&self.state_path) {
             Ok(raw) => {
@@ -143,12 +180,30 @@ impl JjJournal {
                 })?;
 
         let mut current_state = self.read_state()?.unwrap_or_default();
+        validate_state_project_root(&current_state, &self.project_root)?;
+        let operation_before_snapshot = self.current_operation_id()?;
+        if let Some(expected_op_id) = current_state.last_operation_id.as_deref()
+            && expected_op_id != operation_before_snapshot
+        {
+            return Err(JournalError::InvalidState(format!(
+                "jj operation drift detected for {}: expected last operation {}, found {}; refusing sidecar snapshot",
+                self.project_root.display(),
+                expected_op_id,
+                operation_before_snapshot
+            )));
+        }
         let revision = revision_supplier(&sanitized)?;
+        let operation_after_snapshot = self.current_operation_id()?;
 
+        if current_state.project_root.is_none() {
+            current_state.project_root = Some(self.project_root.clone());
+        }
         if current_state.session_start_revision.is_none() {
             current_state.session_start_revision = Some(revision.clone());
-            self.write_state(&current_state)?;
+            current_state.session_start_operation_id = Some(operation_before_snapshot);
         }
+        current_state.last_operation_id = Some(operation_after_snapshot);
+        self.write_state(&current_state)?;
 
         Ok(revision)
     }
@@ -213,6 +268,22 @@ fn derive_state_path() -> Result<PathBuf, JournalError> {
                     .to_string(),
             )
         })
+}
+
+fn validate_state_project_root(
+    state: &JournalState,
+    project_root: &Path,
+) -> Result<(), JournalError> {
+    if let Some(recorded_root) = state.project_root.as_ref()
+        && recorded_root != project_root
+    {
+        return Err(JournalError::InvalidState(format!(
+            "journal state belongs to {}, not {}; refusing sidecar snapshot",
+            recorded_root.display(),
+            project_root.display()
+        )));
+    }
+    Ok(())
 }
 
 fn temp_state_path(path: &Path) -> Result<PathBuf, JournalError> {
@@ -387,7 +458,7 @@ mod tests {
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, ref message }
-                if command == "jj --no-pager --color=never log --no-graph -r @ -T description"
+                if command == "jj --no-pager --color=never op log --no-graph -l 1 -T self.id().short(12)"
                     && message.contains("mock jj unavailable")
         ));
         assert!(
@@ -404,6 +475,10 @@ mod tests {
         let arg_log = repo.path().join("jj-args.bin");
         let script = format!(
             "#!/bin/sh\n\
+             if [ \"$3\" = \"op\" ]; then\n\
+               printf 'op-stable\\n'\n\
+               exit 0\n\
+             fi\n\
              if [ \"$3\" = \"log\" ]; then\n\
                printf 'rev-from-log\\n'\n\
                exit 0\n\
@@ -466,6 +541,7 @@ mod tests {
             .write_state_with_fault_injection(
                 &JournalState {
                     session_start_revision: Some(RevisionId::from("rev-123")),
+                    ..Default::default()
                 },
                 true,
             )
@@ -484,7 +560,12 @@ mod tests {
 
     #[test]
     fn concurrent_snapshot_rejected_by_lock() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock env");
         let repo = tempdir().expect("repo tempdir");
+        let bin_dir = tempdir().expect("bin tempdir");
+        let fake_jj = "#!/bin/sh\nif [ \"$3\" = \"op\" ]; then printf 'op-stable\\n'; exit 0; fi\nprintf 'ok\\n'\n";
+        make_fake_jj(bin_dir.path(), fake_jj);
+        let _path_guard = PathGuard::prepend(bin_dir.path());
         let session_dir_a = tempdir().expect("session A tempdir");
         let session_dir_b = tempdir().expect("session B tempdir");
         let first_journal = Arc::new(JjJournal::with_state_path(
@@ -531,6 +612,55 @@ mod tests {
                 .session_start_revision()
                 .expect("state read should succeed"),
             Some(RevisionId::from("rev-first"))
+        );
+    }
+
+    #[test]
+    fn operation_drift_rejected_before_snapshot() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+        let repo = tempdir().expect("repo tempdir");
+        let bin_dir = tempdir().expect("bin tempdir");
+        let op_file = repo.path().join("current-op");
+        fs::write(&op_file, "op-a").expect("write initial op");
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$3\" = \"op\" ]; then\n\
+               cat \"{}\"\n\
+               printf '\\n'\n\
+               exit 0\n\
+             fi\n\
+             printf 'ok\\n'\n",
+            op_file.display()
+        );
+        make_fake_jj(bin_dir.path(), &script);
+        let _path_guard = PathGuard::prepend(bin_dir.path());
+        let journal = JjJournal::with_state_path(
+            repo.path(),
+            repo.path().join("state").join(STATE_FILE_NAME),
+        );
+
+        let first = journal
+            .snapshot_with_revision_supplier("first", |_| Ok(RevisionId::from("rev-a")))
+            .expect("first snapshot should record lineage");
+        assert_eq!(first, RevisionId::from("rev-a"));
+
+        fs::write(&op_file, "op-b").expect("mutate op");
+        let error = journal
+            .snapshot_with_revision_supplier("second", |_| Ok(RevisionId::from("rev-b")))
+            .expect_err("operation drift must fail closed");
+
+        assert!(matches!(
+            error,
+            JournalError::InvalidState(ref message)
+                if message.contains("jj operation drift detected")
+                    && message.contains("op-a")
+                    && message.contains("op-b")
+        ));
+        assert_eq!(
+            journal
+                .session_start_revision()
+                .expect("state read should succeed"),
+            Some(RevisionId::from("rev-a"))
         );
     }
 }
