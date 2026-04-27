@@ -78,6 +78,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub diff: bool,
 
+    /// Extend review agent consistency scan to touched files; does not change diff scope
+    #[arg(long)]
+    pub full_consistency: bool,
+
     /// Compare against branch (default: main)
     #[arg(long, conflicts_with_all = ["diff", "commit", "range", "files"])]
     pub branch: Option<String>,

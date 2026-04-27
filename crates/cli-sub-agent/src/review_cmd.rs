@@ -253,6 +253,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         ReviewProjectPromptOptions {
             project_config: config.as_ref(),
             prior_rounds_section: prior_rounds_section.as_deref(),
+            full_consistency: args.full_consistency,
         },
     );
 
@@ -785,6 +786,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 #[cfg(test)]
 #[path = "review_cmd_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "review_cmd_tests_full_consistency.rs"]
+mod tests_full_consistency;
 #[cfg(test)]
 #[path = "review_cmd_timeout_tests.rs"]
 mod timeout_tests;

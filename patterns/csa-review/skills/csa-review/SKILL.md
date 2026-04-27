@@ -21,6 +21,7 @@ triggers:
 4. Your scope/mode/security_mode parameters are in your initial prompt. Parse them from there.
 5. **STRONG PREFERENCE — DIRECT REVIEW**: Perform the review DIRECTLY by running `git diff`, reading files, and analyzing code yourself. Avoid spawning `csa run`/`csa review`/`csa debate` sub-agents unless the scope genuinely requires delegation (e.g., a 50K-line changeset that won't fit). Fractal recursion is allowed up to the configured ceiling (`project.max_recursion_depth`, default 5) and `pipeline::load_and_validate` enforces it, but a reviewer that nests more reviewers rarely adds value and complicates artifact attribution. When in doubt, read and analyze in-process.
 6. **REVIEW-ONLY SAFETY**: Do NOT run `git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git checkout`, `git reset`, `git stash`, or any `gh pr *` mutation command. Review mode must not mutate repo or PR state.
+7. If the initial prompt contains `consistency_scope=touched-files`, extend consistency checks to bounded full content for touched files as defined in [Review Protocol](references/review-protocol.md). If it contains `consistency_scope=diff-only` or omits the parameter, keep consistency checks limited to the collected diff.
 
 **Only if you are Claude Code and a human user typed `/csa-review` in the chat**:
 - You are the **orchestrator**. Follow the "Execution Protocol" steps below.
@@ -46,6 +47,7 @@ Run structured code reviews through CSA, ensuring:
 - `mode` (optional): `review-only` (default) or `review-and-fix`
 - `review_mode` (optional): `standard` (default) or `red-team`
 - `security_mode` (optional): `auto` (default) | `on` | `off`
+- `consistency_scope` (optional): `diff-only` (default) | `touched-files`
 - `tool` (optional): override review tool (default: auto-detect independent reviewer)
 - `context` (optional): path to `TODO.md` or `spec.toml` to check implementation alignment against the planned design
 

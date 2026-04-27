@@ -634,6 +634,12 @@ pub(crate) fn build_review_instruction_for_project(
     let review_routing = detect_review_routing_metadata(project_root, options.project_config);
     let mut instruction =
         build_review_instruction(scope, mode, security_mode, review_mode, context);
+    let consistency_scope = if options.full_consistency {
+        "touched-files"
+    } else {
+        "diff-only"
+    };
+    instruction.push_str(&format!("\nconsistency_scope={consistency_scope}"));
     instruction.push_str(&format!(
         "\n[project_profile: {}]",
         review_routing.project_profile
@@ -675,6 +681,7 @@ pub(crate) fn build_review_instruction_for_project(
 pub(crate) struct ReviewProjectPromptOptions<'a> {
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) prior_rounds_section: Option<&'a str>,
+    pub(crate) full_consistency: bool,
 }
 
 #[cfg(test)]

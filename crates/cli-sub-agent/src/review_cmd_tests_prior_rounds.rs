@@ -53,6 +53,7 @@ invariant = "lock-losing resume cannot mutate metadata of winning session"
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: Some(&prior_rounds),
+            full_consistency: false,
         },
     );
 
@@ -144,6 +145,7 @@ fn build_review_instruction_for_project_without_prior_rounds_flag_leaves_section
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 

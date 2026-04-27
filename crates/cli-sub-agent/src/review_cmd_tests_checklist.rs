@@ -22,6 +22,7 @@ fn build_review_instruction_for_project_injects_review_checklist() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 
@@ -50,6 +51,7 @@ fn build_review_instruction_for_project_omits_checklist_when_missing() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            full_consistency: false,
         },
     );
 
