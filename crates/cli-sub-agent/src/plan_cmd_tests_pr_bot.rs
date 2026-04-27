@@ -61,6 +61,16 @@ fn pr_bot_artifact_text(path: &str) -> String {
     std::fs::read_to_string(workspace_root().join(path)).unwrap()
 }
 
+fn extract_pr_bot_step_prompt(text: &str, step_id: usize, artifact: &str) -> String {
+    let step_marker = format!("id = {step_id}");
+    let start = text
+        .find(&step_marker)
+        .unwrap_or_else(|| panic!("{artifact} must contain workflow step id {step_id}"));
+    let body = &text[start..];
+    let next_step = body.find("\n[[workflow.steps]]").unwrap_or(body.len());
+    body[..next_step].to_string()
+}
+
 fn assert_marker_order(text: &str, first: &str, second: &str, artifact: &str) {
     let first_idx = text
         .find(first)
@@ -186,6 +196,32 @@ fn pr_bot_archive_includes_helper_scripts() {
     assert!(
         entries.contains(&"patterns/pr-bot/scripts/csa/session-wait-until-done.sh".to_string()),
         "git archive for patterns/pr-bot must include session-wait-until-done.sh"
+    );
+}
+
+#[test]
+fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
+    let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
+    let step5 = extract_pr_bot_step_prompt(&workflow, 5, "patterns/pr-bot/workflow.toml");
+
+    assert!(
+        step5.contains("--json number,headRefName,headRepositoryOwner"),
+        "Step 5 must request head owner metadata for client-side PR owner verification"
+    );
+    assert!(
+        step5.contains("headRepositoryOwner.login == "),
+        "Step 5 must strictly filter PR lookup results by head owner"
+    );
+    assert!(
+        step5.lines().all(
+            |line| !line.trim().starts_with(r#"--head "${WORKFLOW_BRANCH}""#)
+                && !line.contains(r#" --head "${WORKFLOW_BRANCH}""#)
+        ),
+        "Step 5 must not use an unqualified --head \"${{WORKFLOW_BRANCH}}\" fallback"
+    );
+    assert!(
+        step5.contains("a pull request for branch .* already exists"),
+        "Step 5 must recover from gh pr create reporting that the PR already exists"
     );
 }
 

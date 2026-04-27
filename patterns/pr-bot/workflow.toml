@@ -123,9 +123,6 @@ name = "COMMENT_START_LINE"
 name = "COMMENT_TIMESTAMP"
 
 [[workflow.variables]]
-name = "COMMIT_COUNT"
-
-[[workflow.variables]]
 name = "CREATE_OUTPUT"
 
 [[workflow.variables]]
@@ -192,31 +189,22 @@ name = "FIX_RESULT"
 name = "FIX_SID"
 
 [[workflow.variables]]
-name = "GATE_MARKER"
-
-[[workflow.variables]]
-name = "GATE_RC"
-
-[[workflow.variables]]
-name = "GATE_RESULT"
-
-[[workflow.variables]]
-name = "GATE_SID"
-
-[[workflow.variables]]
 name = "HOME"
 
 [[workflow.variables]]
 name = "INTERVAL"
 
 [[workflow.variables]]
+name = "LATEST_BOT_COMMENT_BODY"
+
+[[workflow.variables]]
+name = "LATEST_BOT_COMMENT_JSON"
+
+[[workflow.variables]]
+name = "LATEST_BOT_COMMENT_RC"
+
+[[workflow.variables]]
 name = "LATEST_CURRENT_HEAD_TRIGGER_TS"
-
-[[workflow.variables]]
-name = "LATE_ACTIONABLE_COUNT"
-
-[[workflow.variables]]
-name = "LATE_ACTIONABLE_RC"
 
 [[workflow.variables]]
 name = "LOCAL_REVIEW_HAS_ISSUES"
@@ -234,9 +222,6 @@ name = "MARKER_REPO_SLUG"
 name = "MAX_REVIEW_ROUNDS"
 
 [[workflow.variables]]
-name = "MERGE_BASE"
-
-[[workflow.variables]]
 name = "MERGE_REASON"
 
 [[workflow.variables]]
@@ -244,9 +229,6 @@ name = "MERGE_STRATEGY"
 
 [[workflow.variables]]
 name = "MERGE_WITHOUT_BOT_REASON_KIND"
-
-[[workflow.variables]]
-name = "NEW_COMMIT_COUNT"
 
 [[workflow.variables]]
 name = "NOW_UTC"
@@ -279,9 +261,6 @@ name = "POST_FIX_REUSED_REVIEW_ID"
 name = "POST_FIX_REVIEW_WINDOW_START"
 
 [[workflow.variables]]
-name = "POST_REBASE_TIMEOUT"
-
-[[workflow.variables]]
 name = "PR_BODY"
 
 [[workflow.variables]]
@@ -297,19 +276,19 @@ name = "PR_NUM"
 name = "PR_TITLE"
 
 [[workflow.variables]]
-name = "REBASE_CURRENT_SHA"
+name = "QUOTA_EXPECTED_RESET_AT"
 
 [[workflow.variables]]
-name = "REBASE_REVIEW_HAS_ISSUES"
+name = "QUOTA_NOW_UTC"
 
 [[workflow.variables]]
 name = "REBASE_CLEAN_HISTORY_APPLIED"
 
 [[workflow.variables]]
-name = "REBASE_TRIGGER_BODY"
+name = "REBASE_REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
-name = "REBASE_TRIGGER_TS"
+name = "REBASE_SCRIPT"
 
 [[workflow.variables]]
 name = "REMOTE_NAME"
@@ -420,22 +399,19 @@ name = "WAIT_SLEEP_PID"
 name = "WORKFLOW_BRANCH"
 
 [[workflow.variables]]
-name = "branch_count"
-
-[[workflow.variables]]
-name = "branch_matches"
+name = "count"
 
 [[workflow.variables]]
 name = "field_name"
 
 [[workflow.variables]]
+name = "latest_bot_comment_json"
+
+[[workflow.variables]]
 name = "latest_trigger_ts"
 
 [[workflow.variables]]
-name = "owner_count"
-
-[[workflow.variables]]
-name = "owner_matches"
+name = "matches"
 
 [[workflow.variables]]
 name = "quota_body"
@@ -478,6 +454,8 @@ id = 1
 title = "Assumed Fork Convention"
 tool = "note"
 prompt = """
+> **Layer**: 0 (Orchestrator) -- advisory text only.
+
 pr-bot assumes the GitHub-common fork convention:
 
 - `origin` = your personal fork (push target and PR source)
@@ -504,8 +482,7 @@ git config remote.pushDefault <fork-remote-name>
 When multiple remotes exist, `origin` does not reference the authenticated
 GitHub login, and no explicit push remote is configured, pr-bot fails closed
 with an actionable error instead of guessing and risking a push to the
-canonical repository.
-"""
+canonical repository."""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -650,6 +627,12 @@ prompt = '''
   `ERROR: Local review found unresolved issues. Fix them before PR creation.`
 - FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
 
+PR lookup is strictly owner-aware: query only `${SOURCE_OWNER}:${WORKFLOW_BRANCH}`,
+verify returned rows by `headRepositoryOwner.login` and `headRefName`, and never
+fall back to unqualified `--head "${WORKFLOW_BRANCH}"`. If `gh pr create`
+reports `a pull request for branch ... already exists`, re-resolve via the same
+owner-aware lookup and reuse the existing PR.
+
 ```bash
 # --- Precondition gate: review must be complete ---
 if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
@@ -679,35 +662,27 @@ if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
 find_branch_pr() {
-  local owner_matches owner_count branch_matches branch_count
-  owner_matches="$(
-    gh pr list --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
-      --jq '.[].number' 2>/dev/null || true
+  local matches count
+  matches="$(
+    gh pr list \
+      --repo "${REPO_SLUG}" \
+      --base "${DEFAULT_BRANCH}" \
+      --state open \
+      --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" \
+      --json number,headRefName,headRepositoryOwner \
+      --jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\" and .headRepositoryOwner.login == \"${SOURCE_OWNER}\") | .number" \
+      2>/dev/null || true
   )"
-  owner_count="$(printf '%s\n' "${owner_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [ "${owner_count}" = "1" ]; then
-    printf '%s\n' "${owner_matches}" | sed '/^$/d' | head -n 1
+  count="$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "${count}" = "1" ]; then
+    printf '%s\n' "${matches}" | sed '/^$/d' | head -n 1
     return 0
-  fi
-  if [ "${owner_count}" -gt 1 ]; then
+  elif [ "${count}" = "0" ]; then
+    return 2
+  else
     echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
     return 1
   fi
-
-  branch_matches="$(
-    gh pr list --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --state open --head "${WORKFLOW_BRANCH}" --json number \
-      --jq '.[].number' 2>/dev/null || true
-  )"
-  branch_count="$(printf '%s\n' "${branch_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [ "${branch_count}" = "1" ]; then
-    printf '%s\n' "${branch_matches}" | sed '/^$/d' | head -n 1
-    return 0
-  fi
-  if [ "${branch_count}" -gt 1 ]; then
-    echo "ERROR: Multiple open PRs found for branch ${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
-    return 1
-  fi
-  return 2
 }
 
 set +e
@@ -724,30 +699,43 @@ else
   CREATE_RC=$?
   set -e
   if [ "${CREATE_RC}" != "0" ]; then
-    if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
+      echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
+      set +e
+      PR_NUM="$(find_branch_pr)"
+      FIND_RC=$?
+      set -e
+      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
+        echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+      else
+        echo "ERROR: gh pr create reports PR exists but find_branch_pr could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
+        exit 1
+      fi
+    else
       echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
       exit 1
     fi
-    echo "Detected existing PR during create race; resolving PR number by owner+branch."
   fi
-  FIND_RC=2
-  PR_NUM=""
-  for attempt in 1 2 3 4 5; do
-    set +e
-    PR_NUM="$(find_branch_pr)"
-    FIND_RC=$?
-    set -e
-    if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-      break
+  if [ "${CREATE_RC}" = "0" ]; then
+    FIND_RC=2
+    PR_NUM=""
+    for attempt in 1 2 3 4 5; do
+      set +e
+      PR_NUM="$(find_branch_pr)"
+      FIND_RC=$?
+      set -e
+      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
+        break
+      fi
+      if [ "${FIND_RC}" = "1" ]; then
+        break
+      fi
+      sleep 2
+    done
+    if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
+      echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
+      exit 1
     fi
-    if [ "${FIND_RC}" = "1" ]; then
-      break
-    fi
-    sleep 2
-  done
-  if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
-    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
-    exit 1
   fi
 fi
 if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
@@ -2140,6 +2128,8 @@ title = "Step 10.5: Rebase for Clean History"
 tool = "bash"
 prompt = '''
 > **Layer**: 0 (Orchestrator) -- git history cleanup before merge.
+
+
 Reorganize accumulated fix commits into logical groups (source, patterns, other)
 before merging, but only when the branch meets the audit guard:
 - branch has 3+ commits since `${DEFAULT_BRANCH}`
@@ -2286,7 +2276,7 @@ git push -u "${REMOTE_NAME}" "${CLEAN_BRANCH}"
 gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```'''
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED}) && !(${REBASE_CLEAN_HISTORY_APPLIED})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED}))"
 
 [[workflow.steps]]
 id = 22
@@ -2334,7 +2324,7 @@ git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```'''
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED}) && !(${REBASE_CLEAN_HISTORY_APPLIED})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED}))"
 
 [[workflow.steps]]
 id = 23
@@ -2382,4 +2372,10 @@ git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```'''
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && ((!(${FIXES_ACCUMULATED})) || (${REBASE_CLEAN_HISTORY_APPLIED}))"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})))"
+
+[[workflow.steps]]
+id = 24
+title = "Post-Merge Extensions"
+prompt = "> Post-merge rule-extractor pattern is available at `patterns/rule-extractor/` — integration pending separate PR. Invoke via `csa plan run patterns/rule-extractor/workflow.toml` after successful merge when HIGH/CRITICAL findings exist."
+on_fail = "abort"
