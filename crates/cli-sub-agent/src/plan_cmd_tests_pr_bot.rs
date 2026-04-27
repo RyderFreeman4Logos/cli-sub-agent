@@ -61,6 +61,16 @@ fn pr_bot_artifact_text(path: &str) -> String {
     std::fs::read_to_string(workspace_root().join(path)).unwrap()
 }
 
+fn extract_pr_bot_step_prompt(text: &str, step_id: usize, artifact: &str) -> String {
+    let step_marker = format!("id = {step_id}");
+    let start = text
+        .find(&step_marker)
+        .unwrap_or_else(|| panic!("{artifact} must contain workflow step id {step_id}"));
+    let body = &text[start..];
+    let next_step = body.find("\n[[workflow.steps]]").unwrap_or(body.len());
+    body[..next_step].to_string()
+}
+
 fn assert_marker_order(text: &str, first: &str, second: &str, artifact: &str) {
     let first_idx = text
         .find(first)
@@ -176,6 +186,51 @@ fn pr_bot_workflow_resolves_helpers_from_pattern_dir() {
 }
 
 #[test]
+fn pr_bot_workflow_advisory_steps_have_tool_note() {
+    let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
+    let pattern = pr_bot_artifact_text("patterns/pr-bot/PATTERN.md");
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    let non_note_advisory_steps: Vec<usize> = plan
+        .steps
+        .iter()
+        .filter(|step| {
+            let title = step.title.to_ascii_lowercase();
+            let advisory_title = ["note", "advisory", "extensions"]
+                .iter()
+                .any(|marker| title.contains(marker));
+            let advisory_prompt = step
+                .prompt
+                .trim_start()
+                .starts_with("> Post-merge rule-extractor pattern");
+
+            (advisory_title || advisory_prompt) && step.tool.as_deref() != Some("note")
+        })
+        .map(|step| step.id)
+        .collect();
+
+    assert!(
+        non_note_advisory_steps.is_empty(),
+        "pr-bot advisory steps must use tool = \"note\"; offenders: {non_note_advisory_steps:?}"
+    );
+
+    let post_merge_extensions = pattern
+        .find("## Post-Merge Extensions")
+        .expect("PATTERN.md must contain Post-Merge Extensions section");
+    let post_merge_hint_window = pattern[post_merge_extensions..]
+        .lines()
+        .take(5)
+        .collect::<Vec<_>>();
+
+    assert!(
+        post_merge_hint_window
+            .iter()
+            .any(|line| line.trim() == "Tool: note"),
+        "Post-Merge Extensions in PATTERN.md must include Tool: note near the heading"
+    );
+}
+
+#[test]
 fn pr_bot_archive_includes_helper_scripts() {
     let entries = git_archive_entries(&workspace_root(), "patterns/pr-bot");
 
@@ -186,6 +241,74 @@ fn pr_bot_archive_includes_helper_scripts() {
     assert!(
         entries.contains(&"patterns/pr-bot/scripts/csa/session-wait-until-done.sh".to_string()),
         "git archive for patterns/pr-bot must include session-wait-until-done.sh"
+    );
+}
+
+#[test]
+fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
+    let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
+    let step5 = extract_pr_bot_step_prompt(&workflow, 5, "patterns/pr-bot/workflow.toml");
+    let find_branch_pr_start = step5
+        .find("find_branch_pr() {")
+        .expect("Step 5 must define find_branch_pr");
+    let find_branch_pr_end = step5[find_branch_pr_start..]
+        .find("\n}\n\nfind_branch_pr_with_retry()")
+        .map(|offset| find_branch_pr_start + offset)
+        .expect("Step 5 must close find_branch_pr before invoking it");
+    let find_branch_pr = &step5[find_branch_pr_start..find_branch_pr_end];
+
+    assert!(
+        step5.contains("--json number,headRefName,headRepositoryOwner"),
+        "Step 5 must request head owner metadata for client-side PR owner verification"
+    );
+    assert!(
+        find_branch_pr.contains(r#"--head "${WORKFLOW_BRANCH}""#),
+        "Step 5 must query gh pr list with branch-only --head"
+    );
+    assert!(
+        !find_branch_pr.contains(r#"--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}""#),
+        "Step 5 must not pass owner-qualified syntax to gh pr list --head"
+    );
+    assert!(
+        find_branch_pr.contains("jq -r")
+            && find_branch_pr.contains(r#"--arg branch "${WORKFLOW_BRANCH}""#)
+            && find_branch_pr.contains(r#"--arg owner "${SOURCE_OWNER}""#),
+        "Step 5 jq filter must bind head branch and owner as jq data"
+    );
+    assert!(
+        find_branch_pr.contains(".headRefName == $branch")
+            && find_branch_pr.contains(".headRepositoryOwner.login == $owner"),
+        "Step 5 jq filter must strictly match both bound head branch and head owner"
+    );
+    assert!(
+        !find_branch_pr.contains(r#"--jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\""#),
+        "Step 5 must not interpolate WORKFLOW_BRANCH into jq source"
+    );
+    assert!(
+        step5.contains("headRepositoryOwner.login == "),
+        "Step 5 must strictly filter PR lookup results by head owner"
+    );
+    assert!(
+        find_branch_pr
+            .matches(r#"--head "${WORKFLOW_BRANCH}""#)
+            .count()
+            == 1,
+        "Step 5 must have exactly one branch-only gh pr list --head lookup, not a fallback chain"
+    );
+    assert!(
+        step5.contains("a pull request for branch .* already exists"),
+        "Step 5 must recover from gh pr create reporting that the PR already exists"
+    );
+    assert!(
+        step5.contains("find_branch_pr_with_retry() {"),
+        "Step 5 must define one shared retry helper for stale gh pr list results"
+    );
+    assert!(
+        step5
+            .matches(r#"PR_NUM="$(find_branch_pr_with_retry)""#)
+            .count()
+            == 2,
+        "Step 5 must use the shared retry helper in both create-race and create-success paths"
     );
 }
 

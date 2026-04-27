@@ -42,7 +42,7 @@ This pattern follows a 3-layer dispatcher architecture:
 
 Each step below is annotated with its execution layer.
 
-## Workflow Step 1: Assumed Fork Convention
+## Assumed Fork Convention
 
 Tool: note
 
@@ -211,6 +211,13 @@ OnFail: abort
   `ERROR: Local review found unresolved issues. Fix them before PR creation.`
 - FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
 
+PR lookup is strictly owner-aware: query `--head "${WORKFLOW_BRANCH}"`,
+then verify returned rows by `headRepositoryOwner.login` and `headRefName`.
+Never rely on `--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}"`; `gh pr list --head`
+accepts a branch name only. If `gh pr create`
+reports `a pull request for branch ... already exists`, re-resolve via the same
+owner-aware lookup and reuse the existing PR.
+
 ```bash
 # --- Precondition gate: review must be complete ---
 if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
@@ -240,35 +247,54 @@ if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
 find_branch_pr() {
-  local owner_matches owner_count branch_matches branch_count
-  owner_matches="$(
-    gh pr list --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
-      --jq '.[].number' 2>/dev/null || true
+  local matches count
+  matches="$(
+    gh pr list \
+      --repo "${REPO_SLUG}" \
+      --base "${DEFAULT_BRANCH}" \
+      --state open \
+      --head "${WORKFLOW_BRANCH}" \
+      --json number,headRefName,headRepositoryOwner \
+      2>/dev/null \
+    | jq -r \
+        --arg branch "${WORKFLOW_BRANCH}" \
+        --arg owner "${SOURCE_OWNER}" \
+        '.[] | select(.headRefName == $branch and .headRepositoryOwner.login == $owner) | .number' \
+      2>/dev/null \
+      || true
   )"
-  owner_count="$(printf '%s\n' "${owner_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [ "${owner_count}" = "1" ]; then
-    printf '%s\n' "${owner_matches}" | sed '/^$/d' | head -n 1
+  count="$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "${count}" = "1" ]; then
+    printf '%s\n' "${matches}" | sed '/^$/d' | head -n 1
     return 0
-  fi
-  if [ "${owner_count}" -gt 1 ]; then
+  elif [ "${count}" = "0" ]; then
+    return 2
+  else
     echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
     return 1
   fi
+}
 
-  branch_matches="$(
-    gh pr list --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --state open --head "${WORKFLOW_BRANCH}" --json number \
-      --jq '.[].number' 2>/dev/null || true
-  )"
-  branch_count="$(printf '%s\n' "${branch_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [ "${branch_count}" = "1" ]; then
-    printf '%s\n' "${branch_matches}" | sed '/^$/d' | head -n 1
-    return 0
-  fi
-  if [ "${branch_count}" -gt 1 ]; then
-    echo "ERROR: Multiple open PRs found for branch ${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
-    return 1
-  fi
-  return 2
+find_branch_pr_with_retry() {
+  local attempt pr_num rc
+  rc=2
+  for attempt in 1 2 3 4 5; do
+    set +e
+    pr_num="$(find_branch_pr)"
+    rc=$?
+    set -e
+    if [ "${rc}" = "0" ] && [ -n "${pr_num}" ]; then
+      printf '%s\n' "${pr_num}"
+      return 0
+    fi
+    if [ "${rc}" = "1" ]; then
+      return 1
+    fi
+    if [ "${attempt}" != "5" ]; then
+      sleep 2
+    fi
+  done
+  return "${rc}"
 }
 
 set +e
@@ -285,30 +311,32 @@ else
   CREATE_RC=$?
   set -e
   if [ "${CREATE_RC}" != "0" ]; then
-    if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
+      echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
+      set +e
+      PR_NUM="$(find_branch_pr_with_retry)"
+      FIND_RC=$?
+      set -e
+      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
+        echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+      else
+        echo "ERROR: gh pr create reports PR exists but find_branch_pr could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
+        exit 1
+      fi
+    else
       echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
       exit 1
     fi
-    echo "Detected existing PR during create race; resolving PR number by owner+branch."
   fi
-  FIND_RC=2
-  PR_NUM=""
-  for attempt in 1 2 3 4 5; do
+  if [ "${CREATE_RC}" = "0" ]; then
     set +e
-    PR_NUM="$(find_branch_pr)"
+    PR_NUM="$(find_branch_pr_with_retry)"
     FIND_RC=$?
     set -e
-    if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-      break
+    if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
+      echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
+      exit 1
     fi
-    if [ "${FIND_RC}" = "1" ]; then
-      break
-    fi
-    sleep 2
-  done
-  if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
-    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
-    exit 1
   fi
 fi
 if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
@@ -1965,5 +1993,7 @@ echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false --
 ## ENDIF
 
 ## Post-Merge Extensions
+
+Tool: note
 
 > Post-merge rule-extractor pattern is available at `patterns/rule-extractor/` — integration pending separate PR. Invoke via `csa plan run patterns/rule-extractor/workflow.toml` after successful merge when HIGH/CRITICAL findings exist.
