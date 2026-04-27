@@ -29,6 +29,8 @@ struct CodexTranscriptEvent {
 
 #[derive(Debug, Deserialize)]
 struct CodexTranscriptItem {
+    #[serde(default, rename = "type")]
+    item_type: String,
     #[serde(default)]
     text: Option<String>,
 }
@@ -354,22 +356,34 @@ fn first_non_empty_line_is_thread_started(raw_output: &str) -> bool {
 }
 
 fn extract_codex_json_event_text(raw_output: &str) -> Option<String> {
+    let mut first_non_empty_was_json = None;
     let pieces: Vec<String> = raw_output
         .lines()
-        .filter_map(|line| serde_json::from_str::<CodexTranscriptEvent>(line).ok())
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let event = serde_json::from_str::<CodexTranscriptEvent>(line).ok();
+            if first_non_empty_was_json.is_none() {
+                first_non_empty_was_json = Some(event.is_some());
+            }
+            event
+        })
         .filter_map(|event| {
             if let Some(agent_message) = event.agent_message {
                 return Some(agent_message.into_text());
             }
             if event.event_type == "item.completed" {
-                return event.item.and_then(|item| item.text);
+                return event.item.and_then(|item| {
+                    (item.item_type == "agent_message")
+                        .then_some(item.text)
+                        .flatten()
+                });
             }
             None
         })
         .collect();
 
     if pieces.is_empty() {
-        None
+        first_non_empty_was_json.unwrap_or(false).then(String::new)
     } else {
         Some(pieces.join("\n"))
     }
@@ -479,14 +493,43 @@ mod tests {
     fn clean_step_output_extracts_codex_json_event_stream_text() {
         let output = [
             r#"{"type":"thread.started","thread_id":"thread_1"}"#,
-            r#"{"type":"item.completed","item":{"id":"item_1","text":"- [ ] write test"}}"#,
-            r#"{"type":"item.completed","item":{"id":"item_2","text":"schema_version = 1"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"- [ ] write test"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"schema_version = 1"}}"#,
         ]
         .join("\n");
 
         assert_eq!(
             clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
             "- [ ] write test\nschema_version = 1"
+        );
+    }
+
+    #[test]
+    fn clean_step_output_ignores_codex_tool_result_items() {
+        let output = [
+            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"tool_result","text":"secret shell output"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"agent summary"}}"#,
+        ]
+        .join("\n");
+
+        assert_eq!(
+            clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
+            "agent summary"
+        );
+    }
+
+    #[test]
+    fn clean_step_output_drops_codex_stream_without_agent_messages() {
+        let output = [
+            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"tool_result","text":"secret shell output"}}"#,
+        ]
+        .join("\n");
+
+        assert_eq!(
+            clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
+            ""
         );
     }
 
@@ -518,7 +561,7 @@ mod tests {
     fn clean_step_output_extracts_mixed_json_stream_and_ignores_trailing_prose() {
         let output = [
             r#"{"type":"thread.started","thread_id":"thread_1"}"#,
-            r#"{"type":"item.completed","item":{"id":"item_1","text":"natural text"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"natural text"}}"#,
             "trailing progress note",
         ]
         .join("\n");
