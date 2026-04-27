@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
@@ -15,6 +16,37 @@ use crate::pipeline::{
 use crate::run_helpers::build_executor;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Deserialize)]
+struct CodexTranscriptEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    agent_message: Option<AgentMessageText>,
+    #[serde(default)]
+    item: Option<CodexTranscriptItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexTranscriptItem {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AgentMessageText {
+    Text(String),
+    Object { text: String },
+}
+
+impl AgentMessageText {
+    fn into_text(self) -> String {
+        match self {
+            Self::Text(text) | Self::Object { text } => text,
+        }
+    }
+}
 
 pub(super) struct StepExecutionOutcome {
     pub(super) exit_code: i32,
@@ -269,18 +301,78 @@ pub(super) async fn execute_csa_step(
         Err(error) => return Err(error),
     };
 
-    let captured = if !result.execution.output.is_empty() {
+    let raw_captured = if !result.execution.output.is_empty() {
         result.execution.output
     } else if !result.execution.summary.is_empty() {
         result.execution.summary
     } else {
         String::new()
     };
+    let captured = clean_step_output_for_env(&raw_captured, tool_name, OutputFormat::Json);
     Ok(StepExecutionOutcome {
         exit_code: result.execution.exit_code,
         output: captured,
         session_id: Some(result.meta_session_id),
     })
+}
+
+fn clean_step_output_for_env(
+    raw_output: &str,
+    tool_name: &ToolName,
+    output_format: OutputFormat,
+) -> String {
+    if !should_extract_codex_json_events(raw_output, tool_name, output_format) {
+        return raw_output.to_string();
+    }
+
+    extract_codex_json_event_text(raw_output).unwrap_or_else(|| raw_output.to_string())
+}
+
+fn should_extract_codex_json_events(
+    raw_output: &str,
+    tool_name: &ToolName,
+    output_format: OutputFormat,
+) -> bool {
+    (matches!(tool_name, ToolName::Codex) && matches!(output_format, OutputFormat::Json))
+        || first_non_empty_line_is_thread_started(raw_output)
+}
+
+fn first_non_empty_line_is_thread_started(raw_output: &str) -> bool {
+    let Some(line) = raw_output.lines().find(|line| !line.trim().is_empty()) else {
+        return false;
+    };
+
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .as_object()
+                .and_then(|object| object.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|event_type| event_type == "thread.started")
+        })
+}
+
+fn extract_codex_json_event_text(raw_output: &str) -> Option<String> {
+    let pieces: Vec<String> = raw_output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<CodexTranscriptEvent>(line).ok())
+        .filter_map(|event| {
+            if let Some(agent_message) = event.agent_message {
+                return Some(agent_message.into_text());
+            }
+            if event.event_type == "item.completed" {
+                return event.item.and_then(|item| item.text);
+            }
+            None
+        })
+        .collect();
+
+    if pieces.is_empty() {
+        None
+    } else {
+        Some(pieces.join("\n"))
+    }
 }
 
 pub(super) fn is_stale_session_error(error: &anyhow::Error) -> bool {
@@ -381,6 +473,60 @@ mod tests {
             Some("sid")
         );
         assert_eq!(reduced.get("SCOPE").map(String::as_str), Some("demo"));
+    }
+
+    #[test]
+    fn clean_step_output_extracts_codex_json_event_stream_text() {
+        let output = [
+            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","text":"- [ ] write test"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_2","text":"schema_version = 1"}}"#,
+        ]
+        .join("\n");
+
+        assert_eq!(
+            clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
+            "- [ ] write test\nschema_version = 1"
+        );
+    }
+
+    #[test]
+    fn clean_step_output_falls_back_for_codex_json_without_text() {
+        let output = "not json\n{\"type\":\"thread.started\"}";
+
+        assert_eq!(
+            clean_step_output_for_env(output, &ToolName::Codex, OutputFormat::Json),
+            output
+        );
+    }
+
+    #[test]
+    fn clean_step_output_leaves_clean_prose_for_non_codex_tools() {
+        let output = "plain summary\n- [ ] already clean";
+
+        assert_eq!(
+            clean_step_output_for_env(output, &ToolName::GeminiCli, OutputFormat::Json),
+            output
+        );
+        assert_eq!(
+            clean_step_output_for_env(output, &ToolName::ClaudeCode, OutputFormat::Json),
+            output
+        );
+    }
+
+    #[test]
+    fn clean_step_output_extracts_mixed_json_stream_and_ignores_trailing_prose() {
+        let output = [
+            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","text":"natural text"}}"#,
+            "trailing progress note",
+        ]
+        .join("\n");
+
+        assert_eq!(
+            clean_step_output_for_env(&output, &ToolName::GeminiCli, OutputFormat::Text),
+            "natural text"
+        );
     }
 
     #[test]
