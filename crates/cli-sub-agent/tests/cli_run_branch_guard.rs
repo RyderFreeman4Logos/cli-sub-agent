@@ -225,11 +225,22 @@ fn terminate_daemon_process_group(session_dir: &Path) {
         return;
     };
     let pgid = -(pid as libc::pid_t);
+    // SAFETY: `pid` was read from this test's daemon session directory via
+    // `daemon_pid_for_signal`, which only returns a session-relevant live
+    // daemon PID. Daemon spawning uses the daemon PID as its process-group ID,
+    // so the negative-PGID signal targets only that daemon's test-scoped
+    // process group. This cleanup runs inside the test harness and affects no
+    // process outside the daemon spawned by this test case.
     unsafe {
         libc::kill(pgid, libc::SIGTERM);
     }
     thread::sleep(Duration::from_millis(200));
     if csa_process::ToolLiveness::daemon_pid_is_alive(session_dir) {
+        // SAFETY: same target invariant as the SIGTERM path above. The daemon
+        // PID/PGID comes from this test's parsed session stdout and recorded
+        // session state, and the negative-PGID form is used only for final
+        // cleanup of that test-owned daemon process group after graceful
+        // termination did not complete.
         unsafe {
             libc::kill(pgid, libc::SIGKILL);
         }
@@ -250,6 +261,10 @@ impl EnvGuard {
             .map(|(key, _)| (*key, std::env::var_os(key)))
             .collect();
         for (key, value) in vars {
+            // SAFETY: callers are `#[serial]` tests in this binary, so these
+            // process-wide env mutations are serialized with each other. The
+            // guard snapshots each key before mutation and restores it in
+            // `Drop`, while spawned child commands receive only the scoped env.
             unsafe { std::env::set_var(key, value) };
         }
         Self { saved }
@@ -260,7 +275,13 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         for (key, value) in self.saved.drain(..) {
             match value {
+                // SAFETY: this restores a value captured by `EnvGuard::set`
+                // while the same `#[serial]` test still owns the guard, so no
+                // other test in this binary observes the temporary mutation.
                 Some(value) => unsafe { std::env::set_var(key, value) },
+                // SAFETY: this removes a variable that was absent when
+                // `EnvGuard::set` began; the `#[serial]` test still owns the
+                // guard, preserving the same serialized mutation scope.
                 None => unsafe { std::env::remove_var(key) },
             }
         }
