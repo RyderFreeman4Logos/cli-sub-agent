@@ -1,9 +1,7 @@
-package = []
-
 [versions]
-csa = "0.1.300"
+csa = "0.1.594"
+weave = "0.1.594"
 last_migrated_at = "2026-03-08T12:08:01.820964091Z"
-weave = "0.1.300"
 
 [migrations]
 applied = [
