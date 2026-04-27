@@ -382,6 +382,17 @@ async fn run() -> Result<()> {
             daemon_child,
             session_id,
         } => {
+            if !no_daemon
+                && !daemon_child
+                && session_id.is_none()
+                && let Some(exit_code) = run_helpers_branch_guard::evaluate_run_refusal_for_cd(
+                    allow_base_branch_commit,
+                    cd.as_deref(),
+                )?
+            {
+                exit_current_process(exit_code);
+            }
+
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 no_daemon,

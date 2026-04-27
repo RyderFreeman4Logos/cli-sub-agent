@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
 
 pub(crate) const BRANCH_GUARD_EXIT_CODE: i32 = 2;
@@ -125,6 +126,18 @@ pub(crate) fn evaluate_and_emit_refusal(
         return Some(BRANCH_GUARD_EXIT_CODE);
     }
     None
+}
+
+pub(crate) fn evaluate_run_refusal_for_cd(
+    cli_bypass: bool,
+    cd: Option<&str>,
+) -> Result<Option<i32>> {
+    let project_root = crate::pipeline::determine_project_root(cd)?;
+    let project_config = ProjectConfig::load(&project_root)?;
+    let global_config = GlobalConfig::load()?;
+    let runtime = BranchGuardRuntime::for_run(cli_bypass, project_config.as_ref(), &global_config);
+    let branch_state = observe_branch_state(&project_root, project_config.as_ref());
+    Ok(evaluate_and_emit_refusal(&runtime, branch_state))
 }
 
 pub(crate) fn evaluate_branch_guard(request: BranchGuardRequest) -> BranchGuardDecision {
