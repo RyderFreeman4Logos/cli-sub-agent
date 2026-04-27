@@ -230,7 +230,7 @@ fn write_state_atomically_inner(
 
     let mut tmp_file = fs::File::create(&tmp_path)?;
     tmp_file.write_all(&encoded)?;
-    tmp_file.flush()?;
+    tmp_file.sync_all()?;
     drop(tmp_file);
 
     if fail_after_write {
