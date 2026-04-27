@@ -248,9 +248,7 @@ mod tests {
         // Write a file larger than DIAGNOSTIC_TAIL_BYTES (64 KiB).
         let line = "A".repeat(80) + "\n"; // 81 bytes per line
         let lines_needed = (DIAGNOSTIC_TAIL_BYTES as usize / line.len()) + 200;
-        let content: String = std::iter::repeat(line.as_str())
-            .take(lines_needed)
-            .collect();
+        let content: String = std::iter::repeat_n(line.as_str(), lines_needed).collect();
         assert!(content.len() as u64 > DIAGNOSTIC_TAIL_BYTES);
         fs::write(&path, &content).unwrap();
 

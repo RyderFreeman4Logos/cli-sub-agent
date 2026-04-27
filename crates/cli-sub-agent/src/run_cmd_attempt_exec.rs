@@ -88,20 +88,6 @@ pub(super) async fn run_ephemeral_without_timeout(
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn direct_entry_resolved_timeout_preserves_pipeline_resolved_semantics() {
-        assert_eq!(direct_entry_resolved_timeout(None), ResolvedTimeout(None));
-        assert_eq!(
-            direct_entry_resolved_timeout(Some(45)),
-            ResolvedTimeout(Some(45))
-        );
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_persistent_with_timeout(
     executor: &Executor,
@@ -335,4 +321,18 @@ async fn execute_persistent(
     };
 
     Ok(execution)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_entry_resolved_timeout_preserves_pipeline_resolved_semantics() {
+        assert_eq!(direct_entry_resolved_timeout(None), ResolvedTimeout(None));
+        assert_eq!(
+            direct_entry_resolved_timeout(Some(45)),
+            ResolvedTimeout(Some(45))
+        );
+    }
 }
