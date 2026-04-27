@@ -482,6 +482,18 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
         }
     }
 
+    let budget_part = parts[3];
+    if !csa_core::thinking_budget::is_valid_budget(budget_part) {
+        bail!(
+            "Tier '{}' has model spec '{}' with invalid thinking_budget '{}'. \
+             Valid budgets: [{}].",
+            tier_name,
+            model_spec,
+            budget_part,
+            csa_core::thinking_budget::VALID_BUDGET_DESCRIPTION
+        );
+    }
+
     Ok(())
 }
 

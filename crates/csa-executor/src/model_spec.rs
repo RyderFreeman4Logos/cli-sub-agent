@@ -1,7 +1,7 @@
 //! Model specification parsing.
 
 use anyhow::{Result, bail};
-use csa_core::model_catalog;
+use csa_core::{model_catalog, thinking_budget};
 use serde::{Deserialize, Serialize};
 
 /// Unified model spec: tool/provider/model/thinking_budget
@@ -154,7 +154,8 @@ impl ThinkingBudget {
                     Ok(Self::Custom(n))
                 } else {
                     bail!(
-                        "Invalid thinking budget '{other}': expected default/low/medium/high/xhigh/max or a number"
+                        "Invalid thinking budget '{other}': expected {}",
+                        thinking_budget::VALID_BUDGET_DESCRIPTION
                     )
                 }
             }
