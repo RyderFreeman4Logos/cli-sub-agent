@@ -58,6 +58,7 @@ mod run_cmd_fork;
 mod run_cmd_post;
 mod run_cmd_tool_selection;
 mod run_helpers;
+mod run_helpers_branch_guard;
 mod self_update;
 mod session_cmds;
 mod session_cmds_daemon;
@@ -353,6 +354,7 @@ async fn run() -> Result<()> {
             return_to,
             parent,
             ephemeral,
+            allow_base_branch_commit,
             cd,
             model_spec,
             model,
@@ -380,6 +382,17 @@ async fn run() -> Result<()> {
             daemon_child,
             session_id,
         } => {
+            if !no_daemon
+                && !daemon_child
+                && session_id.is_none()
+                && let Some(exit_code) = run_helpers_branch_guard::evaluate_run_refusal_for_cd(
+                    allow_base_branch_commit,
+                    cd.as_deref(),
+                )?
+            {
+                exit_current_process(exit_code);
+            }
+
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 no_daemon,
@@ -421,6 +434,7 @@ async fn run() -> Result<()> {
                 return_to,
                 parent,
                 ephemeral,
+                allow_base_branch_commit,
                 cd,
                 model_spec,
                 model,

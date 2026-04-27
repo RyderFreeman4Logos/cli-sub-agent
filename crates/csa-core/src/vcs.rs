@@ -170,6 +170,9 @@ pub trait VcsBackend: Send + Sync {
     /// Get the current branch name, if any.
     fn current_branch(&self, project_root: &Path) -> Result<Option<String>, String>;
 
+    /// Detect the repository's default branch, if it can be determined.
+    fn default_branch(&self, project_root: &Path) -> Result<Option<String>, String>;
+
     /// Get the current HEAD commit hash (full SHA for git, change-id for jj).
     fn head_id(&self, project_root: &Path) -> Result<Option<String>, String>;
 

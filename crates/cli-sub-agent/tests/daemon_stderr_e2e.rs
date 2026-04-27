@@ -181,6 +181,8 @@ fn daemon_child_err_path_captures_stderr_and_writes_completion() {
     // but fails during resolve_alias in handle_run → Err.
     // --force-ignore-tier-setting bypasses tier enforcement so the alias
     // resolution actually runs (not blocked by tier check).
+    // --allow-base-branch-commit keeps this non-repo daemon stderr test focused
+    // on the alias-resolution error path.
     let child = Command::new(env!("CARGO_BIN_EXE_csa"))
         .args([
             "run",
@@ -192,6 +194,7 @@ fn daemon_child_err_path_captures_stderr_and_writes_completion() {
             "--force-ignore-tier-setting",
             "--tool",
             "bogus-tool-xyz",
+            "--allow-base-branch-commit",
             "--no-idle-timeout",
             "--timeout",
             "1800",

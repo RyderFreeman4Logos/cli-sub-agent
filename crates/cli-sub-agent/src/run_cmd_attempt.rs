@@ -84,6 +84,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) no_fs_sandbox: bool,
     pub(crate) extra_writable: Vec<PathBuf>,
     pub(crate) extra_readable: Vec<PathBuf>,
+    pub(crate) branch_guard: crate::run_helpers_branch_guard::BranchGuardRuntime,
 }
 
 pub(crate) enum RunLoopCompletion {
@@ -310,6 +311,17 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             } else if !is_auto_seed_fork {
                 anyhow::bail!("Fork requested but no source session resolved");
             }
+        }
+
+        let branch_state = crate::run_helpers_branch_guard::observe_branch_state(
+            request.project_root,
+            request.config,
+        );
+        if let Some(exit_code) = crate::run_helpers_branch_guard::evaluate_and_emit_refusal(
+            &request.branch_guard,
+            branch_state,
+        ) {
+            return Ok(RunLoopCompletion::Exit(exit_code));
         }
 
         if let Some(ref fork_res) = fork_resolution {

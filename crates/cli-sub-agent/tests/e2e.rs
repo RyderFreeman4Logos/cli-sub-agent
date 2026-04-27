@@ -674,6 +674,7 @@ fn run_direct_tool_tier_rejection_surfaces_cause_and_session_id() {
             "--no-daemon",
             "--tool",
             "codex",
+            "--allow-base-branch-commit",
             "--no-idle-timeout",
             "--timeout",
             "1800",
