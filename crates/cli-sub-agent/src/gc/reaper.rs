@@ -113,7 +113,7 @@ pub(super) fn reap_runtime_payloads_in_root(
 
         let session_dir = session_root.join("sessions").join(&session.meta_session_id);
         if session_has_live_lock(&session_dir)? {
-            info!(
+            warn!(
                 session = %session.meta_session_id,
                 "Skipping runtime reap for locked session"
             );
@@ -160,6 +160,12 @@ pub(super) fn reap_runtime_payloads_in_root(
 
         if !dry_run {
             fs::remove_dir_all(&runtime_dir)?;
+            info!(
+                session = %session.meta_session_id,
+                path = %runtime_dir.display(),
+                bytes_reclaimed,
+                "Reaped retired session runtime directory"
+            );
         }
 
         stats.sessions_reaped = stats.sessions_reaped.saturating_add(1);
@@ -174,7 +180,7 @@ pub(super) fn reap_runtime_payloads_in_root(
     Ok(stats)
 }
 
-fn merge_runtime_reap_stats(total: &mut RuntimeReapStats, stats: RuntimeReapStats) {
+pub(super) fn merge_runtime_reap_stats(total: &mut RuntimeReapStats, stats: RuntimeReapStats) {
     total.sessions_reaped = total.sessions_reaped.saturating_add(stats.sessions_reaped);
     total.bytes_reclaimed = total.bytes_reclaimed.saturating_add(stats.bytes_reclaimed);
     total.entries.extend(stats.entries);

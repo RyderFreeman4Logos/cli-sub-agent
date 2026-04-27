@@ -12,11 +12,11 @@ use csa_session::{
 
 use super::load_gc_config_for_sessions;
 use super::reaper::{
-    print_runtime_reap_summary, reap_runtime_payloads_global, require_runtime_reap_max_age,
+    merge_runtime_reap_stats, print_runtime_reap_summary, reap_runtime_payloads_in_root,
 };
 use super::{
     RETIRE_AFTER_DAYS, STATE_DIR_SIZE_CACHE_FILENAME, extract_pid_from_lock,
-    has_confirmed_sessions, is_orphan_session_dir, is_process_alive,
+    has_confirmed_sessions, is_orphan_session_dir, is_process_alive, runtime_reap_max_age_days,
 };
 
 pub(crate) fn handle_gc_global(
@@ -37,14 +37,9 @@ pub(crate) fn handle_gc_global(
         project_roots.extend(discover_project_roots(state_base));
     }
 
-    let runtime_reap_max_age_days = if reap_runtime {
-        Some(require_runtime_reap_max_age(max_age_days)?)
-    } else {
-        None
-    };
-    let runtime_reap_stats = runtime_reap_max_age_days
-        .map(|days| reap_runtime_payloads_global(dry_run, days))
-        .transpose()?;
+    let current_session_id = std::env::var("CSA_SESSION_ID").ok();
+    let mut runtime_reap_enabled = false;
+    let mut runtime_reap_stats = super::RuntimeReapStats::default();
 
     let now = chrono::Utc::now();
     let mut total_stale_locks = 0u64;
@@ -255,6 +250,44 @@ pub(crate) fn handle_gc_global(
         }
 
         let project_gc_config = load_gc_config_for_sessions(session_root, &sessions);
+        if let Some(days) =
+            runtime_reap_max_age_days(reap_runtime, max_age_days, project_gc_config)?
+        {
+            runtime_reap_enabled = true;
+            let sessions_for_reap = if dry_run {
+                sessions.clone()
+            } else {
+                match list_sessions_from_root(session_root) {
+                    Ok(sessions) => sessions,
+                    Err(err) => {
+                        warn!(
+                            path = %session_root.display(),
+                            error = %err,
+                            "Failed to refresh sessions before runtime reap; skipping project"
+                        );
+                        projects_failed += 1;
+                        continue;
+                    }
+                }
+            };
+            match reap_runtime_payloads_in_root(
+                session_root,
+                &sessions_for_reap,
+                dry_run,
+                days,
+                current_session_id.as_deref(),
+            ) {
+                Ok(stats) => merge_runtime_reap_stats(&mut runtime_reap_stats, stats),
+                Err(err) => {
+                    warn!(
+                        path = %session_root.display(),
+                        error = %err,
+                        "Failed to reap runtime payloads for project; skipping project"
+                    );
+                    projects_failed += 1;
+                }
+            }
+        }
         let transcript_stats =
             super::cleanup_project_transcripts(session_root, project_gc_config, dry_run);
         total_transcripts_removed =
@@ -262,6 +295,8 @@ pub(crate) fn handle_gc_global(
         total_transcript_bytes_reclaimed =
             total_transcript_bytes_reclaimed.saturating_add(transcript_stats.bytes_reclaimed);
     }
+
+    let runtime_reap_stats = runtime_reap_enabled.then_some(runtime_reap_stats);
 
     let mut orphan_scopes_cleaned = 0u64;
     if dry_run {

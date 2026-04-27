@@ -51,23 +51,8 @@ pub(crate) fn handle_gc(
     let sessions = list_sessions(&project_root, None)?;
     let gc_config = GcConfig::load_for_project(&project_root)?;
     let now = chrono::Utc::now();
-    let runtime_reap_max_age_days = if reap_runtime {
-        Some(require_runtime_reap_max_age(max_age_days)?)
-    } else {
-        None
-    };
-    let current_session_id = std::env::var("CSA_SESSION_ID").ok();
-    let runtime_reap_stats = runtime_reap_max_age_days
-        .map(|days| {
-            reap_runtime_payloads_in_root(
-                &session_root,
-                &sessions,
-                dry_run,
-                days,
-                current_session_id.as_deref(),
-            )
-        })
-        .transpose()?;
+    let runtime_reap_max_age_days =
+        runtime_reap_max_age_days(reap_runtime, max_age_days, gc_config)?;
 
     let mut stale_locks_removed = 0;
     let mut empty_sessions_removed = 0;
@@ -229,6 +214,24 @@ pub(crate) fn handle_gc(
         }
     }
 
+    let current_session_id = std::env::var("CSA_SESSION_ID").ok();
+    let runtime_reap_stats = runtime_reap_max_age_days
+        .map(|days| {
+            let sessions_for_reap = if dry_run {
+                sessions.clone()
+            } else {
+                list_sessions(&project_root, None)?
+            };
+            reap_runtime_payloads_in_root(
+                &session_root,
+                &sessions_for_reap,
+                dry_run,
+                days,
+                current_session_id.as_deref(),
+            )
+        })
+        .transpose()?;
+
     let transcript_stats = cleanup_project_transcripts(&session_root, gc_config, dry_run);
 
     if dry_run {
@@ -348,6 +351,19 @@ pub(crate) fn handle_gc(
     Ok(())
 }
 
+pub(super) fn runtime_reap_max_age_days(
+    reap_runtime: bool,
+    max_age_days: Option<u64>,
+    gc_config: GcConfig,
+) -> Result<Option<u64>> {
+    if reap_runtime {
+        return require_runtime_reap_max_age(max_age_days).map(Some);
+    }
+    Ok(gc_config
+        .reap_runtime_dirs
+        .then_some(RETIRE_AFTER_DAYS as u64))
+}
+
 /// Extract PID from lock file JSON content (expects `{"pid": N}`).
 fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
     let v: serde_json::Value = serde_json::from_str(json_content).ok()?;
@@ -400,3 +416,7 @@ fn is_process_alive(pid: u32) -> bool {
 #[cfg(test)]
 #[path = "gc_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gc_runtime_tests.rs"]
+mod runtime_tests;

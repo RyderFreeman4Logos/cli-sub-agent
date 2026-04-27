@@ -647,6 +647,7 @@ long_poll_seconds = 240
 [gc]
 transcript_max_age_days = 30
 transcript_max_size_mb = 500
+reap_runtime_dirs = true
 [acp]
 init_timeout_seconds = 120
 # [tools.codex]
