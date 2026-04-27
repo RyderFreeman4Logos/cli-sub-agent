@@ -554,7 +554,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
-                run_cmd_daemon::DaemonSpawnOptions::default(),
+                run_cmd_daemon::DaemonSpawnOptions::for_prompt_file(args.prompt_file.as_deref()),
             )?;
             let result = debate_cmd::handle_debate(args, current_depth, output_format).await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);

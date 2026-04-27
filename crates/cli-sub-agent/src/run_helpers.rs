@@ -1,6 +1,6 @@
 //! Helper functions for `csa run`: tool resolution, executor building, token parsing.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
 
 use csa_config::{GlobalConfig, ProjectConfig};
@@ -26,7 +26,12 @@ pub(crate) use atomic_commit::atomic_commit_discipline_preamble;
 pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 pub(crate) use inline_review_context::prepend_review_context_to_prompt;
-pub(crate) use prompt::{read_prompt, resolve_positional_stdin_sentinel};
+#[cfg(test)]
+pub(crate) use prompt::resolve_prompt_with_file_from_reader;
+pub(crate) use prompt::{
+    is_prompt_file_stdin_sentinel, read_prompt, resolve_positional_stdin_sentinel,
+    resolve_prompt_with_file,
+};
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_claude_code_transport,
@@ -548,22 +553,6 @@ fn extract_cost(text: &str) -> Option<f64> {
         .collect();
 
     num_str.parse().ok()
-}
-
-/// Resolve prompt from `--prompt-file`, positional arg, or stdin (in priority order).
-pub(crate) fn resolve_prompt_with_file(
-    prompt: Option<String>,
-    prompt_file: Option<&std::path::Path>,
-) -> Result<String> {
-    if let Some(path) = prompt_file {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
-        if content.trim().is_empty() {
-            anyhow::bail!("--prompt-file '{}' is empty", path.display());
-        }
-        return Ok(content);
-    }
-    read_prompt(prompt)
 }
 
 /// Result of resolving a tool from a tier's models list.

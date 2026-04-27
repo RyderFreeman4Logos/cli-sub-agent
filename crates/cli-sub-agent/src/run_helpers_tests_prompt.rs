@@ -9,6 +9,65 @@ fn resolve_prompt_with_file_reads_file_content() {
 }
 
 #[test]
+fn resolve_prompt_with_file_routes_dash_to_stdin() {
+    let mut stdin = std::io::Cursor::new("prompt from stdin");
+    let result = super::resolve_prompt_with_file_from_reader(
+        Some("positional".to_string()),
+        Some(std::path::Path::new("-")),
+        false,
+        &mut stdin,
+    )
+    .unwrap();
+    assert_eq!(result, "prompt from stdin");
+}
+
+#[test]
+fn resolve_prompt_with_file_routes_dev_stdin_to_stdin() {
+    let mut stdin = std::io::Cursor::new("prompt from dev stdin");
+    let result = super::resolve_prompt_with_file_from_reader(
+        Some("positional".to_string()),
+        Some(std::path::Path::new("/dev/stdin")),
+        false,
+        &mut stdin,
+    )
+    .unwrap();
+    assert_eq!(result, "prompt from dev stdin");
+}
+
+#[test]
+fn resolve_prompt_with_file_real_path_unchanged() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), "real file content").unwrap();
+    let mut stdin = std::io::Cursor::new("stdin should not win");
+    let result = super::resolve_prompt_with_file_from_reader(
+        Some("positional".to_string()),
+        Some(tmp.path()),
+        false,
+        &mut stdin,
+    )
+    .unwrap();
+    assert_eq!(result, "real file content");
+}
+
+#[test]
+fn resolve_prompt_with_file_empty_stdin_sentinel_bails() {
+    let mut stdin = std::io::Cursor::new("   ");
+    let result = super::resolve_prompt_with_file_from_reader(
+        None,
+        Some(std::path::Path::new("-")),
+        false,
+        &mut stdin,
+    );
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty prompt from stdin")
+    );
+}
+
+#[test]
 fn resolve_prompt_with_file_overrides_positional() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(tmp.path(), "file wins").unwrap();

@@ -196,7 +196,8 @@ pub struct ReviewArgs {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_readable: Vec<PathBuf>,
 
-    /// Read supplementary prompt/context from a file (bypasses shell quoting issues)
+    /// Read supplementary prompt/context from a file path (bypasses shell quoting issues).
+    /// Review treats this as a path; stdin sentinels are not resolved.
     #[arg(long, value_name = "PATH")]
     pub prompt_file: Option<PathBuf>,
 
@@ -430,7 +431,8 @@ pub struct DebateArgs {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_readable: Vec<PathBuf>,
 
-    /// Read the debate question from a file (bypasses shell quoting issues)
+    /// Read the debate question from a file (bypasses shell quoting issues).
+    /// Use `-` or `/dev/stdin` to read the prompt from stdin (heredoc or pipe).
     #[arg(long, value_name = "PATH", conflicts_with_all = ["question", "topic"])]
     pub prompt_file: Option<PathBuf>,
 

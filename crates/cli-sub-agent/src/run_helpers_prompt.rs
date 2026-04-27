@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::io::{IsTerminal, Read};
+use std::path::Path;
 
 pub(crate) fn resolve_positional_stdin_sentinel(prompt: Option<String>) -> Result<Option<String>> {
     let mut stdin = std::io::stdin();
@@ -35,7 +36,56 @@ pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
     read_prompt_from_reader(prompt, stdin.is_terminal(), &mut stdin)
 }
 
-fn read_prompt_from_reader<R: Read>(
+/// Resolve prompt from `--prompt-file`, positional arg, or stdin (in priority order).
+pub(crate) fn resolve_prompt_with_file(
+    prompt: Option<String>,
+    prompt_file: Option<&Path>,
+) -> Result<String> {
+    if let Some(path) = prompt_file {
+        if is_prompt_file_stdin_sentinel(path) {
+            return read_prompt(None);
+        }
+
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
+        if content.trim().is_empty() {
+            anyhow::bail!("--prompt-file '{}' is empty", path.display());
+        }
+        return Ok(content);
+    }
+    read_prompt(prompt)
+}
+
+pub(crate) fn is_prompt_file_stdin_sentinel(path: &Path) -> bool {
+    matches!(
+        path.as_os_str().to_str(),
+        Some("-" | "/dev/stdin" | "/proc/self/fd/0")
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_prompt_with_file_from_reader<R: Read>(
+    prompt: Option<String>,
+    prompt_file: Option<&Path>,
+    stdin_is_terminal: bool,
+    reader: &mut R,
+) -> Result<String> {
+    if let Some(path) = prompt_file {
+        if is_prompt_file_stdin_sentinel(path) {
+            return read_prompt_from_reader(None, stdin_is_terminal, reader);
+        }
+
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
+        if content.trim().is_empty() {
+            anyhow::bail!("--prompt-file '{}' is empty", path.display());
+        }
+        return Ok(content);
+    }
+    read_prompt_from_reader(prompt, stdin_is_terminal, reader)
+}
+
+pub(crate) fn read_prompt_from_reader<R: Read>(
     prompt: Option<String>,
     stdin_is_terminal: bool,
     reader: &mut R,
