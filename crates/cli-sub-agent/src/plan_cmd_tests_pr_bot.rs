@@ -186,6 +186,35 @@ fn pr_bot_workflow_resolves_helpers_from_pattern_dir() {
 }
 
 #[test]
+fn pr_bot_workflow_advisory_steps_have_tool_note() {
+    let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    let non_note_advisory_steps: Vec<usize> = plan
+        .steps
+        .iter()
+        .filter(|step| {
+            let title = step.title.to_ascii_lowercase();
+            let advisory_title = ["note", "advisory", "extensions"]
+                .iter()
+                .any(|marker| title.contains(marker));
+            let advisory_prompt = step
+                .prompt
+                .trim_start()
+                .starts_with("> Post-merge rule-extractor pattern");
+
+            (advisory_title || advisory_prompt) && step.tool.as_deref() != Some("note")
+        })
+        .map(|step| step.id)
+        .collect();
+
+    assert!(
+        non_note_advisory_steps.is_empty(),
+        "pr-bot advisory steps must use tool = \"note\"; offenders: {non_note_advisory_steps:?}"
+    );
+}
+
+#[test]
 fn pr_bot_archive_includes_helper_scripts() {
     let entries = git_archive_entries(&workspace_root(), "patterns/pr-bot");
 

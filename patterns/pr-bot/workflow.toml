@@ -2383,5 +2383,6 @@ condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED} && !(${REBASE_CL
 [[workflow.steps]]
 id = 24
 title = "Post-Merge Extensions"
+tool = "note"
 prompt = "> Post-merge rule-extractor pattern is available at `patterns/rule-extractor/` — integration pending separate PR. Invoke via `csa plan run patterns/rule-extractor/workflow.toml` after successful merge when HIGH/CRITICAL findings exist."
 on_fail = "abort"
