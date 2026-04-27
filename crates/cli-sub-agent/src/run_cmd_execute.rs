@@ -333,8 +333,6 @@ pub(crate) async fn handle_run(
         return Ok(1);
     };
     let branch_guard = crate::run_helpers_branch_guard::BranchGuardRuntime::for_run(
-        &project_root,
-        current_depth,
         allow_base_branch_commit,
         config.as_ref(),
         &global_config,

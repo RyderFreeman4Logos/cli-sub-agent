@@ -10,7 +10,6 @@ const HARDCODED_PROTECTED_BRANCHES: &[&str] = &["main", "master", "dev", "develo
 pub(crate) enum BranchGuardBypassSource {
     CliFlag,
     TrustedConfig,
-    VerifiedChildSession,
     ReadOnly,
 }
 
@@ -32,7 +31,6 @@ pub(crate) struct BranchGuardRequest {
     pub(crate) cli_bypass: bool,
     pub(crate) trusted_config_bypass: bool,
     pub(crate) project_config_requested_bypass: bool,
-    pub(crate) verified_child_session: bool,
     pub(crate) read_only_mode: bool,
     pub(crate) branch_state: VcsBranchState,
 }
@@ -75,32 +73,22 @@ pub(crate) struct BranchGuardRuntime {
     pub(crate) cli_bypass: bool,
     pub(crate) trusted_config_bypass: bool,
     pub(crate) project_config_requested_bypass: bool,
-    pub(crate) verified_child_session: bool,
     pub(crate) read_only_mode: bool,
 }
 
 impl BranchGuardRuntime {
     pub(crate) fn for_run(
-        project_root: &Path,
-        current_depth: u32,
         cli_bypass: bool,
         project_config: Option<&ProjectConfig>,
         global_config: &GlobalConfig,
     ) -> Self {
-        Self::from_sources(
-            cli_bypass,
-            project_config,
-            global_config,
-            verified_child_session(project_root, current_depth),
-            false,
-        )
+        Self::from_sources(cli_bypass, project_config, global_config, false)
     }
 
     pub(crate) fn from_sources(
         cli_bypass: bool,
         project_config: Option<&ProjectConfig>,
         global_config: &GlobalConfig,
-        verified_child_session: bool,
         read_only_mode: bool,
     ) -> Self {
         let trusted_config_bypass = global_config.run.allow_base_branch_commit;
@@ -111,7 +99,6 @@ impl BranchGuardRuntime {
             cli_bypass,
             trusted_config_bypass,
             project_config_requested_bypass,
-            verified_child_session,
             read_only_mode,
         }
     }
@@ -121,7 +108,6 @@ impl BranchGuardRuntime {
             cli_bypass: self.cli_bypass,
             trusted_config_bypass: self.trusted_config_bypass,
             project_config_requested_bypass: self.project_config_requested_bypass,
-            verified_child_session: self.verified_child_session,
             read_only_mode: self.read_only_mode,
             branch_state,
         }
@@ -150,11 +136,6 @@ pub(crate) fn evaluate_branch_guard(request: BranchGuardRequest) -> BranchGuardD
     if request.trusted_config_bypass {
         return BranchGuardDecision::Allow {
             source: Some(BranchGuardBypassSource::TrustedConfig),
-        };
-    }
-    if request.verified_child_session {
-        return BranchGuardDecision::Allow {
-            source: Some(BranchGuardBypassSource::VerifiedChildSession),
         };
     }
     if request.read_only_mode {
@@ -234,25 +215,6 @@ pub(crate) fn observe_branch_state(
     }
 }
 
-pub(crate) fn verified_child_session(project_root: &Path, current_depth: u32) -> bool {
-    if current_depth == 0 {
-        return false;
-    }
-    let Ok(session_id) = std::env::var("CSA_SESSION_ID") else {
-        return false;
-    };
-    if csa_session::load_session(project_root, &session_id).is_err() {
-        return false;
-    }
-    let Ok(expected_dir) = csa_session::get_session_dir(project_root, &session_id) else {
-        return false;
-    };
-    let Some(actual_dir) = std::env::var_os("CSA_SESSION_DIR") else {
-        return false;
-    };
-    Path::new(&actual_dir) == expected_dir.as_path()
-}
-
 pub(crate) fn emit_branch_guard_refusal(refusal: &BranchGuardRefusal) {
     eprintln!("{}", refusal.render_stderr());
 }
@@ -284,7 +246,6 @@ mod tests {
             cli_bypass: false,
             trusted_config_bypass: false,
             project_config_requested_bypass: false,
-            verified_child_session: false,
             read_only_mode: false,
             branch_state,
         }
@@ -362,28 +323,15 @@ mod tests {
     }
 
     #[test]
-    fn verified_child_bypass_requires_verified_marker_not_depth_only() {
-        let mut spoofed = request(VcsBranchState::OnBranch {
+    fn child_session_env_does_not_bypass_protected_branch_guard() {
+        let spoofed = request(VcsBranchState::OnBranch {
             current: "main".to_string(),
             detected_default: Some("main".to_string()),
         });
-        spoofed.verified_child_session = false;
         assert!(matches!(
             evaluate_branch_guard(spoofed),
             BranchGuardDecision::Refuse(_)
         ));
-
-        let mut verified = request(VcsBranchState::OnBranch {
-            current: "main".to_string(),
-            detected_default: Some("main".to_string()),
-        });
-        verified.verified_child_session = true;
-        assert_eq!(
-            evaluate_branch_guard(verified),
-            BranchGuardDecision::Allow {
-                source: Some(BranchGuardBypassSource::VerifiedChildSession)
-            }
-        );
     }
 
     #[test]

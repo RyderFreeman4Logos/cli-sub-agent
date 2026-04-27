@@ -306,7 +306,7 @@ fn forged_csa_depth_without_verified_session_refuses() {
 
 #[test]
 #[serial]
-fn verified_child_session_allows_guard_to_later_tool_error() {
+fn forged_child_session_env_tuple_refuses_on_protected_branch() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_git_repo(tmp.path(), "main");
     let state_home = tmp.path().join(".local/state");
@@ -317,7 +317,7 @@ fn verified_child_session_allows_guard_to_later_tool_error() {
         ("XDG_CONFIG_HOME", config_home.as_os_str().to_os_string()),
     ]);
     let session = csa_session::create_session(tmp.path(), Some("parent"), None, Some("codex"))
-        .expect("create verified parent session");
+        .expect("create parent session");
     let session_dir =
         csa_session::get_session_dir(tmp.path(), &session.meta_session_id).expect("session dir");
 
@@ -338,12 +338,12 @@ fn verified_child_session_allows_guard_to_later_tool_error() {
         .output()
         .expect("csa run should execute");
 
-    assert_branch_guard_allowed_to_later_error(&output);
+    assert_branch_guard_refused(&output);
 }
 
 #[test]
 #[serial]
-fn verified_child_session_without_session_dir_refuses() {
+fn forged_child_session_env_without_session_dir_refuses() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_git_repo(tmp.path(), "main");
     let state_home = tmp.path().join(".local/state");
@@ -354,7 +354,7 @@ fn verified_child_session_without_session_dir_refuses() {
         ("XDG_CONFIG_HOME", config_home.as_os_str().to_os_string()),
     ]);
     let session = csa_session::create_session(tmp.path(), Some("parent"), None, Some("codex"))
-        .expect("create verified parent session");
+        .expect("create parent session");
 
     let output = csa_cmd(tmp.path())
         .args([
@@ -369,41 +369,6 @@ fn verified_child_session_without_session_dir_refuses() {
         .env("CSA_DEPTH", "1")
         .env("CSA_SESSION_ID", &session.meta_session_id)
         .env_remove("CSA_SESSION_DIR")
-        .current_dir(tmp.path())
-        .output()
-        .expect("csa run should execute");
-
-    assert_branch_guard_refused(&output);
-}
-
-#[test]
-#[serial]
-fn verified_child_session_with_mismatched_session_dir_refuses() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    init_git_repo(tmp.path(), "main");
-    let state_home = tmp.path().join(".local/state");
-    let config_home = tmp.path().join(".config");
-    let _env = EnvGuard::set(&[
-        ("HOME", tmp.path().as_os_str().to_os_string()),
-        ("XDG_STATE_HOME", state_home.as_os_str().to_os_string()),
-        ("XDG_CONFIG_HOME", config_home.as_os_str().to_os_string()),
-    ]);
-    let session = csa_session::create_session(tmp.path(), Some("parent"), None, Some("codex"))
-        .expect("create verified parent session");
-
-    let output = csa_cmd(tmp.path())
-        .args([
-            "run",
-            "--no-daemon",
-            "--sa-mode",
-            "true",
-            "--tool",
-            "missing-tool-alias",
-            "inspect repository",
-        ])
-        .env("CSA_DEPTH", "1")
-        .env("CSA_SESSION_ID", &session.meta_session_id)
-        .env("CSA_SESSION_DIR", tmp.path().join("wrong-session-dir"))
         .current_dir(tmp.path())
         .output()
         .expect("csa run should execute");
