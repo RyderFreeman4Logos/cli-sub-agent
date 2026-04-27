@@ -48,9 +48,11 @@ impl JjJournal {
         }
     }
 
-    fn capture_snapshot_revision(&self, message: &str) -> Result<RevisionId, JournalError> {
-        let sanitized = sanitize_snapshot_message(message)?;
-        self.run_jj(["describe", "-m", sanitized.as_str()])?;
+    fn capture_snapshot_revision(
+        &self,
+        sanitized_message: &str,
+    ) -> Result<RevisionId, JournalError> {
+        self.run_jj(["describe", "-m", sanitized_message])?;
         self.run_jj(["new", "--no-edit"])?;
 
         let output = self.run_jj(["log", "--no-graph", "-r", "@-", "-T", "change_id"])?;
@@ -69,7 +71,7 @@ impl JjJournal {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let mut collected: Vec<OsString> = vec!["--no-pager".into()];
+        let mut collected: Vec<OsString> = vec!["--no-pager".into(), "--color=never".into()];
         collected.extend(args.into_iter().map(Into::into));
         let output = Command::new("jj")
             .args(&collected)
@@ -104,13 +106,15 @@ impl JjJournal {
     }
 
     fn read_state(&self) -> Result<Option<JournalState>, JournalError> {
-        if !self.state_path.exists() {
-            return Ok(None);
+        match fs::read_to_string(&self.state_path) {
+            Ok(raw) => {
+                let state = serde_json::from_str::<JournalState>(&raw)
+                    .map_err(|err| JournalError::InvalidState(err.to_string()))?;
+                Ok(Some(state))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
         }
-        let raw = fs::read_to_string(&self.state_path)?;
-        let state = serde_json::from_str::<JournalState>(&raw)
-            .map_err(|err| JournalError::InvalidState(err.to_string()))?;
-        Ok(Some(state))
     }
 
     fn write_state(&self, state: &JournalState) -> Result<(), JournalError> {
@@ -136,7 +140,7 @@ impl JjJournal {
                 })?;
 
         let mut current_state = self.read_state()?.unwrap_or_default();
-        let revision = revision_supplier(message)?;
+        let revision = revision_supplier(&sanitized)?;
 
         if current_state.session_start_revision.is_none() {
             current_state.session_start_revision = Some(revision.clone());
@@ -380,7 +384,7 @@ mod tests {
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, ref message }
-                if command == "jj --no-pager describe -m snapshot me"
+                if command == "jj --no-pager --color=never describe -m snapshot me"
                     && message.contains("mock jj unavailable")
         ));
         assert!(
@@ -397,7 +401,7 @@ mod tests {
         let arg_log = repo.path().join("jj-args.bin");
         let script = format!(
             "#!/bin/sh\n\
-             if [ \"$2\" = \"log\" ]; then\n\
+             if [ \"$3\" = \"log\" ]; then\n\
                printf 'rev-from-log\\n'\n\
                exit 0\n\
              fi\n\
@@ -435,12 +439,13 @@ mod tests {
             .map(|chunk| String::from_utf8_lossy(chunk).to_string())
             .collect::<Vec<_>>();
 
-        assert!(parts.windows(5).any(|window| {
+        assert!(parts.windows(6).any(|window| {
             window[0] == "CALL"
                 && window[1] == "--no-pager"
-                && window[2] == "describe"
-                && window[3] == "-m"
-                && window[4] == "msg;$(touch hacked)`echo no` / second line"
+                && window[2] == "--color=never"
+                && window[3] == "describe"
+                && window[4] == "-m"
+                && window[5] == "msg;$(touch hacked)`echo no` / second line"
         }));
         assert!(
             !repo.path().join("hacked").exists(),
