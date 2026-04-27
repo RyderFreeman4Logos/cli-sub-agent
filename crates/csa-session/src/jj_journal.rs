@@ -52,8 +52,11 @@ impl JjJournal {
         &self,
         sanitized_message: &str,
     ) -> Result<RevisionId, JournalError> {
+        let desc_output = self.run_jj(["log", "--no-graph", "-r", "@", "-T", "description"])?;
+        let preserved_description = String::from_utf8_lossy(&desc_output.stdout).to_string();
+
         self.run_jj(["describe", "-m", sanitized_message])?;
-        self.run_jj(["new", "--no-edit"])?;
+        self.run_jj(["new", "-m", preserved_description.as_str()])?;
 
         let output = self.run_jj(["log", "--no-graph", "-r", "@-", "-T", "change_id"])?;
         let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -384,7 +387,7 @@ mod tests {
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, ref message }
-                if command == "jj --no-pager --color=never describe -m snapshot me"
+                if command == "jj --no-pager --color=never log --no-graph -r @ -T description"
                     && message.contains("mock jj unavailable")
         ));
         assert!(
