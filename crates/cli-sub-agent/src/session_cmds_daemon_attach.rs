@@ -251,11 +251,12 @@ pub(super) fn resolve_attach_terminal_exit(
     session_dir: &Path,
     session_id: &str,
     output_streamed: bool,
+    output_log_visible: bool,
 ) -> Result<i32> {
     if let Some(completion) = load_daemon_completion_packet(session_dir)?
         && !session_has_terminal_process(session_dir)
     {
-        emit_failure_summary_for_empty_output(session_dir, output_streamed);
+        emit_failure_summary_for_empty_output(session_dir, output_streamed, output_log_visible);
         return Ok(completion.exit_code);
     }
 
@@ -266,7 +267,7 @@ pub(super) fn resolve_attach_terminal_exit(
             .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())
             .map(|r| r.exit_code)
             .unwrap_or(0);
-        emit_failure_summary_for_empty_output(session_dir, output_streamed);
+        emit_failure_summary_for_empty_output(session_dir, output_streamed, output_log_visible);
         return Ok(exit_code);
     }
 
@@ -295,7 +296,7 @@ pub(super) fn resolve_attach_terminal_exit(
             && let Ok(contents) = fs::read_to_string(&result_path)
             && let Ok(result) = toml::from_str::<csa_session::result::SessionResult>(&contents)
         {
-            emit_failure_summary_for_empty_output(session_dir, output_streamed);
+            emit_failure_summary_for_empty_output(session_dir, output_streamed, output_log_visible);
             return Ok(result.exit_code);
         }
         return Ok(1);

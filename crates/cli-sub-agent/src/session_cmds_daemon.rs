@@ -75,23 +75,29 @@ fn session_has_terminal_process(session_dir: &Path) -> bool {
         || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
 }
 
-fn session_output_logs_have_content(session_dir: &Path) -> bool {
-    ["stdout.log", "output.log"].iter().any(|name| {
-        fs::metadata(session_dir.join(name))
-            .map(|metadata| metadata.len() > 0)
-            .unwrap_or(false)
-    })
+fn session_log_has_content(session_dir: &Path, log_name: &str) -> bool {
+    fs::metadata(session_dir.join(log_name))
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
 }
 
-fn failure_summary_for_empty_output(session_dir: &Path, output_streamed: bool) -> Option<String> {
-    if output_streamed || session_output_logs_have_content(session_dir) {
+fn visible_output_logs_have_content(session_dir: &Path, output_log_visible: bool) -> bool {
+    session_log_has_content(session_dir, "stdout.log")
+        || (output_log_visible && session_log_has_content(session_dir, "output.log"))
+}
+
+fn failure_summary_for_empty_output(
+    session_dir: &Path,
+    output_streamed: bool,
+    output_log_visible: bool,
+) -> Option<String> {
+    if output_streamed || visible_output_logs_have_content(session_dir, output_log_visible) {
         return None;
     }
 
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
-    let result = fs::read_to_string(result_path).ok().and_then(|contents| {
-        toml::from_str::<csa_session::result::SessionResult>(&contents).ok()
-    })?;
+    let contents = fs::read_to_string(result_path).ok()?;
+    let result = toml::from_str::<csa_session::result::SessionResult>(&contents).ok()?;
     if result.status != "failure" || result.exit_code == 0 || result.summary.trim().is_empty() {
         return None;
     }
@@ -99,8 +105,14 @@ fn failure_summary_for_empty_output(session_dir: &Path, output_streamed: bool) -
     Some(result.summary)
 }
 
-fn emit_failure_summary_for_empty_output(session_dir: &Path, output_streamed: bool) {
-    let Some(summary) = failure_summary_for_empty_output(session_dir, output_streamed) else {
+fn emit_failure_summary_for_empty_output(
+    session_dir: &Path,
+    output_streamed: bool,
+    output_log_visible: bool,
+) {
+    let Some(summary) =
+        failure_summary_for_empty_output(session_dir, output_streamed, output_log_visible)
+    else {
         return;
     };
     eprintln!("{summary}");
@@ -217,6 +229,7 @@ pub(crate) fn handle_session_attach(
             &session_dir,
             &resolved.session_id,
             false,
+            false,
         );
     };
 
@@ -304,7 +317,11 @@ pub(crate) fn handle_session_attach(
                 }
                 std::io::stderr().flush()?;
             }
-            emit_failure_summary_for_empty_output(&session_dir, streamed_output);
+            emit_failure_summary_for_empty_output(
+                &session_dir,
+                streamed_output,
+                live_streams_output_log,
+            );
             // Return the session's exit code from result.toml.
             return Ok(completion.exit_code);
         }
@@ -315,6 +332,7 @@ pub(crate) fn handle_session_attach(
                 &session_dir,
                 &resolved.session_id,
                 streamed_output,
+                live_streams_output_log,
             );
         }
 

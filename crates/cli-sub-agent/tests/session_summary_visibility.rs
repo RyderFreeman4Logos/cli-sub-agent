@@ -58,7 +58,10 @@ completed_at = "2026-04-27T00:00:01Z"
     .expect("write result.toml");
 }
 
-fn create_empty_output_failure_session(tmp: &Path, name: &str) -> (std::path::PathBuf, String) {
+fn create_empty_output_failure_session(
+    tmp: &Path,
+    name: &str,
+) -> (std::path::PathBuf, String, std::path::PathBuf) {
     let state_home = tmp.join(".local/state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", tmp);
@@ -72,14 +75,16 @@ fn create_empty_output_failure_session(tmp: &Path, name: &str) -> (std::path::Pa
     let session_dir = csa_session::get_session_dir(&project, &session_id).expect("session dir");
     write_pre_exec_failure_result(&session_dir);
 
-    (project, session_id)
+    (project, session_id, session_dir)
 }
 
-fn assert_subcommand_surfaces_summary(subcommand: &str, session_name: &str) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let (project, session_id) = create_empty_output_failure_session(tmp.path(), session_name);
-
-    let output = csa_cmd(tmp.path())
+fn assert_subcommand_surfaces_summary_for_session(
+    tmp: &Path,
+    project: &Path,
+    subcommand: &str,
+    session_id: &str,
+) {
+    let output = csa_cmd(tmp)
         .args([
             "session",
             subcommand,
@@ -100,10 +105,31 @@ fn assert_subcommand_surfaces_summary(subcommand: &str, session_name: &str) {
     );
 }
 
+fn assert_subcommand_surfaces_summary(subcommand: &str, session_name: &str) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, _) = create_empty_output_failure_session(tmp.path(), session_name);
+    assert_subcommand_surfaces_summary_for_session(tmp.path(), &project, subcommand, &session_id);
+}
+
 #[test]
 #[serial]
 fn session_wait_surfaces_result_summary_when_failure_output_is_empty() {
     assert_subcommand_surfaces_summary("wait", "wait-empty-output-failure");
+}
+
+#[test]
+#[serial]
+fn session_wait_surfaces_result_summary_when_only_output_log_has_content() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), "wait-output-log-hidden-failure");
+    std::fs::write(
+        session_dir.join("output.log"),
+        "hidden output.log content\n",
+    )
+    .expect("write output log");
+
+    assert_subcommand_surfaces_summary_for_session(tmp.path(), &project, "wait", &session_id);
 }
 
 #[test]

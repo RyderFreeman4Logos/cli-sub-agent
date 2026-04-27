@@ -212,7 +212,7 @@ where
             emit_wait_next_step_if_needed(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, loaded_result.as_ref());
-            emit_failure_summary_for_empty_output(&session_dir, streamed_output);
+            emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
             emit_completion_signal(
                 &resolved.session_id,
                 completion_status.as_ref(),
@@ -233,7 +233,7 @@ where
             emit_wait_next_step_if_needed(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
-            emit_failure_summary_for_empty_output(&session_dir, streamed_output);
+            emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
             emit_completion_signal(
                 &resolved.session_id,
                 completion_status.as_ref(),
@@ -259,7 +259,7 @@ where
             emit_wait_next_step_if_needed(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
-            emit_failure_summary_for_empty_output(&session_dir, streamed_output);
+            emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
             emit_completion_signal(
                 &resolved.session_id,
                 completion_status.as_ref(),
@@ -287,7 +287,7 @@ where
                 emit_wait_next_step_if_needed(&session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
-                emit_failure_summary_for_empty_output(&session_dir, streamed_output);
+                emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
                 emit_completion_signal(
                     &resolved.session_id,
                     completion_status.as_ref(),
