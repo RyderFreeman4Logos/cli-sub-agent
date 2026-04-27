@@ -18,7 +18,7 @@ fn test_validate_multiple_tiers_all_valid() {
         "tier-2-standard".to_string(),
         TierConfig {
             description: "Standard tasks".to_string(),
-            models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            models: vec!["codex/openai/gpt-5.4/default".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -87,7 +87,7 @@ fn test_validate_tier_with_multiple_models_all_valid() {
             description: "Has multiple models".to_string(),
             models: vec![
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
-                "codex/anthropic/claude-sonnet-4-5/default".to_string(),
+                "codex/openai/gpt-5.4/default".to_string(),
             ],
             strategy: TierStrategy::default(),
 
@@ -199,7 +199,7 @@ fn test_validate_tier_token_budget_zero_rejected() {
         "bad-budget".to_string(),
         TierConfig {
             description: "Zero budget".to_string(),
-            models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            models: vec!["codex/openai/gpt-5.4/default".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: Some(0),
@@ -251,7 +251,7 @@ fn test_validate_tier_max_turns_zero_rejected() {
         "bad-turns".to_string(),
         TierConfig {
             description: "Zero turns".to_string(),
-            models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            models: vec!["codex/openai/gpt-5.4/default".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -303,7 +303,7 @@ fn test_validate_tier_with_valid_budget_and_turns() {
         "budgeted-tier".to_string(),
         TierConfig {
             description: "Has budget".to_string(),
-            models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            models: vec!["codex/openai/gpt-5.4/default".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: Some(100_000),
@@ -402,6 +402,122 @@ fn test_validate_tier_model_spec_unknown_tool_rejected() {
 }
 
 #[test]
+fn test_validate_tier_model_spec_unknown_provider_rejected() {
+    let dir = tempdir().unwrap();
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "bad-provider-tier".to_string(),
+        TierConfig {
+            description: "Unknown provider in spec".to_string(),
+            models: vec!["codex/anthropic/gpt-5.5/high".to_string()],
+            strategy: TierStrategy::default(),
+
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+            preflight: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("unknown provider"),
+        "Expected 'unknown provider' in error, got: {err_msg}"
+    );
+    assert!(err_msg.contains("anthropic"));
+    assert!(err_msg.contains("openai"));
+}
+
+#[test]
+fn test_validate_tier_model_spec_unknown_model_rejected() {
+    let dir = tempdir().unwrap();
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "bad-model-tier".to_string(),
+        TierConfig {
+            description: "Unknown model in spec".to_string(),
+            models: vec!["codex/openai/o3/high".to_string()],
+            strategy: TierStrategy::default(),
+
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+            preflight: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("unknown model"),
+        "Expected 'unknown model' in error, got: {err_msg}"
+    );
+    assert!(err_msg.contains("o3"));
+    assert!(err_msg.contains("gpt-5.5"));
+}
+
+#[test]
 fn test_validate_tier_model_spec_known_tool_accepted() {
     let dir = tempdir().unwrap();
 
@@ -450,6 +566,69 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
     let config_path = dir.path().join(".csa").join("config.toml");
     let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
+}
+
+#[test]
+fn tier_validate_rejects_invalid_thinking_budget() {
+    fn config_with_model_spec(model_spec: &str) -> ProjectConfig {
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "budget-tier".to_string(),
+            TierConfig {
+                description: "Budget validation".to_string(),
+                models: vec![model_spec.to_string()],
+                strategy: TierStrategy::default(),
+
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+
+        ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            acp: Default::default(),
+            tools: HashMap::new(),
+            review: None,
+            debate: None,
+            tiers,
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+            memory: Default::default(),
+            hooks: Default::default(),
+            run: Default::default(),
+            execution: Default::default(),
+            session_wait: None,
+            preflight: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+        }
+    }
+
+    let invalid_spec = "codex/openai/gpt-5.5/minimal";
+    let result = validate_loaded_config(Some(config_with_model_spec(invalid_spec)));
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("minimal"),
+        "Expected offending budget in error, got: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("thinking_budget") || err_msg.contains(invalid_spec),
+        "Expected thinking_budget field or full model spec in error, got: {err_msg}"
+    );
+
+    let valid_spec = "codex/openai/gpt-5.5/xhigh";
+    let result = validate_loaded_config(Some(config_with_model_spec(valid_spec)));
+    assert!(result.is_ok(), "valid tier model spec should pass");
 }
 
 #[test]

@@ -450,6 +450,51 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
         );
     }
 
+    let provider_part = parts[1];
+    if csa_core::model_catalog::provider_validation_enabled(tool_part) {
+        let valid_providers = csa_core::model_catalog::valid_providers(tool_part);
+        if !valid_providers.contains(&provider_part) {
+            bail!(
+                "Tier '{}' has model spec '{}' with unknown provider '{}' for tool '{}'. \
+                 Known providers: [{}].",
+                tier_name,
+                model_spec,
+                provider_part,
+                tool_part,
+                valid_providers.join(", ")
+            );
+        }
+    }
+
+    let model_part = parts[2];
+    if csa_core::model_catalog::model_validation_enabled(tool_part) {
+        let valid_models = csa_core::model_catalog::valid_models(tool_part, provider_part);
+        if !valid_models.contains(&model_part) {
+            bail!(
+                "Tier '{}' has model spec '{}' with unknown model '{}' for tool '{}' provider '{}'. \
+                 Known models: [{}].",
+                tier_name,
+                model_spec,
+                model_part,
+                tool_part,
+                provider_part,
+                valid_models.join(", ")
+            );
+        }
+    }
+
+    let budget_part = parts[3];
+    if !csa_core::thinking_budget::is_valid_budget(budget_part) {
+        bail!(
+            "Tier '{}' has model spec '{}' with invalid thinking_budget '{}'. \
+             Valid budgets: [{}].",
+            tier_name,
+            model_spec,
+            budget_part,
+            csa_core::thinking_budget::VALID_BUDGET_DESCRIPTION
+        );
+    }
+
     Ok(())
 }
 
@@ -460,6 +505,10 @@ mod tests;
 #[cfg(test)]
 #[path = "validate_tests_tail.rs"]
 mod tests_tail;
+
+#[cfg(test)]
+#[path = "validate_tests_model_catalog.rs"]
+mod tests_model_catalog;
 
 #[cfg(test)]
 #[path = "validate_tests_transport.rs"]

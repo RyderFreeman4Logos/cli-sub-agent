@@ -5,6 +5,7 @@ use csa_config::config::CURRENT_SCHEMA_VERSION;
 use csa_config::{ProjectMeta, ResourcesConfig};
 
 use crate::test_session_sandbox::ScopedSessionSandbox;
+use clap::Parser;
 
 #[tokio::test]
 async fn execute_with_session_and_meta_fails_preflight_before_creating_session() {
@@ -87,6 +88,33 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
     assert!(
         sessions.is_empty(),
         "preflight failure must not create session"
+    );
+}
+
+#[tokio::test]
+async fn run_invalid_model_spec_fails_before_creating_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
+
+    let result = crate::cli::Cli::try_parse_from([
+        "csa",
+        "run",
+        "--model-spec",
+        "codex/openai/o4-mini/xhigh",
+        "prompt",
+    ]);
+    let err = match result {
+        Ok(_) => panic!("unknown model should fail clap parsing"),
+        Err(err) => err,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("o4-mini"), "missing offending model: {msg}");
+    assert!(msg.contains("gpt-5.5"), "missing valid alternative: {msg}");
+
+    let sessions = csa_session::list_sessions(temp.path(), None).unwrap();
+    assert!(
+        sessions.is_empty(),
+        "invalid model spec must fail before session creation"
     );
 }
 

@@ -60,9 +60,9 @@ fn detect_installed_tools_in_paths(paths: &OsStr) -> Vec<&'static str> {
 /// Build smart tier configuration based on installed tools.
 ///
 /// Assigns tools to tiers based on their characteristics:
-/// - tier-1-quick: Fast, cheap (gemini-cli flash > codex sonnet > opencode sonnet > claude-code sonnet)
-/// - tier-2-standard: Balanced (codex sonnet > claude-code sonnet > opencode sonnet > gemini-cli pro)
-/// - tier-3-complex: Deep reasoning (claude-code opus > codex opus > opencode opus > gemini-cli pro)
+/// - tier-1-quick: Fast, cheap (gemini-cli flash > codex mini > opencode sonnet > claude-code sonnet)
+/// - tier-2-standard: Balanced (codex frontier > claude-code sonnet > opencode sonnet > gemini-cli pro)
+/// - tier-3-complex: Deep reasoning (claude-code opus > codex frontier > opencode opus > gemini-cli pro)
 ///
 /// Tools in `globally_disabled` are treated as unavailable even if their binary
 /// is installed, respecting the user's global `enabled = false` settings.
@@ -82,7 +82,7 @@ fn build_smart_tiers(
     let tier1_model = if has_tool("gemini-cli") {
         "gemini-cli/google/gemini-3-flash-preview/xhigh"
     } else if has_tool("codex") {
-        "codex/anthropic/claude-sonnet-4-5-20250929/default"
+        "codex/openai/gpt-5.4-mini/xhigh"
     } else if has_tool("opencode") {
         "opencode/anthropic/claude-sonnet-4-5-20250929/default"
     } else if has_tool("claude-code") {
@@ -106,7 +106,7 @@ fn build_smart_tiers(
 
     // tier-2-standard: Balanced
     let tier2_model = if has_tool("codex") {
-        "codex/anthropic/claude-sonnet-4-5-20250929/default"
+        "codex/openai/gpt-5.5/high"
     } else if has_tool("claude-code") {
         "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
     } else if has_tool("opencode") {
@@ -134,7 +134,7 @@ fn build_smart_tiers(
     let tier3_model = if has_tool("claude-code") {
         "claude-code/anthropic/claude-opus-4-6/default"
     } else if has_tool("codex") {
-        "codex/anthropic/claude-opus-4-6/default"
+        "codex/openai/gpt-5.5/xhigh"
     } else if has_tool("opencode") {
         "opencode/anthropic/claude-opus-4-6/default"
     } else if has_tool("gemini-cli") {
