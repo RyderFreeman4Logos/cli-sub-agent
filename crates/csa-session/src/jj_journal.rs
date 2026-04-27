@@ -5,8 +5,8 @@
 //! optional sidecar journal.
 
 use csa_core::vcs::{JournalError, RevisionId, SnapshotJournal};
+use csa_lock::acquire_lock;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
@@ -30,13 +30,13 @@ struct JournalState {
 }
 
 impl JjJournal {
-    pub fn new(project_root: impl AsRef<Path>) -> Self {
+    pub fn new(project_root: impl AsRef<Path>) -> Result<Self, JournalError> {
         let project_root = project_root.as_ref().to_path_buf();
-        let state_path = derive_state_path(&project_root);
-        Self {
+        let state_path = derive_state_path()?;
+        Ok(Self {
             project_root,
             state_path,
-        }
+        })
     }
 
     #[cfg(test)]
@@ -115,6 +115,42 @@ impl JjJournal {
         write_state_atomically(&self.state_path, state)
     }
 
+    fn snapshot_with_revision_supplier<F>(
+        &self,
+        message: &str,
+        revision_supplier: F,
+    ) -> Result<RevisionId, JournalError>
+    where
+        F: FnOnce(&str) -> Result<RevisionId, JournalError>,
+    {
+        let sanitized = sanitize_snapshot_message(message)?;
+        let session_dir = self.state_path.parent().ok_or_else(|| {
+            JournalError::InvalidState(format!(
+                "state path has no parent: {}",
+                self.state_path.display()
+            ))
+        })?;
+        let truncated_reason: String = sanitized.chars().take(64).collect();
+        let reason = format!("snapshot: {truncated_reason}");
+        let _lock = acquire_lock(session_dir, "jj-journal-snapshot", &reason).map_err(|err| {
+            JournalError::CommandFailed {
+                command: "acquire_lock(jj-journal-snapshot)".to_string(),
+                message: err.to_string(),
+            }
+        })?;
+
+        let current_state = self.read_state()?.unwrap_or_default();
+        let revision = revision_supplier(message)?;
+
+        if current_state.session_start_revision.is_none() {
+            self.write_state(&JournalState {
+                session_start_revision: Some(revision.clone()),
+            })?;
+        }
+
+        Ok(revision)
+    }
+
     #[cfg(test)]
     fn write_state_with_fault_injection(
         &self,
@@ -127,16 +163,7 @@ impl JjJournal {
 
 impl SnapshotJournal for JjJournal {
     fn snapshot(&self, message: &str) -> Result<RevisionId, JournalError> {
-        let revision = self.capture_snapshot_revision(message)?;
-        let current_state = self.read_state()?.unwrap_or_default();
-
-        if current_state.session_start_revision.is_none() {
-            self.write_state(&JournalState {
-                session_start_revision: Some(revision.clone()),
-            })?;
-        }
-
-        Ok(revision)
+        self.snapshot_with_revision_supplier(message, |msg| self.capture_snapshot_revision(msg))
     }
 
     fn session_start_revision(&self) -> Result<Option<RevisionId>, JournalError> {
@@ -170,20 +197,15 @@ fn sanitize_snapshot_message(message: &str) -> Result<String, JournalError> {
     Ok(bounded)
 }
 
-fn derive_state_path(project_root: &Path) -> PathBuf {
-    if let Some(session_dir) = std::env::var_os(SESSION_DIR_ENV) {
-        return PathBuf::from(session_dir).join(STATE_FILE_NAME);
-    }
-
-    let digest = Sha256::digest(project_root.as_os_str().as_encoded_bytes());
-    let hash = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    std::env::temp_dir()
-        .join("csa-jj-journal")
-        .join(hash)
-        .join(STATE_FILE_NAME)
+fn derive_state_path() -> Result<PathBuf, JournalError> {
+    std::env::var_os(SESSION_DIR_ENV)
+        .map(|session_dir| PathBuf::from(session_dir).join(STATE_FILE_NAME))
+        .ok_or_else(|| {
+            JournalError::Unavailable(
+                "CSA_SESSION_DIR not set; sidecar jj snapshot journal requires CSA session context"
+                    .to_string(),
+            )
+        })
 }
 
 fn temp_state_path(path: &Path) -> Result<PathBuf, JournalError> {
@@ -233,6 +255,8 @@ mod tests {
     use crate::test_env::TEST_ENV_LOCK;
     use csa_core::vcs::SnapshotJournal;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::tempdir;
 
     fn make_fake_jj(bin_dir: &Path, script_body: &str) -> PathBuf {
@@ -257,6 +281,67 @@ mod tests {
             // SAFETY: guarded by TEST_ENV_LOCK; see set_path_for_test().
             None => unsafe { std::env::remove_var("PATH") },
         }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_os(key: &'static str, value: &Path) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: test-scoped env mutation is guarded by TEST_ENV_LOCK.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: test-scoped env mutation is guarded by TEST_ENV_LOCK.
+            unsafe { std::env::remove_var(key) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                // SAFETY: test-scoped env restoration is guarded by TEST_ENV_LOCK.
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                // SAFETY: test-scoped env restoration is guarded by TEST_ENV_LOCK.
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn new_fails_when_session_dir_missing() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+        let _session_dir = EnvVarGuard::unset(SESSION_DIR_ENV);
+        let repo = tempdir().expect("repo tempdir");
+
+        let error = JjJournal::new(repo.path()).expect_err("new should fail without session dir");
+
+        assert_eq!(
+            error,
+            JournalError::Unavailable(
+                "CSA_SESSION_DIR not set; sidecar jj snapshot journal requires CSA session context"
+                    .to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn new_succeeds_when_session_dir_set() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+        let session_dir = tempdir().expect("session tempdir");
+        let _session_dir = EnvVarGuard::set_os(SESSION_DIR_ENV, session_dir.path());
+        let repo = tempdir().expect("repo tempdir");
+
+        let journal = JjJournal::new(repo.path()).expect("new should succeed");
+
+        assert_eq!(journal.state_path, session_dir.path().join(STATE_FILE_NAME),);
     }
 
     #[test]
@@ -378,6 +463,55 @@ mod tests {
         assert!(
             temp_state_path(&state_path).expect("tmp path").exists(),
             "temporary file should remain for crash observability"
+        );
+    }
+
+    #[test]
+    fn concurrent_snapshot_rejected_by_lock() {
+        let repo = tempdir().expect("repo tempdir");
+        let session_dir = tempdir().expect("session tempdir");
+        let journal = Arc::new(JjJournal::with_state_path(
+            repo.path(),
+            session_dir.path().join(STATE_FILE_NAME),
+        ));
+        let entered_lock = Arc::new(Barrier::new(2));
+        let release_lock = Arc::new(Barrier::new(2));
+
+        let first_journal = Arc::clone(&journal);
+        let first_entered = Arc::clone(&entered_lock);
+        let first_release = Arc::clone(&release_lock);
+        let first = thread::spawn(move || {
+            first_journal.snapshot_with_revision_supplier("first snapshot", |_| {
+                first_entered.wait();
+                first_release.wait();
+                Ok(RevisionId::from("rev-first"))
+            })
+        });
+
+        entered_lock.wait();
+
+        let error = journal
+            .snapshot_with_revision_supplier("second snapshot", |_| Ok(RevisionId::from("rev-2")))
+            .expect_err("second snapshot should fail on lock contention");
+
+        assert!(matches!(
+            error,
+            JournalError::CommandFailed { ref command, .. }
+                if command == "acquire_lock(jj-journal-snapshot)"
+        ));
+
+        release_lock.wait();
+
+        let first_revision = first
+            .join()
+            .expect("first snapshot thread should not panic")
+            .expect("first snapshot should succeed");
+        assert_eq!(first_revision, RevisionId::from("rev-first"));
+        assert_eq!(
+            journal
+                .session_start_revision()
+                .expect("state read should succeed"),
+            Some(RevisionId::from("rev-first"))
         );
     }
 }
