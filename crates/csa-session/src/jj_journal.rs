@@ -129,6 +129,8 @@ impl JjJournal {
         let output = self.run_jj([
             "op",
             "log",
+            "--ignore-working-copy",
+            "--at-op=@",
             "--no-graph",
             "-l",
             "1",
@@ -138,7 +140,7 @@ impl JjJournal {
         let op_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if op_id.is_empty() {
             return Err(JournalError::CommandFailed {
-                command: "jj op log --no-graph -l 1 -T self.id().short(12)".to_string(),
+                command: "jj op log --ignore-working-copy --at-op=@ --no-graph -l 1 -T self.id().short(12)".to_string(),
                 message: "operation id was empty".to_string(),
             });
         }
@@ -458,7 +460,7 @@ mod tests {
         assert!(matches!(
             error,
             JournalError::CommandFailed { ref command, ref message }
-                if command == "jj --no-pager --color=never op log --no-graph -l 1 -T self.id().short(12)"
+                if command == "jj --no-pager --color=never op log --ignore-working-copy --at-op=@ --no-graph -l 1 -T self.id().short(12)"
                     && message.contains("mock jj unavailable")
         ));
         assert!(
@@ -661,6 +663,66 @@ mod tests {
                 .session_start_revision()
                 .expect("state read should succeed"),
             Some(RevisionId::from("rev-a"))
+        );
+    }
+
+    #[test]
+    fn read_only_operation_check_does_not_report_working_copy_snapshot_as_drift() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+        let repo = tempdir().expect("repo tempdir");
+        let bin_dir = tempdir().expect("bin tempdir");
+        let mutating_op_file = repo.path().join("mutating-op");
+        fs::write(&mutating_op_file, "op-a").expect("write initial op");
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$3\" = \"op\" ]; then\n\
+               has_ignore=0\n\
+               has_at_op=0\n\
+               for arg in \"$@\"; do\n\
+                 if [ \"$arg\" = \"--ignore-working-copy\" ]; then\n\
+                   has_ignore=1\n\
+                 fi\n\
+                 if [ \"$arg\" = \"--at-op=@\" ]; then\n\
+                   has_at_op=1\n\
+                 fi\n\
+               done\n\
+               if [ \"$has_ignore\" = \"1\" ] && [ \"$has_at_op\" = \"1\" ]; then\n\
+                 printf 'op-a\\n'\n\
+               else\n\
+                 cat \"{}\"\n\
+                 printf '\\n'\n\
+               fi\n\
+               exit 0\n\
+             fi\n\
+             printf 'ok\\n'\n",
+            mutating_op_file.display()
+        );
+        make_fake_jj(bin_dir.path(), &script);
+        let _path_guard = PathGuard::prepend(bin_dir.path());
+        let journal = JjJournal::with_state_path(
+            repo.path(),
+            repo.path().join("state").join(STATE_FILE_NAME),
+        );
+
+        let first = journal
+            .snapshot_with_revision_supplier("first", |_| Ok(RevisionId::from("rev-a")))
+            .expect("first snapshot should record lineage");
+        assert_eq!(first, RevisionId::from("rev-a"));
+
+        fs::write(&mutating_op_file, "op-b")
+            .expect("simulate jj auto-snapshot after working-copy edit");
+        let second = journal
+            .snapshot_with_revision_supplier("second", |_| Ok(RevisionId::from("rev-b")))
+            .expect("read-only op check must not report working-copy snapshot as drift");
+
+        assert_eq!(second, RevisionId::from("rev-b"));
+        assert_eq!(
+            journal
+                .read_state()
+                .expect("state read should succeed")
+                .expect("state should be persisted")
+                .last_operation_id,
+            Some("op-a".to_string())
         );
     }
 }
