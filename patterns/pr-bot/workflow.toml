@@ -671,8 +671,13 @@ find_branch_pr() {
       --state open \
       --head "${WORKFLOW_BRANCH}" \
       --json number,headRefName,headRepositoryOwner \
-      --jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\" and .headRepositoryOwner.login == \"${SOURCE_OWNER}\") | .number" \
-      2>/dev/null || true
+      2>/dev/null \
+    | jq -r \
+        --arg branch "${WORKFLOW_BRANCH}" \
+        --arg owner "${SOURCE_OWNER}" \
+        '.[] | select(.headRefName == $branch and .headRepositoryOwner.login == $owner) | .number' \
+      2>/dev/null \
+      || true
   )"
   count="$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
   if [ "${count}" = "1" ]; then

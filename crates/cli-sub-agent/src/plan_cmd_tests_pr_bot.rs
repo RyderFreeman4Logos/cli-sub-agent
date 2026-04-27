@@ -225,9 +225,19 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
         "Step 5 must not pass owner-qualified syntax to gh pr list --head"
     );
     assert!(
-        find_branch_pr.contains(r#".headRefName == \"${WORKFLOW_BRANCH}\""#)
-            && find_branch_pr.contains(r#".headRepositoryOwner.login == \"${SOURCE_OWNER}\""#),
-        "Step 5 jq filter must strictly match both head branch and head owner"
+        find_branch_pr.contains("jq -r")
+            && find_branch_pr.contains(r#"--arg branch "${WORKFLOW_BRANCH}""#)
+            && find_branch_pr.contains(r#"--arg owner "${SOURCE_OWNER}""#),
+        "Step 5 jq filter must bind head branch and owner as jq data"
+    );
+    assert!(
+        find_branch_pr.contains(".headRefName == $branch")
+            && find_branch_pr.contains(".headRepositoryOwner.login == $owner"),
+        "Step 5 jq filter must strictly match both bound head branch and head owner"
+    );
+    assert!(
+        !find_branch_pr.contains(r#"--jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\""#),
+        "Step 5 must not interpolate WORKFLOW_BRANCH into jq source"
     );
     assert!(
         step5.contains("headRepositoryOwner.login == "),

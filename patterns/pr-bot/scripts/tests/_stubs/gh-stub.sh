@@ -38,7 +38,6 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   head_arg="$(arg_value "--head" "$@")"
   base_arg="$(arg_value "--base" "$@")"
   json_arg="$(arg_value "--json" "$@")"
-  jq_arg="$(arg_value "--jq" "$@")"
   if [ "${head_arg}" != "${expected_list_head}" ]; then
     echo "unexpected --head: ${head_arg}" >&2
     exit 1
@@ -49,10 +48,6 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   fi
   if [ "${json_arg}" != "number,headRefName,headRepositoryOwner" ]; then
     echo "unexpected --json: ${json_arg}" >&2
-    exit 1
-  fi
-  if [ -z "${jq_arg}" ]; then
-    echo "missing --jq" >&2
     exit 1
   fi
 
@@ -85,11 +80,14 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
         printf '[{"number":606,"headRefName":"fix/1171","headRepositoryOwner":{"login":"other-owner"}}]\n'
       fi
       ;;
+    quoted-branch)
+      printf '[{"number":707,"headRefName":"feat/has\\"quote","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      ;;
     *)
       echo "unknown GH_STUB_SCENARIO: ${scenario}" >&2
       exit 1
       ;;
-  esac | jq -r "${jq_arg}"
+  esac
   exit 0
 fi
 
@@ -113,7 +111,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
       echo "a pull request for branch \"test-owner:fix/1171\" into branch \"main\" already exists" >&2
       exit 1
       ;;
-    preexisting|ambiguous)
+    preexisting|ambiguous|quoted-branch)
       echo "gh pr create should not be called for scenario ${scenario}" >&2
       exit 1
       ;;

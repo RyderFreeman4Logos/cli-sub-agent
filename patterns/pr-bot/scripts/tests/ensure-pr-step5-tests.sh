@@ -8,6 +8,11 @@ STUB_DIR="${ROOT_DIR}/patterns/pr-bot/scripts/tests/_stubs"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ensure-pr Step 5 tests: SKIP (jq is required for client-side PR lookup filtering)" >&2
+  exit 0
+fi
+
 extract_step5_script() {
   local output_path="$1"
   awk '
@@ -40,6 +45,9 @@ run_case() {
   local expected_pr="$5"
   local expected_creates="$6"
   local expected_error="${7:-}"
+  local workflow_branch="${8:-fix/1171}"
+  local expected_list_head="${9:-${workflow_branch}}"
+  local expected_create_head="${10:-test-owner:${workflow_branch}}"
   local case_dir="${TMP_ROOT}/${case_name}"
   local bin_dir="${case_dir}/bin"
   local stdout_file="${case_dir}/stdout.txt"
@@ -60,12 +68,12 @@ run_case() {
     GIT_STUB_SOURCE_OWNER="test-owner" \
     GH_STUB_STATE_DIR="${case_dir}" \
     GH_STUB_SCENARIO="${scenario}" \
-    GH_STUB_EXPECTED_LIST_HEAD="fix/1171" \
-    GH_STUB_EXPECTED_CREATE_HEAD="test-owner:fix/1171" \
+    GH_STUB_EXPECTED_LIST_HEAD="${expected_list_head}" \
+    GH_STUB_EXPECTED_CREATE_HEAD="${expected_create_head}" \
     GH_STUB_EXPECTED_BASE="main" \
     REVIEW_COMPLETED="true" \
     REMOTE_NAME="origin" \
-    WORKFLOW_BRANCH="fix/1171" \
+    WORKFLOW_BRANCH="${workflow_branch}" \
     REPO_SLUG="test-owner/test-repo" \
     DEFAULT_BRANCH="main" \
     PR_TITLE="Fix 1171" \
@@ -101,5 +109,6 @@ run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0"
 run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
 run_case "create-already-exists-reresolve" "true" "missed-already-exists" "0" "303" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple open PRs found for test-owner:fix/1171"
+run_case "quoted-branch-reuse" "true" "quoted-branch" "0" "707" "0" "" 'feat/has"quote'
 
 echo "ensure-pr Step 5 tests: PASS"
