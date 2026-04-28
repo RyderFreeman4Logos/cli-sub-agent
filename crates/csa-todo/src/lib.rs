@@ -25,11 +25,14 @@ use std::path::{Path, PathBuf};
 const METADATA_FILE: &str = "metadata.toml";
 const TODO_MD_FILE: &str = "TODO.md";
 const SPEC_FILE: &str = "spec.toml";
+const EPIC_PLAN_FILE: &str = "epic-plan.toml";
 const LOCK_FILE: &str = ".lock";
 
+pub use epic_plan::{EpicMeta, EpicPlan, ScaleSignals, Story, StoryStatus};
 pub use reference::{ReferenceFile, ReferenceIndex, ReferenceSource};
 pub use spec::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 
+pub mod epic_plan;
 pub mod reference;
 mod spec;
 
@@ -276,6 +279,11 @@ impl TodoManager {
         self.todos_dir.join(timestamp).join(SPEC_FILE)
     }
 
+    /// Return the path to epic-plan.toml for the given plan timestamp.
+    pub fn epic_plan_path(&self, timestamp: &str) -> PathBuf {
+        self.todos_dir.join(timestamp).join(EPIC_PLAN_FILE)
+    }
+
     /// Load spec.toml for a plan when it exists.
     pub fn load_spec(&self, timestamp: &str) -> Result<Option<SpecDocument>> {
         validate_timestamp(timestamp)?;
@@ -290,6 +298,22 @@ impl TodoManager {
         let spec: SpecDocument = toml::from_str(&content)
             .with_context(|| format!("Failed to parse spec: {}", spec_path.display()))?;
         Ok(Some(spec))
+    }
+
+    /// Load epic-plan.toml for a plan when it exists.
+    pub fn load_epic_plan(&self, timestamp: &str) -> Result<Option<EpicPlan>> {
+        validate_timestamp(timestamp)?;
+
+        let epic_plan_path = self.epic_plan_path(timestamp);
+        if !epic_plan_path.exists() {
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(&epic_plan_path)
+            .with_context(|| format!("Failed to read epic plan: {}", epic_plan_path.display()))?;
+        let epic_plan: EpicPlan = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse epic plan: {}", epic_plan_path.display()))?;
+        Ok(Some(epic_plan))
     }
 
     /// Save spec.toml for an existing TODO plan.

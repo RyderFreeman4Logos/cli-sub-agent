@@ -15,6 +15,52 @@ pub struct DependencyGraph {
 }
 
 impl DependencyGraph {
+    pub fn from_nodes_and_edges(
+        nodes: Vec<DependencyNode>,
+        edge_pairs: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Result<Self> {
+        Self::try_from_nodes_and_edges(nodes, edge_pairs)
+    }
+
+    pub(crate) fn from_trusted_nodes_and_edges(
+        nodes: Vec<DependencyNode>,
+        edge_pairs: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Self {
+        match Self::try_from_nodes_and_edges(nodes, edge_pairs) {
+            Ok(graph) => graph,
+            Err(error) => panic!("trusted dependency graph edge indexes are invalid: {error}"),
+        }
+    }
+
+    fn try_from_nodes_and_edges(
+        nodes: Vec<DependencyNode>,
+        edge_pairs: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Result<Self> {
+        let mut edge_set: BTreeSet<(usize, usize)> = BTreeSet::new();
+        for (from, to) in edge_pairs {
+            if from >= nodes.len() || to >= nodes.len() {
+                bail!(
+                    "Dependency edge index out of bounds: {from} -> {to} for {} nodes",
+                    nodes.len()
+                );
+            }
+            edge_set.insert((from, to));
+        }
+
+        let mut edges = vec![Vec::new(); nodes.len()];
+        let mut incoming = vec![Vec::new(); nodes.len()];
+        for (from, to) in edge_set {
+            edges[from].push(to);
+            incoming[to].push(from);
+        }
+
+        Ok(Self {
+            nodes,
+            edges,
+            incoming,
+        })
+    }
+
     /// Build a dependency graph from TODO markdown content.
     ///
     /// Supported dependency formats:

@@ -287,3 +287,60 @@ fn test_save_spec_requires_existing_plan() {
 
     assert!(result.is_err());
 }
+
+// -- epic-plan.toml support ----------------------------------------------
+
+fn sample_epic_plan() -> EpicPlan {
+    EpicPlan {
+        schema_version: 1,
+        epic: EpicMeta {
+            name: "Epic decomposition".to_string(),
+            prefix: "feat/epic".to_string(),
+            summary: "Validate epic-plan persistence.".to_string(),
+        },
+        stories: vec![Story {
+            id: "phase-1a".to_string(),
+            branch: "feat/epic/phase-1a".to_string(),
+            depends_on: Vec::new(),
+            summary: "First story.".to_string(),
+            status: StoryStatus::Pending,
+        }],
+    }
+}
+
+#[test]
+fn test_epic_plan_path_points_to_epic_plan_toml() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let path = manager.epic_plan_path("20260211T023000");
+    assert_eq!(
+        path,
+        dir.path().join("20260211T023000").join("epic-plan.toml")
+    );
+}
+
+#[test]
+fn test_load_epic_plan_returns_none_when_missing() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+    let plan = manager.create("Epic Missing", None).unwrap();
+
+    let epic_plan = manager.load_epic_plan(&plan.timestamp).unwrap();
+
+    assert!(epic_plan.is_none());
+}
+
+#[test]
+fn test_load_epic_plan_roundtrip() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+    let plan = manager.create("Epic Roundtrip", None).unwrap();
+    let epic_plan = sample_epic_plan();
+    let content = toml::to_string_pretty(&epic_plan).unwrap();
+
+    std::fs::write(manager.epic_plan_path(&plan.timestamp), content).unwrap();
+    let loaded = manager.load_epic_plan(&plan.timestamp).unwrap();
+
+    assert_eq!(loaded, Some(epic_plan));
+}
