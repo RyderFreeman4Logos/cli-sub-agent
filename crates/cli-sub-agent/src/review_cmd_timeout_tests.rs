@@ -14,9 +14,8 @@ fn review_initial_response_timeout_is_resolved_per_reviewer_tool() {
     cfg.resources.initial_response_timeout_seconds = None;
 
     let gemini_timeout =
-        resolve_review_initial_response_timeout_seconds(Some(&cfg), None, None, "gemini-cli");
-    let codex_timeout =
-        resolve_review_initial_response_timeout_seconds(Some(&cfg), None, None, "codex");
+        resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "gemini-cli");
+    let codex_timeout = resolve_initial_response_timeout_for_tool(Some(&cfg), None, None, "codex");
 
     assert_eq!(
         gemini_timeout,

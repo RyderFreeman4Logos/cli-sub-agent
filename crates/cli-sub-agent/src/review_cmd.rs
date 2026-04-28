@@ -1,7 +1,5 @@
 use crate::cli::ReviewArgs;
 use crate::pipeline::resolve_initial_response_timeout_for_tool;
-#[cfg(test)]
-use crate::pipeline::resolve_initial_response_timeout_for_tool as resolve_review_initial_response_timeout_seconds;
 use crate::review_consensus::{
     CLEAN, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
     consensus_verdict, parse_consensus_strategy, resolve_consensus,
