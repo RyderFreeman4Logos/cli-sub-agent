@@ -34,6 +34,12 @@ impl std::fmt::Display for ReviewMode {
         .multiple(false)
 ))]
 pub struct ReviewArgs {
+    /// Check that the current branch HEAD has a passing full-diff review verdict.
+    ///
+    /// This is a fast, read-only state lookup used by git hooks and PR workflows.
+    #[arg(long)]
+    pub check_verdict: bool,
+
     /// Tool to use for review (defaults to global [review] config or project fallback).
     /// Combine with --tier to use that tier's model/thinking for the selected tool.
     /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
@@ -287,7 +293,9 @@ pub fn validate_command_args(
         }
         Commands::Review(args) => {
             validate_review_args(args)?;
-            validate_timeout(args.timeout, min_timeout)?;
+            if !args.check_verdict {
+                validate_timeout(args.timeout, min_timeout)?;
+            }
         }
         Commands::Debate(args) => {
             validate_timeout(args.timeout, min_timeout)?;

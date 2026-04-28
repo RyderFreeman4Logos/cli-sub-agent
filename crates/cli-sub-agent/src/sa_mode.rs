@@ -22,6 +22,7 @@ fn command_name_for_sa_mode(command: &Commands) -> Option<&'static str> {
 pub(crate) fn command_sa_mode_arg(command: &Commands) -> Option<Option<bool>> {
     match command {
         Commands::Run { sa_mode, .. } => Some(*sa_mode),
+        Commands::Review(args) if args.check_verdict => None,
         Commands::Review(args) => Some(args.sa_mode),
         Commands::Debate(args) => Some(args.sa_mode),
         Commands::Batch { sa_mode, .. } => Some(*sa_mode),

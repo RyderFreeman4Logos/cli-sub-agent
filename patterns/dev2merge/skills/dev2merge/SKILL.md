@@ -36,7 +36,7 @@ Every stage has hard gates (`on_fail = "abort"`) — no step can be skipped by t
 
 Pipeline: Branch Validation → FAST_PATH Detection → L1/L2 Quality Gates →
 (FAST_PATH: commit → bump → review) or (Full: mktd → mktsk [direct, TaskCreate] → bump → cumulative review) →
-Push Gate → PR Creation → pr-bot Hard Gate → Post-Merge Sync.
+Push Gate → Pre-PR Verdict Check → PR Creation → pr-bot Hard Gate → Post-Merge Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -70,7 +70,7 @@ ABSOLUTE PROHIBITION (#1122): Squash-merge primitives are FORBIDDEN at every lev
 - GitHub Web UI "Squash and merge" button
 - ANY `--squash` flag passed to a merge command
 
-dev2merge delegates the actual merge to pr-bot (Step 14). pr-bot reads `pr_review.merge_strategy` from config (default `merge`). If a normal `gh pr merge --merge` fails (e.g. lefthook re-stage race producing an empty-diff PR, or upstream advancing during the wait), DO NOT escalate to `--squash`. Surface `merge_blocked` (or the structural variant `merge_blocked_empty_diff`) to the orchestrator.
+dev2merge delegates the actual merge to pr-bot (Step 15). pr-bot reads `pr_review.merge_strategy` from config (default `merge`). If a normal `gh pr merge --merge` fails (e.g. lefthook re-stage race producing an empty-diff PR, or upstream advancing during the wait), DO NOT escalate to `--squash`. Surface `merge_blocked` (or the structural variant `merge_blocked_empty_diff`) to the orchestrator.
 
 EMPTY-DIFF GUARD: Before any merge, verify `gh pr diff <PR>` is non-empty. An empty-diff PR is the structural fingerprint of the lefthook-race scenario in #1122 -- the branch tip drifted, the PR body still references the intended fix, but the actual diff vs main is empty. Aborting at the empty-diff signal is the correct behavior. Squash-merging an empty-diff PR produces an empty squash commit on main and corrupts the audit trail; this is the exact bug #1122 documents.
 
@@ -156,17 +156,20 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 7 | Plan with mktd | `csa plan run patterns/mktd/workflow.toml` | bash |
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly (TaskCreate/TaskUpdate) | main agent |
 | 9 | Version Bump | `just bump-patch` if needed | bash |
-| 10 | Cumulative Review | `csa review --range main...HEAD` | bash |
+| 10 | Self-Review Gate | Main agent checks and fixes the full branch diff before CSA review | main agent |
+| 11 | Pre-PR Cumulative Review Gate | `csa review --range main...HEAD` | bash |
 | **ENDIF** | | | |
-| 11 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
-| 12 | Create or Reuse PR | `gh pr create` or reuse existing, outputs `PR_NUMBER`/`PR_URL` | bash |
-| 13 | pr-bot Hard Gate | **MANDATORY** — runs pr-bot (review + merge) | bash |
-| 14 | Post-Merge Sync | Verifies PR MERGED, then `git checkout main && git merge --ff-only` | bash |
+| 12 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
+| 13 | Pre-PR Review Verdict Check | `csa review --check-verdict` requires PASS/CLEAN for `main...HEAD` | bash |
+| 14 | Create or Reuse PR | `gh pr create` or reuse existing, outputs `PR_NUMBER`/`PR_URL` | bash |
+| 15 | pr-bot Hard Gate | **MANDATORY** — runs pr-bot (review + merge) | bash |
+| 16 | Post-Merge Sync | Verifies PR MERGED, then `git checkout main && git merge --ff-only` | bash |
 
-Steps 12-14 form the PR transaction. Step 12 creates the PR, Step 13 is a **hard gate**
-that runs pr-bot (which performs cloud review and the actual merge). Step 14
+Steps 13-16 form the PR transaction. Step 13 verifies the pre-PR review verdict
+before any PR can be created. Step 14 creates the PR, Step 15 is a **hard gate**
+that runs pr-bot (which performs cloud review and the actual merge). Step 16
 verifies the PR reached MERGED state before syncing — this is defense in depth against
-a skipped Step 13. Marker files provide idempotency in Step 13.
+a skipped Step 15. Marker files provide idempotency in Step 15.
 
 ### FAST_PATH Heuristic
 
@@ -209,8 +212,9 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 6. Version bumped if needed.
 7. Pre-PR cumulative review passed (`REVIEW_COMPLETED=true`).
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
-9. PR created or reused on GitHub targeting main, `PR_NUMBER` and `PR_URL` resolved.
-10. pr-bot hard gate completed: either triggered `pr-bot` or detected an already-completed run for the same PR/HEAD.
-11. PR state verified as MERGED (defense in depth against skipped Step 13).
-12. Local main synced: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
-13. Feature branch cleaned up.
+9. Pre-PR review verdict check passed (`csa review --check-verdict`).
+10. PR created or reused on GitHub targeting main, `PR_NUMBER` and `PR_URL` resolved.
+11. pr-bot hard gate completed: either triggered `pr-bot` or detected an already-completed run for the same PR/HEAD.
+12. PR state verified as MERGED (defense in depth against skipped Step 15).
+13. Local main synced: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
+14. Feature branch cleaned up.

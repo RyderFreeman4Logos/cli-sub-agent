@@ -408,6 +408,7 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 
 fn default_review_args() -> ReviewArgs {
     ReviewArgs {
+        check_verdict: false,
         tool: None,
         sa_mode: None,
         session: None,

@@ -13,13 +13,13 @@ hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
 mktsk N*(implement → commit) → Self-Review Gate → Pre-PR Cumulative Review → Push →
-PR Creation → **pr-bot Hard Gate** → Post-Merge Sync.
+Pre-PR Verdict Check → PR Creation → **pr-bot Hard Gate** → Post-Merge Sync.
 
-**CRITICAL PIPELINE INVARIANT**: PR creation (Step 13) and pr-bot (Step 14) are
+**CRITICAL PIPELINE INVARIANT**: PR creation (Step 14) and pr-bot (Step 15) are
 **two separate hard gates**. Creating a PR does NOT complete the pipeline. You
-MUST run pr-bot (Step 14) after PR creation. NEVER skip Step 14. NEVER merge
+MUST run pr-bot (Step 15) after PR creation. NEVER skip Step 15. NEVER merge
 the PR manually or via `gh pr merge`. The pr-bot workflow handles the merge.
-Agents that stop after Step 13 leave the PR unmerged — this is a known failure
+Agents that stop after Step 14 leave the PR unmerged — this is a known failure
 mode that this invariant exists to prevent.
 
 ### ABSOLUTE PROHIBITIONS
@@ -67,7 +67,7 @@ when seen, surface `merge_blocked_empty_diff` instead of pushing through.
 Squash-merging an empty-diff PR produces an empty squash commit on main;
 this is the exact corruption #1122 documents.
 
-dev2merge delegates merging to pr-bot (Step 14), which reads
+dev2merge delegates merging to pr-bot (Step 15), which reads
 `pr_review.merge_strategy` from config (default `merge`). Even if a normal
 `--merge` fails, DO NOT escalate to `--squash`. Surface `merge_blocked` to
 the orchestrator.
@@ -423,17 +423,32 @@ if [ "${DIFF_LINES}" -eq 0 ]; then
 fi
 git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
-echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 13)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="verify review verdict (Step 13)" required=true -->'
 ```
 
-## Step 13: Create or Reuse Pull Request
+## Step 13: Pre-PR Review Verdict Check
+
+Tool: bash
+OnFail: abort
+
+Hard gate before PR creation: the current branch HEAD must have a PASS/CLEAN
+review verdict for the full cumulative diff (`main...HEAD`).
+
+```bash
+set -euo pipefail
+csa review --check-verdict
+echo "CSA_VAR:REVIEW_VERDICT_CHECKED=true"
+echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 14)" required=true -->'
+```
+
+## Step 14: Create or Reuse Pull Request
 
 Tool: bash
 OnFail: abort
 
 Create or reuse a PR for the current branch. Outputs PR_NUMBER and PR_URL
 as CSA_VARs for the next step. This step does NOT trigger pr-bot —
-that is a separate hard gate in Step 14.
+that is a separate hard gate in Step 15.
 
 ```bash
 set -euo pipefail
@@ -484,17 +499,17 @@ fi
 echo "PR #${PR_NUMBER} resolved: ${PR_URL}"
 echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
 echo "CSA_VAR:PR_URL=${PR_URL}"
-echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml (Step 14)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml (Step 15)" required=true -->'
 ```
 
-## Step 14: pr-bot Review & Merge Gate (HARD GATE)
+## Step 15: pr-bot Review & Merge Gate (HARD GATE)
 
 Tool: bash
 OnFail: abort
 
 **MANDATORY**: This step MUST NOT be skipped. It runs pr-bot which performs
 cloud review (if enabled) and the actual merge. Without this step completing
-successfully, the PR remains unmerged and Step 15 will fail.
+successfully, the PR remains unmerged and Step 16 will fail.
 
 Uses marker files for idempotency: skips if pr-bot already completed for
 the same PR/HEAD combination.
@@ -502,7 +517,7 @@ the same PR/HEAD combination.
 ```bash
 set -euo pipefail
 if [ -z "${PR_NUMBER:-}" ]; then
-  echo "ERROR: PR_NUMBER not set — Step 13 must run first." >&2
+  echo "ERROR: PR_NUMBER not set — Step 14 must run first." >&2
   exit 1
 fi
 HEAD_SHA="$(git rev-parse --verify HEAD)"
@@ -530,7 +545,7 @@ trap cleanup_lock EXIT
 if [ -f "${DONE_MARKER}" ]; then
   echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
   echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 15)" required=true -->'
+  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 16)" required=true -->'
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
   echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
@@ -542,7 +557,7 @@ else
   if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
     touch "${DONE_MARKER}"
     echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 15)" required=true -->'
+    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 16)" required=true -->'
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
   else
@@ -552,7 +567,7 @@ else
 fi
 ```
 
-## Step 15: Post-Merge Local Sync
+## Step 16: Post-Merge Local Sync
 
 Tool: bash
 OnFail: abort
@@ -562,17 +577,17 @@ by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
 ```bash
 set -euo pipefail
-# NOTE: PR_NUMBER comes from Step 13 (gh pr view/list). In fork workflows,
+# NOTE: PR_NUMBER comes from Step 14 (gh pr view/list). In fork workflows,
 # pr-bot may resolve a different PR via owner-aware lookup. For single-repo
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   # --- Deterministic gate: verify pr-bot completion marker ---
-  # Prefer exact marker path from Step 14 (CSA_VAR:PR_BOT_DONE_MARKER).
+  # Prefer exact marker path from Step 15 (CSA_VAR:PR_BOT_DONE_MARKER).
   # Fall back to repo-scoped glob if variable is unset (backwards compat).
   if [ -n "${PR_BOT_DONE_MARKER:-}" ]; then
     if [ ! -f "${PR_BOT_DONE_MARKER}" ]; then
       echo "ERROR: pr-bot marker not found: ${PR_BOT_DONE_MARKER}" >&2
-      echo "Step 14 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Step 15 (pr-bot) must complete successfully before post-merge sync." >&2
       exit 1
     fi
     echo "pr-bot completion marker verified (exact): ${PR_BOT_DONE_MARKER}"
@@ -588,7 +603,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
     MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
     if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
       echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
-      echo "Step 14 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Step 15 (pr-bot) must complete successfully before post-merge sync." >&2
       echo "Marker directory: ${MARKER_DIR}" >&2
       exit 1
     fi
