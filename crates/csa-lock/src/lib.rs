@@ -232,14 +232,15 @@ pub fn acquire_project_resource_lock(
         anyhow::bail!("tool name cannot be empty");
     }
 
-    let canonical = fs::canonicalize(project_root)
-        .or_else(|_| std::path::absolute(project_root))
-        .with_context(|| {
-            format!(
-                "could not resolve project root to absolute path: {}",
-                project_root.display()
-            )
-        })?;
+    let canonical = fs::canonicalize(project_root).with_context(|| {
+        format!(
+            "csa-lock: failed to canonicalize project root '{}' \
+             (cross-session lock coordination requires a stable canonical path); \
+             ensure the path exists and is readable, and check sandbox config \
+             (.csa/config.toml [filesystem_sandbox]) if running under bwrap/landlock",
+            project_root.display()
+        )
+    })?;
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_os_str().as_encoded_bytes());
     let digest = format!("{:x}", hasher.finalize());
@@ -540,6 +541,36 @@ mod tests {
         .to_string();
 
         assert!(err.contains("jj-journal:snapshot"));
+    }
+
+    #[test]
+    fn test_project_resource_lock_fails_when_project_root_cannot_canonicalize() {
+        let missing_project_root = tempdir()
+            .expect("project parent tempdir")
+            .path()
+            .join("missing-project");
+
+        let err = acquire_project_resource_lock(
+            &missing_project_root,
+            "jj-journal",
+            "snapshot",
+            "snapshot",
+        )
+        .expect_err("missing project root should fail closed")
+        .to_string();
+
+        assert!(
+            err.contains("csa-lock: failed to canonicalize project root"),
+            "missing canonicalize context: {err}"
+        );
+        assert!(
+            err.contains("cross-session lock coordination requires a stable canonical path"),
+            "missing coordination rationale: {err}"
+        );
+        assert!(
+            err.contains(".csa/config.toml [filesystem_sandbox]"),
+            "missing sandbox config hint: {err}"
+        );
     }
 
     #[test]
