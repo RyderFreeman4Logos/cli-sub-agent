@@ -11,7 +11,7 @@ use crate::review_context::resolve_review_context;
 use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
-use anyhow::{Context, Result};
+use anyhow::Result;
 #[cfg(test)]
 use csa_config::GlobalConfig;
 #[cfg(test)]
@@ -39,6 +39,10 @@ mod findings_toml;
 mod fix;
 #[path = "review_cmd_flow.rs"]
 mod flow;
+#[path = "review_cmd_multi.rs"]
+mod multi;
+#[path = "review_cmd_parent_artifacts.rs"]
+mod parent_artifacts;
 #[path = "review_cmd_post_review.rs"]
 mod post_review;
 #[path = "review_cmd_prior_rounds.rs"]
@@ -74,7 +78,6 @@ use resolve::{
     resolve_review_effective_tier, resolve_review_model, resolve_review_selection,
     resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
     review_scope_allows_auto_discovery, verify_review_skill_available,
-    write_multi_reviewer_consolidated_artifact,
 };
 use result_handling::{build_reviewer_outcome, resolve_single_review_result};
 #[rustfmt::skip]
@@ -581,6 +584,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &global_config,
     )?;
     let reviewer_tools = reviewer_pool.reviewer_tools;
+    let reviewer_tool_plan = reviewer_tools.clone();
     let tier_reviewer_specs = reviewer_pool.tier_reviewer_specs;
 
     let mut join_set = JoinSet::new();
@@ -662,35 +666,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         });
     }
 
-    let mut outcomes = Vec::with_capacity(reviewers);
-    let collect_future = async {
-        while let Some(joined) = join_set.join_next().await {
-            let outcome = joined.context("reviewer task join failure")??;
-            outcomes.push(outcome);
-        }
-        Ok::<_, anyhow::Error>(())
-    };
-
-    if let Some(timeout_secs) = args.timeout {
-        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), collect_future)
-            .await
-        {
-            Ok(inner) => inner?,
-            Err(_) => {
-                error!(
-                    timeout_secs = timeout_secs,
-                    "Multi-reviewer review aborted: wall-clock timeout exceeded"
-                );
-                anyhow::bail!(
-                    "Review aborted: --timeout {timeout_secs}s exceeded. \
-                     Increase --timeout for longer runs, or use --idle-timeout to kill only when output stalls."
-                );
-            }
-        }
-    } else {
-        collect_future.await?;
-    }
-    outcomes.sort_by_key(|o| o.reviewer_index);
+    let outcomes =
+        multi::collect_reviewer_outcomes(&mut join_set, &reviewer_tool_plan, args.timeout).await?;
 
     let review_iterations = outcomes
         .first()
@@ -731,13 +708,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         persist_review_findings_toml(&project_root, &review_meta);
     }
 
-    if let Err(err) = write_multi_reviewer_consolidated_artifact(reviewers) {
-        warn!(
-            error = %err,
-            "Failed to write consolidated multi-reviewer artifact (shadow mode; continuing)"
-        );
-    }
-
     let responses: Vec<AgentResponse> = outcomes
         .iter()
         .map(|o| AgentResponse {
@@ -749,8 +719,28 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .collect();
 
     let consensus_result = resolve_consensus(consensus_strategy, &responses);
-    let final_verdict = consensus_verdict(&consensus_result);
+    let all_reviewers_unavailable = !outcomes.is_empty()
+        && outcomes
+            .iter()
+            .all(|outcome| outcome.verdict == crate::review_consensus::UNAVAILABLE);
+    let final_verdict = if all_reviewers_unavailable {
+        crate::review_consensus::UNAVAILABLE
+    } else {
+        consensus_verdict(&consensus_result)
+    };
     let agreement = agreement_level(&consensus_result);
+
+    if let Err(err) = parent_artifacts::write_multi_reviewer_parent_artifacts(
+        reviewers,
+        &outcomes,
+        final_verdict,
+        all_reviewers_unavailable,
+    ) {
+        warn!(
+            error = %err,
+            "Failed to write parent multi-reviewer artifacts (continuing)"
+        );
+    }
 
     print_reviewer_outcomes(&outcomes);
 
