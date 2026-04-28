@@ -170,16 +170,13 @@ fn resolve_effective_min_timeout() -> u64 {
 fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
     // Only execution commands need upgraded weave patterns.
     // All management/read-only commands stay available even when weave is unhealthy.
-    matches!(
-        command,
-        Commands::Run { .. }
-            | Commands::Review(_)
-            | Commands::Debate(_)
-            | Commands::Batch { .. }
-            | Commands::Plan { .. }
-            | Commands::ClaudeSubAgent(_)
-            | Commands::McpServer
-    )
+    match command {
+        Commands::Run { .. } => true,
+        Commands::Review(args) => !args.check_verdict,
+        Commands::Debate(_) | Commands::Batch { .. } | Commands::Plan { .. } => true,
+        Commands::ClaudeSubAgent(_) | Commands::McpServer => true,
+        _ => false,
+    }
 }
 
 fn link_bug_class_pipeline() {
@@ -531,7 +528,7 @@ async fn run() -> Result<()> {
         Commands::Review(args) => {
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "review",
-                args.no_daemon,
+                args.no_daemon || args.check_verdict,
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),

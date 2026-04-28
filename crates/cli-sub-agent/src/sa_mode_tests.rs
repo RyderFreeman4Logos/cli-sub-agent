@@ -185,6 +185,14 @@ mod tests {
     }
 
     #[test]
+    fn validate_sa_mode_ignores_review_check_verdict() {
+        let cli = Cli::try_parse_from(["csa", "review", "--check-verdict"])
+            .expect("cli parse should pass");
+        let resolved = crate::validate_sa_mode(&cli.command, 0).expect("check-verdict should pass");
+        assert!(!resolved);
+    }
+
+    #[test]
     fn sa_mode_caller_guard_emits_at_root_depth_text_mode() {
         let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 0, true);
         assert!(
