@@ -607,8 +607,8 @@ LANG_ARGS=()
 if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
   LANG_ARGS+=("--language" "${RESOLVED_LANGUAGE}")
 fi
-TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
-TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
+TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}" | head -n1) || { echo "csa todo create failed" >&2; exit 1; }
+TODO_PATH=$(csa todo show -t "${TODO_TS}" --path | head -n1) || { echo "csa todo show failed" >&2; exit 1; }
 SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
 printf '%s\n' "${FINAL_TODO}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
