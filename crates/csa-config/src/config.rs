@@ -197,7 +197,7 @@ fn default_recursion_depth() -> u32 {
 
 pub use super::config_session::{
     DEFAULT_COOLDOWN_SECS, ExecutionConfig, HooksSection, PostExecGateConfig, RunConfig,
-    SessionConfig, VcsConfig,
+    SessionConfig, SnapshotTrigger, VcsConfig,
 };
 pub use super::config_tool::{
     ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions, TransportKind,

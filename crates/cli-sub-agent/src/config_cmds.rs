@@ -13,7 +13,7 @@ mod helpers;
 use helpers::{format_missing_key_message, format_toml_value, resolve_key, suggest_key_paths};
 #[path = "config_cmds_display.rs"]
 mod display;
-use display::{inject_resolved_tool_transports_json, inject_resolved_tool_transports_toml};
+use display::{build_execution_toml, build_project_display_json, build_project_display_toml};
 #[path = "config_cmds_set.rs"]
 mod set;
 pub(crate) use set::handle_config_set;
@@ -676,48 +676,6 @@ fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Va
     Ok(load_toml_root(path)?.and_then(|root| resolve_key(&root, key)))
 }
 
-fn build_execution_toml(execution: &csa_config::ExecutionConfig) -> toml::Value {
-    let mut table = toml::map::Map::new();
-    table.insert(
-        "min_timeout_seconds".to_string(),
-        toml::Value::Integer(execution.min_timeout_seconds as i64),
-    );
-    table.insert(
-        "auto_weave_upgrade".to_string(),
-        toml::Value::Boolean(execution.auto_weave_upgrade),
-    );
-    toml::Value::Table(table)
-}
-
-fn build_project_display_toml(config: &ProjectConfig) -> Result<toml::Value> {
-    let mut root = toml::Value::try_from(config.clone())?;
-    let root_table = root
-        .as_table_mut()
-        .expect("serialized project config should be a TOML table");
-    root_table.insert(
-        "execution".to_string(),
-        build_execution_toml(&config.execution),
-    );
-    inject_resolved_tool_transports_toml(root_table, config);
-    Ok(root)
-}
-
-fn build_project_display_json(config: &ProjectConfig) -> Result<serde_json::Value> {
-    let mut root = serde_json::to_value(config)?;
-    let root_object = root
-        .as_object_mut()
-        .expect("serialized project config should be a JSON object");
-    root_object.insert(
-        "execution".to_string(),
-        serde_json::json!({
-            "min_timeout_seconds": config.execution.min_timeout_seconds,
-            "auto_weave_upgrade": config.execution.auto_weave_upgrade,
-        }),
-    );
-    inject_resolved_tool_transports_json(root_object, config);
-    Ok(root)
-}
-
 fn build_global_display_toml(config: &GlobalConfig) -> Result<toml::Value> {
     let mut root = toml::Value::try_from(config.clone())?;
     root.as_table_mut()
@@ -780,6 +738,10 @@ mod tests;
 #[cfg(test)]
 #[path = "config_cmds_transport_display_tests.rs"]
 mod transport_display_tests;
+
+#[cfg(test)]
+#[path = "config_cmds_vcs_tests.rs"]
+mod vcs_tests;
 
 #[cfg(test)]
 #[path = "config_cmds_lookup_tests.rs"]

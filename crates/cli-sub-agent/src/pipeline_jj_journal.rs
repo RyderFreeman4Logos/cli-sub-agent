@@ -6,8 +6,6 @@ use csa_core::vcs::{JournalError, RevisionId, SnapshotJournal};
 use csa_session::JjJournal;
 use tracing::{info, warn};
 
-pub(crate) const AUTO_SNAPSHOT_ENV: &str = "CSA_VCS_AUTO_SNAPSHOT";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PostRunJjSnapshotOutcome {
     ConfigOff,
@@ -19,6 +17,7 @@ pub(crate) enum PostRunJjSnapshotOutcome {
 }
 
 pub(crate) fn maybe_record_post_run_snapshot(
+    config: Option<&csa_config::VcsConfig>,
     project_root: &Path,
     session_dir: &Path,
     session_id: &str,
@@ -27,6 +26,7 @@ pub(crate) fn maybe_record_post_run_snapshot(
     result: &mut csa_process::ExecutionResult,
 ) -> PostRunJjSnapshotOutcome {
     let outcome = evaluate_post_run_snapshot(
+        config,
         project_root,
         session_dir,
         session_id,
@@ -35,7 +35,7 @@ pub(crate) fn maybe_record_post_run_snapshot(
     );
     match &outcome {
         PostRunJjSnapshotOutcome::ConfigOff => {
-            info!("jj sidecar snapshot disabled by CSA_VCS_AUTO_SNAPSHOT");
+            info!("jj sidecar snapshot disabled by [vcs].auto_snapshot");
         }
         PostRunJjSnapshotOutcome::NoChangedPaths => {
             info!("Skipping jj sidecar snapshot because PostRun changed_paths is empty");
@@ -64,6 +64,7 @@ pub(crate) fn maybe_record_post_run_snapshot(
 }
 
 fn evaluate_post_run_snapshot(
+    config: Option<&csa_config::VcsConfig>,
     project_root: &Path,
     session_dir: &Path,
     session_id: &str,
@@ -71,7 +72,7 @@ fn evaluate_post_run_snapshot(
     changed_paths: &[String],
 ) -> PostRunJjSnapshotOutcome {
     evaluate_post_run_snapshot_with(
-        auto_snapshot_enabled(),
+        config.cloned().unwrap_or_default(),
         project_root,
         session_id,
         tool_name,
@@ -84,7 +85,7 @@ fn evaluate_post_run_snapshot(
 }
 
 fn evaluate_post_run_snapshot_with<F>(
-    auto_snapshot_enabled: bool,
+    config: csa_config::VcsConfig,
     project_root: &Path,
     session_id: &str,
     tool_name: &str,
@@ -94,8 +95,13 @@ fn evaluate_post_run_snapshot_with<F>(
 where
     F: FnOnce(&str) -> Result<RevisionId, JournalError>,
 {
-    if !auto_snapshot_enabled {
+    if !config.auto_snapshot {
         return PostRunJjSnapshotOutcome::ConfigOff;
+    }
+    if config.snapshot_trigger == csa_config::SnapshotTrigger::ToolCompleted {
+        warn!(
+            "[vcs].snapshot_trigger=\"tool-completed\" is reserved for V2; falling back to post-run snapshot"
+        );
     }
     if changed_paths.is_empty() {
         return PostRunJjSnapshotOutcome::NoChangedPaths;
@@ -114,16 +120,6 @@ where
             message: render_journal_error(&err),
         },
     }
-}
-
-fn auto_snapshot_enabled() -> bool {
-    auto_snapshot_enabled_from_value(std::env::var_os(AUTO_SNAPSHOT_ENV).as_deref())
-}
-
-fn auto_snapshot_enabled_from_value(value: Option<&std::ffi::OsStr>) -> bool {
-    value
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|value| value.trim() == "1")
 }
 
 fn format_snapshot_message(session_id: &str, tool_name: &str, changed_paths: &[String]) -> String {
@@ -147,7 +143,7 @@ fn append_snapshot_notice(result: &mut csa_process::ExecutionResult, message: &s
     if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
         result.stderr_output.push('\n');
     }
-    result.stderr_output.push_str("CSA_VCS_AUTO_SNAPSHOT: ");
+    result.stderr_output.push_str("[vcs].auto_snapshot: ");
     result.stderr_output.push_str(message);
     result.stderr_output.push('\n');
 }
@@ -155,7 +151,16 @@ fn append_snapshot_notice(result: &mut csa_process::ExecutionResult, message: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
     use std::fs;
+    use std::process::Command;
+
+    fn vcs_config(auto_snapshot: bool) -> csa_config::VcsConfig {
+        csa_config::VcsConfig {
+            auto_snapshot,
+            ..Default::default()
+        }
+    }
 
     fn result() -> csa_process::ExecutionResult {
         csa_process::ExecutionResult {
@@ -167,12 +172,70 @@ mod tests {
         }
     }
 
+    fn run_command(repo: &Path, program: &str, args: &[&str]) {
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap_or_else(|err| panic!("spawn {program}: {err}"));
+        assert!(
+            output.status.success(),
+            "{program} {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn jj_log_descriptions(repo: &Path) -> String {
+        let output = Command::new("jj")
+            .args(["log", "--no-graph", "-T", "description ++ \"\\n\""])
+            .current_dir(repo)
+            .output()
+            .expect("run jj log");
+        assert!(
+            output.status.success(),
+            "jj log failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
+    fn setup_colocated_jj_git_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        run_command(repo.path(), "git", &["init"]);
+        run_command(
+            repo.path(),
+            "git",
+            &["config", "user.email", "csa-test@example.com"],
+        );
+        run_command(repo.path(), "git", &["config", "user.name", "CSA Test"]);
+        run_command(repo.path(), "jj", &["git", "init", "--colocate"]);
+        run_command(
+            repo.path(),
+            "jj",
+            &[
+                "config",
+                "set",
+                "--repo",
+                "user.email",
+                "csa-test@example.com",
+            ],
+        );
+        run_command(
+            repo.path(),
+            "jj",
+            &["config", "set", "--repo", "user.name", "CSA Test"],
+        );
+        repo
+    }
+
     #[test]
     fn config_off_is_a_quiet_noop() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let outcome = evaluate_post_run_snapshot_with(
-            false,
+            vcs_config(false),
             tmp.path(),
             "01SESSION",
             "codex",
@@ -193,10 +256,14 @@ mod tests {
     fn changed_paths_empty_skips_snapshot() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
-        let outcome =
-            evaluate_post_run_snapshot_with(true, tmp.path(), "01SESSION", "codex", &[], |_| {
-                panic!("snapshot must not run for empty changed paths")
-            });
+        let outcome = evaluate_post_run_snapshot_with(
+            vcs_config(true),
+            tmp.path(),
+            "01SESSION",
+            "codex",
+            &[],
+            |_| panic!("snapshot must not run for empty changed paths"),
+        );
 
         assert_eq!(outcome, PostRunJjSnapshotOutcome::NoChangedPaths);
         let mut result = result();
@@ -213,7 +280,7 @@ mod tests {
         fs::create_dir(tmp.path().join(".git")).expect("create .git");
 
         let outcome = evaluate_post_run_snapshot_with(
-            true,
+            vcs_config(true),
             tmp.path(),
             "01SESSION",
             "codex",
@@ -242,7 +309,7 @@ mod tests {
         fs::create_dir(tmp.path().join(".jj")).expect("create .jj");
 
         let outcome = evaluate_post_run_snapshot_with(
-            true,
+            vcs_config(true),
             tmp.path(),
             "01SESSION",
             "codex",
@@ -271,7 +338,7 @@ mod tests {
         fs::create_dir(tmp.path().join(".jj")).expect("create .jj");
 
         let outcome = evaluate_post_run_snapshot_with(
-            true,
+            vcs_config(true),
             tmp.path(),
             "01SESSION",
             "codex",
@@ -311,7 +378,7 @@ mod tests {
         fs::create_dir(tmp.path().join(".jj")).expect("create .jj");
 
         let outcome = evaluate_post_run_snapshot_with(
-            true,
+            vcs_config(true),
             tmp.path(),
             "01SESSION",
             "codex",
@@ -330,17 +397,82 @@ mod tests {
     }
 
     #[test]
-    fn auto_snapshot_env_accepts_only_one() {
-        assert!(auto_snapshot_enabled_from_value(Some(
-            std::ffi::OsStr::new("1")
-        )));
-        assert!(!auto_snapshot_enabled_from_value(None));
-        assert!(!auto_snapshot_enabled_from_value(Some(
-            std::ffi::OsStr::new("true",)
-        )));
-        assert!(!auto_snapshot_enabled_from_value(Some(
-            std::ffi::OsStr::new("0",)
-        )));
+    fn real_colocated_jj_repo_snapshots_only_when_vcs_config_enables_it() {
+        if which::which("jj").is_err() {
+            eprintln!("skipping real jj snapshot test because jj is not installed");
+            return;
+        }
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let env_home = tempfile::tempdir().expect("env home tempdir");
+        let jj_config_home = env_home.path().join("jj-config-home");
+        fs::create_dir_all(&jj_config_home).expect("create jj config home");
+        let _home_guard = ScopedEnvVarRestore::set("HOME", &jj_config_home);
+        let _config_guard = ScopedEnvVarRestore::set("XDG_CONFIG_HOME", &jj_config_home);
+        let repo = setup_colocated_jj_git_repo();
+        let session_dir = tempfile::tempdir().expect("session tempdir");
+        fs::write(repo.path().join("tracked.txt"), "first\n").expect("write tracked file");
+        let changed_paths = vec!["tracked.txt".to_string()];
+
+        let mut disabled_result = result();
+        let disabled_outcome = maybe_record_post_run_snapshot(
+            Some(&vcs_config(false)),
+            repo.path(),
+            session_dir.path(),
+            "01DISABLED",
+            "codex",
+            &changed_paths,
+            &mut disabled_result,
+        );
+        assert_eq!(disabled_outcome, PostRunJjSnapshotOutcome::ConfigOff);
+        assert!(!jj_log_descriptions(repo.path()).contains("01DISABLED"));
+
+        let mut enabled_result = result();
+        let enabled_outcome = maybe_record_post_run_snapshot(
+            Some(&vcs_config(true)),
+            repo.path(),
+            session_dir.path(),
+            "01ENABLED",
+            "codex",
+            &changed_paths,
+            &mut enabled_result,
+        );
+        assert!(matches!(
+            enabled_outcome,
+            PostRunJjSnapshotOutcome::Snapshot { .. }
+        ));
+        assert!(enabled_result.stderr_output.is_empty());
+        assert!(
+            jj_log_descriptions(repo.path()).contains("CSA PostRun snapshot session=01ENABLED"),
+            "jj log should include the CSA snapshot description"
+        );
+    }
+
+    #[test]
+    fn tool_completed_trigger_falls_back_to_post_run_snapshot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(tmp.path().join(".git")).expect("create .git");
+        fs::create_dir(tmp.path().join(".jj")).expect("create .jj");
+        let config = csa_config::VcsConfig {
+            auto_snapshot: true,
+            snapshot_trigger: csa_config::SnapshotTrigger::ToolCompleted,
+            ..Default::default()
+        };
+
+        let outcome = evaluate_post_run_snapshot_with(
+            config,
+            tmp.path(),
+            "01SESSION",
+            "codex",
+            &["src/lib.rs".to_string()],
+            |_| Ok(RevisionId::from("rev-from-fallback")),
+        );
+
+        assert_eq!(
+            outcome,
+            PostRunJjSnapshotOutcome::Snapshot {
+                revision: RevisionId::from("rev-from-fallback")
+            }
+        );
     }
 
     #[test]

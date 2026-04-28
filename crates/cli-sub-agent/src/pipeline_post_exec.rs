@@ -200,6 +200,7 @@ pub(crate) async fn process_execution_result(
         }
     }
     crate::pipeline_jj_journal::maybe_record_post_run_snapshot(
+        ctx.config.map(|config| &config.vcs),
         ctx.project_root,
         &ctx.session_dir,
         &session.meta_session_id,

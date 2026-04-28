@@ -354,11 +354,22 @@ impl ExecutionConfig {
     }
 }
 
+/// Hook event used for automatic sidecar VCS snapshots.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SnapshotTrigger {
+    /// Snapshot after a run finishes.
+    #[default]
+    PostRun,
+    /// Reserved for V2 tool-completed wiring.
+    ToolCompleted,
+}
+
 /// VCS backend configuration.
 ///
 /// Controls which VCS backend CSA uses for the project.
 /// When `backend` is `None`, auto-detection is used (`.jj/` → Jj, `.git` → Git).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VcsConfig {
     /// Explicit VCS backend override. `None` means auto-detect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -367,10 +378,59 @@ pub struct VcsConfig {
     /// Defaults to Git when not set, overriding auto-detect's jj preference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colocated_default: Option<VcsKind>,
+    /// Enable automatic sidecar snapshot journaling.
+    #[serde(default)]
+    pub auto_snapshot: bool,
+    /// Event that triggers automatic snapshots.
+    #[serde(default)]
+    pub snapshot_trigger: SnapshotTrigger,
+}
+
+impl Default for VcsConfig {
+    fn default() -> Self {
+        Self {
+            backend: None,
+            colocated_default: None,
+            auto_snapshot: false,
+            snapshot_trigger: SnapshotTrigger::PostRun,
+        }
+    }
 }
 
 impl VcsConfig {
     pub fn is_default(&self) -> bool {
-        self.backend.is_none() && self.colocated_default.is_none()
+        self.backend.is_none()
+            && self.colocated_default.is_none()
+            && !self.auto_snapshot
+            && self.snapshot_trigger == SnapshotTrigger::PostRun
+    }
+}
+
+#[cfg(test)]
+mod vcs_config_tests {
+    use super::*;
+
+    #[test]
+    fn vcs_config_defaults_to_auto_snapshot_off_post_run_trigger() {
+        let config: VcsConfig = toml::from_str("").expect("parse defaults");
+
+        assert!(!config.auto_snapshot);
+        assert_eq!(config.snapshot_trigger, SnapshotTrigger::PostRun);
+        assert!(config.is_default());
+    }
+
+    #[test]
+    fn vcs_config_parses_explicit_snapshot_values() {
+        let config: VcsConfig = toml::from_str(
+            r#"
+auto_snapshot = true
+snapshot_trigger = "tool-completed"
+"#,
+        )
+        .expect("parse explicit vcs config");
+
+        assert!(config.auto_snapshot);
+        assert_eq!(config.snapshot_trigger, SnapshotTrigger::ToolCompleted);
+        assert!(!config.is_default());
     }
 }
