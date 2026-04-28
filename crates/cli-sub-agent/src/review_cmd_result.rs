@@ -1,5 +1,7 @@
 use anyhow::Result;
 use csa_core::types::{ReviewDecision, ToolName};
+use std::fs;
+use std::path::Path;
 use tracing::warn;
 
 use crate::review_consensus::{
@@ -8,7 +10,7 @@ use crate::review_consensus::{
 
 use super::execute::ReviewExecutionOutcome;
 use super::output::{
-    GEMINI_AUTH_PROMPT_STATUS_REASON, ReviewerOutcome, detect_tool_diagnostic,
+    GEMINI_AUTH_PROMPT_STATUS_REASON, ReviewerOutcome, detect_tool_diagnostic, extract_review_text,
     is_review_output_empty, sanitize_review_output,
 };
 
@@ -50,6 +52,7 @@ pub(super) fn resolve_single_review_result(
     result: &ReviewExecutionOutcome,
     tool: ToolName,
     scope: &str,
+    project_root: &Path,
 ) -> SingleReviewResolution {
     let auth_prompt_failure =
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
@@ -93,9 +96,10 @@ pub(super) fn resolve_single_review_result(
     } else if auth_prompt_failure || empty_output {
         ReviewDecision::Uncertain
     } else {
-        parse_review_decision(
+        parse_review_decision_for_execution(
             &result.execution.execution.output,
             result.execution.execution.exit_code,
+            load_summary_fallback(project_root, &result.execution.meta_session_id).as_deref(),
         )
     };
     let verdict = verdict_from_decision(decision);
@@ -146,7 +150,11 @@ pub(super) fn build_reviewer_outcome(
         } else if auth_prompt_failure || empty {
             ReviewDecision::Uncertain
         } else {
-            parse_review_decision(&result.execution.output, result.execution.exit_code)
+            parse_review_decision_for_execution(
+                &result.execution.output,
+                result.execution.exit_code,
+                None,
+            )
         }),
         output: if auth_prompt_failure {
             AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
@@ -166,11 +174,54 @@ pub(super) fn build_reviewer_outcome(
         } else if auth_prompt_failure || empty {
             ReviewDecision::Uncertain
         } else {
-            parse_review_decision(&result.execution.output, result.execution.exit_code)
+            parse_review_decision_for_execution(
+                &result.execution.output,
+                result.execution.exit_code,
+                None,
+            )
         }),
         diagnostic: diagnostic
             .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string())),
     })
+}
+
+fn parse_review_decision_for_execution(
+    raw_output: &str,
+    exit_code: i32,
+    summary_fallback: Option<&str>,
+) -> ReviewDecision {
+    let review_text = extract_review_text(raw_output).unwrap_or_else(|| raw_output.to_string());
+    if !contains_explicit_verdict_token(&review_text)
+        && let Some(summary) = summary_fallback
+    {
+        return parse_review_decision(summary, 0);
+    }
+    parse_review_decision(&review_text, exit_code)
+}
+
+fn load_summary_fallback(project_root: &Path, session_id: &str) -> Option<String> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id).ok()?;
+    fs::read_to_string(session_dir.join("output").join("summary.md")).ok()
+}
+
+fn contains_explicit_verdict_token(text: &str) -> bool {
+    [
+        "HAS_ISSUES",
+        "FAIL",
+        "UNAVAILABLE",
+        "UNCERTAIN",
+        "CLEAN",
+        "PASS",
+        "SKIP",
+    ]
+    .iter()
+    .any(|token| contains_token(text, token))
+}
+
+fn contains_token(haystack: &str, token: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|part| part.eq_ignore_ascii_case(token))
 }
 
 pub(super) fn build_unavailable_reviewer_outcome(
@@ -228,11 +279,100 @@ mod tests {
             ),
             ToolName::Codex,
             "uncommitted",
+            Path::new("."),
         );
 
         assert_eq!(resolved.decision, ReviewDecision::Uncertain);
         assert_eq!(resolved.verdict, UNCERTAIN);
         assert_eq!(resolved.effective_exit_code, 1);
+    }
+
+    #[test]
+    fn resolve_single_review_result_uses_last_reviewer_message_not_prompt_tokens() {
+        let raw = concat!(
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Reviewer instructions mention HAS_ISSUES as a legacy alias.\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"<!-- CSA:SECTION:summary -->\\nPASS\\n<!-- CSA:SECTION:summary:END -->\\n\\n<!-- CSA:SECTION:details -->\\nNo blocking correctness issues found.\\n<!-- CSA:SECTION:details:END -->\"}}\n",
+        );
+
+        let resolved = resolve_single_review_result(
+            &outcome(raw, 0),
+            ToolName::Codex,
+            "uncommitted",
+            Path::new("."),
+        );
+
+        assert_eq!(resolved.decision, ReviewDecision::Pass);
+        assert_eq!(resolved.verdict, CLEAN);
+        assert_eq!(resolved.effective_exit_code, 0);
+    }
+
+    #[test]
+    fn resolve_single_review_result_falls_back_to_summary_md_for_clear_verdict() {
+        let project_root = tempfile::tempdir().expect("temp project");
+        let session_dir = csa_session::get_session_root(project_root.path())
+            .expect("session root")
+            .join("sessions")
+            .join("01TESTRESULT");
+        fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+        fs::write(session_dir.join("output").join("summary.md"), "**PASS**\n")
+            .expect("write summary");
+
+        let resolved = resolve_single_review_result(
+            &outcome("review completed without a verdict token", 1),
+            ToolName::Codex,
+            "uncommitted",
+            project_root.path(),
+        );
+
+        assert_eq!(resolved.decision, ReviewDecision::Pass);
+        assert_eq!(resolved.verdict, CLEAN);
+    }
+
+    #[test]
+    fn mock_pass_review_persists_pass_review_meta() {
+        let project_root = tempfile::tempdir().expect("temp project");
+        let session_dir = csa_session::get_session_root(project_root.path())
+            .expect("session root")
+            .join("sessions")
+            .join("01TESTRESULT");
+        fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+        let raw = concat!(
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Prompt context: legacy HAS_ISSUES maps to failure.\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"<!-- CSA:SECTION:summary -->\\nPASS\\n<!-- CSA:SECTION:summary:END -->\\n\\n<!-- CSA:SECTION:details -->\\nNo blocking correctness issues found.\\n<!-- CSA:SECTION:details:END -->\"}}\n",
+        );
+        let resolved = resolve_single_review_result(
+            &outcome(raw, 0),
+            ToolName::Codex,
+            "uncommitted",
+            project_root.path(),
+        );
+        let meta = csa_session::state::ReviewSessionMeta {
+            session_id: "01TESTRESULT".to_string(),
+            head_sha: "HEAD".to_string(),
+            decision: resolved.decision.as_str().to_string(),
+            verdict: resolved.verdict.to_string(),
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: ToolName::Codex.to_string(),
+            scope: "uncommitted".to_string(),
+            exit_code: resolved.effective_exit_code,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 0,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
+        };
+
+        csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+        let persisted: csa_session::state::ReviewSessionMeta = serde_json::from_str(
+            &fs::read_to_string(session_dir.join("review_meta.json")).expect("read review meta"),
+        )
+        .expect("parse review meta");
+
+        assert_eq!(persisted.decision, ReviewDecision::Pass.as_str());
+        assert_eq!(persisted.verdict, CLEAN);
     }
 
     #[test]

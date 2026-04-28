@@ -260,6 +260,20 @@ pub(crate) fn parse_review_decision(
 ) -> csa_core::types::ReviewDecision {
     use csa_core::types::ReviewDecision;
 
+    if let Some(decision) = parse_review_decision_token(output) {
+        return decision;
+    }
+
+    if exit_code == 0 && contains_clean_phrase(output) {
+        ReviewDecision::Pass
+    } else {
+        ReviewDecision::Fail
+    }
+}
+
+fn parse_review_decision_token(output: &str) -> Option<csa_core::types::ReviewDecision> {
+    use csa_core::types::ReviewDecision;
+
     let has_fail =
         contains_verdict_token(output, HAS_ISSUES) || contains_verdict_token(output, "FAIL");
     let has_unavailable = contains_verdict_token(output, UNAVAILABLE);
@@ -268,19 +282,17 @@ pub(crate) fn parse_review_decision(
     let has_skip = contains_verdict_token(output, SKIP);
 
     if has_fail {
-        ReviewDecision::Fail
+        Some(ReviewDecision::Fail)
     } else if has_unavailable {
-        ReviewDecision::Unavailable
+        Some(ReviewDecision::Unavailable)
     } else if has_uncertain {
-        ReviewDecision::Uncertain
+        Some(ReviewDecision::Uncertain)
     } else if has_pass {
-        ReviewDecision::Pass
+        Some(ReviewDecision::Pass)
     } else if has_skip {
-        ReviewDecision::Skip
-    } else if exit_code == 0 && contains_clean_phrase(output) {
-        ReviewDecision::Pass
+        Some(ReviewDecision::Skip)
     } else {
-        ReviewDecision::Fail
+        None
     }
 }
 
@@ -512,3 +524,7 @@ pub(crate) fn write_consolidated_artifact(
 #[cfg(test)]
 #[path = "review_consensus_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_consensus_parser_tests.rs"]
+mod parser_tests;
