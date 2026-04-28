@@ -416,7 +416,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        let resolved = resolve_single_review_result(&result, result.executed_tool, &scope);
+        let resolved =
+            resolve_single_review_result(&result, result.executed_tool, &scope, &project_root);
         let sanitized = resolved.sanitized;
         let empty_output = resolved.empty_output;
         let verdict = resolved.verdict;
