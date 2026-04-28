@@ -111,6 +111,14 @@ pub(crate) fn check_review_verdict_for_target(
             );
             continue;
         }
+        if session_is_reviewer_sub_session(&session) {
+            debug!(
+                session_id = %session.meta_session_id,
+                description = ?session.description,
+                "Skipping review verdict session: reviewer sub-session description"
+            );
+            continue;
+        }
         let session_dir = session_root.join("sessions").join(&session.meta_session_id);
         let Some(meta) = read_review_meta(&session_dir)? else {
             debug!(
@@ -175,6 +183,13 @@ fn session_branch(session: &MetaSessionState) -> Option<&str> {
 
 fn session_matches_branch(session: &MetaSessionState, branch: &str) -> bool {
     session_branch(session) == Some(branch)
+}
+
+fn session_is_reviewer_sub_session(session: &MetaSessionState) -> bool {
+    session
+        .description
+        .as_deref()
+        .is_some_and(|description| description.trim_start().starts_with("review["))
 }
 
 fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
@@ -285,8 +300,30 @@ mod tests {
         legacy_verdict: &str,
         parent_id: Option<&str>,
     ) -> String {
+        write_review_session_with_description(
+            project_root,
+            branch,
+            head_sha,
+            scope,
+            decision,
+            legacy_verdict,
+            parent_id,
+            "review: test",
+        )
+    }
+
+    fn write_review_session_with_description(
+        project_root: &Path,
+        branch: &str,
+        head_sha: &str,
+        scope: &str,
+        decision: ReviewDecision,
+        legacy_verdict: &str,
+        parent_id: Option<&str>,
+        description: &str,
+    ) -> String {
         let mut session =
-            csa_session::create_session_fresh(project_root, Some("review: test"), parent_id, None)
+            csa_session::create_session_fresh(project_root, Some(description), parent_id, None)
                 .expect("create session");
         session.branch = Some(branch.to_string());
         session.git_head_at_creation = Some(head_sha.to_string());
@@ -444,6 +481,41 @@ mod tests {
         let found =
             check_review_verdict_for_target(&project, "feature", "abcdef1234567890", None).unwrap();
         assert!(found.is_none(), "child reviewer pass must not satisfy gate");
+    }
+
+    #[test]
+    fn check_verdict_rejects_unparented_reviewer_sub_session_pass() {
+        let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let temp = TempDir::new().unwrap();
+        let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        write_review_session_with_description(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Pass,
+            "CLEAN",
+            None,
+            "review[1]: range:main...HEAD",
+        );
+        write_review_session(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+        );
+
+        let found =
+            check_review_verdict_for_target(&project, "feature", "abcdef1234567890", None).unwrap();
+        assert!(
+            found.is_none(),
+            "unparented reviewer sub-session pass must not satisfy gate"
+        );
     }
 
     #[test]

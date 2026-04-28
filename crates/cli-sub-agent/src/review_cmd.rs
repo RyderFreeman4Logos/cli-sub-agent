@@ -734,12 +734,20 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         consensus_verdict(&consensus_result)
     };
     let agreement = agreement_level(&consensus_result);
+    let final_review_meta = parent_artifacts::daemon_consensus_review_meta(
+        &head_sha,
+        &scope,
+        final_verdict,
+        review_iterations,
+        diff_fingerprint.clone(),
+    );
 
     if let Err(err) = parent_artifacts::write_multi_reviewer_parent_artifacts(
         reviewers,
         &outcomes,
         final_verdict,
         all_reviewers_unavailable,
+        final_review_meta.as_ref(),
     ) {
         warn!(
             error = %err,
@@ -768,8 +776,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .iter()
         .map(|outcome| outcome.session_id.clone())
         .collect::<Vec<_>>();
-    // Do not persist inherited CSA_SESSION_ID review metadata here; unlike the
-    // single-reviewer path, that would overwrite an unrelated parent session.
+    // Consensus metadata is written only for daemon sessions. In foreground
+    // nested invocations, inherited CSA_SESSION_ID may point at an unrelated
+    // parent session.
 
     maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 
