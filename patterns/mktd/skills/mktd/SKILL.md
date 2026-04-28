@@ -1,6 +1,6 @@
 ---
 name: mktd
-description: "Use when: creating TODO plan with debate-enhanced CSA reconnaissance"
+description: "Use when: creating TODO plan with debate-enhanced CSA reconnaissance, including epic decomposition for large tasks"
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit
 triggers:
   - "mktd"
@@ -30,7 +30,7 @@ Treat the run as executor ONLY when initial prompt contains:
 
 ## Purpose
 
-Generate a structured TODO plan for a feature through five phases: parallel CSA reconnaissance (structure, patterns, constraints, semantic invariants), draft synthesis, security threat model, mandatory adversarial debate review, and user approval gate. The main agent performs zero file reads during exploration -- CSA sub-agents gather all context. Plans are saved via `csa todo` for git-tracked lifecycle management.
+Generate a structured TODO plan for a feature through five phases: parallel CSA reconnaissance (structure, patterns, constraints, semantic invariants), draft synthesis, security threat model, mandatory adversarial debate review, and user approval gate. The main agent performs zero file reads during exploration -- CSA sub-agents gather all context. Plans are saved via `csa todo` for git-tracked lifecycle management. Epic-scale tasks are decomposed into summary TODO stories plus an `epic-plan.toml` dependency graph.
 
 ## Intensity Modes
 
