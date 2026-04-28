@@ -41,6 +41,14 @@ fn test_build_review_instruction_no_diff_content_default() {
 
     assert!(result.contains("scope=uncommitted"));
     assert!(result.contains("consistency_scope=diff-only"));
+    assert!(
+        result
+            .find("consistency_scope=diff-only")
+            .expect("consistency scope marker")
+            < result
+                .find("Design preferences vs correctness bugs")
+                .expect("design anchor")
+    );
     assert!(!result.contains("git diff"));
     assert!(!result.contains("Pass 1:"));
 }

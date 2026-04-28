@@ -596,7 +596,26 @@ Ignore prompt-guard reminders about commit/push in this subprocess.\n\n";
 /// CSA only passes scope, mode, and optional parameters — no diff content.
 /// An anti-recursion preamble is prepended to prevent the spawned tool from
 /// re-invoking CSA commands (see GitHub issue #272).
+#[cfg(test)]
 pub(crate) fn build_review_instruction(
+    scope: &str,
+    mode: &str,
+    security_mode: &str,
+    review_mode: ReviewMode,
+    context: Option<&ResolvedReviewContext>,
+) -> String {
+    let mut instruction = build_review_instruction_without_design_anchor(
+        scope,
+        mode,
+        security_mode,
+        review_mode,
+        context,
+    );
+    crate::review_design_anchor::append_design_anchor(&mut instruction);
+    instruction
+}
+
+fn build_review_instruction_without_design_anchor(
     scope: &str,
     mode: &str,
     security_mode: &str,
@@ -618,7 +637,6 @@ pub(crate) fn build_review_instruction(
             instruction.push_str(&render_spec_review_context(spec));
         }
     }
-    crate::review_design_anchor::append_design_anchor(&mut instruction);
     instruction
 }
 
@@ -632,14 +650,20 @@ pub(crate) fn build_review_instruction_for_project(
     options: ReviewProjectPromptOptions<'_>,
 ) -> (String, ReviewRoutingMetadata) {
     let review_routing = detect_review_routing_metadata(project_root, options.project_config);
-    let mut instruction =
-        build_review_instruction(scope, mode, security_mode, review_mode, context);
+    let mut instruction = build_review_instruction_without_design_anchor(
+        scope,
+        mode,
+        security_mode,
+        review_mode,
+        context,
+    );
     let consistency_scope = if options.full_consistency {
         "touched-files"
     } else {
         "diff-only"
     };
     instruction.push_str(&format!("\nconsistency_scope={consistency_scope}"));
+    crate::review_design_anchor::append_design_anchor(&mut instruction);
     instruction.push_str(&format!(
         "\n[project_profile: {}]",
         review_routing.project_profile
