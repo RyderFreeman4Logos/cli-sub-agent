@@ -86,6 +86,7 @@ pub(crate) fn check_review_verdict_for_target(
         "Checking review verdict sessions"
     );
 
+    let mut candidates = Vec::new();
     for session in sessions {
         let session_branch = session_branch(&session);
         debug!(
@@ -148,29 +149,67 @@ pub(crate) fn check_review_verdict_for_target(
             );
             continue;
         }
-        if !review_meta_or_artifact_is_pass(&session_dir, &meta)? {
+        let is_pass = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+        if !is_pass {
             debug!(
                 session_id = %session.meta_session_id,
                 decision = %meta.decision,
                 verdict = %meta.verdict,
-                "Skipping review verdict session: no PASS/CLEAN verdict"
+                timestamp = %meta.timestamp,
+                "Found matching review verdict session: non-pass candidate"
             );
-            continue;
         }
         debug!(
             session_id = %session.meta_session_id,
             scope = %meta.scope,
             head_sha = %meta.head_sha,
-            "Found matching PASS/CLEAN review verdict"
+            timestamp = %meta.timestamp,
+            is_pass,
+            "Found matching review verdict candidate"
         );
-        return Ok(Some(ReviewVerdictMatch {
+        candidates.push(ReviewVerdictCandidate {
             session_id: meta.session_id,
             scope: meta.scope,
             head_sha: meta.head_sha,
-        }));
+            timestamp: meta.timestamp,
+            is_pass,
+        });
     }
 
-    Ok(None)
+    let Some(latest) = candidates
+        .into_iter()
+        .max_by_key(|candidate| candidate.timestamp)
+    else {
+        return Ok(None);
+    };
+    if !latest.is_pass {
+        debug!(
+            session_id = %latest.session_id,
+            timestamp = %latest.timestamp,
+            "Latest matching review verdict is not PASS/CLEAN"
+        );
+        return Ok(None);
+    }
+    debug!(
+        session_id = %latest.session_id,
+        scope = %latest.scope,
+        head_sha = %latest.head_sha,
+        timestamp = %latest.timestamp,
+        "Latest matching review verdict is PASS/CLEAN"
+    );
+    Ok(Some(ReviewVerdictMatch {
+        session_id: latest.session_id,
+        scope: latest.scope,
+        head_sha: latest.head_sha,
+    }))
+}
+
+struct ReviewVerdictCandidate {
+    session_id: String,
+    scope: String,
+    head_sha: String,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    is_pass: bool,
 }
 
 fn session_branch(session: &MetaSessionState) -> Option<&str> {
@@ -268,7 +307,7 @@ fn short_sha(sha: &str) -> &str {
 mod tests {
     use super::*;
     use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use csa_core::vcs::{VcsIdentity, VcsKind};
     use tempfile::TempDir;
 
@@ -390,6 +429,15 @@ mod tests {
         csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
     }
 
+    fn set_review_timestamp(project_root: &Path, session_id: &str, timestamp: i64) {
+        let session_dir = csa_session::get_session_dir(project_root, session_id).unwrap();
+        let mut meta = read_review_meta(&session_dir)
+            .unwrap()
+            .expect("review meta should exist");
+        meta.timestamp = Utc.timestamp_opt(timestamp, 0).single().unwrap();
+        csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+    }
+
     #[test]
     fn check_verdict_finds_pass_for_current_branch_head_and_full_diff() {
         let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
@@ -481,6 +529,74 @@ mod tests {
         let found =
             check_review_verdict_for_target(&project, "feature", "abcdef1234567890", None).unwrap();
         assert!(found.is_none(), "child reviewer pass must not satisfy gate");
+    }
+
+    #[test]
+    fn check_verdict_rejects_when_latest_matching_verdict_fails() {
+        let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let temp = TempDir::new().unwrap();
+        let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let older_pass = write_review_session(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Pass,
+            "CLEAN",
+        );
+        let newer_fail = write_review_session(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+        );
+        set_review_timestamp(&project, &older_pass, 100);
+        set_review_timestamp(&project, &newer_fail, 200);
+
+        let found =
+            check_review_verdict_for_target(&project, "feature", "abcdef1234567890", None).unwrap();
+        assert!(
+            found.is_none(),
+            "newer failed review must supersede older clean review"
+        );
+    }
+
+    #[test]
+    fn check_verdict_accepts_when_latest_matching_verdict_passes() {
+        let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let temp = TempDir::new().unwrap();
+        let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let older_fail = write_review_session(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+        );
+        let newer_pass = write_review_session(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Pass,
+            "CLEAN",
+        );
+        set_review_timestamp(&project, &older_fail, 100);
+        set_review_timestamp(&project, &newer_pass, 200);
+
+        let found = check_review_verdict_for_target(&project, "feature", "abcdef1234567890", None)
+            .unwrap()
+            .expect("newer clean review should satisfy gate");
+        assert_eq!(found.session_id, newer_pass);
     }
 
     #[test]
