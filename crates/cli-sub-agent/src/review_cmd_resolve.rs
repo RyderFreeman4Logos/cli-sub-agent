@@ -1,10 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
 use crate::cli::{ReviewArgs, ReviewMode};
-use crate::review_consensus::{build_consolidated_artifact, write_consolidated_artifact};
 use crate::review_context::{
     ResolvedReviewContext, ResolvedReviewContextKind, discover_prior_round_assumptions,
     discover_review_checklist, render_spec_review_context,
@@ -15,7 +14,6 @@ use crate::tier_model_fallback::TierFilter;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_session::review_artifact::ReviewArtifact;
 
 /// Verify the review pattern is installed before attempting execution.
 ///
@@ -516,34 +514,6 @@ Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
 }
 
-pub(crate) fn write_multi_reviewer_consolidated_artifact(reviewers: usize) -> Result<()> {
-    let Some(session_dir) = std::env::var_os("CSA_SESSION_DIR") else {
-        return Ok(());
-    };
-    let output_dir = PathBuf::from(session_dir);
-    let session_id = std::env::var("CSA_SESSION_ID").unwrap_or_else(|_| "unknown".to_string());
-
-    let mut reviewer_artifacts = Vec::new();
-    for reviewer_index in 1..=reviewers {
-        let artifact_path = output_dir
-            .join(format!("reviewer-{reviewer_index}"))
-            .join("review-findings.json");
-
-        if !artifact_path.exists() {
-            continue;
-        }
-
-        let content = std::fs::read_to_string(&artifact_path)
-            .with_context(|| format!("failed to read {}", artifact_path.display()))?;
-        let artifact: ReviewArtifact = serde_json::from_str(&content)
-            .with_context(|| format!("failed to parse {}", artifact_path.display()))?;
-        reviewer_artifacts.push(artifact);
-    }
-
-    let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
-    write_consolidated_artifact(&consolidated, &output_dir)
-}
-
 /// Derive the review scope string from CLI arguments.
 ///
 /// Priority order (first match wins):
@@ -706,62 +676,4 @@ pub(crate) struct ReviewProjectPromptOptions<'a> {
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) prior_rounds_section: Option<&'a str>,
     pub(crate) full_consistency: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::write_multi_reviewer_consolidated_artifact;
-    use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
-    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
-    use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
-    use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn write_multi_reviewer_consolidated_artifact_reads_current_session_reviewer_dir() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let temp = tempdir().expect("tempdir should be created");
-        let session_dir = temp.path().display().to_string();
-        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
-
-        let reviewer_dir = temp.path().join("reviewer-1");
-        fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
-        let findings = vec![Finding {
-            severity: Severity::High,
-            fid: "FID-1".to_string(),
-            file: "src/lib.rs".to_string(),
-            line: Some(7),
-            rule_id: "rule.review.parent-path".to_string(),
-            summary: "parent-path finding".to_string(),
-            engine: "reviewer".to_string(),
-        }];
-        let artifact = ReviewArtifact {
-            severity_summary: SeveritySummary::from_findings(&findings),
-            findings: findings.clone(),
-            review_mode: Some("diff".to_string()),
-            schema_version: "1.0".to_string(),
-            session_id: "01CHILDSESSION0000000000000".to_string(),
-            timestamp: chrono::Utc::now(),
-        };
-        fs::write(
-            reviewer_dir.join("review-findings.json"),
-            serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
-        )
-        .expect("review artifact should be written");
-
-        write_multi_reviewer_consolidated_artifact(1)
-            .expect("consolidated artifact should be produced");
-
-        let consolidated_path = temp.path().join(CONSOLIDATED_REVIEW_ARTIFACT_FILE);
-        let consolidated: ReviewArtifact = serde_json::from_str(
-            &fs::read_to_string(&consolidated_path).expect("consolidated artifact should exist"),
-        )
-        .expect("consolidated artifact should parse");
-        assert_eq!(consolidated.findings.len(), 1);
-        assert_eq!(consolidated.findings[0].fid, "FID-1");
-        assert_eq!(consolidated.severity_summary.high, 1);
-    }
 }

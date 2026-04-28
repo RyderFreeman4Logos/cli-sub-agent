@@ -62,7 +62,7 @@ impl ToolReviewFailureKind {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ReviewerOutcome {
+pub(in crate::review_cmd) struct ReviewerOutcome {
     pub reviewer_index: usize,
     pub tool: ToolName,
     pub session_id: String,

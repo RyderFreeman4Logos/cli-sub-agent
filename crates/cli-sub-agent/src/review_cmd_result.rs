@@ -173,6 +173,23 @@ pub(super) fn build_reviewer_outcome(
     })
 }
 
+pub(super) fn build_unavailable_reviewer_outcome(
+    reviewer_index: usize,
+    reviewer_tool: ToolName,
+    reason: impl Into<String>,
+) -> ReviewerOutcome {
+    let reason = reason.into();
+    ReviewerOutcome {
+        reviewer_index,
+        tool: reviewer_tool,
+        session_id: format!("reviewer-{}-unavailable", reviewer_index + 1),
+        output: format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n"),
+        exit_code: 1,
+        verdict: UNAVAILABLE,
+        diagnostic: Some(reason),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
