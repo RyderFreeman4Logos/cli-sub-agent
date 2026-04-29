@@ -512,7 +512,7 @@ fn format_debate_stdout_text_includes_summary_and_transcript() {
         mode: DebateMode::Heterogeneous,
     };
     let transcript = "<!-- CSA:SECTION:summary -->\nDetailed transcript\n";
-    let text = format_debate_stdout_text(&summary, transcript);
+    let text = format_debate_stdout_text(&summary, transcript, None);
 
     assert!(text.starts_with("Debate verdict: REVISE"));
     assert!(text.contains("Needs stronger evidence."));
@@ -760,6 +760,7 @@ fn debate_cli_defaults_no_timeout() {
     assert_eq!(args.thinking, None);
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
+    assert!(!args.dry_run);
 }
 
 #[test]
@@ -785,3 +786,6 @@ mod execute_tier_tests;
 
 #[path = "debate_cmd_tests_tail.rs"]
 mod tests_tail;
+
+#[path = "debate_cmd_dry_run_tests.rs"]
+mod dry_run_tests;

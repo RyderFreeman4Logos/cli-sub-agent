@@ -713,9 +713,14 @@ fn render_debate_cli_output_respects_json_format() {
         mode: DebateMode::Heterogeneous,
     };
 
-    let rendered =
-        render_debate_cli_output(OutputFormat::Json, &summary, "Transcript body", "01META")
-            .unwrap();
+    let rendered = render_debate_cli_output(
+        OutputFormat::Json,
+        &summary,
+        "Transcript body",
+        "01META",
+        None,
+    )
+    .unwrap();
     let parsed: Value = serde_json::from_str(&rendered).unwrap();
     assert_eq!(parsed["meta_session_id"], "01META");
     assert_eq!(parsed["transcript"], "Transcript body");
@@ -733,7 +738,7 @@ fn render_debate_stdout_json_outputs_valid_payload() {
         mode: DebateMode::SameModelAdversarial,
     };
     let transcript = "Full transcript body\nCSA Meta Session ID: 01META\n";
-    let json = render_debate_stdout_json(&summary, transcript, "01META").unwrap();
+    let json = render_debate_stdout_json(&summary, transcript, "01META", None).unwrap();
     let parsed: Value = serde_json::from_str(&json).unwrap();
 
     assert_eq!(parsed["verdict"], "APPROVE");
