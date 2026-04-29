@@ -246,9 +246,9 @@ SOURCE_OWNER="$(
 if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
-find_branch_pr() {
-  local matches count
-  matches="$(
+resolve_branch_pr() {
+  local lookup status pr_num
+  lookup="$(
     gh pr list \
       --repo "${REPO_SLUG}" \
       --base "${DEFAULT_BRANCH}" \
@@ -259,15 +259,20 @@ find_branch_pr() {
     | jq -r \
         --arg branch "${WORKFLOW_BRANCH}" \
         --arg owner "${SOURCE_OWNER}" \
-        '.[] | select(.headRefName == $branch and .headRepositoryOwner.login == $owner) | .number' \
+        '[.[] | select(.headRefName == $branch and .headRepositoryOwner.login == $owner) | .number] as $matches
+         | if ($matches | length) == 1 then "found\t\($matches[0])"
+           elif ($matches | length) == 0 then "missing"
+           else "ambiguous\t\($matches | length)"
+           end' \
       2>/dev/null \
-      || true
+      || printf 'missing\n'
   )"
-  count="$(printf '%s\n' "${matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [ "${count}" = "1" ]; then
-    printf '%s\n' "${matches}" | sed '/^$/d' | head -n 1
+  status="${lookup%%$'\t'*}"
+  if [ "${status}" = "found" ]; then
+    pr_num="${lookup#*$'\t'}"
+    printf '%s\n' "${pr_num}"
     return 0
-  elif [ "${count}" = "0" ]; then
+  elif [ "${status}" = "missing" ]; then
     return 2
   else
     echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
@@ -275,12 +280,12 @@ find_branch_pr() {
   fi
 }
 
-find_branch_pr_with_retry() {
+resolve_branch_pr_with_retry() {
   local attempt pr_num rc
   rc=2
   for attempt in 1 2 3 4 5; do
     set +e
-    pr_num="$(find_branch_pr)"
+    pr_num="$(resolve_branch_pr)"
     rc=$?
     set -e
     if [ "${rc}" = "0" ] && [ -n "${pr_num}" ]; then
@@ -298,7 +303,7 @@ find_branch_pr_with_retry() {
 }
 
 set +e
-PR_NUM="$(find_branch_pr)"
+PR_NUM="$(resolve_branch_pr)"
 FIND_RC=$?
 set -e
 if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
@@ -314,13 +319,13 @@ else
     if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
       echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
       set +e
-      PR_NUM="$(find_branch_pr_with_retry)"
+      PR_NUM="$(resolve_branch_pr_with_retry)"
       FIND_RC=$?
       set -e
       if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
         echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
       else
-        echo "ERROR: gh pr create reports PR exists but find_branch_pr could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
+        echo "ERROR: gh pr create reports PR exists but resolve_branch_pr could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
         exit 1
       fi
     else
@@ -330,7 +335,7 @@ else
   fi
   if [ "${CREATE_RC}" = "0" ]; then
     set +e
-    PR_NUM="$(find_branch_pr_with_retry)"
+    PR_NUM="$(resolve_branch_pr_with_retry)"
     FIND_RC=$?
     set -e
     if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
