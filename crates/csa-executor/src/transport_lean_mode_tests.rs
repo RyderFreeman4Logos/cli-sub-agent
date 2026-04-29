@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::AcpTransport;
-use csa_acp::{McpServerConfig, SessionConfig};
+use crate::{AcpMcpServerConfig as McpServerConfig, SessionConfig};
 use std::collections::HashMap;
 
 #[test]

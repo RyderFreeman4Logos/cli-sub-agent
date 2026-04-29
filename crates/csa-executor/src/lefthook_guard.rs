@@ -1,3 +1,4 @@
+#[cfg(any(feature = "acp", test))]
 use std::collections::HashMap;
 
 use tokio::process::Command;
@@ -37,6 +38,7 @@ pub(crate) fn sanitize_env_for_codex(cmd: &mut Command) {
     }
 }
 
+#[cfg(any(feature = "acp", test))]
 pub(crate) fn sanitize_env_map_for_codex(env: &mut HashMap<String, String>) {
     env.retain(|key, _| !is_forbidden_env_key(key));
 }
@@ -45,6 +47,7 @@ pub(crate) fn sanitize_args_for_codex(args: &mut Vec<String>) {
     args.retain(|arg| !is_forbidden_arg(arg));
 }
 
+#[cfg(any(feature = "acp", test))]
 fn is_forbidden_env_key(key: &str) -> bool {
     FORBIDDEN_ENV_KEYS.contains(&key) || is_forbidden_env_key_prefix(key)
 }

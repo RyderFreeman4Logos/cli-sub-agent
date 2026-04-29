@@ -10,6 +10,7 @@ pub mod install_hints;
 mod lefthook_guard;
 pub mod logging;
 pub mod model_spec;
+pub mod session_config;
 pub mod session_id;
 pub mod transport;
 pub(crate) mod transport_gemini_retry;
@@ -31,9 +32,12 @@ pub use install_hints::{
 };
 pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
+pub use session_config::{McpServerConfig as AcpMcpServerConfig, SessionConfig};
 pub use session_id::{extract_session_id, extract_session_id_from_transport};
+#[cfg(feature = "acp")]
+pub use transport::AcpTransport;
 pub use transport::{
-    AcpTransport, CODEX_EXEC_INITIAL_STALL_REASON, ClaudeCodeCliTransport,
+    CODEX_EXEC_INITIAL_STALL_REASON, ClaudeCodeCliTransport,
     DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, LegacyTransport, PeakMemoryContext,
     ResolvedTimeout, SandboxTransportConfig, Transport, TransportCapabilities, TransportFactory,
     TransportFactoryError, TransportMode, TransportOptions, TransportResult,
@@ -41,6 +45,3 @@ pub use transport::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, resolve_initial_response_timeout,
     strip_ansi_escape_sequences,
 };
-
-// Re-export session config types from csa-acp for pipeline integration.
-pub use csa_acp::{McpServerConfig as AcpMcpServerConfig, SessionConfig};

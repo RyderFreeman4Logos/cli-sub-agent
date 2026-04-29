@@ -81,8 +81,8 @@ fn test_mode_for_executor_claude_code_default_is_legacy() {
 // Change 3: feature-gate — ACP without feature => error
 // ---------------------------------------------------------------------------
 
-/// When `claude-code-acp` feature is OFF, requesting ACP transport must fail with
-/// a clear error citing the feature flag and the issue numbers (#1115/#1117).
+/// When the ACP feature stack is OFF, requesting ACP transport must fail with
+/// a clear error citing the generic or tool-specific feature gate.
 #[test]
 #[cfg(not(feature = "claude-code-acp"))]
 fn test_validate_or_instantiate_claude_code_acp_errors_without_feature() {
@@ -96,7 +96,9 @@ fn test_validate_or_instantiate_claude_code_acp_errors_without_feature() {
     );
     let msg = format!("{}", result.unwrap_err());
     assert!(
-        msg.contains("claude-code-acp") || msg.contains("1115"),
+        msg.contains("`acp` cargo feature")
+            || msg.contains("claude-code-acp")
+            || msg.contains("1115"),
         "error should mention the feature flag or issue number; got: {msg}"
     );
 }
@@ -157,8 +159,8 @@ fn test_mode_for_executor_codex_default_is_legacy() {
 // Codex: feature-gate — ACP without feature => error
 // ---------------------------------------------------------------------------
 
-/// When `codex-acp` feature is OFF, requesting ACP transport must fail with a
-/// clear error citing the feature flag and the issue numbers (#760 / #1128).
+/// When the ACP feature stack is OFF, requesting ACP transport must fail with a
+/// clear error citing the generic or tool-specific feature gate.
 #[test]
 #[cfg(not(feature = "codex-acp"))]
 fn test_validate_or_instantiate_codex_acp_errors_without_feature() {
@@ -171,7 +173,10 @@ fn test_validate_or_instantiate_codex_acp_errors_without_feature() {
     );
     let msg = format!("{}", result.unwrap_err());
     assert!(
-        msg.contains("codex-acp") || msg.contains("760") || msg.contains("1128"),
+        msg.contains("`acp` cargo feature")
+            || msg.contains("codex-acp")
+            || msg.contains("760")
+            || msg.contains("1128"),
         "error should mention the feature flag or issue number; got: {msg}"
     );
 }
@@ -199,9 +204,9 @@ fn test_codex_acp_works_with_feature() {
 // (and vice versa). Both gates target their own tool only.
 // ---------------------------------------------------------------------------
 
-/// gemini-cli ACP path must remain available regardless of either feature gate.
-/// The feature gates are scoped to claude-code and codex only.
+/// gemini-cli ACP path is available when the generic ACP crate feature is enabled.
 #[test]
+#[cfg(feature = "acp")]
 fn test_gemini_cli_acp_unaffected_by_feature_gates() {
     let executor = Executor::GeminiCli {
         model_override: None,
@@ -211,5 +216,25 @@ fn test_gemini_cli_acp_unaffected_by_feature_gates() {
     assert!(
         result.is_ok(),
         "gemini-cli ACP must not be gated by either feature flag"
+    );
+}
+
+/// Without the generic ACP crate feature, every ACP transport mode is disabled.
+#[test]
+#[cfg(not(feature = "acp"))]
+fn test_gemini_cli_acp_requires_acp_feature() {
+    let executor = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let result = TransportFactory::validate_mode_for_executor_pub(&executor, TransportMode::Acp);
+    assert!(
+        result.is_err(),
+        "gemini-cli ACP must be gated by the generic acp feature"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("`acp` cargo feature"),
+        "error should mention the generic acp feature; got: {msg}"
     );
 }

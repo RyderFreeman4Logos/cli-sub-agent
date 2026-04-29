@@ -10,7 +10,7 @@ csa-core.workspace = true
 csa-session.workspace = true
 csa-process.workspace = true
 csa-resource.workspace = true
-csa-acp = { path = "../csa-acp" }
+csa-acp = { path = "../csa-acp", optional = true }
 csa-hooks = { path = "../csa-hooks" }
 agent-teams.workspace = true
 tokio.workspace = true
@@ -28,17 +28,18 @@ reqwest.workspace = true
 
 [features]
 default = []
+acp = ["dep:csa-acp"]
 # Gate codex ACP transport behind this feature.
 # Disabled by default in favour of `codex exec resume <id>` CLI native resume
 # (codex-cli 0.125.0+), which is empirically equivalent to ACP loadSession on
 # server-side cache reuse (54%, 44,800/83,503 input tokens, #760 / #1128).
 # Enable with `--features codex-acp` when investigating the ACP path.
-codex-acp = []
+codex-acp = ["acp"]
 codex-pty-fork = ["csa-process/codex-pty-fork"]
 # Gate claude-code ACP transport behind this feature.
 # Disabled by default due to startup-crash bugs (#1115, #1117).
 # Enable with `--features claude-code-acp` when investigating the ACP path.
-claude-code-acp = []
+claude-code-acp = ["acp"]
 
 [dev-dependencies]
 tempfile.workspace = true

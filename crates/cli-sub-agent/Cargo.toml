@@ -14,7 +14,7 @@ csa-core.workspace = true
 csa-eval.workspace = true
 csa-session.workspace = true
 csa-lock.workspace = true
-csa-acp = { path = "../csa-acp" }
+csa-acp = { path = "../csa-acp", optional = true }
 csa-executor.workspace = true
 csa-process.workspace = true
 csa-config.workspace = true
@@ -54,5 +54,6 @@ proptest = "1"
 serial_test = "3.4"
 
 [features]
+acp = ["dep:csa-acp", "csa-executor/acp"]
 codex-acp = ["csa-config/codex-acp", "csa-executor/codex-acp"]
 codex-pty-fork = ["csa-executor/codex-pty-fork"]

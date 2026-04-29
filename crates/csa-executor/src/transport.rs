@@ -3,16 +3,22 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::executor::Executor;
+#[cfg(feature = "acp")]
 use crate::lefthook_guard::sanitize_args_for_codex;
+#[cfg(feature = "acp")]
+use crate::session_config::SessionConfig;
+#[cfg(feature = "acp")]
+use crate::transport_gemini_retry::is_gemini_rate_limited_error;
 use crate::transport_gemini_retry::{
     gemini_auth_mode, gemini_inject_api_key_fallback, gemini_max_attempts,
     gemini_rate_limit_backoff, gemini_retry_model, gemini_should_use_api_key,
-    is_gemini_rate_limited_error, is_gemini_rate_limited_result,
+    is_gemini_rate_limited_result,
 };
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+#[cfg(feature = "acp")]
+use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::Utc;
-use csa_acp::SessionConfig;
 use csa_process::{
     ExecutionResult, SpawnOptions, StreamMode, spawn_tool_sandboxed, spawn_tool_with_options,
     wait_and_capture_with_idle_timeout,
@@ -25,21 +31,28 @@ use csa_session::{
 #[path = "transport_meta.rs"]
 mod transport_meta;
 pub use transport_meta::PeakMemoryContext;
-use transport_meta::{build_summary, run_acp_sandboxed};
+#[cfg(feature = "acp")]
+#[path = "transport_acp_sandbox.rs"]
+mod transport_acp_sandbox;
+#[cfg(feature = "acp")]
+use transport_acp_sandbox::{build_summary, run_acp_sandboxed};
 #[path = "transport_gemini_helpers.rs"]
 mod transport_gemini_helpers;
+#[cfg(feature = "acp")]
 use transport_gemini_helpers::{
     GeminiAcpInitFailureClassification, GeminiRetryPhase, annotate_gemini_retry_error,
     append_gemini_retry_report, apply_gemini_acp_initial_stall_summary,
-    apply_gemini_legacy_initial_stall_summary, apply_gemini_mcp_warning_summary,
-    apply_gemini_sandbox_runtime_contract, classify_gemini_acp_init_failure,
-    classify_gemini_acp_initial_stall, classify_gemini_legacy_initial_stall,
-    classify_gemini_oauth_prompt_result, classify_join_error, format_gemini_acp_init_failure,
-    gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
-    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure, is_gemini_mcp_issue_result,
-    is_gemini_oauth_prompt_result, resolve_gemini_shared_npm_cache_source,
+    classify_gemini_acp_init_failure, classify_gemini_acp_initial_stall, classify_join_error,
+    format_gemini_acp_init_failure, gemini_acp_initial_response_timeout_seconds, gemini_phase_desc,
+    gemini_sandbox_runtime_env_overrides, is_gemini_acp_init_failure,
 };
-#[cfg(test)]
+use transport_gemini_helpers::{
+    apply_gemini_legacy_initial_stall_summary, apply_gemini_mcp_warning_summary,
+    apply_gemini_sandbox_runtime_contract, classify_gemini_legacy_initial_stall,
+    classify_gemini_oauth_prompt_result, is_gemini_mcp_issue_result, is_gemini_oauth_prompt_result,
+    resolve_gemini_shared_npm_cache_source,
+};
+#[cfg(all(test, feature = "acp"))]
 use transport_gemini_helpers::{
     apply_gemini_sandbox_runtime_env_overrides, ensure_gemini_runtime_home_writable_path,
     format_gemini_retry_report,
@@ -49,18 +62,23 @@ pub use transport_gemini_helpers::{
 };
 #[path = "transport_gemini_acp_runtime.rs"]
 mod transport_gemini_acp_runtime;
+#[cfg(feature = "acp")]
+use transport_gemini_acp_runtime::prepare_gemini_acp_runtime;
 use transport_gemini_acp_runtime::{
-    gemini_runtime_home_from_env, prepare_gemini_acp_runtime, prepare_gemini_runtime_env,
-    shared_npm_cache_dir,
+    gemini_runtime_home_from_env, prepare_gemini_runtime_env, shared_npm_cache_dir,
 };
 #[path = "transport_gemini_mcp_diagnostic.rs"]
 mod transport_gemini_mcp_diagnostic;
+#[cfg(feature = "acp")]
+use transport_gemini_mcp_diagnostic::McpInitDiagnostic;
 use transport_gemini_mcp_diagnostic::{
-    McpInitDiagnostic, diagnose_mcp_init_failure, disable_mcp_servers_in_runtime,
-    format_mcp_init_warning_summary, gemini_allow_degraded_mcp,
+    diagnose_mcp_init_failure, disable_mcp_servers_in_runtime, format_mcp_init_warning_summary,
+    gemini_allow_degraded_mcp,
 };
 #[path = "transport_acp_crash_retry.rs"]
+#[cfg(feature = "acp")]
 mod transport_acp_crash_retry;
+#[cfg(feature = "acp")]
 use transport_acp_crash_retry::execute_with_crash_retry;
 #[path = "transport_fork.rs"]
 mod transport_fork;
@@ -72,7 +90,9 @@ pub use transport_factory::{TransportFactory, TransportFactoryError, TransportMo
 mod transport_cli;
 pub use transport_cli::ClaudeCodeCliTransport;
 #[path = "transport_acp_payload_debug.rs"]
+#[cfg(feature = "acp")]
 mod transport_acp_payload_debug;
+#[cfg(feature = "acp")]
 use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};
 #[path = "transport_codex_exec_stall.rs"]
 mod transport_codex_exec_stall;
@@ -94,6 +114,7 @@ use transport_legacy_codex_exec_stall::{
 
 #[path = "transport_types.rs"]
 mod transport_types;
+#[cfg(feature = "acp")]
 use transport_types::should_stream_acp_stdout_to_stderr;
 pub use transport_types::{
     ResolvedTimeout, SandboxTransportConfig, TransportCapabilities, TransportOptions,
@@ -398,6 +419,7 @@ impl LegacyTransport {
 
 include!("transport_legacy_impl.rs");
 
+#[cfg(feature = "acp")]
 #[derive(Debug, Clone)]
 pub struct AcpTransport {
     pub(crate) tool_name: String,
@@ -406,6 +428,7 @@ pub struct AcpTransport {
     pub(crate) session_config: Option<SessionConfig>,
 }
 
+#[cfg(feature = "acp")]
 impl AcpTransport {
     pub fn new(tool_name: &str, session_config: Option<SessionConfig>) -> Self {
         let (cmd, args) = Self::acp_command_for_tool(tool_name);
@@ -429,8 +452,10 @@ impl AcpTransport {
     }
 }
 
+#[cfg(feature = "acp")]
 include!("transport_acp_spawn.rs");
 
+#[cfg(feature = "acp")]
 impl AcpTransport {
     /// Execute a single ACP attempt with the given args and env.
     ///
@@ -634,18 +659,59 @@ impl AcpTransport {
         Ok(TransportResult {
             execution,
             provider_session_id: Some(output.session_id),
-            events: output.events,
-            metadata: output.metadata,
+            events: output.events.into_iter().map(convert_acp_event).collect(),
+            metadata: convert_acp_metadata(output.metadata),
         })
     }
 }
 
+#[cfg(feature = "acp")]
+fn convert_acp_event(event: csa_acp::SessionEvent) -> csa_core::transport_events::SessionEvent {
+    match event {
+        csa_acp::SessionEvent::AgentMessage(text) => {
+            csa_core::transport_events::SessionEvent::AgentMessage(text)
+        }
+        csa_acp::SessionEvent::AgentThought(text) => {
+            csa_core::transport_events::SessionEvent::AgentThought(text)
+        }
+        csa_acp::SessionEvent::ToolCallStarted { id, title, kind } => {
+            csa_core::transport_events::SessionEvent::ToolCallStarted { id, title, kind }
+        }
+        csa_acp::SessionEvent::ToolCallCompleted { id, status } => {
+            csa_core::transport_events::SessionEvent::ToolCallCompleted { id, status }
+        }
+        csa_acp::SessionEvent::PlanUpdate(text) => {
+            csa_core::transport_events::SessionEvent::PlanUpdate(text)
+        }
+        csa_acp::SessionEvent::Other(text) => csa_core::transport_events::SessionEvent::Other(text),
+    }
+}
+
+#[cfg(feature = "acp")]
+fn convert_acp_metadata(
+    metadata: csa_acp::StreamingMetadata,
+) -> csa_core::transport_events::StreamingMetadata {
+    csa_core::transport_events::StreamingMetadata {
+        total_events_count: metadata.total_events_count,
+        has_tool_calls: metadata.has_tool_calls,
+        has_execute_tool_calls: metadata.has_execute_tool_calls,
+        has_no_verify_commit: metadata.has_no_verify_commit,
+        has_plan_updates: metadata.has_plan_updates,
+        extracted_commands: metadata.extracted_commands,
+        tail_text: metadata.tail_text,
+        message_text: metadata.message_text,
+        thought_text: metadata.thought_text,
+        has_thought_fallback: metadata.has_thought_fallback,
+    }
+}
+
+#[cfg(feature = "acp")]
 include!("transport_acp_impl.rs");
 
-#[cfg(test)]
+#[cfg(all(test, feature = "acp"))]
 #[path = "transport_tests_mod.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "acp"))]
 #[path = "transport_lean_mode_tests.rs"]
 mod lean_mode_tests;

@@ -1,6 +1,6 @@
 use super::*;
+use crate::SessionConfig;
 use crate::transport_gemini_retry::*;
-use csa_acp::SessionConfig;
 use csa_resource::isolation_plan::IsolationPlan;
 
 include!("transport_tests_tail.rs");

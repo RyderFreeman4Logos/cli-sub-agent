@@ -90,7 +90,7 @@ fn factory_returns_acp_for_claude_code_acp_metadata_with_feature() {
     assert_eq!(transport.mode(), TransportMode::Acp);
 }
 
-/// Without `claude-code-acp` feature, even an explicit ACP metadata request
+/// Without the ACP feature stack, even an explicit ACP metadata request
 /// must fail — the feature gate is the safety net for #1115/#1117.
 #[test]
 #[cfg(not(feature = "claude-code-acp"))]
@@ -107,7 +107,9 @@ fn factory_rejects_acp_for_claude_code_without_feature() {
     );
     let msg = format!("{:#}", result.err().unwrap());
     assert!(
-        msg.contains("claude-code-acp") || msg.contains("1115"),
+        msg.contains("`acp` cargo feature")
+            || msg.contains("claude-code-acp")
+            || msg.contains("1115"),
         "error should mention the feature flag or issue; got: {msg}"
     );
 }
@@ -151,7 +153,7 @@ fn factory_returns_acp_for_codex_acp_metadata_with_feature() {
     assert_eq!(transport.mode(), TransportMode::Acp);
 }
 
-/// Without `codex-acp` feature, even an explicit ACP metadata request must
+/// Without the ACP feature stack, even an explicit ACP metadata request must
 /// fail — the feature gate is the safety net for the #760 / #1128 transport
 /// flip. Mirrors `factory_rejects_acp_for_claude_code_without_feature`.
 #[test]
@@ -170,7 +172,10 @@ fn factory_rejects_acp_for_codex_without_feature() {
     );
     let msg = format!("{:#}", result.err().unwrap());
     assert!(
-        msg.contains("codex-acp") || msg.contains("760") || msg.contains("1128"),
+        msg.contains("`acp` cargo feature")
+            || msg.contains("codex-acp")
+            || msg.contains("760")
+            || msg.contains("1128"),
         "error should mention the feature flag or issue; got: {msg}"
     );
 }

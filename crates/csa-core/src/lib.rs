@@ -7,5 +7,6 @@ pub mod gemini;
 pub mod model_catalog;
 pub mod spec_validate;
 pub mod thinking_budget;
+pub mod transport_events;
 pub mod types;
 pub mod vcs;

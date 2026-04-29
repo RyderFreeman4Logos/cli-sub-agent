@@ -82,6 +82,7 @@ pub(crate) fn is_gemini_rate_limited_result(execution: &ExecutionResult) -> bool
     .is_some()
 }
 
+#[cfg(feature = "acp")]
 pub(crate) fn is_gemini_rate_limited_error(error_msg: &str) -> bool {
     detect_rate_limit_pattern(error_msg).is_some()
 }

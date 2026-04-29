@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::redact::redact_event;
 use chrono::SecondsFormat;
-use csa_acp::SessionEvent;
+use csa_core::transport_events::SessionEvent;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
