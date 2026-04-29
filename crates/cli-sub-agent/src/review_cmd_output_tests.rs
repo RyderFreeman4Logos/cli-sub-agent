@@ -696,7 +696,7 @@ fn persist_review_verdict_json_transcript_without_review_message_emits_uncertain
     fs::write(session_dir.join("output").join("full.md"), full_output)
         .expect("write tool-only full output transcript");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Uncertain, "UNCERTAIN");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let verdict_path = session_dir.join("output").join("review-verdict.json");
@@ -728,7 +728,7 @@ fn persist_review_verdict_json_noise_only_full_output_emits_uncertain_verdict() 
     fs::write(session_dir.join("output").join("full.md"), full_output)
         .expect("write json-noise full output transcript");
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Uncertain, "UNCERTAIN");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let verdict_path = session_dir.join("output").join("review-verdict.json");
