@@ -128,6 +128,7 @@ impl ClaudeCodeCliTransport {
         &self,
         prompt: &str,
         work_dir: &Path,
+        session: Option<&MetaSessionState>,
         resume_session_id: Option<&str>,
         extra_env: Option<&HashMap<String, String>>,
     ) -> Command {
@@ -141,8 +142,13 @@ impl ClaudeCodeCliTransport {
         }
         if let Some(env) = extra_env {
             for (key, value) in env {
-                cmd.env(key, value);
+                if !CLI_TRANSPORT_CSA_OWNED_ENV_VARS.contains(&key.as_str()) {
+                    cmd.env(key, value);
+                }
             }
+        }
+        if let Some(session) = session {
+            inject_cli_session_env(&mut cmd, session);
         }
         for arg in Self::build_argv(&self.executor, prompt, resume_session_id) {
             cmd.arg(arg);
@@ -157,6 +163,7 @@ impl ClaudeCodeCliTransport {
         let cmd = self.build_command(
             request.prompt,
             request.work_dir,
+            request.session,
             request.resume_session_id,
             request.extra_env,
         );
@@ -214,6 +221,7 @@ impl ClaudeCodeCliTransport {
 struct ExecuteOnceRequest<'a> {
     prompt: &'a str,
     work_dir: &'a Path,
+    session: Option<&'a MetaSessionState>,
     resume_session_id: Option<&'a str>,
     extra_env: Option<&'a HashMap<String, String>>,
     stream_mode: StreamMode,
@@ -270,6 +278,7 @@ impl Transport for ClaudeCodeCliTransport {
         self.execute_once(ExecuteOnceRequest {
             prompt,
             work_dir: &work_dir,
+            session: Some(session),
             resume_session_id,
             extra_env,
             stream_mode: options.stream_mode,
@@ -294,6 +303,7 @@ impl Transport for ClaudeCodeCliTransport {
         self.execute_once(ExecuteOnceRequest {
             prompt,
             work_dir,
+            session: None,
             resume_session_id: None,
             extra_env,
             stream_mode,
@@ -392,7 +402,65 @@ const CLI_TRANSPORT_STRIPPED_ENV_VARS: &[&str] = &[
     "CLAUDE_CODE_ENTRYPOINT",
     "LEFTHOOK",
     "LEFTHOOK_SKIP",
+    "CSA_SESSION_ID",
+    "CSA_SESSION_DIR",
+    "CSA_PARENT_SESSION",
+    "CSA_PARENT_SESSION_DIR",
+    "CSA_DAEMON_SESSION_DIR",
+    csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
 ];
+
+const CLI_TRANSPORT_CSA_OWNED_ENV_VARS: &[&str] = &[
+    "CSA_SESSION_ID",
+    "CSA_DEPTH",
+    "CSA_PROJECT_ROOT",
+    "CSA_TOOL",
+    "CSA_PARENT_TOOL",
+    "CSA_PARENT_SESSION",
+    "CSA_SESSION_DIR",
+    "CSA_PARENT_SESSION_DIR",
+    "CSA_DAEMON_SESSION_DIR",
+    csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
+];
+
+fn inject_cli_session_env(cmd: &mut Command, session: &MetaSessionState) {
+    cmd.env("CSA_SESSION_ID", &session.meta_session_id);
+    cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
+    cmd.env("CSA_PROJECT_ROOT", &session.project_path);
+    cmd.env("CSA_TOOL", "claude-code");
+    if let Ok(current_tool) = std::env::var("CSA_TOOL") {
+        cmd.env("CSA_PARENT_TOOL", current_tool);
+    }
+    if let Some(parent_session_id) = session.genealogy.parent_session_id.as_deref() {
+        cmd.env("CSA_PARENT_SESSION", parent_session_id);
+    }
+    if let Ok(session_dir) = csa_session::manager::get_session_dir(
+        Path::new(&session.project_path),
+        &session.meta_session_id,
+    ) {
+        cmd.env(
+            "CSA_SESSION_DIR",
+            session_dir.to_string_lossy().into_owned(),
+        );
+        cmd.env(
+            csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
+            csa_session::contract_result_path(&session_dir)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    if let Some(parent_session_id) = session.genealogy.parent_session_id.as_deref()
+        && let Ok(parent_dir) = csa_session::manager::get_session_dir(
+            Path::new(&session.project_path),
+            parent_session_id,
+        )
+    {
+        cmd.env(
+            "CSA_PARENT_SESSION_DIR",
+            parent_dir.to_string_lossy().into_owned(),
+        );
+    }
+}
 
 /// Result of parsing a `claude --output-format stream-json` byte stream.
 #[derive(Debug, Default)]

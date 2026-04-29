@@ -39,6 +39,8 @@ const CSA_PARENT_TOOL_ENV: &str = "CSA_PARENT_TOOL";
 #[cfg(feature = "acp")]
 const CSA_PARENT_SESSION_ENV: &str = "CSA_PARENT_SESSION";
 #[cfg(feature = "acp")]
+const CSA_DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
+#[cfg(feature = "acp")]
 const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
 #[cfg(feature = "acp")]
 const CSA_OWNED_ENV_KEYS: &[&str] = &[
@@ -49,6 +51,7 @@ const CSA_OWNED_ENV_KEYS: &[&str] = &[
     CSA_IS_SUBPROCESS_ENV,
     CSA_PARENT_TOOL_ENV,
     CSA_PARENT_SESSION_ENV,
+    CSA_DAEMON_SESSION_DIR_ENV,
     CSA_FS_SANDBOXED_ENV,
     CSA_SESSION_DIR_ENV_KEY,
     CSA_PARENT_SESSION_DIR_ENV_KEY,
@@ -479,6 +482,10 @@ mod tests {
                 CSA_PARENT_SESSION_ENV.to_string(),
                 "spoofed-parent-session".to_string(),
             ),
+            (
+                CSA_DAEMON_SESSION_DIR_ENV.to_string(),
+                "/tmp/spoofed-daemon-session-dir".to_string(),
+            ),
             (CSA_FS_SANDBOXED_ENV.to_string(), "0".to_string()),
             (
                 CSA_SESSION_DIR_ENV_KEY.to_string(),
@@ -521,6 +528,10 @@ mod tests {
         assert_eq!(
             env.get(CSA_PARENT_SESSION_ENV).map(String::as_str),
             Some("01HPARENT000000000000000000")
+        );
+        assert!(
+            !env.contains_key(CSA_DAEMON_SESSION_DIR_ENV),
+            "CSA_DAEMON_SESSION_DIR must not flow into fresh ACP subprocess env"
         );
         assert_eq!(env.get(CSA_FS_SANDBOXED_ENV).map(String::as_str), Some("1"));
         assert_eq!(

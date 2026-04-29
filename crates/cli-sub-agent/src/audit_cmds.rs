@@ -288,6 +288,13 @@ mod tests {
     use super::*;
     use crate::audit::helpers::canonical_root;
     use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn current_dir_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_audit_init_stores_mirror_dir_in_manifest() {
@@ -469,21 +476,31 @@ mod tests {
 
     /// RAII guard for temporarily changing the working directory in tests.
     ///
-    /// Restores to a known-good stable directory on drop, not the previous cwd,
-    /// to avoid failures when parallel tests remove each other's temp directories.
-    struct TempCwd;
+    /// Restores to the previous working directory on drop.
+    struct TempCwd {
+        original: PathBuf,
+        _lock: MutexGuard<'static, ()>,
+    }
 
     impl TempCwd {
         fn set(new_dir: &Path) -> Self {
+            let lock = current_dir_lock().lock().expect("cwd lock");
+            let original = std::env::current_dir().expect("read cwd");
             std::env::set_current_dir(new_dir).expect("set cwd");
-            Self
+            Self {
+                original,
+                _lock: lock,
+            }
         }
     }
 
     impl Drop for TempCwd {
         fn drop(&mut self) {
-            // Restore to a stable directory that always exists.
-            let _ = std::env::set_current_dir("/tmp");
+            if std::env::set_current_dir(&self.original).is_err() {
+                // Last-resort stable directory when another test removed the
+                // previous cwd before this guard dropped.
+                let _ = std::env::set_current_dir("/tmp");
+            }
         }
     }
 }

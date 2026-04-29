@@ -31,6 +31,8 @@ use arg_helpers::{
     effective_gemini_model_override, gemini_include_directories,
 };
 
+#[path = "executor_env.rs"]
+mod executor_env;
 #[path = "executor_pre_session.rs"]
 mod pre_session;
 #[path = "executor_prompt_helpers.rs"]
@@ -276,7 +278,9 @@ impl Executor {
     /// Inject environment variables from global config into a Command.
     pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
         for (key, value) in env_vars {
-            cmd.env(key, value);
+            if !Self::STRIPPED_ENV_VARS.contains(&key.as_str()) {
+                cmd.env(key, value);
+            }
         }
     }
 
@@ -295,7 +299,7 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
-        Self::inject_session_path_env(&mut cmd, session);
+        self.inject_csa_owned_env(&mut cmd, session);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(Path::new(&session.project_path)));
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
@@ -513,17 +517,7 @@ impl Executor {
     }
 
     /// Environment variables to strip from child processes.
-    ///
-    /// These prevent recursive-invocation guards in CLI tools from blocking
-    /// legitimate CSA sub-agent launches, and ensure hook-bypass env vars
-    /// never leak into child tool processes.  Mirrors the same list in
-    /// `csa-acp::AcpConnection::STRIPPED_ENV_VARS`.
-    const STRIPPED_ENV_VARS: &[&str] = &[
-        "CLAUDECODE",
-        "CLAUDE_CODE_ENTRYPOINT",
-        "LEFTHOOK",
-        "LEFTHOOK_SKIP",
-    ];
+    const STRIPPED_ENV_VARS: &[&str] = executor_env::STRIPPED_ENV_VARS;
 
     /// Strip process-inherited gemini auth/routing env vars so that CSA's
     /// extra_env controls auth mode exclusively (OAuth-first, API key fallback
@@ -547,11 +541,16 @@ impl Executor {
             cmd.env_remove(var);
         }
 
-        // Set CSA environment variables
+        self.inject_csa_owned_env(&mut cmd, session);
+
+        cmd
+    }
+
+    fn inject_csa_owned_env(&self, cmd: &mut Command, session: &MetaSessionState) {
         cmd.env("CSA_SESSION_ID", &session.meta_session_id);
         cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
         cmd.env("CSA_PROJECT_ROOT", &session.project_path);
-        Self::inject_session_path_env(&mut cmd, session);
+        Self::inject_session_path_env(cmd, session);
 
         // CSA_TOOL: tells the child process which tool it is running as
         cmd.env("CSA_TOOL", self.tool_name());
@@ -564,8 +563,6 @@ impl Executor {
         if let Some(ref parent) = session.genealogy.parent_session_id {
             cmd.env("CSA_PARENT_SESSION", parent);
         }
-
-        cmd
     }
 
     fn inject_session_path_env(cmd: &mut Command, session: &MetaSessionState) {

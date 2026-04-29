@@ -126,10 +126,7 @@ fn parse_first_numeric_version_token(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        detect_tool_version, parse_first_numeric_version_token, probe_binary_version_with_timeout,
-    };
-    use csa_executor::Executor;
+    use super::{parse_first_numeric_version_token, probe_binary_version_with_timeout};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::time::Duration;
@@ -152,12 +149,14 @@ mod tests {
 
     #[tokio::test]
     async fn tool_version_probe_returns_none_on_missing_binary() {
-        let executor = Executor::ClaudeCode {
-            model_override: None,
-            thinking_budget: None,
-            runtime_metadata: csa_executor::claude_runtime_metadata(),
-        };
-        assert!(detect_tool_version(&executor).await.is_none());
+        assert!(
+            probe_binary_version_with_timeout(
+                "/definitely/missing/csa-tool-version-probe",
+                Duration::from_millis(50),
+            )
+            .await
+            .is_none()
+        );
     }
 
     #[cfg(unix)]

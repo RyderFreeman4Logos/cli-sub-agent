@@ -193,8 +193,11 @@ fn test_build_command_no_parent_session_env_when_root() {
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
 
     assert!(
-        !env_map.contains_key(std::ffi::OsStr::new("CSA_PARENT_SESSION")),
-        "Root session should not set CSA_PARENT_SESSION"
+        !matches!(
+            env_map.get(std::ffi::OsStr::new("CSA_PARENT_SESSION")),
+            Some(Some(_))
+        ),
+        "Root session should not set a CSA_PARENT_SESSION value"
     );
 }
 
@@ -275,6 +278,54 @@ fn test_build_command_reserved_session_paths_override_extra_env() {
     assert!(
         result_contract_path.contains("01HTEST000000000000000000"),
         "reserved result contract path should include the session ID, got: {result_contract_path}"
+    );
+}
+
+#[test]
+fn test_build_command_rebuilds_session_env_after_extra_env_merge() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
+    };
+    let session = make_test_session();
+    let extra = HashMap::from([
+        (
+            "CSA_SESSION_ID".to_string(),
+            "01HOUTER00000000000000000".to_string(),
+        ),
+        (
+            "CSA_SESSION_DIR".to_string(),
+            "/tmp/outer-session".to_string(),
+        ),
+        (
+            "CSA_DAEMON_SESSION_DIR".to_string(),
+            "/tmp/outer-daemon-session".to_string(),
+        ),
+    ]);
+
+    let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra));
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_SESSION_ID")),
+        Some(&Some(std::ffi::OsStr::new("01HTEST000000000000000000"))),
+        "CSA_SESSION_ID must be rebuilt from the new session"
+    );
+    let session_dir = env_map
+        .get(std::ffi::OsStr::new("CSA_SESSION_DIR"))
+        .expect("CSA_SESSION_DIR should be present")
+        .expect("CSA_SESSION_DIR should have a value")
+        .to_string_lossy();
+    assert!(
+        session_dir.contains("01HTEST000000000000000000"),
+        "CSA_SESSION_DIR must point at the new session, got: {session_dir}"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_DAEMON_SESSION_DIR")),
+        Some(&None),
+        "CSA_DAEMON_SESSION_DIR must not be inherited by child tool processes"
     );
 }
 

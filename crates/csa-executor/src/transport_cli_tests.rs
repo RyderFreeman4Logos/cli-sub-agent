@@ -18,6 +18,7 @@ use crate::{LegacyTransport, TransportFactory};
 use csa_resource::filesystem_sandbox::FilesystemCapability;
 use csa_resource::isolation_plan::IsolationPlan;
 use csa_resource::sandbox::ResourceCapability;
+use csa_session::state::{ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext};
 use std::collections::HashMap as StdHashMap;
 
 fn make_executor() -> Executor {
@@ -51,6 +52,38 @@ fn make_test_isolation_plan() -> IsolationPlan {
         project_root: None,
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
+    }
+}
+
+fn make_test_session() -> MetaSessionState {
+    let now = chrono::Utc::now();
+    MetaSessionState {
+        meta_session_id: "01HCLITEST000000000000000".to_string(),
+        description: Some("cli transport test".to_string()),
+        project_path: "/tmp/test-project".to_string(),
+        branch: None,
+        created_at: now,
+        last_accessed: now,
+        csa_version: None,
+        genealogy: Genealogy::default(),
+        tools: StdHashMap::new(),
+        context_status: ContextStatus::default(),
+        total_token_usage: None,
+        phase: SessionPhase::Active,
+        task_context: TaskContext::default(),
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+        termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
+        pre_session_porcelain: None,
+        last_return_packet: None,
+        change_id: None,
+        spec_id: None,
+        fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     }
 }
 
@@ -188,6 +221,57 @@ fn capabilities_advertise_resume_fork_streaming() {
     assert!(caps.session_fork, "claude --fork-session works");
     assert!(caps.streaming, "claude --output-format stream-json works");
     assert!(caps.typed_events, "stream-json yields typed events");
+}
+
+#[test]
+fn build_command_rebuilds_session_env_for_cli_transport() {
+    let transport = ClaudeCodeCliTransport::new(make_executor());
+    let session = make_test_session();
+    let extra_env = StdHashMap::from([
+        (
+            "CSA_SESSION_ID".to_string(),
+            "01HOUTER00000000000000000".to_string(),
+        ),
+        (
+            "CSA_SESSION_DIR".to_string(),
+            "/tmp/outer-session".to_string(),
+        ),
+        (
+            "CSA_DAEMON_SESSION_DIR".to_string(),
+            "/tmp/outer-daemon-session".to_string(),
+        ),
+    ]);
+
+    let cmd = transport.build_command(
+        "hello",
+        std::path::Path::new("/tmp/test-project"),
+        Some(&session),
+        None,
+        Some(&extra_env),
+    );
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: StdHashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        envs.into_iter().collect();
+
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_SESSION_ID")),
+        Some(&Some(std::ffi::OsStr::new("01HCLITEST000000000000000"))),
+        "CLI transport must rebuild CSA_SESSION_ID from the new session"
+    );
+    let session_dir = env_map
+        .get(std::ffi::OsStr::new("CSA_SESSION_DIR"))
+        .expect("CSA_SESSION_DIR should be set")
+        .expect("CSA_SESSION_DIR should have a value")
+        .to_string_lossy();
+    assert!(
+        session_dir.contains("01HCLITEST000000000000000"),
+        "CLI transport must rebuild CSA_SESSION_DIR from the new session, got: {session_dir}"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_DAEMON_SESSION_DIR")),
+        Some(&None),
+        "CLI transport must scrub inherited daemon session dir"
+    );
 }
 
 // ---- Resume-id propagation ----
