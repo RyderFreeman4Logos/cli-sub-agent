@@ -41,6 +41,8 @@ mod findings_toml;
 mod fix;
 #[path = "review_cmd_flow.rs"]
 mod flow;
+#[path = "review_cmd_mempal.rs"]
+mod mempal;
 #[path = "review_cmd_multi.rs"]
 mod multi;
 #[path = "review_cmd_parent_artifacts.rs"]
@@ -87,28 +89,24 @@ use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count, resolve_
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
+
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
-    // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     if args.check_verdict {
         return check_verdict::handle_check_verdict(&project_root);
     }
     let project_root_for_hooks = project_root.display().to_string();
-    // 2. Load config and validate recursion depth
     let Some((config, global_config)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
     };
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
-    // 2b. Verify review skill is available (fail fast before any execution)
     verify_review_skill_available(&project_root, args.allow_fallback)?;
-    // Warn if running inside a worktree submodule (known limitation, see #487)
     if is_worktree_submodule(&project_root) {
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
     }
-    // 2c. Run pre-review quality gate pipeline (after skill check, before tool execution)
     let gate_summary = {
         let gate_steps = global_config.review.effective_gate_steps();
         let gate_timeout = config
@@ -118,7 +116,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
         let gate_mode = &global_config.review.gate_mode;
         if gate_steps.is_empty() {
-            // Legacy path: use single gate_command with auto-detection fallback
             let gate_command = config
                 .as_ref()
                 .and_then(|c| c.review.as_ref())
@@ -167,7 +164,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 None
             }
         } else {
-            // Multi-step pipeline: L1 → L2 → L3 sequential execution
             let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
                 &project_root,
                 &gate_steps,
@@ -212,7 +208,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
     };
 
-    // 3. Derive scope and mode from CLI args
     let scope = derive_scope(&args);
     let mode = if args.fix {
         "review-and-fix"
@@ -461,6 +456,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         persist_review_sidecars_if_session_exists(
             &project_root,
             &review_meta,
+            result.persistable_session_id.as_deref(),
+        );
+        mempal::maybe_capture_review_mempal(
+            config.as_ref(),
+            &global_config,
+            &project_root,
             result.persistable_session_id.as_deref(),
         );
 

@@ -46,7 +46,7 @@ pub use global::{
 };
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
-pub use memory::{MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};
+pub use memory::{MemoryBackend, MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};
 pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version, default_registry};
 pub use paths::{APP_NAME, LEGACY_APP_NAME};
 pub use project_profile::{ProjectProfile, detect_project_profile};

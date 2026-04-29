@@ -7,7 +7,6 @@ use super::{
     MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
     resolve_liveness_dead_seconds, resolve_mcp_servers, run_pipeline_hook,
 };
-use crate::memory_capture;
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
@@ -30,6 +29,8 @@ use std::{
 use tracing::{debug, info, warn};
 #[path = "pipeline_session_exec_audit.rs"]
 mod session_exec_audit;
+#[path = "pipeline_session_exec_memory.rs"]
+mod session_exec_memory;
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
 #[path = "pipeline_session_exec_tool_state.rs"]
@@ -387,27 +388,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             .map(|cfg| &cfg.memory)
             .filter(|m| !m.is_default())
             .or_else(|| global_config.map(|cfg| &cfg.memory));
-        let memory_disabled =
-            memory_injection.is_none() || memory_injection.is_some_and(|opts| opts.disabled);
-        if let Some(memory_cfg) = memory_cfg
-            && memory_cfg.inject
-            && !memory_disabled
-        {
-            let memory_query = memory_injection
-                .and_then(|opts| opts.query_override.as_deref())
-                .unwrap_or(raw_prompt.as_str());
-            if let Some(memory_section) = memory_capture::build_memory_section(
-                memory_cfg,
-                memory_query,
-                memory_project_key.as_deref(),
-            ) {
-                info!(
-                    bytes = memory_section.len(),
-                    "Injecting memory context into prompt"
-                );
-                effective_prompt.push_str(&memory_section);
-            }
-        }
+        session_exec_memory::append_memory_section(
+            memory_cfg,
+            memory_injection,
+            raw_prompt.as_str(),
+            memory_project_key.as_deref(),
+            project_root,
+            &mut effective_prompt,
+        );
     }
     if !can_edit || !can_write_new {
         info!(

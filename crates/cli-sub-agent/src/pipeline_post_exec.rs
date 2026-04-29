@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, MemoryBackend, ProjectConfig};
 use csa_executor::{CODEX_EXEC_INITIAL_STALL_REASON, Executor};
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_session::{
@@ -277,28 +277,48 @@ pub(crate) async fn process_execution_result(
     )
     .await;
 
-    // Memory capture
+    // Legacy memory capture. Mempal capture is tied to SessionComplete below
+    // so it runs after the session result and hook artifacts are written.
     let memory_config = ctx
         .config
         .map(|cfg| &cfg.memory)
         .filter(|m| !m.is_default())
         .or_else(|| ctx.global_config.map(|cfg| &cfg.memory));
-    if let Some(memory_config) = memory_config
-        && let Err(e) = memory_capture::capture_session_memory(
-            memory_config,
-            &ctx.session_dir,
-            ctx.memory_project_key.as_deref(),
-            Some(ctx.executor.tool_name()),
-            Some(session.meta_session_id.as_str()),
-        )
-        .await
-    {
-        warn!("Memory capture failed: {}", e);
+    if let Some(memory_config) = memory_config {
+        match csa_memory::resolve_backend(memory_config.backend) {
+            MemoryBackend::Legacy => {
+                if let Err(e) = memory_capture::capture_session_memory(
+                    memory_config,
+                    &ctx.session_dir,
+                    ctx.memory_project_key.as_deref(),
+                    Some(ctx.executor.tool_name()),
+                    Some(session.meta_session_id.as_str()),
+                )
+                .await
+                {
+                    warn!("Memory capture failed: {}", e);
+                }
+            }
+            MemoryBackend::Mempal | MemoryBackend::Auto => {}
+        }
     }
 
     // SessionComplete hook: git-commits session artifacts
     if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, ctx.hooks_config, &hook_vars) {
         warn!("SessionComplete hook failed: {}", e);
+    }
+
+    if let Some(memory_config) = memory_config
+        && matches!(
+            csa_memory::resolve_backend(memory_config.backend),
+            MemoryBackend::Mempal
+        )
+    {
+        csa_hooks::mempal_capture::spawn_mempal_ingest(
+            memory_config,
+            "csa-session",
+            &ctx.session_dir,
+        );
     }
 
     // Tool output compression: runs last so parse_token_usage and hooks see

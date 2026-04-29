@@ -1,6 +1,8 @@
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use csa_config::memory::MemoryConfig;
@@ -17,6 +19,8 @@ const INJECT_MAX_RESULTS: usize = 5;
 const INJECT_QUERY_MAX_CHARS: usize = 200;
 const INJECT_FALLBACK_TERMS: usize = 10;
 const INJECT_SNIPPET_MAX_CHARS: usize = 200;
+const MEMPAL_CONTEXT_TIMEOUT: Duration = Duration::from_secs(50);
+const MEMPAL_CONTEXT_MAX_ITEMS: &str = "5";
 
 /// Capture memory from a completed session.
 pub async fn capture_session_memory(
@@ -117,6 +121,118 @@ pub(crate) fn build_memory_section(
     let store = MemoryStore::new(memory_dir.clone());
     let index_dir = memory_dir.join("index");
     build_memory_section_from_store(config, prompt, project_key, &store, &index_dir)
+}
+
+pub fn build_memory_section_from_mempal(
+    query: &str,
+    project_root: &Path,
+    token_budget: u32,
+) -> Option<String> {
+    let binary_path = csa_memory::detect_mempal()?.binary_path.clone();
+    build_memory_section_from_mempal_binary(
+        Path::new(&binary_path),
+        query,
+        project_root,
+        token_budget,
+        MEMPAL_CONTEXT_TIMEOUT,
+    )
+}
+
+fn build_memory_section_from_mempal_binary(
+    binary_path: &Path,
+    query: &str,
+    project_root: &Path,
+    token_budget: u32,
+    timeout: Duration,
+) -> Option<String> {
+    if query.trim().is_empty() || token_budget == 0 {
+        return None;
+    }
+
+    let output = run_mempal_context(binary_path, query, project_root, timeout)?;
+    if !output.status.success() {
+        tracing::warn!(
+            status = ?output.status.code(),
+            "mempal context failed; skipping memory injection"
+        );
+        return None;
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let body = raw.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let max_chars = token_budget.saturating_mul(4) as usize;
+    if max_chars == 0 {
+        return None;
+    }
+    let body = body.chars().take(max_chars).collect::<String>();
+    if body.trim().is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "\n<!-- CSA:MEMORY -->\nThe following are relevant memories from mempal:\n\n{}\n<!-- CSA:MEMORY:END -->\n",
+        body.trim()
+    ))
+}
+
+fn run_mempal_context(
+    binary_path: &Path,
+    query: &str,
+    project_root: &Path,
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let mut command = Command::new(binary_path);
+    command
+        .arg("context")
+        .arg("--cwd")
+        .arg(project_root)
+        .arg("--max-items")
+        .arg(MEMPAL_CONTEXT_MAX_ITEMS)
+        .arg(query)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let mut child = command.spawn().ok()?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => return child.wait_with_output().ok(),
+            Ok(None) if start.elapsed() >= timeout => {
+                #[cfg(unix)]
+                {
+                    // SAFETY: negative PID targets the process group created above.
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                }
+                let _ = child.wait();
+                tracing::warn!("mempal context timed out; skipping memory injection");
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                tracing::warn!(error = %err, "mempal context failed; skipping memory injection");
+                return None;
+            }
+        }
+    }
 }
 
 fn build_memory_section_from_store(
@@ -338,6 +454,7 @@ mod tests {
     use super::*;
 
     use chrono::Utc;
+    use std::io::Write as _;
     use tempfile::tempdir;
     use ulid::Ulid;
 
@@ -608,5 +725,67 @@ mod tests {
             .filter(|line| line.starts_with("- ["))
             .count();
         assert_eq!(bullet_count, 1, "token budget should limit to one memory");
+    }
+
+    #[test]
+    fn test_build_memory_section_from_mempal_binary_wraps_context() {
+        let temp = tempdir().expect("create tempdir");
+        let script_path = temp.path().join("mempal-fake.sh");
+        let mut script = fs::File::create(&script_path).expect("create fake mempal");
+        writeln!(
+            script,
+            "#!/bin/sh\nprintf 'mempal remembered %s in %s\\n' \"$6\" \"$3\"\n"
+        )
+        .expect("write fake mempal");
+        drop(script);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script_path, perms).expect("chmod");
+        }
+
+        let section = build_memory_section_from_mempal_binary(
+            &script_path,
+            "review routing",
+            temp.path(),
+            200,
+            Duration::from_secs(5),
+        )
+        .expect("mempal section");
+
+        assert!(section.contains("<!-- CSA:MEMORY -->"));
+        assert!(section.contains("mempal remembered review routing"));
+        assert!(section.contains(temp.path().to_string_lossy().as_ref()));
+        assert!(section.contains("<!-- CSA:MEMORY:END -->"));
+    }
+
+    #[test]
+    fn test_build_memory_section_from_mempal_binary_returns_none_on_timeout() {
+        let temp = tempdir().expect("create tempdir");
+        let script_path = temp.path().join("mempal-sleep.sh");
+        let mut script = fs::File::create(&script_path).expect("create fake mempal");
+        writeln!(script, "#!/bin/sh\nsleep 2\n").expect("write fake mempal");
+        drop(script);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script_path, perms).expect("chmod");
+        }
+
+        let section = build_memory_section_from_mempal_binary(
+            &script_path,
+            "review routing",
+            temp.path(),
+            200,
+            Duration::from_millis(100),
+        );
+
+        assert!(section.is_none());
     }
 }

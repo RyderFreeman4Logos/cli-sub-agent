@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+csa-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ulid = { workspace = true }

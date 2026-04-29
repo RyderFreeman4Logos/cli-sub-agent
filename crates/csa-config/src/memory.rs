@@ -1,9 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryBackend {
+    #[default]
+    Legacy,
+    Mempal,
+    Auto,
+}
+
+impl fmt::Display for MemoryBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Legacy => write!(f, "legacy"),
+            Self::Mempal => write!(f, "mempal"),
+            Self::Auto => write!(f, "auto"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    /// Memory backend implementation to use.
+    #[serde(default)]
+    pub backend: MemoryBackend,
     /// Enable automatic memory capture from PostRun hook.
     pub auto_capture: bool,
     /// Enable memory injection into csa run prompts.
@@ -21,6 +43,7 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
+            backend: MemoryBackend::default(),
             auto_capture: false,
             inject: false,
             inject_token_budget: 2000,
@@ -33,7 +56,8 @@ impl Default for MemoryConfig {
 
 impl MemoryConfig {
     pub fn is_default(&self) -> bool {
-        !self.auto_capture
+        self.backend == MemoryBackend::default()
+            && !self.auto_capture
             && !self.inject
             && self.inject_token_budget == 2000
             && self.consolidation_threshold == 100
@@ -146,7 +170,7 @@ fn mask_api_key(api_key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MemoryConfig, MemoryLlmConfig};
+    use super::{MemoryBackend, MemoryConfig, MemoryLlmConfig};
     use crate::ProjectConfig;
 
     #[derive(Debug, serde::Deserialize)]
@@ -158,6 +182,7 @@ mod tests {
     #[test]
     fn test_memory_config_defaults() {
         let parsed: MemoryEnvelope = toml::from_str("[memory]\n").unwrap();
+        assert_eq!(parsed.memory.backend, MemoryBackend::Legacy);
         assert!(!parsed.memory.auto_capture);
         assert!(!parsed.memory.inject);
         assert_eq!(parsed.memory.inject_token_budget, 2000);
@@ -170,6 +195,7 @@ mod tests {
     fn test_memory_config_full() {
         let toml = r#"
 [memory]
+backend = "mempal"
 auto_capture = true
 inject = true
 inject_token_budget = 4096
@@ -186,6 +212,7 @@ enabled = true
 model_spec = "codex/openai/gpt-5.3-codex/low"
 "#;
         let parsed: MemoryEnvelope = toml::from_str(toml).unwrap();
+        assert_eq!(parsed.memory.backend, MemoryBackend::Mempal);
         assert!(parsed.memory.auto_capture);
         assert!(parsed.memory.inject);
         assert_eq!(parsed.memory.inject_token_budget, 4096);
@@ -216,6 +243,24 @@ models = "model-a,model-b,model-c"
     }
 
     #[test]
+    fn test_memory_backend_serde_roundtrip() {
+        for backend in [
+            MemoryBackend::Legacy,
+            MemoryBackend::Mempal,
+            MemoryBackend::Auto,
+        ] {
+            let config = MemoryConfig {
+                backend,
+                ..MemoryConfig::default()
+            };
+            let encoded = toml::to_string(&config).unwrap();
+            let decoded: MemoryConfig = toml::from_str(&encoded).unwrap();
+            assert_eq!(decoded.backend, backend);
+            assert_eq!(decoded.backend.to_string(), backend.to_string());
+        }
+    }
+
+    #[test]
     fn test_memory_config_backward_compat() {
         let parsed: ProjectConfig = toml::from_str(
             r#"
@@ -227,6 +272,7 @@ name = "compat-test"
         .unwrap();
         assert_eq!(parsed.memory.inject_token_budget, 2000);
         assert_eq!(parsed.memory.consolidation_threshold, 100);
+        assert_eq!(parsed.memory.backend, MemoryBackend::Legacy);
         assert!(!parsed.memory.auto_capture);
         assert!(!parsed.memory.inject);
         assert!(!parsed.memory.llm.enabled);
