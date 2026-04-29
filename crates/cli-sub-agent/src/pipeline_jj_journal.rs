@@ -16,6 +16,37 @@ pub(crate) enum PostRunJjSnapshotOutcome {
     Failed { message: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionJjAggregateOutcome {
+    ConfigOff,
+    AggregateOff,
+    ChildSession,
+    NoJjDir,
+    NonColocated,
+    NoSnapshots,
+    Aggregated { snapshot_count: usize },
+    Failed { message: String },
+}
+
+pub(crate) async fn aggregate_session(
+    project_root: &Path,
+    session_dir: &Path,
+    session_id: &str,
+    snapshot_count: usize,
+    message_template: &str,
+) -> anyhow::Result<()> {
+    let project_root = project_root.to_path_buf();
+    let session_dir = session_dir.to_path_buf();
+    let session_id = session_id.to_string();
+    let message_template = message_template.to_string();
+    tokio::task::spawn_blocking(move || {
+        let journal = JjJournal::with_session_dir(project_root, session_dir)?;
+        journal.aggregate_session(&session_id, snapshot_count, &message_template)
+    })
+    .await?
+    .map_err(anyhow::Error::from)
+}
+
 pub(crate) fn maybe_record_post_run_snapshot(
     config: Option<&csa_config::VcsConfig>,
     project_root: &Path,
@@ -61,6 +92,114 @@ pub(crate) fn maybe_record_post_run_snapshot(
         }
     }
     outcome
+}
+
+pub(crate) async fn maybe_aggregate_session_snapshots(
+    config: Option<&csa_config::VcsConfig>,
+    project_root: &Path,
+    session_dir: &Path,
+    session_id: &str,
+    session_depth: u32,
+    result: &mut csa_process::ExecutionResult,
+) -> SessionJjAggregateOutcome {
+    let config = config.cloned().unwrap_or_default();
+    let outcome =
+        evaluate_session_aggregate(config, project_root, session_dir, session_id, session_depth)
+            .await;
+    match &outcome {
+        SessionJjAggregateOutcome::ConfigOff => {
+            info!("jj sidecar aggregation disabled because [vcs].auto_snapshot is false");
+        }
+        SessionJjAggregateOutcome::AggregateOff => {
+            info!("jj sidecar aggregation disabled by [vcs].auto_aggregate");
+        }
+        SessionJjAggregateOutcome::ChildSession => {
+            info!("Skipping jj sidecar aggregation for child session");
+        }
+        SessionJjAggregateOutcome::NoJjDir => append_snapshot_notice(
+            result,
+            "jj sidecar aggregation skipped: .jj/ not found; git fallback is intentionally disabled",
+        ),
+        SessionJjAggregateOutcome::NonColocated => append_snapshot_notice(
+            result,
+            "jj sidecar aggregation skipped: repository is not colocated (.git/ and .jj/ are both required); git fallback is intentionally disabled",
+        ),
+        SessionJjAggregateOutcome::NoSnapshots => {
+            info!("Skipping jj sidecar aggregation because no snapshots were recorded");
+        }
+        SessionJjAggregateOutcome::Aggregated { snapshot_count } => {
+            info!(snapshot_count, "Aggregated jj sidecar snapshots");
+        }
+        SessionJjAggregateOutcome::Failed { message } => {
+            append_snapshot_notice(
+                result,
+                &format!(
+                    "jj sidecar aggregation failed: {message}; git fallback is intentionally disabled"
+                ),
+            );
+        }
+    }
+    outcome
+}
+
+async fn evaluate_session_aggregate(
+    config: csa_config::VcsConfig,
+    project_root: &Path,
+    session_dir: &Path,
+    session_id: &str,
+    session_depth: u32,
+) -> SessionJjAggregateOutcome {
+    if !config.auto_snapshot {
+        return SessionJjAggregateOutcome::ConfigOff;
+    }
+    if !config.resolved_auto_aggregate() {
+        return SessionJjAggregateOutcome::AggregateOff;
+    }
+    if session_depth != 0 {
+        return SessionJjAggregateOutcome::ChildSession;
+    }
+    if !project_root.join(".jj").is_dir() {
+        return SessionJjAggregateOutcome::NoJjDir;
+    }
+    if !project_root.join(".git").exists() {
+        return SessionJjAggregateOutcome::NonColocated;
+    }
+
+    let journal = match JjJournal::with_session_dir(project_root, session_dir) {
+        Ok(journal) => journal,
+        Err(err) => {
+            return SessionJjAggregateOutcome::Failed {
+                message: render_journal_error(&err),
+            };
+        }
+    };
+    let snapshot_count = match journal.snapshot_revisions() {
+        Ok(revisions) => revisions.len(),
+        Err(err) => {
+            return SessionJjAggregateOutcome::Failed {
+                message: render_journal_error(&err),
+            };
+        }
+    };
+    if snapshot_count == 0 {
+        return SessionJjAggregateOutcome::NoSnapshots;
+    }
+
+    let message_template = config.aggregate_message_template.clone();
+    let aggregate = aggregate_session(
+        project_root,
+        session_dir,
+        session_id,
+        snapshot_count,
+        &message_template,
+    )
+    .await;
+    match aggregate {
+        Ok(()) => SessionJjAggregateOutcome::Aggregated { snapshot_count },
+        Err(err) => SessionJjAggregateOutcome::Failed {
+            message: err.to_string(),
+        },
+    }
 }
 
 fn evaluate_post_run_snapshot(
@@ -485,5 +624,38 @@ mod tests {
 
         assert!(message.contains("01SESSION;$(touch hacked)"));
         assert!(message.contains("codex`echo no`\nsecond"));
+    }
+
+    #[tokio::test]
+    async fn aggregate_skips_when_auto_aggregate_is_explicitly_off() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(tmp.path().join(".git")).expect("create .git");
+        fs::create_dir(tmp.path().join(".jj")).expect("create .jj");
+        let config = csa_config::VcsConfig {
+            auto_snapshot: true,
+            auto_aggregate: Some(false),
+            ..Default::default()
+        };
+
+        let outcome =
+            evaluate_session_aggregate(config, tmp.path(), tmp.path(), "01SESSION", 0).await;
+
+        assert_eq!(outcome, SessionJjAggregateOutcome::AggregateOff);
+    }
+
+    #[tokio::test]
+    async fn aggregate_skips_child_sessions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(tmp.path().join(".git")).expect("create .git");
+        fs::create_dir(tmp.path().join(".jj")).expect("create .jj");
+        let config = csa_config::VcsConfig {
+            auto_snapshot: true,
+            ..Default::default()
+        };
+
+        let outcome =
+            evaluate_session_aggregate(config, tmp.path(), tmp.path(), "01SESSION", 1).await;
+
+        assert_eq!(outcome, SessionJjAggregateOutcome::ChildSession);
     }
 }

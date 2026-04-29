@@ -32,6 +32,14 @@ fn build_vcs_toml(vcs: &csa_config::VcsConfig) -> Result<toml::Value> {
         toml::Value::Boolean(vcs.auto_snapshot),
     );
     table.insert(
+        "auto_aggregate".to_string(),
+        toml::Value::Boolean(vcs.resolved_auto_aggregate()),
+    );
+    table.insert(
+        "aggregate_message_template".to_string(),
+        toml::Value::String(vcs.aggregate_message_template.clone()),
+    );
+    table.insert(
         "snapshot_trigger".to_string(),
         toml::Value::String(snapshot_trigger_name(vcs.snapshot_trigger).to_string()),
     );
@@ -70,6 +78,8 @@ pub(super) fn build_project_display_json(config: &ProjectConfig) -> Result<serde
             "backend": config.vcs.backend,
             "colocated_default": config.vcs.colocated_default,
             "auto_snapshot": config.vcs.auto_snapshot,
+            "auto_aggregate": config.vcs.resolved_auto_aggregate(),
+            "aggregate_message_template": config.vcs.aggregate_message_template.clone(),
             "snapshot_trigger": snapshot_trigger_name(config.vcs.snapshot_trigger),
         }),
     );

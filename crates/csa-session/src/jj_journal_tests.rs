@@ -315,6 +315,111 @@ fn atomic_state_write() {
 }
 
 #[test]
+fn aggregate_session_squashes_later_snapshots_exports_and_clears_state() {
+    let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+    let repo = tempdir().expect("repo tempdir");
+    let state_path = repo.path().join("state").join(STATE_FILE_NAME);
+    let bin_dir = tempdir().expect("bin tempdir");
+    let arg_log = repo.path().join("jj-aggregate-args.log");
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$*\" >> '{}'\n\
+         if [ \"$3\" = \"op\" ] && [ \"$4\" = \"log\" ]; then printf 'op-before\\n'; exit 0; fi\n\
+         exit 0\n",
+        arg_log.display()
+    );
+    make_fake_jj(bin_dir.path(), &script);
+    let _path_guard = PathGuard::prepend(bin_dir.path());
+    let journal = JjJournal::with_state_path(repo.path(), &state_path);
+    journal
+        .write_state(&JournalState {
+            project_root: Some(std::path::absolute(repo.path()).expect("absolute repo")),
+            session_start_revision: Some(RevisionId::from("rev-a")),
+            snapshot_revisions: vec![
+                RevisionId::from("rev-a"),
+                RevisionId::from("rev-b"),
+                RevisionId::from("rev-c"),
+            ],
+            session_start_operation_id: Some("op-start".to_string()),
+            last_operation_id: Some("op-latest".to_string()),
+        })
+        .expect("write state");
+
+    journal
+        .aggregate_session("01ABC", 3, "csa: {session_id} ({count} snapshots)")
+        .expect("aggregate session");
+
+    let command_log = fs::read_to_string(arg_log).expect("read arg log");
+    assert!(
+        command_log
+            .contains("squash --from rev-b --from rev-c --into rev-a -m csa: 01ABC (3 snapshots)"),
+        "aggregate should squash later snapshot revisions into the first revision: {command_log}"
+    );
+    assert!(
+        command_log.contains("git export"),
+        "aggregate must export jj state to git: {command_log}"
+    );
+    let state = journal
+        .read_state()
+        .expect("read state")
+        .expect("state remains");
+    assert!(
+        state.snapshot_revisions.is_empty(),
+        "successful aggregation should clear recorded snapshot revisions"
+    );
+    assert_eq!(state.session_start_revision, None);
+    assert_eq!(state.last_operation_id, None);
+}
+
+#[test]
+fn aggregate_session_rolls_back_when_git_export_fails() {
+    let _guard = TEST_ENV_LOCK.lock().expect("lock env");
+    let repo = tempdir().expect("repo tempdir");
+    let state_path = repo.path().join("state").join(STATE_FILE_NAME);
+    let bin_dir = tempdir().expect("bin tempdir");
+    let arg_log = repo.path().join("jj-aggregate-rollback-args.log");
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$*\" >> '{}'\n\
+         if [ \"$3\" = \"op\" ] && [ \"$4\" = \"log\" ]; then printf 'op-anchor\\n'; exit 0; fi\n\
+         if [ \"$3\" = \"git\" ] && [ \"$4\" = \"export\" ]; then printf 'export failed\\n' >&2; exit 42; fi\n\
+         exit 0\n",
+        arg_log.display()
+    );
+    make_fake_jj(bin_dir.path(), &script);
+    let _path_guard = PathGuard::prepend(bin_dir.path());
+    let journal = JjJournal::with_state_path(repo.path(), &state_path);
+    journal
+        .write_state(&JournalState {
+            project_root: Some(std::path::absolute(repo.path()).expect("absolute repo")),
+            session_start_revision: Some(RevisionId::from("rev-a")),
+            snapshot_revisions: vec![RevisionId::from("rev-a"), RevisionId::from("rev-b")],
+            session_start_operation_id: Some("op-start".to_string()),
+            last_operation_id: Some("op-latest".to_string()),
+        })
+        .expect("write state");
+
+    let error = journal
+        .aggregate_session("01ABC", 2, "csa: {session_id} ({count} snapshots)")
+        .expect_err("git export failure should fail aggregation");
+
+    assert!(error.to_string().contains("export failed"));
+    let command_log = fs::read_to_string(arg_log).expect("read arg log");
+    assert!(
+        command_log.contains("op restore op-anchor"),
+        "export failure must restore the pre-squash operation: {command_log}"
+    );
+    let state = journal
+        .read_state()
+        .expect("read state")
+        .expect("state remains");
+    assert_eq!(
+        state.snapshot_revisions,
+        vec![RevisionId::from("rev-a"), RevisionId::from("rev-b")]
+    );
+}
+
+#[test]
 fn concurrent_snapshot_rejected_by_lock() {
     let _guard = TEST_ENV_LOCK.lock().expect("lock env");
     let repo = tempdir().expect("repo tempdir");

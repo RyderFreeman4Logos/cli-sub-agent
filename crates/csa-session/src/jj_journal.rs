@@ -41,6 +41,8 @@ struct JournalState {
     project_root: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_start_revision: Option<RevisionId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    snapshot_revisions: Vec<RevisionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_start_operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,6 +143,95 @@ impl JjJournal {
         Ok(op_id)
     }
 
+    pub fn snapshot_revisions(&self) -> Result<Vec<RevisionId>, JournalError> {
+        Ok(self
+            .read_state()?
+            .map(|state| state.snapshot_revisions)
+            .unwrap_or_default())
+    }
+
+    pub fn aggregate_session(
+        &self,
+        session_id: &str,
+        snapshot_count: usize,
+        message_template: &str,
+    ) -> Result<(), JournalError> {
+        let _lock = acquire_project_resource_lock(
+            &self.project_root,
+            "jj-journal",
+            "aggregate",
+            &format!("aggregate session {session_id}"),
+        )
+        .map_err(|err| JournalError::CommandFailed {
+            command: "acquire_project_resource_lock(jj-journal/aggregate)".to_string(),
+            message: err.to_string(),
+        })?;
+
+        let mut state = self.read_state()?.unwrap_or_default();
+        validate_state_project_root(&state, &self.project_root)?;
+        if snapshot_count == 0 || state.snapshot_revisions.is_empty() {
+            return Ok(());
+        }
+        if state.snapshot_revisions.len() != snapshot_count {
+            return Err(JournalError::InvalidState(format!(
+                "recorded {} jj snapshots for session {session_id}, expected {snapshot_count}",
+                state.snapshot_revisions.len()
+            )));
+        }
+
+        let pre_squash_op = self.current_operation_id()?;
+        let message = format_aggregate_message(message_template, session_id, snapshot_count)?;
+        self.combine_snapshot_revisions(&state.snapshot_revisions, &message)?;
+        match self.run_jj(["git", "export"]) {
+            Ok(_) => {
+                state.snapshot_revisions.clear();
+                state.session_start_revision = None;
+                state.session_start_operation_id = None;
+                state.last_operation_id = None;
+                self.write_state(&state)?;
+                Ok(())
+            }
+            Err(export_err) => {
+                let restore = self.run_jj(["op", "restore", pre_squash_op.as_str()]);
+                match restore {
+                    Ok(_) => Err(export_err),
+                    Err(restore_err) => Err(JournalError::CommandFailed {
+                        command: "jj op restore <pre-squash-op>".to_string(),
+                        message: format!(
+                            "jj git export failed ({export_err}); rollback also failed ({restore_err})"
+                        ),
+                    }),
+                }
+            }
+        }
+    }
+
+    fn combine_snapshot_revisions(
+        &self,
+        revisions: &[RevisionId],
+        message: &str,
+    ) -> Result<(), JournalError> {
+        let Some(first) = revisions.first() else {
+            return Ok(());
+        };
+        if revisions.len() == 1 {
+            self.run_jj(["describe", "-r", first.as_str(), "-m", message])?;
+            return Ok(());
+        }
+
+        let mut args = vec![OsString::from("squash")];
+        for revision in &revisions[1..] {
+            args.push(OsString::from("--from"));
+            args.push(OsString::from(revision.as_str()));
+        }
+        args.push(OsString::from("--into"));
+        args.push(OsString::from(first.as_str()));
+        args.push(OsString::from("-m"));
+        args.push(OsString::from(message));
+        self.run_jj(args)?;
+        Ok(())
+    }
+
     fn read_state(&self) -> Result<Option<JournalState>, JournalError> {
         match fs::read_to_string(&self.state_path) {
             Ok(raw) => {
@@ -198,6 +289,7 @@ impl JjJournal {
             current_state.session_start_revision = Some(revision.clone());
             current_state.session_start_operation_id = Some(operation_before_snapshot);
         }
+        current_state.snapshot_revisions.push(revision.clone());
         current_state.last_operation_id = Some(operation_after_snapshot);
         self.write_state(&current_state)?;
 
@@ -278,6 +370,28 @@ fn sanitize_snapshot_message(message: &str) -> Result<String, JournalError> {
         ));
     }
     Ok(bounded)
+}
+
+fn format_aggregate_message(
+    template: &str,
+    session_id: &str,
+    snapshot_count: usize,
+) -> Result<String, JournalError> {
+    let message = template
+        .replace("{session_id}", session_id)
+        .replace("{count}", &snapshot_count.to_string());
+    if message.contains('\0') {
+        return Err(JournalError::InvalidMessage(
+            "aggregate message contains null byte".to_string(),
+        ));
+    }
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return Err(JournalError::InvalidMessage(
+            "aggregate message empty after template expansion".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn absolutize_project_root(project_root: &Path) -> Result<PathBuf, JournalError> {

@@ -320,10 +320,23 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         .await
         .expect("process enabled post-exec");
     assert!(
-        jj_log_descriptions(&project_root).contains(&format!(
-            "CSA PostRun snapshot session={enabled_session_id}"
-        )),
-        "jj log should include enabled CSA session snapshot"
+        enabled_result.stderr_output.is_empty(),
+        "jj snapshot aggregation should not emit warnings: {}",
+        enabled_result.stderr_output
+    );
+    assert!(
+        jj_log_descriptions(&project_root).contains(&format!("csa: {enabled_session_id}")),
+        "jj log should include enabled CSA aggregate commit"
+    );
+    let journal_state = std::fs::read_to_string(
+        get_session_dir(&project_root, &enabled_session_id)
+            .expect("enabled session dir")
+            .join("jj-journal-state.json"),
+    )
+    .expect("read jj journal state");
+    assert!(
+        !journal_state.contains("snapshot_revisions"),
+        "successful aggregation should clear snapshot revisions: {journal_state}"
     );
 }
 
