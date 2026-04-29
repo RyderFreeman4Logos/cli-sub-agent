@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use csa_config::{MemoryBackend, MemoryConfig};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::memory_capture;
 
@@ -13,6 +13,7 @@ pub(super) fn append_memory_section(
     raw_prompt: &str,
     memory_project_key: Option<&str>,
     project_root: &Path,
+    tool_name: &str,
     effective_prompt: &mut String,
 ) {
     let memory_disabled =
@@ -21,6 +22,13 @@ pub(super) fn append_memory_section(
         return;
     };
     if !memory_cfg.inject || memory_disabled {
+        return;
+    }
+    if csa_hooks::mempal_capture::tool_has_own_mempal(tool_name) {
+        debug!(
+            tool = tool_name,
+            "skipping mempal prompt injection for {tool_name} (has own integration)"
+        );
         return;
     }
 

@@ -8,6 +8,7 @@ pub(crate) fn maybe_capture_review_mempal(
     global_config: &GlobalConfig,
     project_root: &Path,
     session_id: Option<&str>,
+    tool_name: &str,
 ) {
     let memory_config = project_config
         .map(|config| &config.memory)
@@ -27,6 +28,7 @@ pub(crate) fn maybe_capture_review_mempal(
             memory_config,
             "csa-review",
             &session_dir,
+            Some(tool_name),
         ),
         Err(err) => warn!(
             session_id,

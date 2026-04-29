@@ -87,6 +87,7 @@ fn emit_merge_completed_event_inner(
             &project_root,
             "csa-merge",
             &events_dir,
+            None,
         );
     }
     Ok(())

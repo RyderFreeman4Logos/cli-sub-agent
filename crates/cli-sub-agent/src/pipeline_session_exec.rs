@@ -394,6 +394,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             raw_prompt.as_str(),
             memory_project_key.as_deref(),
             project_root,
+            executor.tool_name(),
             &mut effective_prompt,
         );
     }
