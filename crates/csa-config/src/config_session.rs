@@ -365,6 +365,10 @@ pub enum SnapshotTrigger {
     ToolCompleted,
 }
 
+fn default_aggregate_message_template() -> String {
+    "csa: {session_id} ({count} snapshots)".to_string()
+}
+
 /// VCS backend configuration.
 ///
 /// Controls which VCS backend CSA uses for the project.
@@ -381,6 +385,13 @@ pub struct VcsConfig {
     /// Enable automatic sidecar snapshot journaling.
     #[serde(default)]
     pub auto_snapshot: bool,
+    /// Aggregate sidecar snapshots into one exported git commit at session completion.
+    /// `None` follows `auto_snapshot`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_aggregate: Option<bool>,
+    /// Commit message template for aggregated sidecar snapshots.
+    #[serde(default = "default_aggregate_message_template")]
+    pub aggregate_message_template: String,
     /// Event that triggers automatic snapshots.
     #[serde(default)]
     pub snapshot_trigger: SnapshotTrigger,
@@ -392,16 +403,24 @@ impl Default for VcsConfig {
             backend: None,
             colocated_default: None,
             auto_snapshot: false,
+            auto_aggregate: None,
+            aggregate_message_template: default_aggregate_message_template(),
             snapshot_trigger: SnapshotTrigger::PostRun,
         }
     }
 }
 
 impl VcsConfig {
+    pub fn resolved_auto_aggregate(&self) -> bool {
+        self.auto_aggregate.unwrap_or(self.auto_snapshot)
+    }
+
     pub fn is_default(&self) -> bool {
         self.backend.is_none()
             && self.colocated_default.is_none()
             && !self.auto_snapshot
+            && self.auto_aggregate.is_none()
+            && self.aggregate_message_template == default_aggregate_message_template()
             && self.snapshot_trigger == SnapshotTrigger::PostRun
     }
 }
@@ -415,6 +434,11 @@ mod vcs_config_tests {
         let config: VcsConfig = toml::from_str("").expect("parse defaults");
 
         assert!(!config.auto_snapshot);
+        assert!(!config.resolved_auto_aggregate());
+        assert_eq!(
+            config.aggregate_message_template,
+            "csa: {session_id} ({count} snapshots)"
+        );
         assert_eq!(config.snapshot_trigger, SnapshotTrigger::PostRun);
         assert!(config.is_default());
     }
@@ -424,13 +448,34 @@ mod vcs_config_tests {
         let config: VcsConfig = toml::from_str(
             r#"
 auto_snapshot = true
+auto_aggregate = false
+aggregate_message_template = "custom {session_id} {count}"
 snapshot_trigger = "tool-completed"
 "#,
         )
         .expect("parse explicit vcs config");
 
         assert!(config.auto_snapshot);
+        assert_eq!(config.auto_aggregate, Some(false));
+        assert!(!config.resolved_auto_aggregate());
+        assert_eq!(
+            config.aggregate_message_template,
+            "custom {session_id} {count}"
+        );
         assert_eq!(config.snapshot_trigger, SnapshotTrigger::ToolCompleted);
         assert!(!config.is_default());
+    }
+
+    #[test]
+    fn vcs_auto_aggregate_follows_auto_snapshot_when_unset() {
+        let config: VcsConfig = toml::from_str(
+            r#"
+auto_snapshot = true
+"#,
+        )
+        .expect("parse explicit auto snapshot");
+
+        assert_eq!(config.auto_aggregate, None);
+        assert!(config.resolved_auto_aggregate());
     }
 }

@@ -267,6 +267,16 @@ pub(crate) async fn process_execution_result(
         crate::pipeline::run_pipeline_hook(HookEvent::PostEdit, ctx.hooks_config, &hook_vars)?;
     }
 
+    crate::pipeline_jj_journal::maybe_aggregate_session_snapshots(
+        ctx.config.map(|config| &config.vcs),
+        ctx.project_root,
+        &ctx.session_dir,
+        &session.meta_session_id,
+        session.genealogy.depth,
+        result,
+    )
+    .await;
+
     // Memory capture
     let memory_config = ctx
         .config
