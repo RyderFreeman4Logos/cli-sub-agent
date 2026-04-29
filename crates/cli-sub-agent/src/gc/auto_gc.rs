@@ -6,14 +6,12 @@ use tracing::{info, warn};
 use csa_config::GlobalConfig;
 use csa_core::types::OutputFormat;
 use csa_resource::cleanup_orphan_scopes;
-use csa_session::{
-    PhaseEvent, list_sessions_from_root, list_sessions_from_root_readonly, save_session_in,
-};
+use csa_session::{list_sessions_from_root, list_sessions_from_root_readonly, save_session_in};
 
 use super::load_gc_config_for_sessions;
 use super::reaper::{
     merge_runtime_reap_stats, print_runtime_reap_summary, reap_runtime_payloads_in_root,
-    sessions_with_dry_run_retirements,
+    sessions_with_dry_run_retirements, stale_session_retirement_candidate,
 };
 use super::{
     RETIRE_AFTER_DAYS, STATE_DIR_SIZE_CACHE_FILENAME, extract_pid_from_lock,
@@ -128,48 +126,37 @@ pub(crate) fn handle_gc_global(
 
             // Retire stale Active/Available sessions (>7 days since last access)
             let age = now.signed_duration_since(session.last_accessed);
-            if age.num_days() > RETIRE_AFTER_DAYS
-                && session.phase.transition(&PhaseEvent::Retired).is_ok()
+            if let Some(retirement) =
+                stale_session_retirement_candidate(session, now, RETIRE_AFTER_DAYS)
             {
                 if dry_run {
                     eprintln!(
                         "[dry-run] Would retire stale session: {} (phase={}, {} days old, in {})",
                         session.meta_session_id,
                         session.phase,
-                        age.num_days(),
+                        retirement.age_days,
                         session_root.display()
                     );
                     total_sessions_retired += 1;
                 } else {
                     let mut updated = session.clone();
-                    match updated.phase.transition(&PhaseEvent::Retired) {
-                        Ok(new_phase) => {
-                            updated.phase = new_phase;
-                            match save_session_in(session_root, &updated) {
-                                Ok(_) => {
-                                    info!(
-                                        session = %session.meta_session_id,
-                                        age_days = age.num_days(),
-                                        root = %session_root.display(),
-                                        "Retired stale session"
-                                    );
-                                    total_sessions_retired += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        session = %session.meta_session_id,
-                                        error = %e,
-                                        root = %session_root.display(),
-                                        "Failed to persist retirement"
-                                    );
-                                }
-                            }
+                    updated.phase = retirement.phase;
+                    match save_session_in(session_root, &updated) {
+                        Ok(_) => {
+                            info!(
+                                session = %session.meta_session_id,
+                                age_days = retirement.age_days,
+                                root = %session_root.display(),
+                                "Retired stale session"
+                            );
+                            total_sessions_retired += 1;
                         }
                         Err(e) => {
                             warn!(
                                 session = %session.meta_session_id,
                                 error = %e,
-                                "Skipping retirement"
+                                root = %session_root.display(),
+                                "Failed to persist retirement"
                             );
                         }
                     }

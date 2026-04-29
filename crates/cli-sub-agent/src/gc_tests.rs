@@ -380,28 +380,41 @@ fn test_retirement_age_check_stale_session() {
 /// Verify that the combined guard (age + phase) correctly filters sessions.
 #[test]
 fn test_retirement_combined_guard() {
-    use csa_session::state::{PhaseEvent, SessionPhase};
+    use csa_session::state::{SessionPhase, ToolState};
 
     let now = chrono::Utc::now();
+    let make_session = |phase, last_accessed| {
+        let mut session = csa_session::MetaSessionState {
+            phase,
+            last_accessed,
+            ..Default::default()
+        };
+        session.tools.insert(
+            "codex".to_string(),
+            ToolState {
+                provider_session_id: None,
+                last_action_summary: String::new(),
+                last_exit_code: 0,
+                updated_at: now,
+                tool_version: None,
+                token_usage: None,
+            },
+        );
+        session
+    };
 
     // Case 1: Old Active → eligible
-    let stale = now - chrono::Duration::days(10);
-    let age = now.signed_duration_since(stale);
-    let phase = SessionPhase::Active;
-    assert!(age.num_days() > RETIRE_AFTER_DAYS && phase.transition(&PhaseEvent::Retired).is_ok());
+    let stale_active = make_session(SessionPhase::Active, now - chrono::Duration::days(10));
+    let candidate = stale_session_retirement_candidate(&stale_active, now, RETIRE_AFTER_DAYS)
+        .expect("old active session should be retirement-eligible");
+    assert_eq!(candidate.phase, SessionPhase::Retired);
+    assert_eq!(candidate.age_days, 10);
 
     // Case 2: Young Active → not eligible (age guard fails)
-    let recent = now - chrono::Duration::days(3);
-    let age = now.signed_duration_since(recent);
-    assert!(
-        !(age.num_days() > RETIRE_AFTER_DAYS && phase.transition(&PhaseEvent::Retired).is_ok())
-    );
+    let recent_active = make_session(SessionPhase::Active, now - chrono::Duration::days(3));
+    assert!(stale_session_retirement_candidate(&recent_active, now, RETIRE_AFTER_DAYS).is_none());
 
     // Case 3: Old Retired → not eligible (phase guard fails)
-    let stale = now - chrono::Duration::days(10);
-    let age = now.signed_duration_since(stale);
-    let phase = SessionPhase::Retired;
-    assert!(
-        !(age.num_days() > RETIRE_AFTER_DAYS && phase.transition(&PhaseEvent::Retired).is_ok())
-    );
+    let stale_retired = make_session(SessionPhase::Retired, now - chrono::Duration::days(10));
+    assert!(stale_session_retirement_candidate(&stale_retired, now, RETIRE_AFTER_DAYS).is_none());
 }
