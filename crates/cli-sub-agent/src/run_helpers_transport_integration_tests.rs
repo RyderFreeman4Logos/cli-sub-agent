@@ -106,7 +106,7 @@ transport = "acp"
 /// config must fail at executor/transport build time with a clear error
 /// citing the feature flag and #760/#1128.
 #[test]
-#[cfg(not(feature = "codex-acp"))]
+#[cfg(not(feature = "acp"))]
 fn codex_acp_project_config_is_rejected_without_feature() {
     let config = load_project_config(
         r#"
@@ -119,12 +119,12 @@ transport = "acp"
     let result = TransportFactory::create(&executor, Some(SessionConfig::default()));
 
     let err = match result {
-        Ok(_) => panic!("codex+ACP must fail without codex-acp feature"),
+        Ok(_) => panic!("codex+ACP must fail without acp feature"),
         Err(e) => e,
     };
     let message = format!("{err:#}");
     assert!(
-        message.contains("codex-acp") || message.contains("760") || message.contains("1128"),
+        message.contains("`acp` cargo feature") || message.contains("--features acp"),
         "error must cite the feature flag or issue number: {message}"
     );
 }

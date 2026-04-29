@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use csa_acp::SessionEvent;
+use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_process::{ExecutionResult, StreamMode};
 use csa_resource::isolation_plan::IsolationPlan;
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ pub struct TransportResult {
     pub execution: ExecutionResult,
     pub provider_session_id: Option<String>,
     pub events: Vec<SessionEvent>,
-    pub metadata: csa_acp::StreamingMetadata,
+    pub metadata: StreamingMetadata,
 }
 
 /// Informational capability matrix for a Transport implementation.
@@ -85,6 +85,7 @@ pub struct TransportCapabilities {
     pub typed_events: bool,
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn should_stream_acp_stdout_to_stderr(
     stream_mode: StreamMode,
     output_spool: Option<&Path>,

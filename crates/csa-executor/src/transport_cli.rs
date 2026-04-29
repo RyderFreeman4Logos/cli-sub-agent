@@ -48,7 +48,7 @@ use std::process::Stdio;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use csa_acp::{SessionEvent, StreamingMetadata};
+use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_process::{
     SpawnOptions, StreamMode, spawn_tool_sandboxed, wait_and_capture_with_idle_timeout,
 };

@@ -2,7 +2,7 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
-use csa_acp::{SessionEvent, StreamingMetadata};
+use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_core::types::OutputFormat;
 
 use super::git::PostRunCommitGuard;

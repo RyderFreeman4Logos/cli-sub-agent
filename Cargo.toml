@@ -1,9 +1,26 @@
 [workspace]
 members = ["crates/*"]
+default-members = [
+    "crates/cli-sub-agent",
+    "crates/csa-config",
+    "crates/csa-core",
+    "crates/csa-eval",
+    "crates/csa-executor",
+    "crates/csa-hooks",
+    "crates/csa-lock",
+    "crates/csa-mcp-hub",
+    "crates/csa-memory",
+    "crates/csa-process",
+    "crates/csa-resource",
+    "crates/csa-scheduler",
+    "crates/csa-session",
+    "crates/csa-todo",
+    "crates/weave",
+]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.620"
+version = "0.1.621"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"

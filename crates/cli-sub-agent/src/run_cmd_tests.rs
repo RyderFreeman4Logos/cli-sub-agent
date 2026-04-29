@@ -7,7 +7,7 @@ use crate::run_cmd_tool_selection::{
 };
 use chrono::{TimeZone, Utc};
 use clap::Parser;
-use csa_acp::SessionEvent;
+use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};

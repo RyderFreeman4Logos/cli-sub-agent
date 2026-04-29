@@ -6,19 +6,25 @@ use anyhow::{Result, anyhow};
 use csa_process::ExecutionResult;
 use csa_resource::isolation_plan::IsolationPlan;
 
+#[cfg(feature = "acp")]
 use super::transport_types::ResolvedTimeout;
 use crate::executor::Executor;
+#[cfg(feature = "acp")]
 use crate::transport_gemini_retry::{gemini_retry_model, gemini_should_use_api_key};
 
 pub(crate) const GEMINI_OAUTH_PROMPT_SUMMARY: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no tool output produced";
 pub(crate) const GEMINI_MCP_ISSUES_DETECTED_SUMMARY: &str =
     "MCP issues detected. Run /mcp list for status.";
+#[cfg(feature = "acp")]
 pub(crate) const GEMINI_ACP_INITIAL_STALL_REASON: &str = "gemini_acp_initial_stall";
 pub(crate) const GEMINI_LEGACY_INITIAL_STALL_REASON: &str = "gemini_legacy_initial_stall";
+#[cfg(feature = "acp")]
 const DEFAULT_GEMINI_ACP_INITIAL_RESPONSE_TIMEOUT_SECONDS: u64 = 180;
+#[cfg(feature = "acp")]
 const ACP_TIMEOUT_FOOTER_SUFFIX: &str = "s; process killed";
 
+#[cfg(feature = "acp")]
 #[derive(Debug, Clone)]
 pub(super) struct GeminiRetryPhase {
     pub(super) attempt: u8,
@@ -26,6 +32,7 @@ pub(super) struct GeminiRetryPhase {
     model: &'static str,
 }
 
+#[cfg(feature = "acp")]
 impl GeminiRetryPhase {
     pub(super) fn for_attempt(attempt: u8) -> Self {
         Self {
@@ -40,6 +47,7 @@ impl GeminiRetryPhase {
     }
 }
 
+#[cfg(feature = "acp")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GeminiAcpInitialStallClassification {
     pub(super) code: &'static str,
@@ -94,6 +102,7 @@ pub(super) fn resolve_gemini_shared_npm_cache_source(
     }
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn gemini_acp_initial_response_timeout_seconds(
     tool_name: &str,
     resolved_timeout: ResolvedTimeout,
@@ -105,6 +114,7 @@ pub(super) fn gemini_acp_initial_response_timeout_seconds(
     resolved_timeout.as_option().filter(|seconds| *seconds > 0)
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn classify_gemini_acp_initial_stall(
     execution: &ExecutionResult,
     timeout_seconds: Option<u64>,
@@ -129,6 +139,7 @@ pub(super) fn classify_gemini_acp_initial_stall(
     })
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn apply_gemini_acp_initial_stall_summary(
     execution: &mut ExecutionResult,
     classification: &GeminiAcpInitialStallClassification,
@@ -147,6 +158,7 @@ pub(super) fn apply_gemini_acp_initial_stall_summary(
     execution.stderr_output.push('\n');
 }
 
+#[cfg(feature = "acp")]
 pub(crate) fn strip_acp_timeout_footer(stderr: &str) -> &str {
     let trimmed = stderr.strip_suffix('\n').unwrap_or(stderr);
     if let Some((prefix, last_line)) = trimmed.rsplit_once('\n') {
@@ -160,6 +172,7 @@ pub(crate) fn strip_acp_timeout_footer(stderr: &str) -> &str {
     stderr
 }
 
+#[cfg(feature = "acp")]
 fn is_acp_timeout_footer(line: &str) -> bool {
     [
         "initial response timeout: no ACP events/stderr for ",
@@ -243,6 +256,7 @@ pub(crate) fn apply_gemini_mcp_warning_summary(
     execution.stderr_output.push('\n');
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn gemini_phase_desc(attempt: u8) -> &'static str {
     match attempt {
         1 => "OAuth->APIKey(same model)",
@@ -252,6 +266,7 @@ pub(super) fn gemini_phase_desc(attempt: u8) -> &'static str {
     }
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn append_gemini_retry_report(
     execution: &mut ExecutionResult,
     phases: &[GeminiRetryPhase],
@@ -272,6 +287,7 @@ pub(super) fn append_gemini_retry_report(
     execution.stderr_output.push_str(&report);
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn annotate_gemini_retry_error(
     error: anyhow::Error,
     phases: &[GeminiRetryPhase],
@@ -619,6 +635,7 @@ pub fn strip_ansi_escape_sequences(text: &str) -> String {
 /// Broken-pipe panics (from `eprintln!` after the tool process closes stderr)
 /// are rewritten into a clean message that mentions the tool died, instead of
 /// surfacing the raw tokio panic trace.
+#[cfg(feature = "acp")]
 pub(super) fn classify_join_error(e: tokio::task::JoinError) -> anyhow::Error {
     if e.is_panic() {
         let msg = match e.into_panic().downcast::<String>() {
@@ -639,18 +656,21 @@ pub(super) fn classify_join_error(e: tokio::task::JoinError) -> anyhow::Error {
     }
 }
 
+#[cfg(feature = "acp")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GeminiAcpInitFailureClassification {
     pub(super) code: &'static str,
     pub(super) missing_env_vars: Vec<&'static str>,
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn is_gemini_acp_init_failure(error: &str) -> bool {
     let error_lower = error.to_ascii_lowercase();
     error_lower.contains("acp initialization failed")
         || error_lower.contains("sandboxed acp: acp initialization failed")
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn classify_gemini_acp_init_failure(
     error: &str,
     execution_env: &HashMap<String, String>,
@@ -674,6 +694,7 @@ pub(super) fn classify_gemini_acp_init_failure(
     }
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn format_gemini_acp_init_failure(
     classification: &GeminiAcpInitFailureClassification,
     error: anyhow::Error,
@@ -707,6 +728,7 @@ pub(super) fn format_gemini_acp_init_failure(
     )
 }
 
+#[cfg(feature = "acp")]
 fn missing_gemini_auth_env_vars(execution_env: &HashMap<String, String>) -> Vec<&'static str> {
     [
         csa_core::gemini::API_KEY_ENV,
@@ -722,6 +744,7 @@ fn missing_gemini_auth_env_vars(execution_env: &HashMap<String, String>) -> Vec<
     .collect()
 }
 
+#[cfg(feature = "acp")]
 fn is_gemini_init_oom(error_lower: &str) -> bool {
     error_lower.contains("oom detected")
         || error_lower.contains("out of memory")
@@ -729,6 +752,7 @@ fn is_gemini_init_oom(error_lower: &str) -> bool {
         || error_lower.contains("memory limit")
 }
 
+#[cfg(feature = "acp")]
 fn is_gemini_init_auth_env(error_lower: &str) -> bool {
     [
         "auth",
@@ -746,6 +770,7 @@ fn is_gemini_init_auth_env(error_lower: &str) -> bool {
     .any(|pattern| error_lower.contains(pattern))
 }
 
+#[cfg(feature = "acp")]
 fn is_gemini_init_mcp_extension(error_lower: &str) -> bool {
     error_lower.contains("mcp-server")
         || error_lower.contains("gemini-cli-security")
@@ -756,6 +781,7 @@ fn is_gemini_init_mcp_extension(error_lower: &str) -> bool {
                 .any(|pattern| error_lower.contains(pattern)))
 }
 
+#[cfg(feature = "acp")]
 pub(super) fn format_gemini_retry_report(phases: &[GeminiRetryPhase]) -> String {
     phases
         .iter()

@@ -1,12 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "acp")]
+use super::AcpTransport;
+use super::{ClaudeCodeCliTransport, LegacyTransport, Transport, TransportCapabilities};
 use crate::executor::Executor;
-use csa_acp::SessionConfig;
-
-use super::{
-    AcpTransport, ClaudeCodeCliTransport, LegacyTransport, Transport, TransportCapabilities,
-};
+use crate::session_config::SessionConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -142,16 +141,21 @@ impl TransportFactory {
         };
 
         match (executor, mode) {
+            #[cfg(not(feature = "acp"))]
+            (_, TransportMode::Acp) => err(
+                "ACP transport requires the `acp` cargo feature; rebuild with `--features acp` to enable",
+            ),
+
             // ClaudeCode + ACP: gated behind the `claude-code-acp` cargo feature.
             // ACP for claude-code crashes at session startup (turn_count=0, #1115/#1117).
             // Build with `--features claude-code-acp` to re-enable this path.
-            #[cfg(not(feature = "claude-code-acp"))]
+            #[cfg(all(feature = "acp", not(feature = "claude-code-acp")))]
             (Executor::ClaudeCode { .. }, TransportMode::Acp) => err(
                 "claude-code ACP transport requires the `claude-code-acp` cargo feature \
                      (disabled by default due to startup-crash bugs #1115/#1117); \
                      rebuild with `--features claude-code-acp` to enable",
             ),
-            #[cfg(feature = "claude-code-acp")]
+            #[cfg(all(feature = "acp", feature = "claude-code-acp"))]
             (Executor::ClaudeCode { .. }, TransportMode::Acp) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::Legacy) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::OpenaiCompat) => {
@@ -164,13 +168,13 @@ impl TransportFactory {
             // on server-side cache reuse (#760 / #1128).
             // Build with `--features codex-acp` to re-enable this path.
             (Executor::Codex { .. }, TransportMode::Legacy) => Ok(()),
-            #[cfg(not(feature = "codex-acp"))]
+            #[cfg(all(feature = "acp", not(feature = "codex-acp")))]
             (Executor::Codex { .. }, TransportMode::Acp) => err(
                 "codex ACP transport requires the `codex-acp` cargo feature \
                      (disabled by default in favour of native `codex exec resume <id>`, \
                      #760/#1128); rebuild with `--features codex-acp` to enable",
             ),
-            #[cfg(feature = "codex-acp")]
+            #[cfg(all(feature = "acp", feature = "codex-acp"))]
             (Executor::Codex { .. }, TransportMode::Acp) => Ok(()),
             (Executor::Codex { .. }, TransportMode::OpenaiCompat) => {
                 err("codex only supports cli or acp transport")
@@ -178,6 +182,7 @@ impl TransportFactory {
 
             // GeminiCli: Legacy and ACP (native --acp mode)
             (Executor::GeminiCli { .. }, TransportMode::Legacy) => Ok(()),
+            #[cfg(feature = "acp")]
             (Executor::GeminiCli { .. }, TransportMode::Acp) => Ok(()),
             (Executor::GeminiCli { .. }, TransportMode::OpenaiCompat) => {
                 err("gemini-cli only supports cli or acp transport")
@@ -185,6 +190,7 @@ impl TransportFactory {
 
             // Opencode: Legacy only
             (Executor::Opencode { .. }, TransportMode::Legacy) => Ok(()),
+            #[cfg(feature = "acp")]
             (Executor::Opencode { .. }, TransportMode::Acp) => err("opencode has no acp transport"),
             (Executor::Opencode { .. }, TransportMode::OpenaiCompat) => {
                 err("opencode only supports cli transport")
@@ -195,6 +201,7 @@ impl TransportFactory {
             (Executor::OpenaiCompat { .. }, TransportMode::Legacy) => {
                 err("openai-compat has no cli binary")
             }
+            #[cfg(feature = "acp")]
             (Executor::OpenaiCompat { .. }, TransportMode::Acp) => {
                 err("openai-compat does not support acp transport")
             }
@@ -241,38 +248,50 @@ impl TransportFactory {
                 _ => Ok(Box::new(LegacyTransport::new(executor.clone()))),
             },
             TransportMode::Acp => {
-                // claude-code ACP transport is gated behind the `claude-code-acp` cargo
-                // feature (disabled by default, #1115/#1117). All other tools' ACP
-                // paths are always available.
-                #[cfg(not(feature = "claude-code-acp"))]
-                if matches!(executor, Executor::ClaudeCode { .. }) {
+                #[cfg(not(feature = "acp"))]
+                {
+                    let _ = executor;
+                    let _ = session_config;
                     anyhow::bail!(
-                        "claude-code ACP transport is disabled (cargo feature `claude-code-acp` \
+                        "ACP transport is disabled (cargo feature `acp` is not enabled). \
+                         Rebuild csa-executor with `--features acp` to enable ACP transport."
+                    );
+                }
+                #[cfg(feature = "acp")]
+                {
+                    // claude-code ACP transport is gated behind the `claude-code-acp` cargo
+                    // feature (disabled by default, #1115/#1117). All other tools' ACP
+                    // paths are always available.
+                    #[cfg(not(feature = "claude-code-acp"))]
+                    if matches!(executor, Executor::ClaudeCode { .. }) {
+                        anyhow::bail!(
+                            "claude-code ACP transport is disabled (cargo feature `claude-code-acp` \
                          is not enabled). This path was gated because ACP silently crashes at \
                          session startup (turn_count=0, output_log=0B, #1115/#1117). \
                          Rebuild csa-executor with `--features claude-code-acp` to enable \
                          this transport for investigation."
-                    );
-                }
-                // codex ACP transport is gated behind the `codex-acp` cargo feature
-                // (disabled by default, #760 / #1128) because native CLI resume
-                // (`codex exec resume <id>`, codex-cli 0.125.0+) is empirically
-                // equivalent on server-side cache reuse.
-                #[cfg(not(feature = "codex-acp"))]
-                if matches!(executor, Executor::Codex { .. }) {
-                    anyhow::bail!(
-                        "codex ACP transport is disabled (cargo feature `codex-acp` is not \
+                        );
+                    }
+                    // codex ACP transport is gated behind the `codex-acp` cargo feature
+                    // (disabled by default, #760 / #1128) because native CLI resume
+                    // (`codex exec resume <id>`, codex-cli 0.125.0+) is empirically
+                    // equivalent on server-side cache reuse.
+                    #[cfg(not(feature = "codex-acp"))]
+                    if matches!(executor, Executor::Codex { .. }) {
+                        anyhow::bail!(
+                            "codex ACP transport is disabled (cargo feature `codex-acp` is not \
                          enabled). This path was gated because native `codex exec resume <id>` \
                          (codex-cli 0.125.0+) is empirically equivalent to ACP loadSession on \
                          server-side cache reuse (54%, 44,800/83,503 input tokens, #760 / #1128). \
                          Rebuild csa-executor with `--features codex-acp` to enable this \
                          transport for investigation."
-                    );
+                        );
+                    }
+                    Ok(Box::new(AcpTransport::new(
+                        executor.tool_name(),
+                        session_config,
+                    )))
                 }
-                Ok(Box::new(AcpTransport::new(
-                    executor.tool_name(),
-                    session_config,
-                )))
             }
             TransportMode::OpenaiCompat => {
                 let default_model = if let Executor::OpenaiCompat { model_override, .. } = executor

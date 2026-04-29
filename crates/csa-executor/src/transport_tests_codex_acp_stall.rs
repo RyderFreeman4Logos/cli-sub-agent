@@ -1,4 +1,4 @@
-use csa_acp::{SessionEvent, client::StreamingMetadata};
+use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_process::ExecutionResult;
 
 fn codex_acp_stall_result(events: Vec<SessionEvent>) -> super::TransportResult {

@@ -1,7 +1,6 @@
 //! Executor enum for 4 AI tools.
 
 use anyhow::{Result, bail};
-use csa_acp::SessionConfig;
 use csa_core::types::{PromptTransport, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
@@ -20,6 +19,7 @@ use crate::install_hints::{
 };
 use crate::lefthook_guard::{sanitize_args_for_codex, sanitize_env_for_codex};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
+use crate::session_config::SessionConfig;
 use crate::transport::{
     ResolvedTimeout, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
     TransportResult,

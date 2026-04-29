@@ -74,7 +74,7 @@ impl AcpTransport {
                         request.output_spool_keep_rotated,
                     ));
                     match sr {
-                        transport_meta::AcpSandboxedResult {
+                        transport_acp_sandbox::AcpSandboxedResult {
                             result: Ok(mut output),
                             peak_memory_mb,
                             ..
@@ -82,7 +82,7 @@ impl AcpTransport {
                             output.peak_memory_mb = output.peak_memory_mb.or(peak_memory_mb);
                             Ok(output)
                         }
-                        transport_meta::AcpSandboxedResult {
+                        transport_acp_sandbox::AcpSandboxedResult {
                             result: Err(e),
                             sandbox_spawn_failed: true,
                             ..
@@ -125,7 +125,7 @@ impl AcpTransport {
                             ))
                             .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
                         }
-                        transport_meta::AcpSandboxedResult {
+                        transport_acp_sandbox::AcpSandboxedResult {
                             result: Err(e),
                             peak_memory_mb,
                             ..

@@ -53,7 +53,14 @@ impl TransportFactory {
     /// Determine which fork method applies for a given tool.
     pub fn fork_method_for_tool(tool_name: &str) -> ForkMethod {
         if tool_name == "claude-code" {
-            ForkMethod::Native
+            #[cfg(feature = "acp")]
+            {
+                ForkMethod::Native
+            }
+            #[cfg(not(feature = "acp"))]
+            {
+                ForkMethod::Soft
+            }
         } else if tool_name == "codex" {
             #[cfg(feature = "codex-pty-fork")]
             {
@@ -70,7 +77,7 @@ impl TransportFactory {
 
     /// Fork a session via the appropriate transport-level mechanism.
     ///
-    /// - `claude-code`: Native fork via `claude --fork-session` CLI.
+    /// - `claude-code`: Native fork via `claude --fork-session` CLI when ACP support is compiled in.
     /// - All others: Soft fork via context summary injection from parent session.
     pub async fn fork_session(request: &ForkRequest) -> ForkInfo {
         let method = request
@@ -87,36 +94,45 @@ impl TransportFactory {
             return Self::fork_codex_via_pty(request).await;
         }
 
-        let Some(provider_session_id) = &request.provider_session_id else {
-            return ForkInfo {
-                success: false,
-                method: ForkMethod::Native,
-                new_session_id: None,
-                notes: Some(
-                    "Native fork requires provider_session_id, but none was provided".to_string(),
-                ),
-            };
-        };
-
-        match csa_acp::fork_session_via_cli(
-            provider_session_id,
-            &request.working_dir,
-            request.timeout,
-        )
-        .await
+        #[cfg(not(feature = "acp"))]
         {
-            Ok(result) => ForkInfo {
-                success: true,
-                method: ForkMethod::Native,
-                new_session_id: Some(result.session_id),
-                notes: None,
-            },
-            Err(e) => ForkInfo {
-                success: false,
-                method: ForkMethod::Native,
-                new_session_id: None,
-                notes: Some(format!("Native fork failed: {e}")),
-            },
+            Self::fork_soft_with_reason(request, "ACP native fork support is not compiled in")
+        }
+
+        #[cfg(feature = "acp")]
+        {
+            let Some(provider_session_id) = &request.provider_session_id else {
+                return ForkInfo {
+                    success: false,
+                    method: ForkMethod::Native,
+                    new_session_id: None,
+                    notes: Some(
+                        "Native fork requires provider_session_id, but none was provided"
+                            .to_string(),
+                    ),
+                };
+            };
+
+            match csa_acp::fork_session_via_cli(
+                provider_session_id,
+                &request.working_dir,
+                request.timeout,
+            )
+            .await
+            {
+                Ok(result) => ForkInfo {
+                    success: true,
+                    method: ForkMethod::Native,
+                    new_session_id: Some(result.session_id),
+                    notes: None,
+                },
+                Err(e) => ForkInfo {
+                    success: false,
+                    method: ForkMethod::Native,
+                    new_session_id: None,
+                    notes: Some(format!("Native fork failed: {e}")),
+                },
+            }
         }
     }
 
@@ -220,10 +236,20 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "acp")]
     fn test_fork_method_for_tool_claude_code_is_native() {
         assert_eq!(
             TransportFactory::fork_method_for_tool("claude-code"),
             ForkMethod::Native
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "acp"))]
+    fn test_fork_method_for_tool_claude_code_is_soft_when_acp_feature_disabled() {
+        assert_eq!(
+            TransportFactory::fork_method_for_tool("claude-code"),
+            ForkMethod::Soft
         );
     }
 
@@ -351,11 +377,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "acp")]
     async fn test_fork_session_native_without_provider_id_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let request = ForkRequest {
             tool_name: "claude-code".to_string(),
-            fork_method: None,
+            fork_method: Some(ForkMethod::Native),
             provider_session_id: None,
             codex_auto_trust: false,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
@@ -374,6 +401,35 @@ mod tests {
                 .unwrap()
                 .contains("provider_session_id"),
             "Should explain missing provider ID: {:?}",
+            info.notes
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "acp"))]
+    async fn test_fork_session_native_without_acp_feature_degrades_to_soft() {
+        let tmp = tempfile::tempdir().unwrap();
+        let request = ForkRequest {
+            tool_name: "claude-code".to_string(),
+            fork_method: Some(ForkMethod::Native),
+            provider_session_id: None,
+            codex_auto_trust: false,
+            parent_csa_session_id: "01TEST_PARENT".to_string(),
+            parent_session_dir: tmp.path().to_path_buf(),
+            working_dir: tmp.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let info = TransportFactory::fork_session(&request).await;
+
+        assert!(info.success);
+        assert_eq!(info.method, ForkMethod::Soft);
+        assert!(
+            info.notes
+                .as_deref()
+                .unwrap()
+                .contains("ACP native fork support is not compiled in"),
+            "Should explain ACP feature-gated fork fallback: {:?}",
             info.notes
         );
     }

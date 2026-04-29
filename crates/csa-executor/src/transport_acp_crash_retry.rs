@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use csa_acp::SessionEvent;
+use csa_core::transport_events::SessionEvent;
 use csa_session::state::{MetaSessionState, ToolState};
 use regex::Regex;
 

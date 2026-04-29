@@ -53,9 +53,9 @@ pub(crate) fn persist_if_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csa_acp::SessionEvent;
     use csa_config::config::CURRENT_SCHEMA_VERSION;
     use csa_config::{ProjectMeta, ResourcesConfig, SessionConfig};
+    use csa_core::transport_events::SessionEvent;
     use csa_process::ExecutionResult;
     use std::collections::HashMap;
 
