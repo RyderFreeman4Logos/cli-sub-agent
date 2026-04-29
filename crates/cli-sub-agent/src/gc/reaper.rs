@@ -30,6 +30,12 @@ pub(crate) struct RuntimeReapEntry {
     pub(crate) bytes_reclaimed: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RetirementCandidate {
+    pub(super) phase: SessionPhase,
+    pub(super) age_days: i64,
+}
+
 pub(super) fn require_runtime_reap_max_age(max_age_days: Option<u64>) -> Result<u64> {
     max_age_days.ok_or_else(|| anyhow!("`csa gc --reap-runtime` requires `--max-age-days <N>`"))
 }
@@ -190,16 +196,32 @@ pub(super) fn sessions_with_dry_run_retirements(
         .iter()
         .cloned()
         .map(|mut session| {
-            let age = now.signed_duration_since(session.last_accessed);
-            if !session.tools.is_empty()
-                && age.num_days() > retire_after_days
-                && let Ok(retired_phase) = session.phase.transition(&PhaseEvent::Retired)
+            if let Some(candidate) =
+                stale_session_retirement_candidate(&session, now, retire_after_days)
             {
-                session.phase = retired_phase;
+                session.phase = candidate.phase;
             }
             session
         })
         .collect()
+}
+
+pub(super) fn stale_session_retirement_candidate(
+    session: &MetaSessionState,
+    now: chrono::DateTime<chrono::Utc>,
+    retire_after_days: i64,
+) -> Option<RetirementCandidate> {
+    if session.tools.is_empty() {
+        return None;
+    }
+
+    let age_days = now.signed_duration_since(session.last_accessed).num_days();
+    if age_days <= retire_after_days {
+        return None;
+    }
+
+    let phase = session.phase.transition(&PhaseEvent::Retired).ok()?;
+    Some(RetirementCandidate { phase, age_days })
 }
 
 pub(super) fn merge_runtime_reap_stats(total: &mut RuntimeReapStats, stats: RuntimeReapStats) {

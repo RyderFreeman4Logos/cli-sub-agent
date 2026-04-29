@@ -7,7 +7,7 @@ use csa_config::{GcConfig, GlobalConfig};
 use csa_core::types::OutputFormat;
 use csa_resource::cleanup_orphan_scopes;
 use csa_session::{
-    PhaseEvent, delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
+    delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
 };
 
 mod auto_gc;
@@ -20,10 +20,10 @@ mod transcript;
 use auto_gc::discover_project_roots;
 pub(crate) use auto_gc::{handle_gc_global, invalidate_state_dir_size_cache};
 pub use gc_args::GcArgs;
-pub(crate) use reaper::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS;
+pub(crate) use reaper::{AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS, reap_runtime_payloads_global};
 use reaper::{
     print_runtime_reap_summary, reap_runtime_payloads_in_root, require_runtime_reap_max_age,
-    sessions_with_dry_run_retirements,
+    sessions_with_dry_run_retirements, stale_session_retirement_candidate,
 };
 use transcript::{cleanup_project_transcripts, load_gc_config_for_sessions};
 
@@ -33,13 +33,6 @@ const STATE_DIR_SIZE_CACHE_FILENAME: &str = ".size-cache.toml";
 const RUNTIME_DIR_NAME: &str = "runtime";
 
 pub(crate) type RuntimeReapStats = reaper::RuntimeReapStats;
-
-pub(crate) fn reap_runtime_payloads_global(
-    dry_run: bool,
-    max_age_days: u64,
-) -> Result<RuntimeReapStats> {
-    reaper::reap_runtime_payloads_global(dry_run, max_age_days)
-}
 
 pub(crate) fn handle_gc(
     dry_run: bool,
@@ -114,45 +107,32 @@ pub(crate) fn handle_gc(
 
         // Retire stale Active/Available sessions (>7 days since last access)
         let age = now.signed_duration_since(session.last_accessed);
-        if age.num_days() > RETIRE_AFTER_DAYS
-            && session.phase.transition(&PhaseEvent::Retired).is_ok()
+        if let Some(retirement) =
+            stale_session_retirement_candidate(session, now, RETIRE_AFTER_DAYS)
         {
             if dry_run {
                 eprintln!(
                     "[dry-run] Would retire stale session: {} (phase={}, {} days old)",
-                    session.meta_session_id,
-                    session.phase,
-                    age.num_days()
+                    session.meta_session_id, session.phase, retirement.age_days
                 );
                 sessions_retired += 1;
             } else {
                 let mut updated = session.clone();
-                match updated.phase.transition(&PhaseEvent::Retired) {
-                    Ok(new_phase) => {
-                        updated.phase = new_phase;
-                        match save_session_in(&session_root, &updated) {
-                            Ok(_) => {
-                                info!(
-                                    session = %session.meta_session_id,
-                                    age_days = age.num_days(),
-                                    "Retired stale session"
-                                );
-                                sessions_retired += 1;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    session = %session.meta_session_id,
-                                    error = %e,
-                                    "Failed to persist retirement"
-                                );
-                            }
-                        }
+                updated.phase = retirement.phase;
+                match save_session_in(&session_root, &updated) {
+                    Ok(_) => {
+                        info!(
+                            session = %session.meta_session_id,
+                            age_days = retirement.age_days,
+                            "Retired stale session"
+                        );
+                        sessions_retired += 1;
                     }
                     Err(e) => {
                         warn!(
                             session = %session.meta_session_id,
                             error = %e,
-                            "Skipping retirement"
+                            "Failed to persist retirement"
                         );
                     }
                 }
