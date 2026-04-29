@@ -271,7 +271,7 @@ fn parse_review_verdict_accepts_clean_phrase_without_explicit_token() {
 }
 
 #[test]
-fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_exist() {
+fn build_multi_reviewer_instruction_keeps_session_dir_deferred_when_env_exists() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _parent_guard =
         ScopedEnvVarRestore::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
@@ -286,15 +286,20 @@ fn build_multi_reviewer_instruction_prefers_current_session_dir_env_when_both_ex
         None,
     );
 
-    assert!(prompt.contains("/tmp/child-session/reviewer-2/review-findings.json"));
     assert!(
-        !prompt.contains("/tmp/parent-session/reviewer-2/review-findings.json"),
-        "current session dir should override parent session dir when both exist"
+        prompt.contains(
+            "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-2/review-findings.json"
+        ),
+        "review prompt should defer session dir resolution to the reviewer process"
+    );
+    assert!(
+        !prompt.contains("/tmp/child-session") && !prompt.contains("/tmp/parent-session"),
+        "review prompt must not capture the parent process session dirs"
     );
 }
 
 #[test]
-fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
+fn build_multi_reviewer_instruction_does_not_capture_parent_session_dir_env() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _parent_guard =
         ScopedEnvVarRestore::set(CSA_PARENT_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
@@ -309,7 +314,15 @@ fn build_multi_reviewer_instruction_falls_back_to_parent_session_dir_env() {
         None,
     );
 
-    assert!(prompt.contains("/tmp/parent-session/reviewer-3/review-findings.json"));
+    assert!(
+        prompt.contains(
+            "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-3/review-findings.json"
+        )
+    );
+    assert!(
+        !prompt.contains("/tmp/parent-session"),
+        "review prompt must not inherit the outer CSA session dir"
+    );
 }
 
 #[test]
