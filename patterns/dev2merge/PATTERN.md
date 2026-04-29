@@ -61,10 +61,10 @@ FORBIDDEN — all of these destroy per-commit audit trails:
 
 **Empty-diff structural guard**: Before any merge (or before delegating to
 pr-bot), verify `gh pr diff <PR>` is non-empty AND the branch has commits
-ahead of main with a non-empty cumulative diff. An empty-diff PR is the
+ahead of the default branch with a non-empty cumulative diff. An empty-diff PR is the
 structural fingerprint of the lefthook re-stage race documented in #1122 —
 when seen, surface `merge_blocked_empty_diff` instead of pushing through.
-Squash-merging an empty-diff PR produces an empty squash commit on main;
+Squash-merging an empty-diff PR produces an empty squash commit on the default branch;
 this is the exact corruption #1122 documents.
 
 dev2merge delegates merging to pr-bot (Step 15), which reads
@@ -368,7 +368,7 @@ Required actions:
 Tool: bash
 OnFail: abort
 
-Cumulative review covering all commits since main.
+Cumulative review covering all commits since the default branch.
 Sets REVIEW_COMPLETED=true as gate for push step.
 
 ```bash
@@ -381,7 +381,7 @@ echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 
 When global config sets `[review].batch_commits >= 2`, intermediate cumulative
 reviews can be skipped until the branch accumulates enough new commits after
-the last passed `main...HEAD` review. Set `CSA_REVIEW_NOW=1` to bypass batching
+the last passed `${DEFAULT_BRANCH}...HEAD` review. Set `CSA_REVIEW_NOW=1` to bypass batching
 for the current run.
 
 ## ENDIF
@@ -397,7 +397,7 @@ Hard gates before any push:
 2. **Empty-diff structural guard (#1122)**: branch must have at least one
    commit ahead of base AND the cumulative diff vs base must be non-empty.
    An empty-diff branch is the lefthook-race fingerprint — it produces an
-   empty PR which can be silently squashed into an empty commit on main.
+   empty PR which can be silently squashed into an empty commit on the default branch.
    Aborting here surfaces `merge_blocked_empty_diff` to the orchestrator
    instead of letting it propagate to pr-bot.
 
@@ -432,7 +432,7 @@ Tool: bash
 OnFail: abort
 
 Hard gate before PR creation: the current branch HEAD must have a PASS/CLEAN
-review verdict for the full cumulative diff (`main...HEAD`).
+review verdict for the full cumulative diff (`${DEFAULT_BRANCH}...HEAD`).
 
 ```bash
 set -euo pipefail
@@ -457,7 +457,7 @@ COMMIT_SUBJECT="$(git log -1 --format=%s)"
 
 # --- Create or reuse PR ---
 set +e
-CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
+CREATE_OUTPUT="$(gh pr create --base "${DEFAULT_BRANCH}" --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
 CREATE_RC=$?
 set -e
 if [ "${CREATE_RC}" -ne 0 ]; then
@@ -487,7 +487,7 @@ done
 # Fallback: gh pr list --head
 if [ -z "${PR_NUMBER}" ]; then
   echo "INFO: gh pr view failed; falling back to gh pr list..."
-  PR_NUMBER="$(gh pr list --head "${BRANCH}" --base main --json number -q '.[0].number' 2>/dev/null || true)"
+  PR_NUMBER="$(gh pr list --head "${BRANCH}" --base "${DEFAULT_BRANCH}" --json number -q '.[0].number' 2>/dev/null || true)"
   if [ -n "${PR_NUMBER}" ] && printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
     PR_URL="$(gh pr view "${PR_NUMBER}" --json url -q '.url' 2>/dev/null || true)"
   fi
@@ -620,14 +620,28 @@ if [ -n "${PR_NUMBER:-}" ]; then
   echo "PR #${PR_NUMBER} confirmed MERGED."
 fi
 FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
-git fetch origin
-git checkout main
-git merge origin/main --ff-only
-LOCAL_SHA="$(git rev-parse HEAD)"
-REMOTE_SHA="$(git rev-parse origin/main)"
-if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
-  echo "ERROR: Local main does not match origin/main after sync." >&2
-  exit 1
+SYNC_REMOTE="origin"
+SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
 fi
-echo "Local main synced to ${LOCAL_SHA}."
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
+  exit 0
+fi
+if ! git checkout "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge checkout of ${SYNC_DEFAULT_BRANCH} failed; leaving ${FEATURE_BRANCH:-current branch} checked out." >&2
+  exit 0
+fi
+if ! git pull --ff-only "${SYNC_REMOTE}" "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge pull of ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} failed; merge already completed." >&2
+  exit 0
+fi
+LOCAL_SHA="$(git rev-parse HEAD)"
+REMOTE_SHA="$(git rev-parse "${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH}" 2>/dev/null || true)"
+if [ -n "${REMOTE_SHA}" ] && [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
+  echo "WARNING: Local ${SYNC_DEFAULT_BRANCH} (${LOCAL_SHA}) does not match ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} (${REMOTE_SHA}) after sync." >&2
+  exit 0
+fi
+echo "Local ${SYNC_DEFAULT_BRANCH} synced to ${LOCAL_SHA}."
 ```

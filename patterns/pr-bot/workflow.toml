@@ -222,6 +222,9 @@ name = "MARKER_REPO_SLUG"
 name = "MAX_REVIEW_ROUNDS"
 
 [[workflow.variables]]
+name = "MERGE_COMPLETED"
+
+[[workflow.variables]]
 name = "MERGE_REASON"
 
 [[workflow.variables]]
@@ -354,6 +357,12 @@ name = "SOURCE_OWNER"
 name = "STEP_11_OUTPUT"
 
 [[workflow.variables]]
+name = "SYNC_DEFAULT_BRANCH"
+
+[[workflow.variables]]
+name = "SYNC_REMOTE"
+
+[[workflow.variables]]
 name = "TRIGGER_BODY"
 
 [[workflow.variables]]
@@ -402,9 +411,6 @@ name = "WORKFLOW_BRANCH"
 name = "attempt"
 
 [[workflow.variables]]
-name = "count"
-
-[[workflow.variables]]
 name = "field_name"
 
 [[workflow.variables]]
@@ -412,9 +418,6 @@ name = "latest_bot_comment_json"
 
 [[workflow.variables]]
 name = "latest_trigger_ts"
-
-[[workflow.variables]]
-name = "matches"
 
 [[workflow.variables]]
 name = "pr_num"
@@ -451,6 +454,9 @@ name = "reuse_existing_current_head_review"
 
 [[workflow.variables]]
 name = "setup_body"
+
+[[workflow.variables]]
+name = "status"
 
 [[workflow.variables]]
 name = "step"
@@ -2280,12 +2286,9 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local default branch with remote
-git fetch "${REMOTE_NAME}"
-git checkout "${DEFAULT_BRANCH}"
-git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
+MERGE_COMPLETED=true
+echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "!(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES}))"
@@ -2347,12 +2350,9 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local default branch with remote
-git fetch "${REMOTE_NAME}"
-git checkout "${DEFAULT_BRANCH}"
-git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
+MERGE_COMPLETED=true
+echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED}))"
@@ -2395,18 +2395,57 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local default branch with remote
-git fetch "${REMOTE_NAME}"
-git checkout "${DEFAULT_BRANCH}"
-git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
+MERGE_COMPLETED=true
+echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})))"
 
 [[workflow.steps]]
 id = 24
+title = "Post-Merge Default Branch Checkout"
+tool = "bash"
+prompt = '''
+> **Layer**: 0 (Orchestrator) -- best-effort checkout after successful merge.
+
+
+After `gh pr merge` succeeds, leave the working tree on the dynamically
+detected default branch and pull its latest remote state. This step is
+best-effort: checkout or pull failure warns but does not change the successful
+merge outcome.
+
+```bash
+set +e
+SYNC_REMOTE="${REMOTE_NAME:-origin}"
+SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref "refs/remotes/${SYNC_REMOTE}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${SYNC_REMOTE}/@@")"
+fi
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+  SYNC_REMOTE="origin"
+fi
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
+  exit 0
+fi
+if ! git checkout "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge checkout of ${SYNC_DEFAULT_BRANCH} failed; leaving current branch unchanged." >&2
+  exit 0
+fi
+if ! git pull --ff-only "${SYNC_REMOTE}" "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge pull of ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} failed; merge already completed." >&2
+  exit 0
+fi
+git log --oneline -1
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
+```'''
+on_fail = "abort"
+condition = "${MERGE_COMPLETED}"
+
+[[workflow.steps]]
+id = 25
 title = "Post-Merge Extensions"
 tool = "note"
 prompt = "> Post-merge rule-extractor pattern is available at `patterns/rule-extractor/` — integration pending separate PR. Invoke via `csa plan run patterns/rule-extractor/workflow.toml` after successful merge when HIGH/CRITICAL findings exist."

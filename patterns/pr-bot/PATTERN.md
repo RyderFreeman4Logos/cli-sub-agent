@@ -1872,12 +1872,9 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local default branch with remote
-git fetch "${REMOTE_NAME}"
-git checkout "${DEFAULT_BRANCH}"
-git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
+MERGE_COMPLETED=true
+echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 
 ## ENDIF
@@ -1938,12 +1935,9 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local default branch with remote
-git fetch "${REMOTE_NAME}"
-git checkout "${DEFAULT_BRANCH}"
-git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
+MERGE_COMPLETED=true
+echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 
 ## ELSE
@@ -1985,15 +1979,54 @@ MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG
 mkdir -p "${MARKER_DIR}"
 touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
-# Post-merge: sync local default branch with remote
-git fetch "${REMOTE_NAME}"
-git checkout "${DEFAULT_BRANCH}"
-git merge "${REMOTE_NAME}/${DEFAULT_BRANCH}" --ff-only
-git log --oneline -1  # verify local matches remote
-echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
+MERGE_COMPLETED=true
+echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 
 ## ENDIF
+
+## ENDIF
+
+## IF ${MERGE_COMPLETED}
+
+## Step 13: Post-Merge Default Branch Checkout
+
+> **Layer**: 0 (Orchestrator) -- best-effort checkout after successful merge.
+
+Tool: bash
+
+After `gh pr merge` succeeds, leave the working tree on the dynamically
+detected default branch and pull its latest remote state. This step is
+best-effort: checkout or pull failure warns but does not change the successful
+merge outcome.
+
+```bash
+set +e
+SYNC_REMOTE="${REMOTE_NAME:-origin}"
+SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref "refs/remotes/${SYNC_REMOTE}/HEAD" 2>/dev/null | sed "s@^refs/remotes/${SYNC_REMOTE}/@@")"
+fi
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+  SYNC_REMOTE="origin"
+fi
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
+  exit 0
+fi
+if ! git checkout "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge checkout of ${SYNC_DEFAULT_BRANCH} failed; leaving current branch unchanged." >&2
+  exit 0
+fi
+if ! git pull --ff-only "${SYNC_REMOTE}" "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge pull of ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} failed; merge already completed." >&2
+  exit 0
+fi
+git log --oneline -1
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
+```
 
 ## ENDIF
 

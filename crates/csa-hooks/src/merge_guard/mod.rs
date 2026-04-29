@@ -112,7 +112,7 @@ _post_merge_sync() {
     DEFAULT_BRANCH="${DEFAULT_BRANCH#${PRIMARY_REMOTE}/}"
   fi
   if [ -z "${DEFAULT_BRANCH}" ]; then
-    printf 'NOTE: post-merge sync skipped — could not determine default branch (gh repo view failed, %s/HEAD not set)\n' "${PRIMARY_REMOTE}" >&2
+    printf 'NOTE: post-merge sync skipped: could not determine default branch (gh repo view failed, %s/HEAD not set)\n' "${PRIMARY_REMOTE}" >&2
     return 0
   fi
 
@@ -126,8 +126,10 @@ _post_merge_sync() {
     } >&2 || printf 'NOTE: in-place fast-forward failed, continuing\n' >&2
   else
     {
-      git fetch "${PRIMARY_REMOTE}" "${DEFAULT_BRANCH}:${DEFAULT_BRANCH}"
-    } >&2 || printf 'NOTE: refspec update failed, continuing\n' >&2
+      git fetch "${PRIMARY_REMOTE}" "${DEFAULT_BRANCH}" &&
+      git checkout "${DEFAULT_BRANCH}" &&
+      git pull --ff-only "${PRIMARY_REMOTE}" "${DEFAULT_BRANCH}"
+    } >&2 || printf 'NOTE: post-merge checkout/pull failed, continuing\n' >&2
   fi
 }
 

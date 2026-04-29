@@ -198,14 +198,15 @@ fn assert_in_place_sync_log_with_remote(git_log: &Path, remote: &str, branch: &s
     );
 }
 
-fn assert_refspec_sync_log(git_log: &Path, branch: &str) {
-    assert_refspec_sync_log_with_remote(git_log, "origin", branch);
+fn assert_checkout_sync_log(git_log: &Path, branch: &str) {
+    assert_checkout_sync_log_with_remote(git_log, "origin", branch);
 }
 
-fn assert_refspec_sync_log_with_remote(git_log: &Path, remote: &str, branch: &str) {
+fn assert_checkout_sync_log_with_remote(git_log: &Path, remote: &str, branch: &str) {
     let lines = git_log_lines(git_log);
-    assert_log_has_line(&lines, &format!("fetch {remote} {branch}:{branch}"));
-    assert_log_lacks_prefix(&lines, "checkout ");
+    assert_log_has_line(&lines, &format!("fetch {remote} {branch}"));
+    assert_log_has_line(&lines, &format!("checkout {branch}"));
+    assert_log_has_line(&lines, &format!("pull --ff-only {remote} {branch}"));
     assert_log_lacks_prefix(&lines, "merge ");
 }
 
@@ -311,7 +312,7 @@ fn post_merge_sync_ignores_local_branch_upstream_for_primary_remote() {
     create_test_marker(tmp.path());
     let (code, _, _) = run_wrapper_with_mock_git(&gd, &gh, &mb, &["pr", "merge", "42"]);
     assert_eq!(code, 0);
-    assert_refspec_sync_log_with_remote(&gl, "origin", "main");
+    assert_checkout_sync_log_with_remote(&gl, "origin", "main");
     let lines = git_log_lines(&gl);
     assert_log_lacks_prefix(&lines, "fetch main ");
     assert_log_lacks_prefix(&lines, "merge main/");
@@ -336,14 +337,14 @@ fn post_merge_sync_skips_when_all_default_detection_fails() {
 }
 
 #[test]
-fn post_merge_sync_uses_refspec_when_not_on_default() {
+fn post_merge_sync_checks_out_default_when_not_on_default() {
     let tmp = tempfile::tempdir().unwrap();
     let (gd, gh, mb, gl) =
         setup_post_merge_env_with_git(tmp.path(), 0, Some("main"), None, Some("feat/xyz"), 0);
     create_test_marker(tmp.path());
     let (code, _, _) = run_wrapper_with_mock_git(&gd, &gh, &mb, &["pr", "merge", "42"]);
     assert_eq!(code, 0);
-    assert_refspec_sync_log(&gl, "main");
+    assert_checkout_sync_log(&gl, "main");
 }
 
 #[test]
