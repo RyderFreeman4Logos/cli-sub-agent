@@ -145,6 +145,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut is_auto_seed_fork = request.is_auto_seed_fork;
     let mut session_arg = request.session_arg;
     let mut effective_session_arg = request.effective_session_arg;
+    let mut vcs_probe_cache = crate::run_helpers_branch_guard::VcsProbeCache::default();
     let enforce_tier =
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
     let result = loop {
@@ -313,9 +314,10 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             }
         }
 
-        let branch_state = crate::run_helpers_branch_guard::observe_branch_state(
+        let branch_state = crate::run_helpers_branch_guard::observe_branch_state_with_cache(
             request.project_root,
             request.config,
+            Some(&mut vcs_probe_cache),
         );
         if let Some(exit_code) = crate::run_helpers_branch_guard::evaluate_and_emit_refusal(
             &request.branch_guard,
