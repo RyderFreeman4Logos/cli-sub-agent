@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{ArgGroup, ValueEnum};
 use csa_core::types::ToolName;
 
-use super::{Commands, parse_model_spec_arg};
+use super::{Commands, parse_model_spec_arg, parse_spec_path_arg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -177,7 +177,7 @@ pub struct ReviewArgs {
     pub cd: Option<String>,
 
     /// Path to agent-spec file (.spec or .toml) for contract-based verification
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", value_parser = parse_spec_path_arg)]
     pub spec: Option<String>,
 
     /// Tier name, alias, or unambiguous prefix for tool/model routing.

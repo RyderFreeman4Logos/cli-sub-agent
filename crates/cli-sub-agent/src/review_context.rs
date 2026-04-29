@@ -35,15 +35,10 @@ pub(crate) fn resolve_review_context(
 fn resolve_explicit_review_context(path: &str) -> Result<ResolvedReviewContext> {
     let path_ref = Path::new(path);
 
-    // Security: reject paths with null bytes (potential injection)
-    anyhow::ensure!(
-        !path.contains('\0'),
-        "Spec path contains null byte: rejected for security"
-    );
-
-    // Accept .toml and .spec as spec document formats (both parsed as TOML)
-    if has_extension(path_ref, "toml") || has_extension(path_ref, "spec") {
-        return load_spec_review_context(path_ref);
+    match csa_core::spec_validate::validate_spec(path_ref) {
+        Ok(spec_path) => return load_spec_review_context(&spec_path),
+        Err(csa_core::spec_validate::SpecValidationError::InvalidExtension { .. }) => {}
+        Err(error) => return Err(error.into()),
     }
 
     let kind = if has_extension(path_ref, "md") {

@@ -90,6 +90,12 @@ fn parse_model_spec_arg(spec: &str) -> std::result::Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+fn parse_spec_path_arg(spec: &str) -> std::result::Result<String, String> {
+    csa_core::spec_validate::validate_spec(std::path::Path::new(spec))
+        .map(|path| path.display().to_string())
+        .map_err(|err| err.to_string())
+}
+
 fn validate_ulid(value: &str) -> std::result::Result<String, String> {
     csa_session::validate_session_id(value)
         .map(|_| value.to_string())
@@ -233,7 +239,7 @@ pub enum Commands {
         no_stream_stdout: bool,
 
         /// Path to agent-spec file (.spec or .toml) for contract-based verification
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", value_parser = parse_spec_path_arg)]
         spec: Option<String>,
 
         /// Tier name, alias, or unambiguous prefix for tool/model routing.
