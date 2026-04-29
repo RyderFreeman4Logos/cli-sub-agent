@@ -27,6 +27,21 @@ Light mode flow: Phase 1 (RECON) → Phase 1.5 (LANGUAGE) → Phase 2 (DRAFT) �
 Phase 2.25 (SPEC) → Phase 4 (SAVE) → Phase 4.5 (APPROVE).
 The SAVE step uses the draft TODO directly instead of the revised version.
 
+### Epic Mode
+
+When RECON findings indicate an epic-scale task (>= 3 scale signals),
+the DRAFT phase produces BOTH a summary TODO.md and an `epic-plan.toml`
+with a story dependency graph. Each story is an independent unit of work
+with its own branch (`feat/<epic>/<story>`), own TODO, and own dev2merge run.
+
+Scale signals: new modules (>2), new public APIs (>5), new config sections (>2),
+new CLI subcommands (>1), cross-crate deps (>3), design doc pages (>5).
+
+After mktd completes, use `csa todo epic show` to view the story DAG and
+`csa todo epic next` to see which stories are ready to start.
+
+Each story follows: branch from main -> mktd (story-specific) -> dev2merge -> merge to main.
+
 ## Step 0: Phase 0.5 — Auto Session Discovery
 
 Tool: bash
@@ -273,6 +288,51 @@ Write all TODO descriptions, section headers, and task names in `${STEP_2_OUTPUT
 Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool].
 Every checkbox item MUST include a mechanically verifiable `DONE WHEN:` line.
+
+### Epic Scale Detection
+
+Before drafting, assess whether this task is epic-scale. Count how many of these signals appear in the RECON findings:
+
+1. New crate/module count > 2
+2. New public API surface > 5 new pub fn/trait
+3. New config schema sections > 2
+4. New CLI subcommands > 1
+5. Cross-crate dependency edges > 3
+6. Whitepaper/RFC/design-doc exceeds 5 logical pages
+
+If >= 3 signals fire, this is an EPIC. Produce BOTH:
+(A) A summary TODO.md that lists the epic's stories as checkbox items
+(B) An epic-plan.toml section enclosed in a fenced code block tagged ```epic-plan.toml
+
+The epic-plan.toml MUST follow this schema:
+```toml
+[epic]
+name = "feature-name"
+prefix = "feat/feature-name"
+summary = "One-line description"
+
+[[stories]]
+id = "phase-1"
+branch = "feat/feature-name/phase-1-description"
+depends_on = []
+summary = "What this story delivers"
+
+[[stories]]
+id = "phase-2"
+branch = "feat/feature-name/phase-2-description"
+depends_on = ["phase-1"]
+summary = "What this story delivers"
+```
+
+Each story MUST have:
+- Unique id (short kebab-case, e.g. "phase-1a", "core-types")
+- Branch name under the epic prefix
+- Explicit depends_on (empty array if independent)
+- Summary describing what the story delivers
+
+The summary TODO.md should reference `epic-plan.toml` and list each story as a checkbox item with its branch and dependencies.
+
+If < 3 signals fire, produce a regular TODO.md as before (no epic plan).
 
 ### Output
 
@@ -569,6 +629,16 @@ TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${F
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path | head -n1) || { echo "csa todo show failed" >&2; exit 1; }
 SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
 printf '%s\n' "${FINAL_TODO}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+# Extract and save epic-plan.toml if present in FINAL_TODO
+EPIC_PLAN=$(printf '%s\n' "${FINAL_TODO}" | sed -n '/^```epic-plan.toml$/,/^```$/p' | sed '1d;$d')
+if [[ -n "${EPIC_PLAN:-}" ]]; then
+  EPIC_PATH="$(dirname "${TODO_PATH}")/epic-plan.toml"
+  printf '%s\n' "${EPIC_PLAN}" > "${EPIC_PATH}" || { echo "write epic-plan.toml failed" >&2; exit 1; }
+  [[ -s "${EPIC_PATH}" ]] || { echo "saved epic-plan.toml is empty" >&2; exit 1; }
+  # Validate via csa todo epic validate
+  csa todo epic validate -t "${TODO_TS}" 2>&1 || { echo "epic-plan.toml validation failed" >&2; exit 1; }
+  echo "Epic plan saved and validated" >&2
+fi
 SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_PATH}" || { echo "write spec failed" >&2; exit 1; }
 [[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }

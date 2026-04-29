@@ -1,5 +1,7 @@
 //! CLI subcommands for the `csa todo` command group.
 
+use std::ffi::OsString;
+
 use clap::{Subcommand, ValueEnum};
 
 #[derive(Subcommand)]
@@ -177,6 +179,12 @@ pub enum TodoCommands {
         cd: Option<String>,
     },
 
+    /// Epic plan management
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommands,
+    },
+
     /// Manage reference files attached to TODO plans
     Ref {
         #[command(subcommand)]
@@ -189,6 +197,54 @@ pub enum TodoDagFormat {
     Mermaid,
     Terminal,
     Dot,
+}
+
+#[derive(Subcommand)]
+pub enum EpicCommands {
+    /// Show the epic plan for current TODO
+    Show {
+        /// Timestamp of the TODO plan (default: latest)
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Output format (also accepts --format)
+        #[arg(long = "epic-format", value_enum, default_value_t = EpicFormat::Terminal)]
+        epic_format: EpicFormat,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Validate epic plan (check DAG, no cycles, all deps valid)
+    Validate {
+        /// Timestamp of the TODO plan (default: latest)
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Show next actionable stories (pending with all deps merged)
+    Next {
+        /// Timestamp of the TODO plan (default: latest)
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum EpicFormat {
+    Terminal,
+    Mermaid,
+    Dot,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -274,4 +330,104 @@ pub enum TodoRefCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+}
+
+pub(crate) fn normalize_epic_format_args(
+    args: impl IntoIterator<Item = OsString>,
+) -> Vec<OsString> {
+    let mut in_todo = false;
+    let mut in_epic = false;
+    let mut in_epic_show = false;
+
+    args.into_iter()
+        .map(|arg| {
+            if in_epic_show {
+                // The root command owns global --format, so clap cannot also define a
+                // subcommand-local --format. Keep the epic user-facing syntax stable by
+                // rewriting it to the internal flag before clap parses the command.
+                if arg == "--format" {
+                    return OsString::from("--epic-format");
+                }
+                if let Some(value) = arg.to_str().and_then(|s| s.strip_prefix("--format=")) {
+                    return OsString::from(format!("--epic-format={value}"));
+                }
+                return arg;
+            }
+
+            if arg == "todo" {
+                in_todo = true;
+            } else if in_todo && arg == "epic" {
+                in_epic = true;
+            } else if in_epic && arg == "show" {
+                in_epic_show = true;
+            }
+
+            arg
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod epic_arg_normalization_tests {
+    use super::normalize_epic_format_args;
+    use std::ffi::OsString;
+
+    fn normalize(args: &[&str]) -> Vec<String> {
+        normalize_epic_format_args(args.iter().map(OsString::from))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn rewrites_epic_show_format_flag() {
+        let args = normalize(&[
+            "csa", "todo", "epic", "show", "--format", "mermaid", "--cd", ".",
+        ]);
+
+        assert_eq!(
+            args,
+            vec![
+                "csa",
+                "todo",
+                "epic",
+                "show",
+                "--epic-format",
+                "mermaid",
+                "--cd",
+                "."
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrites_epic_show_format_equals() {
+        let args = normalize(&["csa", "todo", "epic", "show", "--format=json"]);
+
+        assert_eq!(
+            args,
+            vec!["csa", "todo", "epic", "show", "--epic-format=json"]
+        );
+    }
+
+    #[test]
+    fn preserves_global_format_before_command() {
+        let args = normalize(&[
+            "csa", "--format", "json", "todo", "epic", "show", "--format", "dot",
+        ]);
+
+        assert_eq!(
+            args,
+            vec![
+                "csa",
+                "--format",
+                "json",
+                "todo",
+                "epic",
+                "show",
+                "--epic-format",
+                "dot"
+            ]
+        );
+    }
 }

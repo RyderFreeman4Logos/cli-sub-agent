@@ -72,6 +72,7 @@ mod skill_resolver;
 mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;
+mod todo_epic_cmd;
 mod todo_ref_cmd;
 mod tool_version;
 
@@ -213,7 +214,7 @@ async fn run() -> Result<()> {
         .try_init()
         .ok();
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(cli::normalize_epic_format_args(std::env::args_os()));
     let output_format = cli.format;
     let command = cli.command;
 
@@ -713,6 +714,9 @@ async fn run() -> Result<()> {
                 cd,
             } => {
                 todo_cmd::handle_dag(timestamp, format, cd)?;
+            }
+            TodoCommands::Epic { command } => {
+                todo_epic_cmd::handle_epic_command(command)?;
             }
             TodoCommands::Ref { cmd } => match cmd {
                 TodoRefCommands::List {
