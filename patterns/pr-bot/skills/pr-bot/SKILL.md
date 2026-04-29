@@ -29,7 +29,7 @@ triggers:
 
 ## Purpose
 
-Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus configurable cloud bot review (default: gemini-code-assist; configurable via `pr_review.cloud_bot_name`). When bot times out, the workflow **aborts** (no silent fallback merge). The one explicit exception is a detected quota-exhaustion warning, which is cached and routed through the merge-without-bot audit path. Performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). Non-target bot comments (e.g., codex auto-review) are also detected and processed with a quota warning. Merges with `--merge` to preserve per-commit audit trail.
+Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering `${DEFAULT_BRANCH}...HEAD`) plus configurable cloud bot review (default: gemini-code-assist; configurable via `pr_review.cloud_bot_name`). When bot times out, the workflow **aborts** (no silent fallback merge). The one explicit exception is a detected quota-exhaustion warning, which is cached and routed through the merge-without-bot audit path. Performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). Non-target bot comments (e.g., codex auto-review) are also detected and processed with a quota warning. Merges with `--merge` to preserve per-commit audit trail.
 
 **MANDATORY AUDIT TRAIL**: When an agent determines a PR-page review finding
 (for example, a cloud bot finding) is NOT a real issue or is acceptable in
@@ -64,7 +64,7 @@ Layer 1 agents perform the actual work dispatched by Layer 0:
 
 | Step | Layer 1 Agent | Work Performed |
 |------|-------------|----------------|
-| Step 2 | `csa review --branch main` | Cumulative local review |
+| Step 2 | `csa review --branch ${DEFAULT_BRANCH}` | Cumulative local review |
 | Step 3 | `csa` (executor) | Fix local review issues |
 | Step 7 | claude-code (Task tool) | Classify bot comments |
 | Step 8 | `csa debate` | False-positive arbitration |
@@ -90,7 +90,7 @@ results.
 ```
 Layer 0 (Orchestrator)
   |
-  +-- dispatch --> Layer 1: csa review --branch main
+  +-- dispatch --> Layer 1: csa review --branch ${DEFAULT_BRANCH}
   |                  |
   |                  +-- spawn --> Layer 2: reviewer model(s)
   |
@@ -114,7 +114,7 @@ Layer 0 (Orchestrator)
 ### Prerequisites
 
 - All changes must be committed on a feature branch
-- Feature branch must be ahead of main
+- Feature branch must be ahead of the default branch
 - **FORBIDDEN**: Pushing the feature branch to remote BEFORE invoking this skill.
   Step 2 (local review) MUST complete before any push. If you push first,
   unreviewed code reaches the remote and CI/reviewers may act on it prematurely.
@@ -225,12 +225,12 @@ breaks prompt-guard propagation.
 ### Step-by-Step
 
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
-2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA from `review_meta.json`). If matched, skip review; if mismatched/missing, run full `csa review --branch main --fix --max-rounds 3` (the `--fix` flag resumes the same reviewer session to fix issues, preserving full review context). This is the foundation -- without it, bot unavailability cannot safely merge. Sets `REVIEW_COMPLETED=true` on success.
-3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): Detect if branch was already pushed (early-push warning). Resolve the push remote using the documented fork-convention guard; if `origin` looks canonical and no explicit push remote is configured, fail closed with a fix command instead of guessing. Then push with `--force-with-lease`, derive `source_owner` from `origin` remote URL, and resolve PR strictly by owner-aware lookup (`base=main + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
+2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA from `review_meta.json`). If matched, skip review; if mismatched/missing, run full `csa review --branch "${DEFAULT_BRANCH}" --fix --max-rounds 3` (the `--fix` flag resumes the same reviewer session to fix issues, preserving full review context). This is the foundation -- without it, bot unavailability cannot safely merge. Sets `REVIEW_COMPLETED=true` on success.
+3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): Detect if branch was already pushed (early-push warning). Resolve the push remote using the documented fork-convention guard; if `origin` looks canonical and no explicit push remote is configured, fail closed with a fix command instead of guessing. Then push with `--force-with-lease`, derive `source_owner` from `origin` remote URL, and resolve PR strictly by owner-aware lookup (`base=${DEFAULT_BRANCH} + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
     If `false` → skip Steps 4-9. Apply the same SHA-verified fast-path before
     supplementary review. If SHA matches, skip review; if SHA mismatches/missing
-    (HEAD drift fallback), run full `csa review --branch main`. Then route through
+    (HEAD drift fallback), run full `csa review --branch "${DEFAULT_BRANCH}"`. Then route through
     the bot-unavailable merge path (Step 6a).
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
    - **Round 0** (initial PR): follows `cloud_bot_trigger` config (`"comment"` → @mention, `"auto"` → skip).
@@ -244,13 +244,13 @@ breaks prompt-guard propagation.
    - Category A (already fixed): react and acknowledge.
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
    - Category C (real issue): queue for staleness filter, then fix.
-6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
+6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff "${DEFAULT_BRANCH}...HEAD"` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
 7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Require structured debate output, then post the PR audit trail through an explicit `gh pr comment` step. If debate overturns the false-positive classification, reroute that comment into the real-issue fix step instead of posting a dismissal comment.
-8. **Fix non-stale real issues**: For surviving Category C comments, fix using `csa review --fix` to resume the reviewer session (preserves review context, avoids 50K+ token waste of spawning fresh). Commit fixes, then run `csa review --range main...HEAD` (review gate) BEFORE pushing — unreviewed fix code must not reach the remote.
+8. **Fix non-stale real issues**: For surviving Category C comments, fix using `csa review --fix` to resume the reviewer session (preserves review context, avoids 50K+ token waste of spawning fresh). Commit fixes, then run `csa review --range "${DEFAULT_BRANCH}...HEAD"` (review gate) BEFORE pushing — unreviewed fix code must not reach the remote.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
 10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Squash merges are forbidden for audit reasons.
-11. **Merge**: When `cloud_bot=false`, leave audit trail comment explaining merge rationale (bot disabled + local review CLEAN). When `cloud_bot=true`, either the bot must have confirmed no issues before reaching this step, or Step 4 must have explicitly routed through the quota-exhausted merge-without-bot path with an audit comment citing the cached window and local review session. Plain timeout still aborts and never falls through to merge. Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
+11. **Merge**: When `cloud_bot=false`, leave audit trail comment explaining merge rationale (bot disabled + local review CLEAN). When `cloud_bot=true`, either the bot must have confirmed no issues before reaching this step, or Step 4 must have explicitly routed through the quota-exhausted merge-without-bot path with an audit comment citing the cached window and local review session. Plain timeout still aborts and never falls through to merge. Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then sync the local default branch from its remote tracking branch.
 
 ## Example Usage
 
@@ -268,7 +268,7 @@ breaks prompt-guard propagation.
 ## Done Criteria
 
 1. Step 2 completed synchronously (not backgrounded) via one of:
-   - full path: `csa review --branch main`, or
+   - full path: `csa review --branch "${DEFAULT_BRANCH}"`, or
    - fast-path: current HEAD SHA matches latest reviewed session HEAD SHA.
    - `REVIEW_COMPLETED=true` is set after successful completion.
 2. Any local review issues are fixed before PR creation.
@@ -277,14 +277,14 @@ breaks prompt-guard propagation.
 5. **If cloud_bot enabled (default)**: cloud bot triggered (round-aware: auto on round 0, explicit retrigger on round 1+), wait handled by the built-in `pr-bot-wait.sh` helper with hard timeout and positive review-event signal checks, and timeout path handled. If bot responds with environment/configuration setup message instead of actual review, workflow STOPS and reports to user (Step 5a).
 6. **If cloud_bot disabled**: supplementary check completed via one of:
    - fast-path: SHA match, review skipped, or
-   - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch main` executed.
+   - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch "${DEFAULT_BRANCH}"` executed.
 7. Every bot comment classified (A/B/C) and actioned appropriately (cloud_bot enabled only).
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
-10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD via explicit retrigger command (NOT relying on auto-review), uses the same configurable wait policy as the initial gate (`cloud_bot_wait_seconds` quiet wait + `cloud_bot_poll_max_seconds` polling), and requires a **positive review event** (via `pulls/{pr}/reviews` API, filtered by `commit_id`) with zero actionable findings. If no review event or API failure, falls back to local `csa review --range main...HEAD`. If new findings appear, workflow aborts (user must re-run pr-bot).
+10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD via explicit retrigger command (NOT relying on auto-review), uses the same configurable wait policy as the initial gate (`cloud_bot_wait_seconds` quiet wait + `cloud_bot_poll_max_seconds` polling), and requires a **positive review event** (via `pulls/{pr}/reviews` API, filtered by `commit_id`) with zero actionable findings. If no review event or API failure, falls back to local `csa review --range "${DEFAULT_BRANCH}...HEAD"`. If new findings appear, workflow aborts (user must re-run pr-bot).
 10b. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
 10c. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.
 12. PR merged via configured strategy (default: merge commit, full history preserved). Branch deletion controlled by `pr_review.delete_branch` config (default: false — branches preserved for audit).
-13. Local main updated: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
+13. Local default branch updated from its remote tracking branch.
