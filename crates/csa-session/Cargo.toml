@@ -12,6 +12,7 @@ csa-process.workspace = true
 csa-resource.workspace = true
 csa-lock.workspace = true
 csa-config.workspace = true
+fd-lock.workspace = true
 toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true

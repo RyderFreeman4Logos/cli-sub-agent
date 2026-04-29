@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod checklist;
 pub mod consensus;
 pub mod env;
 pub mod error;
