@@ -257,6 +257,18 @@ if [ -f "${MARKER_FILE}" ]; then
     printf '{"event":"MergeCompleted","pr_number":%s,"head_sha":"%s","marker_path":"%s","timestamp":"%s"}\n' \
       "${PR_NUMBER}" "${HEAD_SHA}" "${MARKER_FILE}" "${AUDIT_TS}" \
       >> "${EVENTS_DIR}/merge-guard.jsonl" 2>/dev/null || true
+    if command -v csa >/dev/null 2>&1 && command -v mempal >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+      CSA_CONFIG_JSON="$(csa config show --format json 2>/dev/null || true)"
+      case "${CSA_CONFIG_JSON}" in
+        *'"auto_capture":true'*|*'"auto_capture": true'*)
+          case "${CSA_CONFIG_JSON}" in
+            *'"backend":"mempal"'*|*'"backend": "mempal"'*|*'"backend":"auto"'*|*'"backend": "auto"'*)
+              ( timeout 30s mempal ingest --wing cli-sub-agent --room csa-merge "${EVENTS_DIR}" >/dev/null 2>&1 || true ) &
+              ;;
+          esac
+          ;;
+      esac
+    fi
     _post_merge_sync
   fi
   exit ${MERGE_EXIT}

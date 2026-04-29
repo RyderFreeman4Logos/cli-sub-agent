@@ -823,6 +823,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "csa-config",
+ "csa-memory",
  "libc",
  "serde",
  "serde_json",

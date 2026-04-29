@@ -53,6 +53,7 @@ pub mod directive;
 pub mod event;
 pub mod event_bus;
 pub mod guard;
+pub mod mempal_capture;
 pub mod merge_guard;
 pub mod policy;
 pub mod pre_session;

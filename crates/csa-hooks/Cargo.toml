@@ -12,6 +12,7 @@ async-hooks = []
 anyhow.workspace = true
 chrono.workspace = true
 csa-config.workspace = true
+csa-memory.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile.workspace = true

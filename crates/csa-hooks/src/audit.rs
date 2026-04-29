@@ -81,6 +81,14 @@ fn emit_merge_completed_event_inner(
         log = %log_path.display(),
         "MergeCompleted audit event emitted"
     );
+
+    if let Ok(project_root) = std::env::current_dir() {
+        crate::mempal_capture::spawn_mempal_ingest_for_project(
+            &project_root,
+            "csa-merge",
+            &events_dir,
+        );
+    }
     Ok(())
 }
 
