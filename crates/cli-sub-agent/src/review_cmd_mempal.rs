@@ -24,12 +24,15 @@ pub(crate) fn maybe_capture_review_mempal(
         return;
     };
     match csa_session::get_session_dir(project_root, session_id) {
-        Ok(session_dir) => csa_hooks::mempal_capture::spawn_mempal_ingest(
-            memory_config,
-            "csa-review",
-            &session_dir,
-            Some(tool_name),
-        ),
+        Ok(session_dir) => {
+            let result_path = session_dir.join("result.toml");
+            csa_hooks::mempal_capture::spawn_mempal_ingest(
+                memory_config,
+                "csa-review",
+                &result_path,
+                Some(tool_name),
+            );
+        }
         Err(err) => warn!(
             session_id,
             error = %err,

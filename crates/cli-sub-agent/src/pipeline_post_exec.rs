@@ -320,7 +320,7 @@ pub(crate) async fn process_execution_result(
         csa_hooks::mempal_capture::spawn_mempal_ingest(
             memory_config,
             "csa-session",
-            &ctx.session_dir,
+            &ctx.session_dir.join("result.toml"),
             Some(ctx.executor.tool_name()),
         );
     }

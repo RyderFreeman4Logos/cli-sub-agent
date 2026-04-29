@@ -86,7 +86,7 @@ fn emit_merge_completed_event_inner(
         crate::mempal_capture::spawn_mempal_ingest_for_project(
             &project_root,
             "csa-merge",
-            &events_dir,
+            &log_path,
             None,
         );
     }
