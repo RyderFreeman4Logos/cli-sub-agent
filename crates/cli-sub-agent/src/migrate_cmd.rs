@@ -67,8 +67,20 @@ fn run_migrations(
     registry: &csa_config::MigrationRegistry,
     dry_run: bool,
 ) -> Result<()> {
-    let mut lock = csa_config::WeaveLock::load_or_init(project_dir, csa_version, weave_version)?;
-    let had_versions_before = lock.versions().is_some();
+    let existing_lock = csa_config::WeaveLock::load(project_dir)?;
+    let had_versions_before = existing_lock
+        .as_ref()
+        .and_then(csa_config::WeaveLock::versions)
+        .is_some();
+    let mut lock = match existing_lock {
+        Some(lock) => lock,
+        None if dry_run => csa_config::WeaveLock::new(csa_version, weave_version),
+        None => {
+            let lock = csa_config::WeaveLock::new(csa_version, weave_version);
+            lock.save(project_dir)?;
+            lock
+        }
+    };
 
     let lock_version = lock
         .versions_or_init(csa_version, weave_version)
@@ -86,10 +98,16 @@ fn run_migrations(
     if pending.is_empty() {
         eprintln!("No pending migrations. Lock is up to date.");
         if sync_version_stamp(&mut lock, had_versions_before, csa_version, weave_version) {
-            lock.save(project_dir)?;
-            eprintln!(
-                "Updated weave.lock version stamp(s) to csa {csa_version}, weave {weave_version}."
-            );
+            if dry_run {
+                eprintln!(
+                    "(dry-run: would update weave.lock version stamp(s) to csa {csa_version}, weave {weave_version})"
+                );
+            } else {
+                lock.save(project_dir)?;
+                eprintln!(
+                    "Updated weave.lock version stamp(s) to csa {csa_version}, weave {weave_version}."
+                );
+            }
         }
         return Ok(());
     }
@@ -168,5 +186,20 @@ mod tests {
         let versions = lock.versions().unwrap();
         assert_eq!(versions.csa, "0.1.1");
         assert_eq!(versions.weave, "0.1.1");
+    }
+
+    #[test]
+    fn dry_run_does_not_save_version_stamp_drift() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = csa_config::WeaveLock::new("0.1.1", "0.1.0");
+        lock.save(dir.path()).expect("save stale lock");
+        let lock_path = dir.path().join("weave.lock");
+        let before = std::fs::read_to_string(&lock_path).expect("read stale lock");
+        let registry = csa_config::MigrationRegistry::new();
+
+        run_migrations(dir.path(), "0.1.1", "0.1.1", &registry, true).expect("dry-run migrate");
+
+        let after = std::fs::read_to_string(&lock_path).expect("read lock after dry-run");
+        assert_eq!(after, before);
     }
 }
