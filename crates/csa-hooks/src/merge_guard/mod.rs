@@ -266,7 +266,13 @@ if [ -f "${MARKER_FILE}" ]; then
         *'"auto_capture":true'*|*'"auto_capture": true'*)
           case "${CSA_CONFIG_JSON}" in
             *'"backend":"mempal"'*|*'"backend": "mempal"'*|*'"backend":"auto"'*|*'"backend": "auto"'*)
-              ( timeout 30s mempal ingest --wing cli-sub-agent --room csa-merge "${EVENTS_DIR}" >/dev/null 2>&1 || true ) &
+              (
+                printf '{"content":"MergeCompleted PR #%s at HEAD %s","wing":"cli-sub-agent","room":"csa-merge","project":"cli-sub-agent","source":"csa-merge-%s-%s","source_file":"stdin://csa-hook"}\n' \
+                  "${PR_NUMBER}" "${HEAD_SHA}" "${PR_NUMBER}" "${HEAD_SHA}" |
+                  timeout 30s mempal ingest --stdin --json >/dev/null 2>&1 ||
+                  timeout 30s mempal ingest --wing cli-sub-agent --room csa-merge "${EVENTS_DIR}" >/dev/null 2>&1 ||
+                  true
+              ) &
               ;;
           esac
           ;;

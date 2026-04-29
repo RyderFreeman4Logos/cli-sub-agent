@@ -4,11 +4,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{fs, io};
+
+use anyhow::{Context, anyhow};
 
 use csa_config::{GlobalConfig, MemoryBackend, MemoryConfig, ProjectConfig};
 
 const INGEST_TIMEOUT: Duration = Duration::from_secs(30);
 const WING: &str = "cli-sub-agent";
+const PROJECT: &str = "cli-sub-agent";
+const SOURCE_FILE: &str = "stdin://csa-hook";
 const CLAUDE_CODE_TOOL: &str = "claude-code";
 
 pub fn tool_has_own_mempal(tool: &str) -> bool {
@@ -100,6 +105,184 @@ fn run_mempal_ingest(
     input_path: &Path,
     timeout: Duration,
 ) -> anyhow::Result<()> {
+    let stdin_result = build_mempal_payload(room, input_path)
+        .and_then(|payload| run_mempal_ingest_stdin(binary_path, &payload, timeout));
+    match stdin_result {
+        Ok(()) => Ok(()),
+        Err(stdin_err) => {
+            tracing::debug!(
+                input = %input_path.display(),
+                error = %stdin_err,
+                "mempal stdin JSON ingest failed; falling back to path ingest"
+            );
+            let legacy_input_path = legacy_ingest_path(input_path);
+            run_mempal_ingest_path(binary_path, room, &legacy_input_path, timeout)
+                .with_context(|| format!("stdin JSON ingest failed: {stdin_err}"))?;
+            Ok(())
+        }
+    }
+}
+
+fn legacy_ingest_path(input_path: &Path) -> PathBuf {
+    if input_path.is_file()
+        && let Some(parent) = input_path.parent()
+        && parent.file_name().is_some()
+    {
+        return parent.to_path_buf();
+    }
+    input_path.to_path_buf()
+}
+
+fn build_mempal_payload(room: &str, input_path: &Path) -> anyhow::Result<Vec<u8>> {
+    let content = read_ingest_content(input_path)?;
+    let source = infer_source(input_path, room);
+    serde_json::to_vec(&serde_json::json!({
+        "content": content,
+        "wing": WING,
+        "room": room,
+        "project": PROJECT,
+        "source": source,
+        "source_file": SOURCE_FILE,
+    }))
+    .context("failed to serialize mempal ingest payload")
+}
+
+fn read_ingest_content(input_path: &Path) -> anyhow::Result<String> {
+    if input_path.is_dir() {
+        let result_path = input_path.join("result.toml");
+        if result_path.is_file() {
+            return read_result_summary(&result_path);
+        }
+
+        for relative_path in [
+            "output/summary.md",
+            "output/full.md",
+            "output.log",
+            "merge-guard.jsonl",
+        ] {
+            let candidate = input_path.join(relative_path);
+            if candidate.is_file() {
+                return read_text_file(&candidate);
+            }
+        }
+
+        anyhow::bail!(
+            "no summary source found in mempal input directory {}",
+            input_path.display()
+        );
+    }
+
+    if input_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "result.toml")
+    {
+        return read_result_summary(input_path);
+    }
+
+    read_text_file(input_path)
+}
+
+fn read_result_summary(result_path: &Path) -> anyhow::Result<String> {
+    let contents = read_text_file(result_path)?;
+    let parsed: toml::Value = toml::from_str(&contents).with_context(|| {
+        format!(
+            "failed to parse result summary from {}",
+            result_path.display()
+        )
+    })?;
+    parsed
+        .get("summary")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            anyhow!(
+                "result.toml has no non-empty summary: {}",
+                result_path.display()
+            )
+        })
+}
+
+fn read_text_file(path: &Path) -> anyhow::Result<String> {
+    let contents = fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read mempal ingest content from {}",
+            path.display()
+        )
+    })?;
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "merge-guard.jsonl")
+    {
+        return contents
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("merge guard event log is empty: {}", path.display()));
+    }
+    Ok(contents)
+}
+
+fn infer_source(input_path: &Path, room: &str) -> String {
+    if room == "csa-merge" {
+        return "csa-merge".to_string();
+    }
+
+    let session_dir = if input_path.is_dir() {
+        input_path
+    } else {
+        input_path.parent().unwrap_or(input_path)
+    };
+
+    session_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("csa-session-{name}"))
+        .unwrap_or_else(|| format!("csa-session-{room}"))
+}
+
+fn run_mempal_ingest_stdin(
+    binary_path: &Path,
+    payload: &[u8],
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let mut command = Command::new(binary_path);
+    command
+        .arg("ingest")
+        .arg("--stdin")
+        .arg("--json")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let mut child = command.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        match io::Write::write_all(&mut stdin, payload) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {}
+            Err(err) => return Err(err).context("failed to write mempal ingest payload to stdin"),
+        }
+    }
+    wait_for_mempal_child(child, timeout)
+}
+
+fn run_mempal_ingest_path(
+    binary_path: &Path,
+    room: &str,
+    input_path: &Path,
+    timeout: Duration,
+) -> anyhow::Result<()> {
     let mut command = Command::new(binary_path);
     command
         .arg("ingest")
@@ -118,7 +301,11 @@ fn run_mempal_ingest(
         command.process_group(0);
     }
 
-    let mut child = command.spawn()?;
+    let child = command.spawn()?;
+    wait_for_mempal_child(child, timeout)
+}
+
+fn wait_for_mempal_child(mut child: std::process::Child, timeout: Duration) -> anyhow::Result<()> {
     let start = Instant::now();
     loop {
         match child.try_wait()? {
@@ -157,11 +344,66 @@ mod tests {
     fn run_mempal_ingest_passes_expected_args() {
         let temp = tempfile::tempdir().expect("create tempdir");
         let log_path = temp.path().join("args.log");
+        let stdin_path = temp.path().join("stdin.json");
         let script_path = temp.path().join("mempal-fake.sh");
         let mut script = fs::File::create(&script_path).expect("create fake mempal");
         writeln!(
             script,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat > '{}'\n",
+            log_path.display(),
+            stdin_path.display()
+        )
+        .expect("write fake mempal");
+        drop(script);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script_path, perms).expect("chmod");
+        }
+
+        let input_dir = temp.path().join("01ABCSESSION");
+        fs::create_dir(&input_dir).expect("create input dir");
+        let result_path = input_dir.join("result.toml");
+        fs::write(&result_path, "summary = \"captured summary\"\n").expect("write result");
+        run_mempal_ingest(
+            &script_path,
+            "csa-session",
+            &result_path,
+            Duration::from_secs(5),
+        )
+        .expect("run fake mempal");
+
+        let args = fs::read_to_string(log_path).expect("read args");
+        assert_eq!(args, "ingest\n--stdin\n--json\n");
+        let payload: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(stdin_path).expect("read stdin"))
+                .expect("stdin payload is json");
+        assert_eq!(payload["content"], "captured summary");
+        assert_eq!(payload["wing"], "cli-sub-agent");
+        assert_eq!(payload["room"], "csa-session");
+        assert_eq!(payload["project"], "cli-sub-agent");
+        assert_eq!(payload["source"], "csa-session-01ABCSESSION");
+        assert_eq!(payload["source_file"], "stdin://csa-hook");
+    }
+
+    #[test]
+    fn run_mempal_ingest_falls_back_to_path_args_when_stdin_is_unsupported() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let log_path = temp.path().join("args.log");
+        let script_path = temp.path().join("mempal-fake.sh");
+        let mut script = fs::File::create(&script_path).expect("create fake mempal");
+        writeln!(
+            script,
+            r#"#!/bin/sh
+if [ "$2" = "--stdin" ]; then
+  cat >/dev/null
+  exit 2
+fi
+printf '%s\n' "$@" > '{}'
+"#,
             log_path.display()
         )
         .expect("write fake mempal");
@@ -177,10 +419,12 @@ mod tests {
 
         let input_dir = temp.path().join("session-output");
         fs::create_dir(&input_dir).expect("create input dir");
+        let result_path = input_dir.join("result.toml");
+        fs::write(&result_path, "summary = \"fallback summary\"\n").expect("write result");
         run_mempal_ingest(
             &script_path,
             "csa-session",
-            &input_dir,
+            &result_path,
             Duration::from_secs(5),
         )
         .expect("run fake mempal");
