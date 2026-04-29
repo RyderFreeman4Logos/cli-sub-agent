@@ -399,7 +399,7 @@ fn derive_review_verdict_artifact(
     }
 
     if !full_output_is_effectively_empty(session_dir)? {
-        let decision = ReviewDecision::Fail;
+        let decision = ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Fail);
         return Ok(ReviewVerdictArtifact::from_parts(
             meta.session_id.clone(),
             decision,
@@ -409,10 +409,11 @@ fn derive_review_verdict_artifact(
         ));
     }
 
+    let decision = ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain);
     Ok(ReviewVerdictArtifact::from_parts(
         meta.session_id.clone(),
-        ReviewDecision::Uncertain,
-        legacy_verdict_for_decision(ReviewDecision::Uncertain, "UNCERTAIN"),
+        decision,
+        legacy_verdict_for_decision(decision, &meta.verdict),
         findings,
         Vec::new(),
     ))

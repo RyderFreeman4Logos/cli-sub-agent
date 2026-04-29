@@ -417,10 +417,49 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_nonempty_unstructured_full_md
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1217: when synthetic-empty findings.toml and unstructured non-empty full.md
+/// leave structured extraction inconclusive, trust review_meta.decision.
+#[test]
+fn issue_1217_synthetic_empty_toml_unstructured_full_md_preserves_meta_pass() {
+    let session_id = "01TEST1217SYNTHMETADECISION0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1217-synth-meta-pass-unstructured-full", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(SYNTHETIC_MARKER_FILENAME),
+        b"",
+    )
+    .expect("write synthetic marker");
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        "Review completed, but the output did not include a structured verdict.\n",
+    )
+    .expect("write unstructured full output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 /// Case 10 (#1045 round 3): synthetic-empty findings.toml + NO review-findings.json
-/// + empty full.md → decision=uncertain.
+/// + empty full.md + meta decision uncertain → decision=uncertain.
 ///
-/// Last-resort fallback when everything is empty/absent.
+/// Last-resort fallback when everything is empty/absent preserves meta.decision.
 #[test]
 fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_uncertain() {
     let session_id = "01TEST1045R3SYNTHNOJSEMPTY0";
@@ -443,7 +482,7 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_uncertain
     // NO review-findings.json.
     // NO full.md (or empty — absent is equivalent for the empty check).
 
-    let meta = make_review_meta(session_id);
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Uncertain, "UNCERTAIN");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let verdict_path = session_dir.join("output").join("review-verdict.json");
@@ -455,6 +494,39 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_uncertain
         ReviewDecision::Uncertain,
         "#1045 round 3: synthetic-empty TOML + missing JSON + empty/missing full.md must yield uncertain"
     );
+    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+/// #1217: the terminal empty-output fallback also preserves meta.decision.
+#[test]
+fn issue_1217_synthetic_empty_toml_empty_full_md_preserves_meta_pass() {
+    let session_id = "01TEST1217SYNTHMETAPASSEMPTY";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1217-synth-meta-pass-empty-full", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(SYNTHETIC_MARKER_FILENAME),
+        b"",
+    )
+    .expect("write synthetic marker");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
