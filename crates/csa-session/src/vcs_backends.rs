@@ -375,6 +375,14 @@ fn parse_jj_current_bookmark(bookmarks: &str) -> Option<String> {
     })
 }
 
+fn parse_jj_trunk_bookmark(bookmarks: &str) -> Option<String> {
+    bookmarks
+        .lines()
+        .flat_map(str::split_whitespace)
+        .find(|bookmark| !bookmark.is_empty())
+        .map(str::to_string)
+}
+
 fn git_output(project_root: &Path, args: &[&str]) -> Result<Output, String> {
     Command::new("git")
         .args(args)
@@ -436,7 +444,16 @@ fn git_default_from_local_heads(project_root: &Path) -> Result<Option<String>, S
 
 fn jj_default_from_trunk_config(project_root: &Path) -> Result<Option<String>, String> {
     let output = match Command::new("jj")
-        .args(["config", "get", "revset-aliases.trunk()"])
+        .args([
+            "log",
+            "-r",
+            "trunk()",
+            "--no-graph",
+            "-T",
+            "bookmarks ++ \"\\n\"",
+            "--limit",
+            "1",
+        ])
         .current_dir(project_root)
         .output()
     {
@@ -446,14 +463,8 @@ fn jj_default_from_trunk_config(project_root: &Path) -> Result<Option<String>, S
     if !output.status.success() {
         return Ok(None);
     }
-    let raw = parse_utf8_stdout(output.stdout, "jj config get revset-aliases.trunk()")?;
-    let candidate = raw
-        .trim()
-        .trim_matches('"')
-        .strip_prefix("bookmarks(")
-        .and_then(|value| value.strip_suffix(')'))
-        .map(|value| value.trim_matches('"').trim_matches('\'').to_string());
-    Ok(candidate.filter(|value| !value.is_empty()))
+    let raw = parse_utf8_stdout(output.stdout, "jj log trunk() bookmarks")?;
+    Ok(parse_jj_trunk_bookmark(&raw))
 }
 
 /// Maximum commit message length (bytes). Prevents accidental or malicious oversized messages.
@@ -627,6 +638,20 @@ mod tests {
         let bookmark = parse_jj_current_bookmark("main: abc123def\n");
 
         assert_eq!(bookmark.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn jj_trunk_bookmark_uses_first_resolved_bookmark() {
+        let bookmark = parse_jj_trunk_bookmark("release main\n");
+
+        assert_eq!(bookmark.as_deref(), Some("release"));
+    }
+
+    #[test]
+    fn jj_trunk_bookmark_returns_none_without_bookmarks() {
+        let bookmark = parse_jj_trunk_bookmark("\n  \n");
+
+        assert_eq!(bookmark, None);
     }
 
     #[test]

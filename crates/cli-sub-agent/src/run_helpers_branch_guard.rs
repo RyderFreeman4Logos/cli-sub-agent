@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
+use csa_core::vcs::VcsKind;
 
 pub(crate) const BRANCH_GUARD_EXIT_CODE: i32 = 2;
 
@@ -26,6 +27,16 @@ pub(crate) enum VcsBranchState {
         detected_default: Option<String>,
         reason: String,
     },
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct VcsProbeCache {
+    vcs_kind: Option<VcsKind>,
+    vcs_kind_observed: bool,
+    vcs_kind_error: Option<String>,
+    default_branch: Option<String>,
+    default_branch_observed: bool,
+    default_branch_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,12 +201,16 @@ pub(crate) fn observe_branch_state(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
 ) -> VcsBranchState {
+    observe_branch_state_with_cache(project_root, project_config, None)
+}
+
+pub(crate) fn observe_branch_state_with_cache(
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    mut cache: Option<&mut VcsProbeCache>,
+) -> VcsBranchState {
     let vcs_config = project_config.map(|config| &config.vcs);
-    let kind = match csa_session::vcs_backends::detect_vcs_kind_with_config(
-        project_root,
-        vcs_config.and_then(|config| config.backend),
-        vcs_config.and_then(|config| config.colocated_default),
-    ) {
+    let kind = match cached_vcs_kind(project_root, vcs_config, cache.as_deref_mut()) {
         Ok(Some(kind)) => kind,
         Ok(None) => return VcsBranchState::NoRepository,
         Err(err) => {
@@ -221,7 +236,7 @@ pub(crate) fn observe_branch_state(
             };
         }
     };
-    let detected_default = match backend.default_branch(project_root) {
+    let detected_default = match cached_default_branch(project_root, backend.as_ref(), cache) {
         Ok(default_branch) => default_branch,
         Err(err) => {
             return VcsBranchState::Indeterminate {
@@ -242,6 +257,72 @@ pub(crate) fn observe_branch_state(
             detected_default,
             reason: "current branch is unknown or detached".to_string(),
         },
+    }
+}
+
+fn cached_vcs_kind(
+    project_root: &Path,
+    vcs_config: Option<&csa_config::VcsConfig>,
+    cache: Option<&mut VcsProbeCache>,
+) -> Result<Option<VcsKind>, String> {
+    let Some(cache) = cache else {
+        return csa_session::vcs_backends::detect_vcs_kind_with_config(
+            project_root,
+            vcs_config.and_then(|config| config.backend),
+            vcs_config.and_then(|config| config.colocated_default),
+        );
+    };
+
+    if !cache.vcs_kind_observed {
+        match csa_session::vcs_backends::detect_vcs_kind_with_config(
+            project_root,
+            vcs_config.and_then(|config| config.backend),
+            vcs_config.and_then(|config| config.colocated_default),
+        ) {
+            Ok(kind) => {
+                cache.vcs_kind = kind;
+                cache.vcs_kind_error = None;
+            }
+            Err(err) => {
+                cache.vcs_kind = None;
+                cache.vcs_kind_error = Some(err);
+            }
+        }
+        cache.vcs_kind_observed = true;
+    }
+
+    match &cache.vcs_kind_error {
+        Some(err) => Err(err.clone()),
+        None => Ok(cache.vcs_kind),
+    }
+}
+
+fn cached_default_branch(
+    project_root: &Path,
+    backend: &dyn csa_core::vcs::VcsBackend,
+    cache: Option<&mut VcsProbeCache>,
+) -> Result<Option<String>, String> {
+    let Some(cache) = cache else {
+        return backend.default_branch(project_root);
+    };
+
+    if !cache.default_branch_observed {
+        match backend.default_branch(project_root) {
+            Ok(default_branch) => {
+                cache.default_branch = default_branch;
+                cache.default_branch_error = None;
+            }
+            Err(err) => {
+                cache.default_branch = None;
+                cache.default_branch_error = Some(err);
+            }
+        }
+        cache.default_branch_observed = true;
+    }
+
+    match &cache.default_branch_error {
+        Some(err) => Err(err.clone()),
+        None => Ok(cache.default_branch.clone()),
     }
 }
 
