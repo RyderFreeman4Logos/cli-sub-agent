@@ -531,11 +531,23 @@ fn is_process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[cfg(target_os = "linux")]
     fn daemon_pid_record(pid: u32) -> String {
         let metadata = read_process_metadata(pid).expect("process metadata");
         format!("{pid} {}\n", metadata.start_time_ticks)
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn wait_for_process_command_line_contains(pid: u32, expected: &str) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_millis(100);
+        let mut delay = Duration::from_millis(1);
+        while std::time::Instant::now() < deadline {
+            if read_process_command_line(pid).is_some_and(|cmdline| cmdline.contains(expected)) {
+                return true;
+            }
+            std::thread::sleep(delay);
+            delay = delay.saturating_mul(2).min(Duration::from_millis(16));
+        }
+        read_process_command_line(pid).is_some_and(|cmdline| cmdline.contains(expected))
     }
 
     #[test]
@@ -563,7 +575,6 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
-        // Use a spawned process with 'codex' in cmdline to satisfy context check.
         let mut child = std::process::Command::new("sh")
             .arg("-c")
             .arg("sleep 60 # codex")
@@ -576,7 +587,6 @@ mod tests {
         )
         .expect("write lock");
 
-        // The process is running, so is_working should return true.
         let working = ToolLiveness::is_working(tmp.path());
         child.kill().ok();
         child.wait().ok();
@@ -591,7 +601,6 @@ mod tests {
 
     #[test]
     fn is_pid_working_returns_true_for_self() {
-        // Our own process should always be in R or S state.
         assert!(is_pid_working(std::process::id()));
     }
 
@@ -601,7 +610,6 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
-        // Use a spawned process with 'tool' in cmdline to satisfy context check.
         let mut child = std::process::Command::new("sh")
             .arg("-c")
             .arg("sleep 60 # tool")
@@ -648,28 +656,28 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn daemon_pid_is_alive_accepts_legacy_pid_with_session_id_context() {
+        const SESSION_ID: &str = "01TESTSESSIONCONTEXT0000000001";
+
         let tmp = tempfile::tempdir().expect("tempdir");
-        let session_dir = tmp.path().join("01TESTSESSIONCONTEXT0000000001");
+        let session_dir = tmp.path().join(SESSION_ID);
         fs::create_dir_all(&session_dir).expect("create session dir");
         let mut child = std::process::Command::new("sh")
-            .args([
-                "-c",
-                "sleep 60",
-                "csa-daemon",
-                "01TESTSESSIONCONTEXT0000000001",
-            ])
+            .args(["-c", "sleep 60", "csa-daemon", SESSION_ID])
             .spawn()
             .unwrap();
         let pid = child.id();
+        let cmdline_ready = wait_for_process_command_line_contains(pid, SESSION_ID);
         fs::write(session_dir.join(DAEMON_PID_FILE), format!("{pid}\n")).expect("write daemon pid");
-
-        assert!(
-            ToolLiveness::daemon_pid_is_alive(&session_dir),
-            "legacy bare daemon.pid should stay alive when the process command still carries the session context"
-        );
+        let daemon_pid_alive = ToolLiveness::daemon_pid_is_alive(&session_dir);
 
         child.kill().ok();
         child.wait().ok();
+
+        assert!(
+            cmdline_ready,
+            "spawned daemon command line should expose session context"
+        );
+        assert!(daemon_pid_alive, "legacy bare daemon.pid should stay alive");
     }
 
     #[cfg(target_os = "linux")]
@@ -756,11 +764,7 @@ mod tests {
     fn pid_matches_session_context_returns_true_for_recent_file_even_without_context_match() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let pid = std::process::id();
-        // Since we can't easily fake process_matches_session_context returning false on Linux
-        // (unless we use a pid that doesn't match), we use a pid that doesn't match.
-        // On Linux, process_matches_session_context(pid, "nonexistent", tmp.path()) should be false.
 
-        // This exercises Patch 1: (context || recent)
         assert!(pid_matches_session_context(
             pid,
             Some("nonexistent"),
@@ -776,11 +780,9 @@ mod tests {
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
 
-        // Put a fake reconcile lock in the PARENT session_dir
         let reconcile_lock = tmp.path().join(".reconcile.lock");
         fs::write(&reconcile_lock, "{\"pid\": 12345}").expect("write lock");
 
-        // Put a real tool lock in locks/
         let mut child = std::process::Command::new("sh")
             .arg("-c")
             .arg("sleep 60 # tool")
@@ -793,7 +795,6 @@ mod tests {
         child.kill().ok();
         child.wait().ok();
 
-        // Should find tool PID, not reconcile PID (12345)
         assert_eq!(found_pid, Some(pid));
     }
 }
