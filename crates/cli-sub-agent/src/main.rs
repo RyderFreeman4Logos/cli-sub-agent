@@ -28,6 +28,7 @@ mod mcp_hub;
 mod mcp_server;
 mod memory_capture;
 mod memory_cmd;
+mod memory_migrate;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_env;
