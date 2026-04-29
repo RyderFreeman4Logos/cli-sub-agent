@@ -43,6 +43,11 @@ pub(crate) struct DebateSummary {
     pub(crate) mode: DebateMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DebateOutputHeader {
+    pub(crate) prompt_bytes: usize,
+}
+
 pub(crate) fn extract_debate_summary(
     tool_output: &str,
     fallback_summary: &str,
@@ -151,8 +156,15 @@ pub(crate) fn format_debate_stdout_summary(summary: &DebateSummary) -> String {
     )
 }
 
-pub(crate) fn format_debate_stdout_text(summary: &DebateSummary, transcript: &str) -> String {
+pub(crate) fn format_debate_stdout_text(
+    summary: &DebateSummary,
+    transcript: &str,
+    header: Option<DebateOutputHeader>,
+) -> String {
     let mut rendered = String::new();
+    if let Some(header) = header {
+        rendered.push_str(&format!("Debate prompt bytes: {}\n", header.prompt_bytes));
+    }
     rendered.push_str(&format_debate_stdout_summary(summary));
     rendered.push('\n');
 
@@ -178,6 +190,8 @@ struct DebateJsonOutput<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_reason: Option<&'a str>,
     mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_bytes: Option<usize>,
     transcript: &'a str,
     meta_session_id: &'a str,
 }
@@ -186,6 +200,7 @@ pub(crate) fn render_debate_stdout_json(
     summary: &DebateSummary,
     transcript: &str,
     meta_session_id: &str,
+    header: Option<DebateOutputHeader>,
 ) -> Result<String> {
     let payload = DebateJsonOutput {
         verdict: summary.verdict.as_str(),
@@ -198,6 +213,7 @@ pub(crate) fn render_debate_stdout_json(
             DebateMode::Heterogeneous => "heterogeneous",
             DebateMode::SameModelAdversarial => "same-model-adversarial",
         },
+        prompt_bytes: header.map(|h| h.prompt_bytes),
         transcript,
         meta_session_id,
     };

@@ -549,7 +549,7 @@ async fn run() -> Result<()> {
         Commands::Debate(args) => {
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "debate",
-                args.no_daemon,
+                args.no_daemon || args.dry_run,
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),

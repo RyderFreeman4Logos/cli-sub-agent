@@ -148,10 +148,13 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         project_root,
         csa_core::types::OutputFormat::Json,
         None,
-        true,
-        Some("quality"),
-        &failures,
-        debate_cmd::DebateMode::Heterogeneous,
+        debate_cmd::DebateFinalizeContext {
+            all_tier_models_failed: true,
+            resolved_tier_name: Some("quality"),
+            failures: &failures,
+            debate_mode: debate_cmd::DebateMode::Heterogeneous,
+            output_header: None,
+        },
     )
     .expect("pre-session all-fail should synthesize unavailable");
 

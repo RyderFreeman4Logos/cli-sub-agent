@@ -125,6 +125,7 @@ fn debate_tier_all_fail_does_not_overwrite_unrelated_latest_session() {
         &debate_summary,
         &transcript,
         missing_owned_session_id,
+        None,
     )
     .expect("render unavailable output");
     let rendered_json: serde_json::Value = serde_json::from_str(&rendered).expect("json output");
@@ -232,10 +233,13 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         project_root,
         csa_core::types::OutputFormat::Json,
         None,
-        true,
-        Some("quality"),
-        &failures,
-        DebateMode::Heterogeneous,
+        DebateFinalizeContext {
+            all_tier_models_failed: true,
+            resolved_tier_name: Some("quality"),
+            failures: &failures,
+            debate_mode: DebateMode::Heterogeneous,
+            output_header: None,
+        },
     )
     .expect("pre-session all-fail should synthesize unavailable");
 

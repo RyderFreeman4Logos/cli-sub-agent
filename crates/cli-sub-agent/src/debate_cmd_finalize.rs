@@ -6,7 +6,7 @@ use tracing::warn;
 
 use super::{DebateMode, render_debate_cli_output};
 use crate::debate_cmd_output::{
-    DebateSummary, append_debate_artifacts_to_result, extract_debate_summary,
+    DebateOutputHeader, DebateSummary, append_debate_artifacts_to_result, extract_debate_summary,
     persist_debate_output_artifacts, render_debate_output,
 };
 use crate::tier_model_fallback::{TierAttemptFailure, format_all_models_failed_reason};
@@ -14,6 +14,14 @@ use crate::tier_model_fallback::{TierAttemptFailure, format_all_models_failed_re
 pub(crate) struct FinalizedDebateOutcome {
     pub(crate) exit_code: i32,
     pub(crate) rendered_output: String,
+}
+
+pub(crate) struct DebateFinalizeContext<'a> {
+    pub(crate) all_tier_models_failed: bool,
+    pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) failures: &'a [TierAttemptFailure],
+    pub(crate) debate_mode: DebateMode,
+    pub(crate) output_header: Option<DebateOutputHeader>,
 }
 
 fn build_unavailable_debate_summary(
@@ -41,13 +49,10 @@ pub(crate) fn finalize_debate_outcome(
     project_root: &Path,
     output_format: OutputFormat,
     execution: Option<crate::pipeline::SessionExecutionResult>,
-    all_tier_models_failed: bool,
-    resolved_tier_name: Option<&str>,
-    failures: &[TierAttemptFailure],
-    debate_mode: DebateMode,
+    context: DebateFinalizeContext<'_>,
 ) -> Result<FinalizedDebateOutcome> {
     let (exit_code, meta_session_id, persisted_session_id, output, debate_summary) =
-        match (all_tier_models_failed, execution) {
+        match (context.all_tier_models_failed, execution) {
             (true, Some(execution)) => {
                 let persisted_session_id = resolve_persisted_debate_session_id(
                     project_root,
@@ -66,7 +71,11 @@ pub(crate) fn finalize_debate_outcome(
                     execution.meta_session_id,
                     persisted_session_id,
                     output,
-                    build_unavailable_debate_summary(resolved_tier_name, failures, debate_mode),
+                    build_unavailable_debate_summary(
+                        context.resolved_tier_name,
+                        context.failures,
+                        context.debate_mode,
+                    ),
                 )
             }
             (true, None) => {
@@ -77,7 +86,11 @@ pub(crate) fn finalize_debate_outcome(
                     meta_session_id,
                     None,
                     output,
-                    build_unavailable_debate_summary(resolved_tier_name, failures, debate_mode),
+                    build_unavailable_debate_summary(
+                        context.resolved_tier_name,
+                        context.failures,
+                        context.debate_mode,
+                    ),
                 )
             }
             (false, Some(execution)) => {
@@ -96,7 +109,7 @@ pub(crate) fn finalize_debate_outcome(
                 let debate_summary = extract_debate_summary(
                     &output,
                     execution.execution.summary.as_str(),
-                    debate_mode,
+                    context.debate_mode,
                 );
                 (
                     execution.execution.exit_code,
@@ -115,8 +128,13 @@ pub(crate) fn finalize_debate_outcome(
         append_debate_artifacts_to_result(project_root, session_id, &artifacts, &debate_summary)?;
     }
 
-    let rendered_output =
-        render_debate_cli_output(output_format, &debate_summary, &output, &meta_session_id)?;
+    let rendered_output = render_debate_cli_output(
+        output_format,
+        &debate_summary,
+        &output,
+        &meta_session_id,
+        context.output_header,
+    )?;
     Ok(FinalizedDebateOutcome {
         exit_code,
         rendered_output,

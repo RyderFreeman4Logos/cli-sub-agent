@@ -1,6 +1,7 @@
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -15,19 +16,26 @@ use crate::run_helpers::resolve_prompt_with_file;
 use csa_config::ExecutionEnvOptions;
 use csa_core::types::OutputFormat;
 
-use crate::debate_cmd_output::{format_debate_stdout_text, render_debate_stdout_json};
+use crate::debate_cmd_output::{
+    DebateOutputHeader, format_debate_stdout_text, render_debate_stdout_json,
+};
 use crate::tier_model_fallback::{
     TierAttemptFailure, classify_next_model_failure, ordered_tier_candidates,
 };
 
 #[path = "debate_cmd_finalize.rs"]
 mod finalize;
-pub(crate) use finalize::finalize_debate_outcome;
 #[cfg(test)]
 pub(crate) use finalize::resolve_persisted_debate_session_id;
+pub(crate) use finalize::{DebateFinalizeContext, finalize_debate_outcome};
+
+#[path = "debate_cmd_dry_run.rs"]
+mod dry_run;
+use dry_run::{DebateDryRunSummary, create_debate_dry_run_session, render_debate_dry_run_summary};
 
 /// Debate execution mode indicating model diversity level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum DebateMode {
     /// Different model families (e.g., Claude vs OpenAI) — full cognitive diversity.
     Heterogeneous,
@@ -68,7 +76,7 @@ pub(crate) async fn handle_debate(
     // Debate reuses the review section's gate settings because the gate is a
     // shared pre-execution quality check (lint/test) that applies equally to
     // both review and debate workflows.
-    {
+    if !args.dry_run {
         let gate_steps = global_config.review.effective_gate_steps();
         let gate_timeout = config
             .as_ref()
@@ -335,6 +343,50 @@ pub(crate) async fn handle_debate(
         tier_active,
         tier_filter.as_ref(),
     );
+
+    if args.dry_run {
+        let Some((attempt_tool, attempt_model_spec)) = candidates.first() else {
+            anyhow::bail!("Debate dry-run failed: no debate tier candidates were resolved");
+        };
+        let executor = crate::pipeline::build_and_validate_executor(
+            attempt_tool,
+            attempt_model_spec.as_deref(),
+            debate_model.as_deref(),
+            thinking.as_deref(),
+            crate::pipeline::ConfigRefs {
+                project: config.as_ref(),
+                global: Some(&global_config),
+            },
+            tier_active && attempt_model_spec.is_some(),
+            args.force_override_user_config,
+            false,
+        )
+        .await?;
+        let summary = DebateDryRunSummary {
+            session_id: create_debate_dry_run_session(
+                &project_root,
+                &debate_description,
+                executor.tool_name(),
+                resolved_tier_name.as_deref(),
+            )?,
+            tool: executor.tool_name().to_string(),
+            model: attempt_model_spec
+                .clone()
+                .or_else(|| debate_model.clone())
+                .unwrap_or_else(|| "tool default".to_string()),
+            prompt_bytes: prompt.len(),
+            rounds: args.rounds,
+            mode: debate_mode,
+        };
+        let rendered = render_debate_dry_run_summary(output_format, &summary)?;
+        if rendered.ends_with('\n') {
+            print!("{rendered}");
+        } else {
+            println!("{rendered}");
+        }
+        return Ok(0);
+    }
+
     let mut execution = None;
     let mut failures = Vec::new();
 
@@ -562,10 +614,15 @@ pub(crate) async fn handle_debate(
         &project_root,
         output_format,
         execution,
-        all_tier_models_failed,
-        resolved_tier_name.as_deref(),
-        &failures,
-        debate_mode,
+        DebateFinalizeContext {
+            all_tier_models_failed,
+            resolved_tier_name: resolved_tier_name.as_deref(),
+            failures: &failures,
+            debate_mode,
+            output_header: Some(DebateOutputHeader {
+                prompt_bytes: prompt.len(),
+            }),
+        },
     )?;
     let rendered_output = finalized.rendered_output;
     if rendered_output.ends_with('\n') {
@@ -582,11 +639,16 @@ fn render_debate_cli_output(
     debate_summary: &crate::debate_cmd_output::DebateSummary,
     transcript: &str,
     meta_session_id: &str,
+    output_header: Option<DebateOutputHeader>,
 ) -> Result<String> {
     match output_format {
-        OutputFormat::Text => Ok(format_debate_stdout_text(debate_summary, transcript)),
+        OutputFormat::Text => Ok(format_debate_stdout_text(
+            debate_summary,
+            transcript,
+            output_header,
+        )),
         OutputFormat::Json => {
-            render_debate_stdout_json(debate_summary, transcript, meta_session_id)
+            render_debate_stdout_json(debate_summary, transcript, meta_session_id, output_header)
         }
     }
 }

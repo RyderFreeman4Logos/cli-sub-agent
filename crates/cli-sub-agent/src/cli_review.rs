@@ -383,6 +383,10 @@ pub struct DebateArgs {
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
     pub rounds: u32,
 
+    /// Validate debate plumbing without invoking the AI tool
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: Option<u64>,
