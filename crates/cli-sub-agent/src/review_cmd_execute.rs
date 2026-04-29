@@ -29,7 +29,8 @@ use tracing::{info, warn};
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
 use crate::tier_model_fallback::{
     TierAttemptFailure, TierFilter, chain_failure_reasons, classify_next_model_failure,
-    format_all_models_failed_reason, ordered_tier_candidates,
+    fallback_reason_for_result, format_all_models_failed_reason, ordered_tier_candidates,
+    persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -165,6 +166,7 @@ pub(crate) async fn execute_review_with_tier_filter(
         tier_model_spec.as_deref(),
         tier_name.as_deref(),
         project_config,
+        Some(global_config),
         tier_fallback_enabled,
         tier_filter.as_ref(),
     );
@@ -272,6 +274,15 @@ pub(crate) async fn execute_review_with_tier_filter(
                         execution_started_at,
                         &err,
                     );
+                    if let Some(session_id) = extract_meta_session_id_from_error(&err) {
+                        persist_fallback_result_fields(
+                            project_root,
+                            &session_id,
+                            tool,
+                            *attempt_tool,
+                            fallback_reason_for_result(&failures),
+                        );
+                    }
                     let failure_reason =
                         format_all_models_failed_reason(tier_name.as_deref(), &failures);
                     return Ok(ReviewExecutionOutcome {
@@ -421,6 +432,13 @@ pub(crate) async fn execute_review_with_tier_filter(
             if attempt_index + 1 == candidates.len() {
                 let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
                 ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
+                persist_fallback_result_fields(
+                    project_root,
+                    &execution.meta_session_id,
+                    tool,
+                    *attempt_tool,
+                    fallback_reason_for_result(&failures),
+                );
                 let persistable_session_id = Some(execution.meta_session_id.clone());
                 return Ok(ReviewExecutionOutcome {
                     execution,
@@ -441,6 +459,13 @@ pub(crate) async fn execute_review_with_tier_filter(
 
         let session_dir = get_session_dir(project_root, &execution.meta_session_id)?;
         ensure_review_summary_artifact(&session_dir, &execution.execution.output)?;
+        persist_fallback_result_fields(
+            project_root,
+            &execution.meta_session_id,
+            tool,
+            *attempt_tool,
+            fallback_reason_for_result(&failures),
+        );
         let routed_to = (attempt_tool != &tool
             || attempt_model_spec.as_deref() != tier_model_spec.as_deref())
         .then(|| {

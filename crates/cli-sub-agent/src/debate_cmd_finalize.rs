@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use csa_core::types::OutputFormat;
+use csa_core::types::{OutputFormat, ToolName};
 use tracing::warn;
 
 use super::{DebateMode, render_debate_cli_output};
@@ -9,7 +9,9 @@ use crate::debate_cmd_output::{
     DebateOutputHeader, DebateSummary, append_debate_artifacts_to_result, extract_debate_summary,
     persist_debate_output_artifacts, render_debate_output,
 };
-use crate::tier_model_fallback::{TierAttemptFailure, format_all_models_failed_reason};
+use crate::tier_model_fallback::{
+    TierAttemptFailure, format_all_models_failed_reason, persist_fallback_result_fields,
+};
 
 pub(crate) struct FinalizedDebateOutcome {
     pub(crate) exit_code: i32,
@@ -22,6 +24,9 @@ pub(crate) struct DebateFinalizeContext<'a> {
     pub(crate) failures: &'a [TierAttemptFailure],
     pub(crate) debate_mode: DebateMode,
     pub(crate) output_header: Option<DebateOutputHeader>,
+    pub(crate) original_tool: Option<ToolName>,
+    pub(crate) fallback_tool: Option<ToolName>,
+    pub(crate) fallback_reason: Option<&'a str>,
 }
 
 fn build_unavailable_debate_summary(
@@ -126,6 +131,17 @@ pub(crate) fn finalize_debate_outcome(
         let session_dir = csa_session::get_session_dir(project_root, session_id)?;
         let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
         append_debate_artifacts_to_result(project_root, session_id, &artifacts, &debate_summary)?;
+        if let (Some(original_tool), Some(fallback_tool)) =
+            (context.original_tool, context.fallback_tool)
+        {
+            persist_fallback_result_fields(
+                project_root,
+                session_id,
+                original_tool,
+                fallback_tool,
+                context.fallback_reason,
+            );
+        }
     }
 
     let rendered_output = render_debate_cli_output(

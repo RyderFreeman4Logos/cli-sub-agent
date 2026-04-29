@@ -101,6 +101,11 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
     match tool {
         "gemini-cli" => &[
             FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "429_quota_exhausted",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
                 pattern: "429",
                 reason: "HTTP 429",
                 advance_to_next_model: true,
@@ -178,6 +183,11 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         ],
         "opencode" => &[
             FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "429_quota_exhausted",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
                 pattern: "rate limit",
                 reason: "HTTP 429",
                 advance_to_next_model: true,
@@ -204,6 +214,11 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
         ],
         "codex" => &[
+            FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "429_quota_exhausted",
+                advance_to_next_model: true,
+            },
             FailoverPattern {
                 pattern: "rate_limit_exceeded",
                 reason: "HTTP 429",
@@ -247,6 +262,11 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         ],
         "claude-code" => &[
             FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "429_quota_exhausted",
+                advance_to_next_model: true,
+            },
+            FailoverPattern {
                 pattern: "rate limit",
                 reason: "HTTP 429",
                 advance_to_next_model: true,
@@ -278,6 +298,11 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
         ],
         _ => &[
+            FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "429_quota_exhausted",
+                advance_to_next_model: true,
+            },
             FailoverPattern {
                 pattern: "429",
                 reason: "HTTP 429",
@@ -556,6 +581,25 @@ mod tests {
         assert_eq!(detected.matched_pattern, "quota_exhausted");
         assert_eq!(detected.reason, "QUOTA_EXHAUSTED");
         assert!(detected.advance_to_next_model);
+    }
+
+    #[test]
+    fn test_persistent_429_quota_exhausted_advances_to_next_model() {
+        let detected = detect_rate_limit(
+            "codex",
+            "429_quota_exhausted: repeated 3 identical 429/quota errors: Error: exceeded its quota",
+            "",
+            1,
+            Some("codex/openai/gpt-5.4/high"),
+        )
+        .expect("persistent 429 summary should classify");
+        assert_eq!(detected.matched_pattern, "429_quota_exhausted");
+        assert_eq!(detected.reason, "429_quota_exhausted");
+        assert!(detected.advance_to_next_model);
+        assert_eq!(
+            detected.model_spec.as_deref(),
+            Some("codex/openai/gpt-5.4/high")
+        );
     }
 
     #[test]

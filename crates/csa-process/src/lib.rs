@@ -10,11 +10,14 @@ use tokio::time::MissedTickBehavior;
 use tracing::warn;
 mod idle_watchdog;
 use idle_watchdog::should_terminate_for_idle;
+mod persistent_rate_limit;
+use persistent_rate_limit::PersistentRateLimitTracker;
 #[path = "lib_output_helpers.rs"]
 mod output_helpers;
 #[path = "lib_subprocess_helpers.rs"]
 mod subprocess_helpers;
 mod tool_liveness;
+mod workspace_boundary;
 #[cfg(unix)]
 pub use daemon_stderr::DEFAULT_STDERR_SPOOL_MAX_BYTES;
 pub use output_helpers::{
@@ -36,6 +39,9 @@ pub use subprocess_helpers::check_tool_installed;
 use subprocess_helpers::terminate_child_process_group;
 use tool_liveness::record_spool_bytes_written;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
+#[cfg(test)]
+use workspace_boundary::WORKSPACE_BOUNDARY_THRESHOLD_ENV;
+use workspace_boundary::{resolve_workspace_boundary_threshold, workspace_boundary_hint};
 
 #[cfg(unix)]
 pub mod daemon;
@@ -176,31 +182,7 @@ pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 /// a handful of sandbox-rejected reads (e.g. CSA state dirs under
 /// `~/.local/state/cli-sub-agent/...`).  The detector now only emits a
 /// one-shot hint on threshold crossing — see #981 for history.
-const WORKSPACE_BOUNDARY_ERROR_THRESHOLD: usize = 20;
-const WORKSPACE_BOUNDARY_THRESHOLD_ENV: &str = "CSA_WORKSPACE_BOUNDARY_THRESHOLD";
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-/// Resolve the workspace-boundary warn-hint threshold.
-///
-/// Tunable without rebuild via `CSA_WORKSPACE_BOUNDARY_THRESHOLD`; 0 / invalid /
-/// missing -> [`WORKSPACE_BOUNDARY_ERROR_THRESHOLD`].
-fn resolve_workspace_boundary_threshold() -> usize {
-    std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV)
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(WORKSPACE_BOUNDARY_ERROR_THRESHOLD)
-}
-
-/// Build the one-shot hint injected into the child's output on threshold crossing.
-fn workspace_boundary_hint(threshold: usize) -> String {
-    format!(
-        "[csa-notice] Workspace boundary rejections have crossed {threshold}. \
-         Refocus on paths inside the project root; CSA state/cache and tool-internal \
-         directories are inspectable via `csa session logs` / `csa session result` \
-         from the orchestrator, not via direct filesystem reads from inside this session.\n"
-    )
-}
 
 /// Spawn-time process control options.
 #[derive(Debug, Clone, Copy)]
@@ -371,6 +353,22 @@ pub async fn wait_and_capture_with_idle_timeout(
     let workspace_boundary_note = format!(
         "workspace boundary hits crossed threshold {workspace_boundary_threshold}; session continued (non-fatal)"
     );
+    let mut persistent_rate_limit_note: Option<String> = None;
+    let mut persistent_rate_limit_tracker = PersistentRateLimitTracker::default();
+    macro_rules! kill_on_persistent_rate_limit {
+        ($appended:expr, $stream:literal) => {
+            if let Some(note) = persistent_rate_limit_tracker.observe_appended_output($appended) {
+                warn!(
+                    reason = %note,
+                    stream = $stream,
+                    "Killing child due to persistent repeated 429/quota output"
+                );
+                persistent_rate_limit_note = Some(note);
+                terminate_child_process_group(&mut child, termination_grace_period).await;
+                break;
+            }
+        };
+    }
 
     if let Some(stderr_handle) = stderr {
         // Tee mode: read stdout and stderr concurrently via byte-level reads
@@ -405,12 +403,14 @@ pub async fn wait_and_capture_with_idle_timeout(
                             if let (Some(dir), Some(spool)) = (session_dir, spool_file.as_ref()) {
                                 record_spool_bytes_written(dir, spool.bytes_written());
                             }
+                            let previous_output_len = output.len();
                             workspace_boundary_error_hits += accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
                                 &mut output,
                                 stream_mode,
                             );
+                            kill_on_persistent_rate_limit!(&output[previous_output_len..], "stdout");
                             drain_if_over_high_water(&mut output);
                             if workspace_boundary_error_hits >= workspace_boundary_threshold
                                 && !workspace_boundary_warned
@@ -455,12 +455,14 @@ pub async fn wait_and_capture_with_idle_timeout(
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stderr_buf[..n]);
                             spool_chunk(&mut stderr_spool_file, &stderr_buf[..n]);
+                            let previous_stderr_len = stderr_output.len();
                             workspace_boundary_error_hits += accumulate_and_flush_stderr(
                                 &chunk,
                                 &mut stderr_line_buf,
                                 &mut stderr_output,
                                 stream_mode,
                             );
+                            kill_on_persistent_rate_limit!(&stderr_output[previous_stderr_len..], "stderr");
                             drain_if_over_high_water(&mut stderr_output);
                             if workspace_boundary_error_hits >= workspace_boundary_threshold
                                 && !workspace_boundary_warned
@@ -568,12 +570,14 @@ pub async fn wait_and_capture_with_idle_timeout(
                             if let (Some(dir), Some(spool)) = (session_dir, spool_file.as_ref()) {
                                 record_spool_bytes_written(dir, spool.bytes_written());
                             }
+                            let previous_output_len = output.len();
                             workspace_boundary_error_hits += accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
                                 &mut output,
                                 stream_mode,
                             );
+                            kill_on_persistent_rate_limit!(&output[previous_output_len..], "stdout");
                             drain_if_over_high_water(&mut output);
                             if workspace_boundary_error_hits >= workspace_boundary_threshold
                                 && !workspace_boundary_warned
@@ -661,7 +665,14 @@ pub async fn wait_and_capture_with_idle_timeout(
         warn!("Process terminated by signal, using exit code 1");
         1
     });
-    if idle_timed_out {
+    if let Some(note) = persistent_rate_limit_note.as_deref() {
+        exit_code = 1;
+        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+            stderr_output.push('\n');
+        }
+        stderr_output.push_str(note);
+        stderr_output.push('\n');
+    } else if idle_timed_out {
         exit_code = 137;
         if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
             stderr_output.push('\n');
@@ -679,7 +690,9 @@ pub async fn wait_and_capture_with_idle_timeout(
         stderr_output.push('\n');
     }
 
-    let summary = if idle_timed_out {
+    let summary = if let Some(note) = persistent_rate_limit_note {
+        note
+    } else if idle_timed_out {
         timeout_note
     } else if exit_code == 0 {
         extract_summary(&output)
