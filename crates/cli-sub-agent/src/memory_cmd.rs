@@ -29,6 +29,11 @@ pub async fn handle_memory_command(command: MemoryCommands) -> Result<()> {
         MemoryCommands::Gc { days, dry_run } => handle_gc(days, dry_run),
         MemoryCommands::Reindex => handle_reindex(),
         MemoryCommands::Consolidate { dry_run } => handle_consolidate(dry_run).await,
+        MemoryCommands::Migrate { to, dry_run, cd } => match to {
+            crate::cli::MemoryMigrationTarget::Mempal => {
+                crate::memory_migrate::migrate_to_mempal(memory_store(), dry_run, cd)
+            }
+        },
     }
 }
 

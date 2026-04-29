@@ -109,6 +109,32 @@ fn test_cli_fork_last_parses() {
 }
 
 #[test]
+fn test_cli_memory_migrate_mempal_parses() {
+    let cli = try_parse_cli(&[
+        "csa",
+        "memory",
+        "migrate",
+        "--to",
+        "mempal",
+        "--dry-run",
+        "--cd",
+        "/tmp/project",
+    ])
+    .unwrap();
+    match cli.command {
+        crate::cli::Commands::Memory { command } => match command {
+            crate::cli::MemoryCommands::Migrate { to, dry_run, cd } => {
+                assert_eq!(to, crate::cli::MemoryMigrationTarget::Mempal);
+                assert!(dry_run);
+                assert_eq!(cd.as_deref(), Some("/tmp/project"));
+            }
+            _ => panic!("expected memory migrate command"),
+        },
+        _ => panic!("expected Memory command"),
+    }
+}
+
+#[test]
 fn test_cli_fork_from_conflicts_with_session() {
     let result = try_parse_cli(&[
         "csa",
