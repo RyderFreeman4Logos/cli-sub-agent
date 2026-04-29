@@ -248,40 +248,45 @@ fn pr_bot_archive_includes_helper_scripts() {
 fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
     let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
     let step5 = extract_pr_bot_step_prompt(&workflow, 5, "patterns/pr-bot/workflow.toml");
-    let find_branch_pr_start = step5
-        .find("find_branch_pr() {")
-        .expect("Step 5 must define find_branch_pr");
-    let find_branch_pr_end = step5[find_branch_pr_start..]
-        .find("\n}\n\nfind_branch_pr_with_retry()")
-        .map(|offset| find_branch_pr_start + offset)
-        .expect("Step 5 must close find_branch_pr before invoking it");
-    let find_branch_pr = &step5[find_branch_pr_start..find_branch_pr_end];
+    let resolve_branch_pr_start = step5
+        .find("resolve_branch_pr() {")
+        .expect("Step 5 must define resolve_branch_pr");
+    let resolve_branch_pr_end = step5[resolve_branch_pr_start..]
+        .find("\n}\n\nresolve_branch_pr_with_retry()")
+        .map(|offset| resolve_branch_pr_start + offset)
+        .expect("Step 5 must close resolve_branch_pr before invoking it");
+    let resolve_branch_pr = &step5[resolve_branch_pr_start..resolve_branch_pr_end];
+
+    assert!(
+        !step5.contains(&["find", "branch", "pr"].join("_")),
+        "Step 5 must not retain the old branch PR lookup helper name"
+    );
 
     assert!(
         step5.contains("--json number,headRefName,headRepositoryOwner"),
         "Step 5 must request head owner metadata for client-side PR owner verification"
     );
     assert!(
-        find_branch_pr.contains(r#"--head "${WORKFLOW_BRANCH}""#),
+        resolve_branch_pr.contains(r#"--head "${WORKFLOW_BRANCH}""#),
         "Step 5 must query gh pr list with branch-only --head"
     );
     assert!(
-        !find_branch_pr.contains(r#"--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}""#),
+        !resolve_branch_pr.contains(r#"--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}""#),
         "Step 5 must not pass owner-qualified syntax to gh pr list --head"
     );
     assert!(
-        find_branch_pr.contains("jq -r")
-            && find_branch_pr.contains(r#"--arg branch "${WORKFLOW_BRANCH}""#)
-            && find_branch_pr.contains(r#"--arg owner "${SOURCE_OWNER}""#),
+        resolve_branch_pr.contains("jq -r")
+            && resolve_branch_pr.contains(r#"--arg branch "${WORKFLOW_BRANCH}""#)
+            && resolve_branch_pr.contains(r#"--arg owner "${SOURCE_OWNER}""#),
         "Step 5 jq filter must bind head branch and owner as jq data"
     );
     assert!(
-        find_branch_pr.contains(".headRefName == $branch")
-            && find_branch_pr.contains(".headRepositoryOwner.login == $owner"),
+        resolve_branch_pr.contains(".headRefName == $branch")
+            && resolve_branch_pr.contains(".headRepositoryOwner.login == $owner"),
         "Step 5 jq filter must strictly match both bound head branch and head owner"
     );
     assert!(
-        !find_branch_pr.contains(r#"--jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\""#),
+        !resolve_branch_pr.contains(r#"--jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\""#),
         "Step 5 must not interpolate WORKFLOW_BRANCH into jq source"
     );
     assert!(
@@ -289,7 +294,7 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
         "Step 5 must strictly filter PR lookup results by head owner"
     );
     assert!(
-        find_branch_pr
+        resolve_branch_pr
             .matches(r#"--head "${WORKFLOW_BRANCH}""#)
             .count()
             == 1,
@@ -300,12 +305,12 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
         "Step 5 must recover from gh pr create reporting that the PR already exists"
     );
     assert!(
-        step5.contains("find_branch_pr_with_retry() {"),
+        step5.contains("resolve_branch_pr_with_retry() {"),
         "Step 5 must define one shared retry helper for stale gh pr list results"
     );
     assert!(
         step5
-            .matches(r#"PR_NUM="$(find_branch_pr_with_retry)""#)
+            .matches(r#"PR_NUM="$(resolve_branch_pr_with_retry)""#)
             .count()
             == 2,
         "Step 5 must use the shared retry helper in both create-race and create-success paths"
