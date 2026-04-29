@@ -257,7 +257,10 @@ if [ -f "${MARKER_FILE}" ]; then
     printf '{"event":"MergeCompleted","pr_number":%s,"head_sha":"%s","marker_path":"%s","timestamp":"%s"}\n' \
       "${PR_NUMBER}" "${HEAD_SHA}" "${MARKER_FILE}" "${AUDIT_TS}" \
       >> "${EVENTS_DIR}/merge-guard.jsonl" 2>/dev/null || true
-    if command -v csa >/dev/null 2>&1 && command -v mempal >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    MEM_CAP_TOOL="${CSA_TOOL_NAME:-${CSA_TOOL:-}}"
+    if [ "${MEM_CAP_TOOL}" = "claude-code" ]; then
+      :
+    elif command -v csa >/dev/null 2>&1 && command -v mempal >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
       CSA_CONFIG_JSON="$(csa config show --format json 2>/dev/null || true)"
       case "${CSA_CONFIG_JSON}" in
         *'"auto_capture":true'*|*'"auto_capture": true'*)

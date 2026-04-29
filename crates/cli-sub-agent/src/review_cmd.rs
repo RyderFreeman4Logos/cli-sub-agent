@@ -463,6 +463,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &global_config,
             &project_root,
             result.persistable_session_id.as_deref(),
+            result.executed_tool.as_str(),
         );
 
         let is_cumulative_review = review_scope_is_cumulative(&scope);

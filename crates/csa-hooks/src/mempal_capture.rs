@@ -9,6 +9,11 @@ use csa_config::{GlobalConfig, MemoryBackend, MemoryConfig, ProjectConfig};
 
 const INGEST_TIMEOUT: Duration = Duration::from_secs(30);
 const WING: &str = "cli-sub-agent";
+const CLAUDE_CODE_TOOL: &str = "claude-code";
+
+pub fn tool_has_own_mempal(tool: &str) -> bool {
+    tool == CLAUDE_CODE_TOOL
+}
 
 /// Return the effective memory config using the same project-over-global
 /// precedence as the execution pipeline.
@@ -29,7 +34,23 @@ pub fn load_effective_memory_config(project_root: &Path) -> Option<MemoryConfig>
 ///
 /// Failures are logged and never propagated. The worker thread enforces its own
 /// timeout because hook capture must not delay the lifecycle action that fired it.
-pub fn spawn_mempal_ingest(config: &MemoryConfig, room: &'static str, input_path: &Path) {
+pub fn spawn_mempal_ingest(
+    config: &MemoryConfig,
+    room: &'static str,
+    input_path: &Path,
+    tool_name: Option<&str>,
+) {
+    if let Some(tool) = tool_name
+        && tool_has_own_mempal(tool)
+    {
+        tracing::debug!(
+            tool,
+            room,
+            "skipping mempal capture for {tool} (has own integration)"
+        );
+        return;
+    }
+
     if !config.auto_capture {
         return;
     }
@@ -53,9 +74,14 @@ pub fn spawn_mempal_ingest(config: &MemoryConfig, room: &'static str, input_path
 
 /// Convenience wrapper for merge-guard capture, where only the current working
 /// directory is available.
-pub fn spawn_mempal_ingest_for_project(project_root: &Path, room: &'static str, input_path: &Path) {
+pub fn spawn_mempal_ingest_for_project(
+    project_root: &Path,
+    room: &'static str,
+    input_path: &Path,
+    tool_name: Option<&str>,
+) {
     if let Some(config) = load_effective_memory_config(project_root) {
-        spawn_mempal_ingest(&config, room, input_path);
+        spawn_mempal_ingest(&config, room, input_path, tool_name);
     }
 }
 
@@ -177,5 +203,13 @@ mod tests {
             ..MemoryConfig::default()
         };
         assert!(resolve_mempal_binary(&config).is_none());
+    }
+
+    #[test]
+    fn tool_has_own_mempal_only_matches_claude_code() {
+        assert!(tool_has_own_mempal("claude-code"));
+        assert!(!tool_has_own_mempal("codex"));
+        assert!(!tool_has_own_mempal("gemini-cli"));
+        assert!(!tool_has_own_mempal("opencode"));
     }
 }
