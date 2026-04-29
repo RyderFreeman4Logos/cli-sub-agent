@@ -8,6 +8,7 @@ mod audit_cmds;
 mod batch;
 mod bug_class;
 mod caller_hints_tests;
+mod checklist_cmd;
 mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;
@@ -755,6 +756,7 @@ async fn run() -> Result<()> {
                 }
             },
         },
+        Commands::Checklist { command } => checklist_cmd::handle_checklist_command(command)?,
         Commands::Plan { cmd } => {
             plan_cmd_daemon::dispatch(
                 cmd,

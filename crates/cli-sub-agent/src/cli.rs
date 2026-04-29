@@ -25,6 +25,9 @@ pub use cli_xurl::*;
 #[path = "cli_plan.rs"]
 mod cli_plan;
 pub use cli_plan::*;
+#[path = "cli_checklist.rs"]
+mod cli_checklist;
+pub use cli_checklist::*;
 
 /// Build version string combining Cargo.toml version and git describe.
 fn build_version() -> &'static str {
@@ -375,6 +378,12 @@ pub enum Commands {
     Todo {
         #[command(subcommand)]
         cmd: TodoCommands,
+    },
+
+    /// Review checklist management
+    Checklist {
+        #[command(subcommand)]
+        command: ChecklistCommands,
     },
 
     /// Execute weave workflow files
