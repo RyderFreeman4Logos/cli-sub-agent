@@ -19,9 +19,7 @@ use csa_core::types::OutputFormat;
 use crate::debate_cmd_output::{
     DebateOutputHeader, format_debate_stdout_text, render_debate_stdout_json,
 };
-use crate::tier_model_fallback::{
-    TierAttemptFailure, classify_next_model_failure, ordered_tier_candidates,
-};
+use crate::tier_model_fallback::{self, TierAttemptFailure};
 
 #[path = "debate_cmd_finalize.rs"]
 mod finalize;
@@ -335,11 +333,12 @@ pub(crate) async fn handle_debate(
         resolve_debate_timeout_seconds(args.timeout, Some(global_config.debate.timeout_seconds));
     let wall_clock_start = Instant::now();
     let readonly_project_root = global_config.debate.readonly_sandbox.unwrap_or(false);
-    let candidates = ordered_tier_candidates(
+    let candidates = tier_model_fallback::ordered_tier_candidates(
         tool,
         resolved_model_spec.as_deref(),
         resolved_tier_name.as_deref(),
         config.as_ref(),
+        Some(&global_config),
         tier_active,
         tier_filter.as_ref(),
     );
@@ -389,6 +388,7 @@ pub(crate) async fn handle_debate(
 
     let mut execution = None;
     let mut failures = Vec::new();
+    let mut final_tool = None;
 
     'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
         candidates.iter().enumerate()
@@ -468,7 +468,7 @@ pub(crate) async fn handle_debate(
             let executed = match execute_result {
                 Ok(execution) => execution,
                 Err(err) => {
-                    if let Some(detected) = classify_next_model_failure(
+                    if let Some(detected) = tier_model_fallback::classify_next_model_failure(
                         attempt_tool.as_str(),
                         &err.to_string(),
                         "",
@@ -525,11 +525,12 @@ pub(crate) async fn handle_debate(
 
             resume_session = Some(executed.meta_session_id.clone());
             if executed.execution.exit_code == 0 {
+                final_tool = Some(*attempt_tool);
                 execution = Some(executed);
                 break 'tier_attempts;
             }
 
-            if let Some(detected) = classify_next_model_failure(
+            if let Some(detected) = tier_model_fallback::classify_next_model_failure(
                 attempt_tool.as_str(),
                 &executed.execution.stderr_output,
                 &executed.execution.output,
@@ -551,6 +552,7 @@ pub(crate) async fn handle_debate(
                     total = candidates.len(),
                     "Debate tier model failed; advancing to next configured model"
                 );
+                final_tool = Some(*attempt_tool);
                 execution = Some(executed);
                 continue 'tier_attempts;
             }
@@ -597,11 +599,13 @@ pub(crate) async fn handle_debate(
                         );
                     }
                     warn!("Debate ended after transient failure: {reason}");
+                    final_tool = Some(*attempt_tool);
                     execution = Some(executed);
                     break 'tier_attempts;
                 }
                 DebateErrorKind::Deterministic(reason) => {
                     debug!("Debate finished with deterministic non-zero outcome: {reason}");
+                    final_tool = Some(*attempt_tool);
                     execution = Some(executed);
                     break 'tier_attempts;
                 }
@@ -610,6 +614,7 @@ pub(crate) async fn handle_debate(
     }
 
     let all_tier_models_failed = !failures.is_empty() && failures.len() == candidates.len();
+    let fallback_reason = tier_model_fallback::fallback_reason_for_result(&failures);
     let finalized = finalize_debate_outcome(
         &project_root,
         output_format,
@@ -622,6 +627,9 @@ pub(crate) async fn handle_debate(
             output_header: Some(DebateOutputHeader {
                 prompt_bytes: prompt.len(),
             }),
+            original_tool: Some(tool),
+            fallback_tool: final_tool,
+            fallback_reason,
         },
     )?;
     let rendered_output = finalized.rendered_output;

@@ -11,11 +11,14 @@ const USER_RESULT_FILE_NAME: &str = "user-result.toml";
 pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
 pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
 pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
-const RUNTIME_RESULT_KEYS: [&str; 8] = [
+const RUNTIME_RESULT_KEYS: [&str; 11] = [
     "status",
     "exit_code",
     "summary",
     "tool",
+    "original_tool",
+    "fallback_tool",
+    "fallback_reason",
     "started_at",
     "completed_at",
     "events_count",
@@ -592,6 +595,9 @@ mod tests {
             exit_code: 0,
             summary: "turn 1".to_string(),
             tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
             started_at: now,
             completed_at: now,
             events_count: 1,

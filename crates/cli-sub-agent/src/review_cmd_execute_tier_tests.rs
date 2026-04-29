@@ -140,6 +140,16 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         serde_json::from_str(&std::fs::read_to_string(&verdict_path).unwrap()).unwrap();
     assert_eq!(artifact.routed_to, result.routed_to);
     assert_eq!(artifact.primary_failure, result.primary_failure);
+
+    let persisted = csa_session::load_result(project_dir.path(), &result.execution.meta_session_id)
+        .unwrap()
+        .expect("result.toml should exist");
+    assert_eq!(persisted.original_tool.as_deref(), Some("gemini-cli"));
+    assert_eq!(persisted.fallback_tool.as_deref(), Some("codex"));
+    assert_eq!(
+        persisted.fallback_reason.as_deref(),
+        Some("429_quota_exhausted")
+    );
 }
 
 #[cfg(unix)]
@@ -278,6 +288,9 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
 
     let result_toml = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
     assert!(result_toml.contains("tool = \"codex\""));
+    assert!(result_toml.contains("original_tool = \"codex\""));
+    assert!(result_toml.contains("fallback_tool = \"codex\""));
+    assert!(result_toml.contains("fallback_reason = \"429_quota_exhausted\""));
     assert!(result_toml.contains("PASS via fallback codex variant"));
 }
 

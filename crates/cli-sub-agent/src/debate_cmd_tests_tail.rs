@@ -596,6 +596,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
         Some("codex/openai/gpt-5.4/medium"),
         Some("quality"),
         Some(&config),
+        None,
         true,
         Some(&crate::tier_model_fallback::TierFilter::whitelist([
             "codex",

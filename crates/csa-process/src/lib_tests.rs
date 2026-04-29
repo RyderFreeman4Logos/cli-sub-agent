@@ -9,6 +9,59 @@ fn test_extract_summary_empty() {
 }
 
 #[test]
+fn persistent_rate_limit_tracker_detects_three_identical_429_lines() {
+    let mut tracker = super::PersistentRateLimitTracker::default();
+    assert!(
+        tracker
+            .observe_appended_output("Error: exceeded its quota (429)\n")
+            .is_none()
+    );
+    assert!(
+        tracker
+            .observe_appended_output("Error: exceeded its quota (429)\n")
+            .is_none()
+    );
+    let note = tracker
+        .observe_appended_output("Error: exceeded its quota (429)\n")
+        .expect("third identical 429 should trip quota exhaustion");
+    assert!(note.contains("429_quota_exhausted"));
+    assert!(note.contains("repeated 3"));
+}
+
+#[test]
+fn persistent_rate_limit_tracker_does_not_trip_on_changing_429_lines() {
+    let mut tracker = super::PersistentRateLimitTracker::default();
+    assert!(
+        tracker
+            .observe_appended_output("HTTP 429 retry 1\n")
+            .is_none()
+    );
+    assert!(
+        tracker
+            .observe_appended_output("HTTP 429 retry 2\n")
+            .is_none()
+    );
+    assert!(
+        tracker
+            .observe_appended_output("HTTP 429 retry 3\n")
+            .is_none()
+    );
+}
+
+#[test]
+fn persistent_rate_limit_tracker_resets_on_non_rate_limit_line() {
+    let mut tracker = super::PersistentRateLimitTracker::default();
+    assert!(tracker.observe_appended_output("HTTP 429 same\n").is_none());
+    assert!(
+        tracker
+            .observe_appended_output("working on request\n")
+            .is_none()
+    );
+    assert!(tracker.observe_appended_output("HTTP 429 same\n").is_none());
+    assert!(tracker.observe_appended_output("HTTP 429 same\n").is_none());
+}
+
+#[test]
 fn test_extract_summary_single_line() {
     assert_eq!(extract_summary("Hello, world!"), "Hello, world!");
 }

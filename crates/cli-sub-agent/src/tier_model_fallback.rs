@@ -1,6 +1,7 @@
-use csa_config::ProjectConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_scheduler::RateLimitDetected;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TierFilter {
@@ -40,6 +41,7 @@ pub(crate) fn ordered_tier_candidates(
     initial_model_spec: Option<&str>,
     tier_name: Option<&str>,
     config: Option<&ProjectConfig>,
+    global_config: Option<&GlobalConfig>,
     tier_fallback_enabled: bool,
     tier_filter: Option<&TierFilter>,
 ) -> Vec<(ToolName, Option<String>)> {
@@ -48,7 +50,13 @@ pub(crate) fn ordered_tier_candidates(
     }
 
     let Some(tier_name) = tier_name else {
-        return vec![(initial_tool, initial_model_spec.map(str::to_string))];
+        return ordered_global_candidates(
+            initial_tool,
+            initial_model_spec,
+            config,
+            global_config,
+            tier_filter,
+        );
     };
     let Some(cfg) = config else {
         return vec![(initial_tool, initial_model_spec.map(str::to_string))];
@@ -75,6 +83,43 @@ pub(crate) fn ordered_tier_candidates(
 
     if ordered.is_empty() {
         ordered.push((initial_tool, initial_model_spec.map(str::to_string)));
+    }
+
+    ordered
+}
+
+fn ordered_global_candidates(
+    initial_tool: ToolName,
+    initial_model_spec: Option<&str>,
+    config: Option<&ProjectConfig>,
+    global_config: Option<&GlobalConfig>,
+    tier_filter: Option<&TierFilter>,
+) -> Vec<(ToolName, Option<String>)> {
+    let mut ordered = vec![(initial_tool, initial_model_spec.map(str::to_string))];
+    let Some(global_config) = global_config else {
+        return ordered;
+    };
+
+    for tool in csa_config::global::sort_tools_by_effective_priority(
+        csa_config::global::all_known_tools(),
+        config,
+        global_config,
+    ) {
+        if tool == initial_tool {
+            continue;
+        }
+        if let Some(whitelist) = tier_filter.and_then(TierFilter::whitelist_slice)
+            && !whitelist.iter().any(|candidate| candidate == tool.as_str())
+        {
+            continue;
+        }
+        if config.is_some_and(|cfg| !cfg.is_tool_auto_selectable(tool.as_str())) {
+            continue;
+        }
+        if !crate::run_helpers::is_tool_binary_available_for_config(tool.as_str(), config) {
+            continue;
+        }
+        ordered.push((tool, None));
     }
 
     ordered
@@ -116,10 +161,45 @@ pub(crate) fn format_all_models_failed_reason(
     })
 }
 
+pub(crate) fn fallback_reason_for_result(failures: &[TierAttemptFailure]) -> Option<&'static str> {
+    failures
+        .iter()
+        .any(|failure| {
+            let reason = failure.reason.to_ascii_lowercase();
+            reason.contains("429") || reason.contains("quota")
+        })
+        .then_some("429_quota_exhausted")
+}
+
+pub(crate) fn persist_fallback_result_fields(
+    project_root: &Path,
+    session_id: &str,
+    original_tool: ToolName,
+    fallback_tool: ToolName,
+    fallback_reason: Option<&str>,
+) {
+    let Some(reason) = fallback_reason else {
+        return;
+    };
+    let Ok(Some(mut result)) = csa_session::load_result(project_root, session_id) else {
+        return;
+    };
+    result.original_tool = Some(original_tool.as_str().to_string());
+    result.fallback_tool = Some(fallback_tool.as_str().to_string());
+    result.fallback_reason = Some(reason.to_string());
+    if let Err(err) = csa_session::save_result(project_root, session_id, &result) {
+        tracing::warn!(
+            session_id,
+            error = %err,
+            "Failed to persist runtime fallback fields in result.toml"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{TierFilter, ordered_tier_candidates};
-    use csa_config::{ProjectConfig, ToolConfig};
+    use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
     use csa_core::types::ToolName;
     use std::collections::HashMap;
 
@@ -201,6 +281,7 @@ mod tests {
             Some("codex/openai/gpt-5.4/high"),
             Some("quality"),
             Some(&cfg),
+            None,
             true,
             Some(&TierFilter::whitelist(["codex"])),
         );
@@ -211,6 +292,36 @@ mod tests {
                 ToolName::Codex,
                 Some("codex/openai/gpt-5.4/high".to_string())
             )]
+        );
+    }
+
+    #[test]
+    fn no_tier_fallback_uses_global_tool_priority() {
+        let _availability = crate::test_env_lock::ScopedEnvVarRestore::set(
+            crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+            "1",
+        );
+        let mut global = GlobalConfig::default();
+        global.preferences.tool_priority =
+            vec!["claude-code".to_string(), "gemini-cli".to_string()];
+
+        let candidates = ordered_tier_candidates(
+            ToolName::Codex,
+            None,
+            None,
+            None,
+            Some(&global),
+            true,
+            Some(&TierFilter::whitelist(["gemini-cli", "claude-code"])),
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                (ToolName::Codex, None),
+                (ToolName::ClaudeCode, None),
+                (ToolName::GeminiCli, None),
+            ]
         );
     }
 }

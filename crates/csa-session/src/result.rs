@@ -159,6 +159,15 @@ pub struct SessionResult {
     pub summary: String,
     /// Tool that was executed
     pub tool: String,
+    /// First tool selected before runtime fallback, when fallback occurred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_tool: Option<String>,
+    /// Tool that ultimately produced this result, when different from original_tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_tool: Option<String>,
+    /// Machine-readable reason for runtime fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
     /// When execution started
     pub started_at: DateTime<Utc>,
     /// When execution completed
@@ -210,6 +219,9 @@ mod tests {
             exit_code: 0,
             summary: "All tests passed".to_string(),
             tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
             started_at: now,
             completed_at: now,
             events_count: 4,
@@ -238,6 +250,9 @@ mod tests {
             exit_code: 1,
             summary: "Build failed".to_string(),
             tool: "gemini-cli".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
             started_at: now,
             completed_at: now,
             events_count: 0,
@@ -317,6 +332,9 @@ artifacts = ["output/a.txt", "output/b.txt"]
             exit_code: 0,
             summary: "Done".to_string(),
             tool: "opencode".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
             started_at: now,
             completed_at: now,
             events_count: 2,

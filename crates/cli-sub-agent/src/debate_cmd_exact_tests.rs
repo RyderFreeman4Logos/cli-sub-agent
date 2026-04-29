@@ -53,6 +53,9 @@ fn setup_unrelated_debate_session(
             exit_code: 0,
             summary: "original unrelated summary".to_string(),
             tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
             started_at: chrono::Utc::now(),
             completed_at: chrono::Utc::now(),
             events_count: 0,
@@ -154,6 +157,9 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             failures: &failures,
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");
