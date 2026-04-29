@@ -457,7 +457,7 @@ COMMIT_SUBJECT="$(git log -1 --format=%s)"
 
 # --- Create or reuse PR ---
 set +e
-CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
+CREATE_OUTPUT="$(gh pr create --base "${DEFAULT_BRANCH}" --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
 CREATE_RC=$?
 set -e
 if [ "${CREATE_RC}" -ne 0 ]; then
@@ -620,14 +620,28 @@ if [ -n "${PR_NUMBER:-}" ]; then
   echo "PR #${PR_NUMBER} confirmed MERGED."
 fi
 FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
-git fetch origin
-git checkout main
-git merge origin/main --ff-only
-LOCAL_SHA="$(git rev-parse HEAD)"
-REMOTE_SHA="$(git rev-parse origin/main)"
-if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
-  echo "ERROR: Local main does not match origin/main after sync." >&2
-  exit 1
+SYNC_REMOTE="origin"
+SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
 fi
-echo "Local main synced to ${LOCAL_SHA}."
+if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
+  echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
+  exit 0
+fi
+if ! git checkout "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge checkout of ${SYNC_DEFAULT_BRANCH} failed; leaving ${FEATURE_BRANCH:-current branch} checked out." >&2
+  exit 0
+fi
+if ! git pull --ff-only "${SYNC_REMOTE}" "${SYNC_DEFAULT_BRANCH}"; then
+  echo "WARNING: post-merge pull of ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} failed; merge already completed." >&2
+  exit 0
+fi
+LOCAL_SHA="$(git rev-parse HEAD)"
+REMOTE_SHA="$(git rev-parse "${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH}" 2>/dev/null || true)"
+if [ -n "${REMOTE_SHA}" ] && [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
+  echo "WARNING: Local ${SYNC_DEFAULT_BRANCH} (${LOCAL_SHA}) does not match ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} (${REMOTE_SHA}) after sync." >&2
+  exit 0
+fi
+echo "Local ${SYNC_DEFAULT_BRANCH} synced to ${LOCAL_SHA}."
 ```
