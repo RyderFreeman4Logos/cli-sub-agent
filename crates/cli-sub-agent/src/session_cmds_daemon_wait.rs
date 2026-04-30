@@ -1,4 +1,5 @@
 use super::*;
+use std::os::fd::AsRawFd;
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
@@ -40,6 +41,46 @@ impl WaitBehavior {
 pub(crate) struct WaitReconciliationOutcome {
     pub(crate) result_became_available: bool,
     pub(crate) synthetic: bool,
+}
+
+pub(crate) struct SessionWaitLock {
+    file: std::fs::File,
+}
+
+impl Drop for SessionWaitLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns a valid fd for the lock file.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+pub(crate) fn try_acquire_session_wait_lock(session_dir: &Path) -> Result<Option<SessionWaitLock>> {
+    let lock_path = session_dir.join(".wait.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    // SAFETY: `file` owns a valid fd and `LOCK_EX | LOCK_NB` is a standard
+    // non-blocking advisory exclusive lock request.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(Some(SessionWaitLock { file }));
+    }
+
+    let err = std::io::Error::last_os_error();
+    if matches!(
+        err.raw_os_error(),
+        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+    ) {
+        return Ok(None);
+    }
+
+    Err(err.into())
 }
 
 /// Wait for a daemon session to reach a terminal result and daemon exit.
@@ -131,6 +172,16 @@ where
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     // For cross-project sessions, derive session_dir from the resolved sessions_dir
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
+    let _wait_lock = match try_acquire_session_wait_lock(&session_dir)? {
+        Some(lock) => lock,
+        None => {
+            eprintln!(
+                "ERROR: another csa session wait is already running for session {} (lock held). The existing wait will notify you on completion. Do NOT re-issue.",
+                resolved.session_id
+            );
+            return Ok(1);
+        }
+    };
 
     // Use the foreign project root for cross-project sessions, local otherwise.
     let effective_root = resolved
