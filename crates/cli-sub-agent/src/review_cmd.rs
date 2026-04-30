@@ -78,7 +78,7 @@ use resolve::build_review_instruction;
 #[cfg(test)]
 pub(crate) use resolve::resolve_review_tool;
 use resolve::{
-    ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope,
+    ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
     resolve_review_effective_tier, resolve_review_model, resolve_review_selection,
     resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
     review_scope_allows_auto_discovery, verify_review_skill_available,
@@ -208,7 +208,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
     };
 
-    let scope = derive_scope(&args);
+    let scope = derive_scope_for_project(&args, &project_root);
     let mode = if args.fix {
         "review-and-fix"
     } else {
