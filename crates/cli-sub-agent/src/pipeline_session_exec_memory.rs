@@ -52,7 +52,23 @@ fn build_memory_section_for_backend(
     memory_project_key: Option<&str>,
     project_root: &Path,
 ) -> Option<String> {
-    match csa_memory::resolve_backend(memory_cfg.backend) {
+    build_memory_section_for_resolved_backend(
+        csa_memory::resolve_backend(memory_cfg.backend),
+        memory_cfg,
+        memory_query,
+        memory_project_key,
+        project_root,
+    )
+}
+
+fn build_memory_section_for_resolved_backend(
+    backend: MemoryBackend,
+    memory_cfg: &MemoryConfig,
+    memory_query: &str,
+    memory_project_key: Option<&str>,
+    project_root: &Path,
+) -> Option<String> {
+    match backend {
         MemoryBackend::Mempal => memory_capture::build_memory_section_from_mempal(
             memory_query,
             project_root,
@@ -61,5 +77,62 @@ fn build_memory_section_for_backend(
         MemoryBackend::Legacy | MemoryBackend::Auto => {
             memory_capture::build_memory_section(memory_cfg, memory_query, memory_project_key)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_env_lock::ScopedTestEnvVar;
+    use csa_memory::{MemoryEntry, MemorySource, MemoryStore};
+    use tempfile::tempdir;
+    use ulid::Ulid;
+
+    #[test]
+    fn auto_backend_fallback_injects_legacy_memory_when_resolved_legacy() {
+        let temp = tempdir().expect("create tempdir");
+        let _state = ScopedTestEnvVar::set("XDG_STATE_HOME", temp.path().join("state"));
+        let memory_dir = temp
+            .path()
+            .join("state")
+            .join("cli-sub-agent")
+            .join("memory");
+        let store = MemoryStore::new(memory_dir);
+        let now = chrono::Utc::now();
+        store
+            .append(&MemoryEntry {
+                id: Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").expect("valid ulid"),
+                timestamp: now,
+                project: Some("test-project".to_string()),
+                tool: Some("codex".to_string()),
+                session_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
+                tags: Vec::new(),
+                content: "legacy memory fallback preserves prompt context".to_string(),
+                facts: Vec::new(),
+                source: MemorySource::PostRun,
+                valid_from: Some(now),
+                valid_until: None,
+            })
+            .expect("append legacy memory");
+
+        let config = MemoryConfig {
+            backend: MemoryBackend::Auto,
+            inject: true,
+            inject_token_budget: 200,
+            ..MemoryConfig::default()
+        };
+
+        let section = build_memory_section_for_resolved_backend(
+            MemoryBackend::Legacy,
+            &config,
+            "legacy fallback context",
+            Some("test-project"),
+            temp.path(),
+        )
+        .expect("legacy memory section");
+
+        assert!(section.contains("previous sessions"));
+        assert!(section.contains("legacy memory fallback"));
+        assert!(section.contains("<!-- CSA:MEMORY:END -->"));
     }
 }

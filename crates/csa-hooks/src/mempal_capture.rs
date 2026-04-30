@@ -45,6 +45,21 @@ pub fn spawn_mempal_ingest(
     input_path: &Path,
     tool_name: Option<&str>,
 ) {
+    let _ = spawn_mempal_ingest_with_resolver(config, room, input_path, tool_name, |config| {
+        resolve_mempal_binary(config)
+    });
+}
+
+fn spawn_mempal_ingest_with_resolver<F>(
+    config: &MemoryConfig,
+    room: &'static str,
+    input_path: &Path,
+    tool_name: Option<&str>,
+    resolve_binary: F,
+) -> Option<thread::JoinHandle<()>>
+where
+    F: FnOnce(&MemoryConfig) -> Option<PathBuf>,
+{
     if let Some(tool) = tool_name
         && tool_has_own_mempal(tool)
     {
@@ -53,19 +68,17 @@ pub fn spawn_mempal_ingest(
             room,
             "skipping mempal capture for {tool} (has own integration)"
         );
-        return;
+        return None;
     }
 
     if !config.auto_capture {
-        return;
+        return None;
     }
 
-    let Some(binary_path) = resolve_mempal_binary(config) else {
-        return;
-    };
+    let binary_path = resolve_binary(config)?;
 
     let input_path = input_path.to_path_buf();
-    thread::spawn(move || {
+    Some(thread::spawn(move || {
         if let Err(err) = run_mempal_ingest(&binary_path, room, &input_path, INGEST_TIMEOUT) {
             tracing::warn!(
                 room,
@@ -74,7 +87,7 @@ pub fn spawn_mempal_ingest(
                 "mempal ingest failed; continuing"
             );
         }
-    });
+    }))
 }
 
 /// Convenience wrapper for merge-guard capture, where only the current working
@@ -337,8 +350,169 @@ fn wait_for_mempal_child(mut child: std::process::Child, timeout: Duration) -> a
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ENV_LOCK;
     use std::fs;
     use std::io::Write as _;
+    use std::path::PathBuf;
+
+    struct ScopedPath {
+        original: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ScopedPath {
+        fn prepend(path: &Path) -> Self {
+            let lock = ENV_LOCK.lock().expect("env lock poisoned");
+            let original = std::env::var_os("PATH");
+            let mut paths = vec![path.to_path_buf()];
+            paths.extend(std::env::split_paths(
+                original
+                    .as_deref()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("")),
+            ));
+            let joined = std::env::join_paths(paths).expect("join PATH");
+            // SAFETY: test-scoped env mutation protected by ENV_LOCK.
+            unsafe { std::env::set_var("PATH", joined) };
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+
+        fn set_only(path: &Path) -> Self {
+            let lock = ENV_LOCK.lock().expect("env lock poisoned");
+            let original = std::env::var_os("PATH");
+            // SAFETY: test-scoped env mutation protected by ENV_LOCK.
+            unsafe { std::env::set_var("PATH", path) };
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ScopedPath {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation protected by ENV_LOCK.
+            unsafe {
+                match self.original.take() {
+                    Some(path) => std::env::set_var("PATH", path),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+    }
+
+    fn executable_mempal_script(path: &Path, body: &str) {
+        let mut script = fs::File::create(path).expect("create fake mempal");
+        write!(script, "{body}").expect("write fake mempal");
+        drop(script);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("chmod");
+        }
+    }
+
+    fn mempal_config() -> MemoryConfig {
+        MemoryConfig {
+            backend: MemoryBackend::Mempal,
+            auto_capture: true,
+            ..MemoryConfig::default()
+        }
+    }
+
+    fn which_mempal(_: &MemoryConfig) -> Option<PathBuf> {
+        which::which("mempal").ok()
+    }
+
+    #[test]
+    fn capture_with_mempal_available_sends_json_payload_to_stdin() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir(&fake_bin).expect("create fake bin");
+        let log_path = temp.path().join("stdin.json");
+        executable_mempal_script(
+            &fake_bin.join("mempal"),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'mempal mock 0.0.0\\n'\n  exit 0\nfi\nif [ \"$1\" = \"ingest\" ] && [ \"$2\" = \"--stdin\" ] && [ \"$3\" = \"--json\" ]; then\n  cat > '{}'\n  exit 0\nfi\nexit 64\n",
+                log_path.display()
+            ),
+        );
+        let _path = ScopedPath::prepend(&fake_bin);
+
+        let input_dir = temp.path().join("01KSESSION");
+        fs::create_dir(&input_dir).expect("create session dir");
+        let result_path = input_dir.join("result.toml");
+        fs::write(&result_path, "summary = \"captured via hook\"\n").expect("write result");
+
+        let handle = spawn_mempal_ingest_with_resolver(
+            &mempal_config(),
+            "csa-session",
+            &result_path,
+            Some("codex"),
+            which_mempal,
+        )
+        .expect("capture should spawn");
+        handle.join().expect("capture worker should not panic");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(log_path).expect("read stdin log"))
+                .expect("stdin payload is json");
+        assert_eq!(payload["content"], "captured via hook");
+        assert_eq!(payload["wing"], "cli-sub-agent");
+        assert_eq!(payload["room"], "csa-session");
+        assert_eq!(payload["project"], "cli-sub-agent");
+        assert_eq!(payload["source"], "csa-session-01KSESSION");
+        assert_eq!(payload["source_file"], "stdin://csa-hook");
+    }
+
+    #[test]
+    fn capture_skips_when_mempal_unavailable() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let empty_bin = temp.path().join("empty-bin");
+        fs::create_dir(&empty_bin).expect("create empty bin");
+        let _path = ScopedPath::set_only(&empty_bin);
+
+        let result_path = temp.path().join("result.toml");
+        fs::write(&result_path, "summary = \"no mempal available\"\n").expect("write result");
+
+        let handle = spawn_mempal_ingest_with_resolver(
+            &mempal_config(),
+            "csa-session",
+            &result_path,
+            Some("codex"),
+            which_mempal,
+        );
+
+        assert!(
+            handle.is_none(),
+            "missing mempal should silently skip capture"
+        );
+    }
+
+    #[test]
+    fn capture_skips_for_claude_code_sessions() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let result_path = temp.path().join("result.toml");
+        fs::write(&result_path, "summary = \"claude-code owns mempal\"\n").expect("write result");
+
+        let handle = spawn_mempal_ingest_with_resolver(
+            &mempal_config(),
+            "csa-session",
+            &result_path,
+            Some("claude-code"),
+            |_| panic!("resolver must not run for claude-code sessions"),
+        );
+
+        assert!(
+            handle.is_none(),
+            "claude-code capture should be skipped before binary resolution"
+        );
+    }
 
     #[test]
     fn run_mempal_ingest_passes_expected_args() {
