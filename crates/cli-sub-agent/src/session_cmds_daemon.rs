@@ -35,6 +35,7 @@ pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait, handle_session_wait_with_hooks,
     handle_session_wait_with_hooks_and_sampler, synthesized_wait_next_step,
+    try_acquire_session_wait_lock,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
