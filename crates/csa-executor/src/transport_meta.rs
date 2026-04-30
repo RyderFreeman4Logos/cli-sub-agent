@@ -173,6 +173,7 @@ impl AcpTransport {
         // bash execution.  Legacy tools (gemini-cli, opencode) are text-mode
         // and cannot independently call `gh pr merge`.
         csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
+        csa_hooks::git_guard::inject_git_guard_env(&mut env);
         if self.tool_name == "codex" {
             sanitize_env_map_for_codex(&mut env);
         }

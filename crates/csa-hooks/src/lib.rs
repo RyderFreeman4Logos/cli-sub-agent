@@ -52,6 +52,7 @@ pub mod config;
 pub mod directive;
 pub mod event;
 pub mod event_bus;
+pub mod git_guard;
 pub mod guard;
 pub mod mempal_capture;
 pub mod merge_guard;
@@ -70,6 +71,7 @@ pub use event::HookEvent;
 #[cfg(feature = "async-hooks")]
 pub use event_bus::AsyncEventBus;
 pub use event_bus::{EventBus, SyncEventBus};
+pub use git_guard::{git_wrapper_script, inject_git_guard_env};
 pub use guard::{
     GuardContext, PromptGuardEntry, PromptGuardResult, builtin_prompt_guards, format_guard_output,
     run_prompt_guards,
