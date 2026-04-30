@@ -74,6 +74,26 @@ fn commit_workflow_csa_dispatch_steps_have_non_empty_prompts() {
     }
 }
 
+#[test]
+fn commit_workflow_cumulative_review_is_deterministic_bash_gate() {
+    let workflow_path = workspace_root().join("patterns/commit/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Cumulative Branch Review")
+        .expect("missing Cumulative Branch Review step");
+
+    assert_eq!(step.tool.as_deref(), Some("bash"));
+    assert_eq!(step.tier.as_deref(), None);
+    assert!(
+        step.prompt
+            .contains("csa review --sa-mode true --range main...HEAD")
+    );
+    assert!(step.prompt.contains("CSA_VAR:REVIEW_COMPLETED=true"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
@@ -161,6 +181,16 @@ fn commit_workflow_auto_pr_step_exits_before_push_in_executor_mode() {
         .find(|step| step.title == "Auto PR Transaction")
         .expect("missing Auto PR Transaction step");
     let script = extract_bash_block(&auto_pr_step.prompt);
+    let review_gate_index = script
+        .find("REVIEW_COMPLETED")
+        .expect("Auto PR step must check REVIEW_COMPLETED");
+    let executor_guard_index = script
+        .find("CSA_DEPTH")
+        .expect("Auto PR step must retain executor-mode guard");
+    assert!(
+        review_gate_index < executor_guard_index,
+        "REVIEW_COMPLETED gate must run before executor-mode guard"
+    );
 
     let td = tempfile::tempdir().unwrap();
     let bin_dir = td.path().join("bin");
@@ -195,6 +225,7 @@ fn commit_workflow_auto_pr_step_exits_before_push_in_executor_mode() {
         )
         .env("BRANCH", "fix/executor-guard")
         .env("PR_BODY", "body")
+        .env("REVIEW_COMPLETED", "true")
         .env("CSA_DEPTH", "1")
         .env("CSA_INTERNAL_INVOCATION", "1")
         .status()
@@ -214,7 +245,7 @@ fn commit_pattern_step1_bridges_csa_skip_publish_to_skip_publish() {
     let pattern = std::fs::read_to_string(&pattern_path).unwrap();
 
     assert!(
-        pattern.contains(": \"${FILES}\" \"${SCOPE}\" \"${BRANCH}\" \"${COMMIT_SUBJECT}\" \"${COMMIT_BODY}\" \"${COMMIT_MESSAGE_FILE}\" \"${IS_MILESTONE}\" \"${ENABLE_REVIEW_LOOP}\" \"${AUDIT_FAIL}\" \"${AUDIT_PASS_DEFERRED}\" \"${REVIEW_HAS_ISSUES}\" \"${PR_BODY}\" \"${SKIP_PUBLISH}\""),
+        pattern.contains(": \"${FILES}\" \"${SCOPE}\" \"${BRANCH}\" \"${COMMIT_SUBJECT}\" \"${COMMIT_BODY}\" \"${COMMIT_MESSAGE_FILE}\" \"${IS_MILESTONE}\" \"${ENABLE_REVIEW_LOOP}\" \"${AUDIT_FAIL}\" \"${AUDIT_PASS_DEFERRED}\" \"${REVIEW_HAS_ISSUES}\" \"${REVIEW_COMPLETED}\" \"${PR_BODY}\" \"${SKIP_PUBLISH}\""),
         "PATTERN.md Step 1 must initialize SKIP_PUBLISH alongside the other mirrored workflow variables"
     );
     assert!(
