@@ -5,6 +5,9 @@ use csa_config::{ProjectProfile, ToolRestrictions};
 use std::path::Path;
 use tempfile::tempdir;
 
+#[path = "review_cmd_tests_scope_tail.rs"]
+mod scope_tail_tests;
+
 // --- is_worktree_submodule tests ---
 
 #[test]

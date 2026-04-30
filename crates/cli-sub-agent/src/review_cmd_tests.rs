@@ -461,7 +461,7 @@ fn derive_scope_uncommitted() {
         diff: true,
         ..default_review_args()
     };
-    assert_eq!(derive_scope(&args), "uncommitted");
+    assert_eq!(super::resolve::derive_scope(&args), "uncommitted");
 }
 
 #[test]
@@ -470,7 +470,7 @@ fn derive_scope_commit() {
         commit: Some("abc123".to_string()),
         ..default_review_args()
     };
-    assert_eq!(derive_scope(&args), "commit:abc123");
+    assert_eq!(super::resolve::derive_scope(&args), "commit:abc123");
 }
 
 #[test]
@@ -479,7 +479,7 @@ fn derive_scope_range() {
         range: Some("main...HEAD".to_string()),
         ..default_review_args()
     };
-    assert_eq!(derive_scope(&args), "range:main...HEAD");
+    assert_eq!(super::resolve::derive_scope(&args), "range:main...HEAD");
 }
 
 #[test]
@@ -488,7 +488,7 @@ fn derive_scope_files() {
         files: Some("src/**/*.rs".to_string()),
         ..default_review_args()
     };
-    assert_eq!(derive_scope(&args), "files:src/**/*.rs");
+    assert_eq!(super::resolve::derive_scope(&args), "files:src/**/*.rs");
 }
 
 #[test]
@@ -497,7 +497,7 @@ fn derive_scope_default_branch() {
         branch: Some("develop".to_string()),
         ..default_review_args()
     };
-    assert_eq!(derive_scope(&args), "base:develop");
+    assert_eq!(super::resolve::derive_scope(&args), "base:develop");
 }
 
 #[test]
@@ -582,19 +582,19 @@ fn review_cli_rejects_branch_with_diff() {
 #[test]
 fn review_cli_accepts_single_scope_flags() {
     let diff = parse_review_args(&["csa", "review", "--diff"]);
-    assert_eq!(derive_scope(&diff), "uncommitted");
+    assert_eq!(super::resolve::derive_scope(&diff), "uncommitted");
 
     let commit = parse_review_args(&["csa", "review", "--commit", "abc123"]);
-    assert_eq!(derive_scope(&commit), "commit:abc123");
+    assert_eq!(super::resolve::derive_scope(&commit), "commit:abc123");
 
     let range = parse_review_args(&["csa", "review", "--range", "main...HEAD"]);
-    assert_eq!(derive_scope(&range), "range:main...HEAD");
+    assert_eq!(super::resolve::derive_scope(&range), "range:main...HEAD");
 
     let files = parse_review_args(&["csa", "review", "--files", "src/"]);
-    assert_eq!(derive_scope(&files), "files:src/");
+    assert_eq!(super::resolve::derive_scope(&files), "files:src/");
 
     let branch = parse_review_args(&["csa", "review", "--branch", "develop"]);
-    assert_eq!(derive_scope(&branch), "base:develop");
+    assert_eq!(super::resolve::derive_scope(&branch), "base:develop");
 }
 
 #[test]
@@ -609,7 +609,7 @@ fn review_cli_parses_range_scope_with_multiple_reviewers() {
     ]);
 
     assert_eq!(args.reviewers, Some(3));
-    assert_eq!(derive_scope(&args), "range:main...HEAD");
+    assert_eq!(super::resolve::derive_scope(&args), "range:main...HEAD");
 }
 
 #[test]
