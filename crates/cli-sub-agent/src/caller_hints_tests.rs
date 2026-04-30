@@ -7,6 +7,8 @@
 #![cfg(test)]
 
 const NO_STACK_WAKEUP_WARNING: &str = "do NOT stack ScheduleWakeup, /loop, or sleep loops on top";
+const BACKGROUND_WAIT_RECOMMENDATION: &str = "with run_in_background: true";
+const TASK_NOTIFICATION_WAKE_SIGNAL: &str = "The task-notification IS your wake signal";
 
 const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
@@ -27,6 +29,29 @@ fn caller_hint_blocks(src: &str) -> Vec<&str> {
             &tail[..end]
         })
         .collect()
+}
+
+fn assert_wait_hint_contract(block: &str, site: &str) {
+    assert!(
+        block.contains("action=\\\"wait\\\""),
+        "{site} emits action=\"wait\""
+    );
+    assert!(
+        block.contains(BACKGROUND_WAIT_RECOMMENDATION),
+        "{site} CALLER_HINT must recommend backgrounding session wait with run_in_background: true"
+    );
+    assert!(
+        block.contains(TASK_NOTIFICATION_WAKE_SIGNAL),
+        "{site} CALLER_HINT must state that task-notification is the wake signal"
+    );
+    assert!(
+        block.contains(NO_STACK_WAKEUP_WARNING),
+        "{site} CALLER_HINT must warn against ScheduleWakeup/loop stacking; missing warning: {NO_STACK_WAKEUP_WARNING}"
+    );
+    assert!(
+        !block.contains("in a SEPARATE Bash call"),
+        "{site} CALLER_HINT must not lead with the old foreground-wait phrasing"
+    );
 }
 
 #[test]
@@ -59,28 +84,14 @@ fn caller_hint_blocks_ignores_unrelated_mentions_in_comments() {
 fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(RUN_CMD_DAEMON_SRC);
     assert_eq!(blocks.len(), 1, "run_cmd_daemon emits one CALLER_HINT");
-    assert!(
-        blocks[0].contains("action=\\\"wait\\\""),
-        "run_cmd_daemon emits action=\"wait\""
-    );
-    assert!(
-        blocks[0].contains(NO_STACK_WAKEUP_WARNING),
-        "run_cmd_daemon CALLER_HINT must warn against ScheduleWakeup/loop stacking; missing warning: {NO_STACK_WAKEUP_WARNING}"
-    );
+    assert_wait_hint_contract(blocks[0], "run_cmd_daemon");
 }
 
 #[test]
 fn plan_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(PLAN_CMD_DAEMON_SRC);
     assert_eq!(blocks.len(), 1, "plan_cmd_daemon emits one CALLER_HINT");
-    assert!(
-        blocks[0].contains("action=\\\"wait\\\""),
-        "plan_cmd_daemon emits action=\"wait\""
-    );
-    assert!(
-        blocks[0].contains(NO_STACK_WAKEUP_WARNING),
-        "plan_cmd_daemon CALLER_HINT must warn against ScheduleWakeup/loop stacking"
-    );
+    assert_wait_hint_contract(blocks[0], "plan_cmd_daemon");
 }
 
 #[test]
