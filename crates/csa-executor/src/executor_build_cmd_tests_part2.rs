@@ -380,6 +380,19 @@ fn test_build_command_codex_strips_lefthook_env_reinjected_by_extra_env() {
         env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
         Some(&Some(std::ffi::OsStr::new("ok")))
     );
+    assert!(
+        env_map
+            .get(std::ffi::OsStr::new("CSA_REAL_GIT"))
+            .is_some_and(Option::is_some),
+        "git guard should expose the real git binary"
+    );
+    assert!(
+        env_map
+            .get(std::ffi::OsStr::new("PATH"))
+            .and_then(|value| value.as_ref())
+            .is_some_and(|value| value.to_string_lossy().contains("guards")),
+        "git guard should prepend its wrapper directory to PATH"
+    );
 }
 
 #[test]
@@ -409,6 +422,19 @@ fn test_build_execute_in_command_codex_strips_lefthook_env_reinjected_by_extra_e
     assert_eq!(
         env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
         Some(&Some(std::ffi::OsStr::new("ok")))
+    );
+    assert!(
+        env_map
+            .get(std::ffi::OsStr::new("CSA_REAL_GIT"))
+            .is_some_and(Option::is_some),
+        "execute_in should expose the real git binary"
+    );
+    assert!(
+        env_map
+            .get(std::ffi::OsStr::new("PATH"))
+            .and_then(|value| value.as_ref())
+            .is_some_and(|value| value.to_string_lossy().contains("guards")),
+        "execute_in should prepend the git guard wrapper directory to PATH"
     );
 }
 

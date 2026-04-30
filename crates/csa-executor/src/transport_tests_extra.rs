@@ -343,6 +343,14 @@ fn test_build_env_codex_strips_lefthook_bypass_env_only_for_codex() {
     assert!(!env.contains_key("LEFTHOOK"));
     assert!(!env.contains_key("LEFTHOOK_SKIP_PRE_COMMIT"));
     assert_eq!(env.get("SAFE_ENV").map(String::as_str), Some("ok"));
+    assert!(
+        env.get("CSA_REAL_GIT").is_some_and(|value| !value.is_empty()),
+        "ACP env should expose real git for the git guard"
+    );
+    assert!(
+        env.get("PATH").is_some_and(|value| value.contains("guards")),
+        "ACP env should prepend the git guard wrapper directory to PATH"
+    );
 }
 
 #[test]

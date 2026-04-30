@@ -300,6 +300,7 @@ impl Executor {
             Self::inject_env(&mut cmd, env);
         }
         self.inject_csa_owned_env(&mut cmd, session);
+        executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(Path::new(&session.project_path)));
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
@@ -457,6 +458,7 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(work_dir));
         self.append_yolo_args(&mut cmd);
