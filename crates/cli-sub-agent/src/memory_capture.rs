@@ -128,9 +128,23 @@ pub fn build_memory_section_from_mempal(
     project_root: &Path,
     token_budget: u32,
 ) -> Option<String> {
-    let binary_path = csa_memory::detect_mempal()?.binary_path.clone();
+    build_memory_section_from_mempal_with_detector(query, project_root, token_budget, || {
+        csa_memory::detect_mempal().map(|info| PathBuf::from(&info.binary_path))
+    })
+}
+
+fn build_memory_section_from_mempal_with_detector<F>(
+    query: &str,
+    project_root: &Path,
+    token_budget: u32,
+    detect_binary: F,
+) -> Option<String>
+where
+    F: FnOnce() -> Option<PathBuf>,
+{
+    let binary_path = detect_binary()?;
     build_memory_section_from_mempal_binary(
-        Path::new(&binary_path),
+        &binary_path,
         query,
         project_root,
         token_budget,
@@ -727,65 +741,5 @@ mod tests {
         assert_eq!(bullet_count, 1, "token budget should limit to one memory");
     }
 
-    #[test]
-    fn test_build_memory_section_from_mempal_binary_wraps_context() {
-        let temp = tempdir().expect("create tempdir");
-        let script_path = temp.path().join("mempal-fake.sh");
-        let mut script = fs::File::create(&script_path).expect("create fake mempal");
-        writeln!(
-            script,
-            "#!/bin/sh\nprintf 'mempal remembered %s in %s\\n' \"$6\" \"$3\"\n"
-        )
-        .expect("write fake mempal");
-        drop(script);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&script_path, perms).expect("chmod");
-        }
-
-        let section = build_memory_section_from_mempal_binary(
-            &script_path,
-            "review routing",
-            temp.path(),
-            200,
-            Duration::from_secs(5),
-        )
-        .expect("mempal section");
-
-        assert!(section.contains("<!-- CSA:MEMORY -->"));
-        assert!(section.contains("mempal remembered review routing"));
-        assert!(section.contains(temp.path().to_string_lossy().as_ref()));
-        assert!(section.contains("<!-- CSA:MEMORY:END -->"));
-    }
-
-    #[test]
-    fn test_build_memory_section_from_mempal_binary_returns_none_on_timeout() {
-        let temp = tempdir().expect("create tempdir");
-        let script_path = temp.path().join("mempal-sleep.sh");
-        let mut script = fs::File::create(&script_path).expect("create fake mempal");
-        writeln!(script, "#!/bin/sh\nsleep 2\n").expect("write fake mempal");
-        drop(script);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&script_path, perms).expect("chmod");
-        }
-
-        let section = build_memory_section_from_mempal_binary(
-            &script_path,
-            "review routing",
-            temp.path(),
-            200,
-            Duration::from_millis(100),
-        );
-
-        assert!(section.is_none());
-    }
+    include!("memory_capture_mempal_tests.rs");
 }
