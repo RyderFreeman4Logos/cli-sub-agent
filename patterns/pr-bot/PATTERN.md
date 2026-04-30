@@ -235,7 +235,9 @@ if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | gre
   echo "Unreviewed code may have been visible to CI/reviewers. Continuing with force-push of reviewed code."
 fi
 
-git push --force-with-lease -u "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="pr-bot initial branch push for CI/review" \
+  git push --force-with-lease -u "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 ORIGIN_URL="$(git remote get-url --push "${REMOTE_NAME}")"
 SOURCE_OWNER="$(
   printf '%s\n' "${ORIGIN_URL}" | sed -nE \
@@ -1403,7 +1405,9 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       ROUND_LIMIT_REACHED=false  # Clear so Steps 10.5/11/12 are unblocked
       # Push any Category C fixes from Step 9 so remote HEAD includes them.
       # Without this, gh pr merge merges the stale remote head.
-      git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+      CSA_SKIP_REVIEW_CHECK=1 \
+      CSA_SKIP_REVIEW_CHECK_REASON="pr-bot push after round-limit merge decision" \
+        git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
       echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
       echo "CSA_VAR:ROUND_LIMIT_ACTION="
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
@@ -1458,7 +1462,9 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
 fi
 
 # --- Push fixes only (next trigger happens in Step 5) ---
-git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="pr-bot push fixes between review rounds" \
+  git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 ROUND_LIMIT_REACHED=false
 echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
 echo "CSA_VAR:REVIEW_ROUND=$REVIEW_ROUND"
@@ -1826,7 +1832,9 @@ fi
 
 # Push fallback fix commits so the remote PR head includes them.
 # Without this, gh pr merge uses the stale remote HEAD and omits fixes.
-git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="pr-bot push fallback fixes before merge" \
+  git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 
 # Audit trail: explain why merging without bot review.
 DIFF_SUMMARY="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" | sed -n '1,20p')"
@@ -1894,7 +1902,9 @@ If fixes accumulated, create clean branch for final review.
 ```bash
 CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
-git push -u "${REMOTE_NAME}" "${CLEAN_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="pr-bot push clean branch for PR" \
+  git push -u "${REMOTE_NAME}" "${CLEAN_BRANCH}"
 gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```
 
@@ -1920,7 +1930,9 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
-git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="pr-bot Step 12 pre-merge push" \
+  git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
@@ -1964,7 +1976,9 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
-git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="pr-bot Step 12b pre-merge push" \
+  git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then

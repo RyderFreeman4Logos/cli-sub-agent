@@ -421,7 +421,9 @@ if [ "${DIFF_LINES}" -eq 0 ]; then
   echo "Investigate the working tree and the failed commit's intended files; do NOT escalate to squash merge."
   exit 1
 fi
-git push -u origin "${BRANCH}" --force-with-lease
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="dev2merge Step 12 push after Step 11 review verification" \
+  git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 echo '<!-- CSA:NEXT_STEP cmd="verify review verdict (Step 13)" required=true -->'
 ```

@@ -514,7 +514,9 @@ fi
 # Resolve branch name (BRANCH may be unset in standalone /commit)
 BRANCH="${BRANCH:-$(git branch --show-current)}"
 
-git push -u origin "${BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="commit workflow push after commit step" \
+  git push -u origin "${BRANCH}"
 set +e
 CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}" 2>&1)"
 CREATE_RC=$?

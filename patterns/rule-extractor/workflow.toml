@@ -465,7 +465,9 @@ Extracted from HIGH/CRITICAL finding in PR #${PR_NUM}.
 Bug class: ${BUG_CLASS_NAME}
 Source: pr-bot-finding auto-extraction (issue #661)"
 
-git push -u origin "${PROPOSAL_BRANCH}"
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="rule-extractor workflow push for proposal PR" \
+  git push -u origin "${PROPOSAL_BRANCH}"
 gh pr create \
   --title "chore(rules): propose ${LANG}/${RULE_FILE} — ${BUG_CLASS_NAME}" \
   --body "## Rule Proposal (auto-extracted)

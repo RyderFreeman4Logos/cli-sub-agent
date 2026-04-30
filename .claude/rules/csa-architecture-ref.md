@@ -55,6 +55,11 @@ Per-tool transport: `[tools.<name>].transport = "auto" | "acp" | "cli"`; current
 
 **tier-routing** — When `[tiers]` are configured, direct `--tool`/`--model`/`--thinking` is blocked by default across `csa run`, `csa review`, and `csa debate`. Callers must use `--tier <name>` to select a tier by name, which resolves tool/model/thinking from the tier definition. Override with `--force-ignore-tier-setting` (alias: `--force-tier`) to bypass. The existing `--force` flag also bypasses tier enforcement. When no tiers are configured (empty `[tiers]`), all existing behavior is preserved. Priority chain: CLI `--tier` > config tier > CLI `--tool` (with force) > config tool > auto-select.
 
+## Weave Execution Model
+
+Deterministic workflow compiler. `tool = "bash"` steps run via `spawn_bash()` — LLM not involved, exit code checked programmatically. `tool = "manual"` steps are non-enforceable handoffs. `on_fail = "abort"` forms hard gates. `csa review --check-verdict` reads `review_meta.json` + `output/review-verdict.json` from session dir (`~/.local/state/`). Pre-push hook (`scripts/hooks/review-check.sh`) is last-resort defense for pushes bypassing weave pipeline.
+→ `.agents/project-rules-ref/weave-execution-model.md`
+
 ## Patterns & Skills
 
 Patterns in `patterns/` (weave packages). Skills in `.claude/skills/` (SKILL.md + .skill.toml). **MANDATORY**: every pattern needs companion skill symlink; pattern changes MUST pass `weave compile`; workflow variables MUST sync between PATTERN.md and workflow.toml (PR #257: 17 review rounds from orphaned variable). **dev2merge** is the primary deterministic pipeline (`csa plan run patterns/dev2merge/workflow.toml`): branch validation → FAST_PATH detection → L1/L2 gates → mktd → mktsk → cumulative review → push gate → PR → pr-bot → merge. All steps enforced via `on_fail = "abort"` and git pre-push hook (`scripts/hooks/pre-push`).
