@@ -146,7 +146,9 @@ fi
 
 # Push
 BRANCH="$(git branch --show-current)"
-git push -u origin "${BRANCH}" --force-with-lease
+CSA_SKIP_REVIEW_CHECK=1 \
+CSA_SKIP_REVIEW_CHECK_REASON="mktsk workflow push after implementation" \
+  git push -u origin "${BRANCH}" --force-with-lease
 
 # Create or reuse PR
 COMMIT_SUBJECT="$(git log -1 --format=%s)"
