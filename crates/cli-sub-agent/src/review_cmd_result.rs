@@ -1,5 +1,8 @@
 use anyhow::Result;
-use csa_core::types::{ReviewDecision, ToolName};
+use csa_core::{
+    gemini::RATE_LIMIT_PATTERNS,
+    types::{ReviewDecision, ToolName},
+};
 use std::fs;
 use std::path::Path;
 use tracing::warn;
@@ -18,6 +21,14 @@ const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAu
 const AUTH_PROMPT_DIAGNOSTIC: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced";
 const REVIEW_UNAVAILABLE_PREFIX: &str = "Review unavailable: ";
+const TRANSIENT_GEMINI_FAILURE_PATTERNS: &[&str] = &[
+    "retrydelayms",
+    "rate limit",
+    "rate_limit",
+    "overloaded",
+    "temporarily unavailable",
+    "503",
+];
 
 fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
     match decision {
@@ -57,6 +68,7 @@ pub(super) fn resolve_single_review_result(
     let auth_prompt_failure =
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
     let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
+    let transient_unavailable_reason = transient_gemini_failure_reason(result, tool);
     let sanitized = if auth_prompt_failure {
         AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
     } else if forced_unavailable {
@@ -67,11 +79,14 @@ pub(super) fn resolve_single_review_result(
                 .as_deref()
                 .unwrap_or("all configured tier models failed")
         )
+    } else if let Some(reason) = transient_unavailable_reason.as_deref() {
+        format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
     } else {
         sanitize_review_output(&result.execution.execution.output)
     };
     let empty_output = !auth_prompt_failure
         && !forced_unavailable
+        && transient_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.execution.output);
     let tool_diagnostic = detect_tool_diagnostic(
         &result.execution.execution.output,
@@ -93,6 +108,8 @@ pub(super) fn resolve_single_review_result(
 
     let decision = if let Some(forced) = result.forced_decision {
         forced
+    } else if transient_unavailable_reason.is_some() {
+        ReviewDecision::Unavailable
     } else if auth_prompt_failure || empty_output {
         ReviewDecision::Uncertain
     } else {
@@ -127,8 +144,11 @@ pub(super) fn build_reviewer_outcome(
         session_result.forced_decision,
         Some(ReviewDecision::Unavailable)
     );
+    let transient_unavailable_reason =
+        transient_gemini_failure_reason(session_result, reviewer_tool);
     let empty = !auth_prompt_failure
         && !forced_unavailable
+        && transient_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.output);
     let diagnostic =
         detect_tool_diagnostic(&result.execution.output, &result.execution.stderr_output);
@@ -147,6 +167,8 @@ pub(super) fn build_reviewer_outcome(
         session_id: session_result.execution.meta_session_id.clone(),
         verdict: verdict_from_decision(if let Some(forced) = session_result.forced_decision {
             forced
+        } else if transient_unavailable_reason.is_some() {
+            ReviewDecision::Unavailable
         } else if auth_prompt_failure || empty {
             ReviewDecision::Uncertain
         } else {
@@ -166,11 +188,15 @@ pub(super) fn build_reviewer_outcome(
                     .as_deref()
                     .unwrap_or("all configured tier models failed")
             )
+        } else if let Some(reason) = transient_unavailable_reason.as_deref() {
+            format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
         } else {
             sanitize_review_output(&result.execution.output)
         },
         exit_code: exit_code_from_decision(if let Some(forced) = session_result.forced_decision {
             forced
+        } else if transient_unavailable_reason.is_some() {
+            ReviewDecision::Unavailable
         } else if auth_prompt_failure || empty {
             ReviewDecision::Uncertain
         } else {
@@ -181,8 +207,55 @@ pub(super) fn build_reviewer_outcome(
             )
         }),
         diagnostic: diagnostic
-            .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string())),
+            .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
+            .or_else(|| transient_unavailable_reason.clone()),
     })
+}
+
+fn transient_gemini_failure_reason(
+    result: &ReviewExecutionOutcome,
+    tool: ToolName,
+) -> Option<String> {
+    if tool != ToolName::GeminiCli || result.execution.execution.exit_code == 0 {
+        return None;
+    }
+
+    let fields = [
+        result.failure_reason.as_deref(),
+        result.primary_failure.as_deref(),
+        Some(result.execution.execution.summary.as_str()),
+        Some(result.execution.execution.stderr_output.as_str()),
+        Some(result.execution.execution.output.as_str()),
+        result.status_reason.as_deref(),
+    ];
+
+    fields
+        .into_iter()
+        .flatten()
+        .find(|text| contains_transient_gemini_failure_pattern(text))
+        .map(|text| {
+            format!(
+                "gemini-cli transient failure: {}",
+                truncate_single_line(text, 240)
+            )
+        })
+}
+
+fn contains_transient_gemini_failure_pattern(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    TRANSIENT_GEMINI_FAILURE_PATTERNS
+        .iter()
+        .chain(RATE_LIMIT_PATTERNS.iter())
+        .any(|pattern| lower.contains(pattern))
+        || lower.contains("quota")
+}
+
+fn truncate_single_line(text: &str, max_chars: usize) -> String {
+    text.chars()
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .replace('\n', " ")
 }
 
 fn parse_review_decision_for_execution(
@@ -285,6 +358,26 @@ mod tests {
         assert_eq!(resolved.decision, ReviewDecision::Uncertain);
         assert_eq!(resolved.verdict, UNCERTAIN);
         assert_eq!(resolved.effective_exit_code, 1);
+    }
+
+    #[test]
+    fn resolve_single_review_result_maps_transient_gemini_failure_to_unavailable() {
+        let mut result = outcome("", 1);
+        result.executed_tool = ToolName::GeminiCli;
+        result.execution.execution.summary = "retryDelayMs: undefined".to_string();
+
+        let resolved = resolve_single_review_result(
+            &result,
+            ToolName::GeminiCli,
+            "uncommitted",
+            Path::new("."),
+        );
+
+        assert_eq!(resolved.decision, ReviewDecision::Unavailable);
+        assert_eq!(resolved.verdict, UNAVAILABLE);
+        assert_eq!(resolved.effective_exit_code, 1);
+        assert!(resolved.sanitized.contains("Review unavailable:"));
+        assert!(resolved.sanitized.contains("retryDelayMs: undefined"));
     }
 
     #[test]
