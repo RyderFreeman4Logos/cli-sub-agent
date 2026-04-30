@@ -69,6 +69,9 @@ name = "PR_BODY"
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
+name = "REVIEW_COMPLETED"
+
+[[workflow.variables]]
 name = "SKIP_PUBLISH"
 
 [[workflow.variables]]
@@ -101,11 +104,12 @@ Initialize and declare workflow variables.
 - `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
 - `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
 - `${REVIEW_HAS_ISSUES}`: Set by `ai-reviewed-commit` if issues found
+- `${REVIEW_COMPLETED}`: Set by cumulative branch review before push/PR
 - `${PR_BODY}`: Body for the created Pull Request
 
 ```bash
 # Force weave to pick up these variables
-: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}" "${SKIP_PUBLISH}"
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${REVIEW_COMPLETED}" "${PR_BODY}" "${SKIP_PUBLISH}"
 
 # Bridge CSA_SKIP_PUBLISH env var to workflow variable.
 # When parent workflow (mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true, auto-PR is skipped.
@@ -531,18 +535,18 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 21
 title = "Cumulative Branch Review"
-tool = "csa"
-prompt = """
+tool = "bash"
+prompt = '''
 Perform a cumulative review of the entire feature branch before pushing.
 This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
 set -euo pipefail
 bash scripts/csa/cumulative-review-batch.sh --default-branch main -- \
-  csa review --range main...HEAD
+  csa review --sa-mode true --range main...HEAD
+echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 22)" required=true -->'
-```"""
-tier = "tier-2-standard"
+```'''
 on_fail = "abort"
 condition = "!(${SKIP_PUBLISH})"
 
@@ -559,6 +563,11 @@ Runs by default when commit is standalone. Skipped when parent workflow
 
 ```bash
 set -euo pipefail
+if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
+  echo "ERROR: Push blocked — cumulative review not completed." >&2
+  exit 1
+fi
+
 if [ "${CSA_DEPTH:-0}" -gt 0 ] && [ "${CSA_INTERNAL_INVOCATION:-0}" = "1" ]; then
   echo "INFO: Executor mode detected; skipping push/PR transaction."
   exit 0
