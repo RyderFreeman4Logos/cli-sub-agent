@@ -73,6 +73,8 @@ pub enum MemoryCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+    /// Show memory backend status (configured vs resolved, mempal detection)
+    Status,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

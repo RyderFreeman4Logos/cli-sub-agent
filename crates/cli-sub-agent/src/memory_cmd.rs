@@ -34,6 +34,7 @@ pub async fn handle_memory_command(command: MemoryCommands) -> Result<()> {
                 crate::memory_migrate::migrate_to_mempal(memory_store(), dry_run, cd)
             }
         },
+        MemoryCommands::Status => handle_status(),
     }
 }
 
@@ -344,6 +345,44 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
     println!("  Entries before: {}", plan.total_before);
     println!("  Groups merged: {}", plan.groups_to_merge.len());
     println!("  Entries after (estimated): {}", plan.total_after_estimate);
+    Ok(())
+}
+
+fn handle_status() -> Result<()> {
+    let config = load_memory_config()?;
+    let resolved = csa_memory::resolve_backend(config.backend);
+    let mempal_info = csa_memory::detect_mempal();
+
+    println!("Memory Backend Status");
+    println!("  configured: {}", config.backend);
+    println!("  resolved:   {}", resolved);
+    println!("  auto_capture: {}", config.auto_capture);
+    println!("  inject:       {}", config.inject);
+    println!("  inject_token_budget: {}", config.inject_token_budget);
+    println!();
+
+    match mempal_info {
+        Some(info) => {
+            println!("Mempal Detection");
+            println!("  binary: {}", info.binary_path);
+            println!(
+                "  version: {}",
+                info.version.as_deref().unwrap_or("unknown")
+            );
+        }
+        None => {
+            println!("Mempal Detection");
+            println!("  not found on PATH");
+        }
+    }
+    println!();
+
+    let store = memory_store();
+    let legacy_count = store.load_all().map(|e| e.len()).unwrap_or(0);
+    println!("Legacy Store");
+    println!("  entries: {}", legacy_count);
+    println!("  path:    {}", store.base_dir().display());
+
     Ok(())
 }
 
