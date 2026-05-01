@@ -49,6 +49,7 @@ pub(crate) fn resolve_debate_selection(
             arg_tool,
             Some(model_spec),
             None,
+            None, // thinking not relevant for debate command
             project_config,
             project_root,
             false,

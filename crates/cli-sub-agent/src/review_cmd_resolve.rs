@@ -111,6 +111,7 @@ pub(crate) fn resolve_review_selection(
             arg_tool,
             Some(model_spec),
             None,
+            None, // thinking not relevant for review command
             project_config,
             project_root,
             false,

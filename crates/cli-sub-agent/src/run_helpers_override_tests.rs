@@ -33,6 +33,7 @@ fn resolve_tool_and_model_model_spec_preserves_explicit_model_override() {
         None,
         Some("codex/openai/gpt-5.4/medium"),
         Some("explicit-model"),
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,

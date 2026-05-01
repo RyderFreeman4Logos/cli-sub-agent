@@ -155,6 +155,7 @@ fn auto_selection_uses_codex_cli_when_transport_is_unset() {
         None,
         None,
         None,
+        None, // thinking
         Some(&config),
         td.path(),
         false,
@@ -272,6 +273,7 @@ fn auto_selection_uses_claude_cli_when_transport_is_unset() {
         None,
         None,
         None,
+        None, // thinking
         Some(&config),
         td.path(),
         false,

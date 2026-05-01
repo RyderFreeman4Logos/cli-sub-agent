@@ -115,6 +115,7 @@ fn csa_run_tool_hint_difficulty_resolves_quick_tier() {
         &strategy,
         None,
         None,
+        None, // thinking
         Some(&config),
         &GlobalConfig::default(),
         tmp.path(),

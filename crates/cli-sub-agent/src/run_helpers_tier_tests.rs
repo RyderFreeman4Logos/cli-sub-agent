@@ -51,6 +51,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&config),
         std::path::Path::new("/tmp"),
         true,  // force tier bypass
@@ -107,6 +108,7 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&config),
         std::path::Path::new("/tmp"),
         true,  // force tier bypass
@@ -163,6 +165,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         None,
         Some("codex/openai/gpt-5.3-codex/high"),
         None,
+        None, // thinking
         Some(&config),
         std::path::Path::new("/tmp"),
         true,
@@ -179,7 +182,11 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
 
 // --- resolve_tool_from_tier tests ---
 
-fn config_with_tier(tier_name: &str, models: Vec<&str>, enabled_tools: &[&str]) -> ProjectConfig {
+pub(super) fn config_with_tier(
+    tier_name: &str,
+    models: Vec<&str>,
+    enabled_tools: &[&str],
+) -> ProjectConfig {
     let mut tools = HashMap::new();
     for tool in csa_config::global::all_known_tools() {
         let name = tool.as_str();
@@ -338,6 +345,7 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
         Some(ToolName::GeminiCli),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false, // force (tier whitelist bypass)
@@ -373,6 +381,7 @@ fn resolve_tool_and_model_allows_model_spec_exact_selection_when_tiers_configure
         None,
         Some("codex/openai/gpt-5.4/high"),
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -405,6 +414,7 @@ fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
         None,                 // no --tool
         None,                 // no --model-spec
         Some("custom-model"), // --model provided
+        None,                 // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -433,7 +443,8 @@ fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
     let result = super::resolve_tool_and_model(
         Some(ToolName::Codex),
         None,
-        None,
+        Some("gpt-4"), // model required when bypassing tiers
+        Some("high"),  // thinking required when bypassing tiers
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -460,6 +471,7 @@ fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -508,6 +520,7 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -538,6 +551,7 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
         None,
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -576,6 +590,7 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -610,6 +625,7 @@ fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -645,6 +661,7 @@ fn resolve_tool_and_model_tier_ignores_auto_resolved_tool_hint() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -680,6 +697,7 @@ fn resolve_tool_and_model_tier_with_tool_and_force_ignore_errors_on_conflict() {
         Some(ToolName::Codex),
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -720,6 +738,7 @@ fn resolve_tool_and_model_tier_alias_resolves_correctly() {
         None,
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
@@ -756,6 +775,7 @@ fn resolve_tool_and_model_invalid_tier_selector_includes_aliases_in_error() {
         None,
         None,
         None,
+        None, // thinking
         Some(&cfg),
         std::path::Path::new("/tmp"),
         false,
