@@ -146,20 +146,20 @@ fn resolve_claude_sub_agent_tool_and_model(
         )?)
     };
 
-    crate::run_helpers::resolve_tool_and_model(
-        resolved_tool,
+    crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
+        tool: resolved_tool,
         model_spec,
         model,
-        None, // claude-sub-agent does not support --thinking
-        project_config,
+        thinking: None, // claude-sub-agent does not support --thinking
+        config: project_config,
         project_root,
-        false,               // claude-sub-agent does not support --force
-        false,               // claude-sub-agent does not support --force-override-user-config
-        false,               // claude-sub-agent does not require edit-capable tool filtering
-        None,                // claude-sub-agent does not support --tier
-        false,               // claude-sub-agent does not support --force-ignore-tier-setting
-        !user_explicit_tool, // treat auto/implicit selection as non-explicit
-    )
+        force: false,                      // claude-sub-agent does not support --force
+        force_override_user_config: false, // claude-sub-agent does not support --force-override-user-config
+        needs_edit: false, // claude-sub-agent does not require edit-capable tool filtering
+        tier: None,        // claude-sub-agent does not support --tier
+        force_ignore_tier_setting: false, // claude-sub-agent does not support --force-ignore-tier-setting
+        tool_is_auto_resolved: !user_explicit_tool, // treat auto/implicit selection as non-explicit
+    })
 }
 
 fn resolve_tool_arg_alias(
@@ -389,21 +389,22 @@ mod tests {
         )
         .unwrap();
 
-        let (tool_name, model_spec, model) = crate::run_helpers::resolve_tool_and_model(
-            Some(tool),
-            Some("codex/openai/gpt-5.4/high"),
-            None,
-            None, // thinking not needed for test
-            Some(&cfg),
-            std::path::Path::new("/tmp/test-project"),
-            false,
-            false,
-            false,
-            None,
-            false,
-            true,
-        )
-        .expect("auto-selected claude-sub-agent tool should not block explicit model_spec");
+        let (tool_name, model_spec, model) =
+            crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
+                tool: Some(tool),
+                model_spec: Some("codex/openai/gpt-5.4/high"),
+                model: None,
+                thinking: None, // thinking not needed for test
+                config: Some(&cfg),
+                project_root: std::path::Path::new("/tmp/test-project"),
+                force: false,
+                force_override_user_config: false,
+                needs_edit: false,
+                tier: None,
+                force_ignore_tier_setting: false,
+                tool_is_auto_resolved: true,
+            })
+            .expect("auto-selected claude-sub-agent tool should not block explicit model_spec");
 
         assert_eq!(tool_name, ToolName::Codex);
         assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));

@@ -107,20 +107,21 @@ pub(crate) fn resolve_review_selection(
     crate::run_helpers::validate_model_spec_tier_conflict(arg_model_spec, cli_tier, "review")?;
 
     if let Some(model_spec) = arg_model_spec {
-        let (tool, resolved_model_spec, _) = crate::run_helpers::resolve_tool_and_model(
-            arg_tool,
-            Some(model_spec),
-            None,
-            None, // thinking not relevant for review command
-            project_config,
-            project_root,
-            false,
-            force_override_user_config,
-            false,
-            cli_tier,
-            force_ignore_tier_setting,
-            false,
-        )?;
+        let (tool, resolved_model_spec, _) =
+            crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
+                tool: arg_tool,
+                model_spec: Some(model_spec),
+                model: None,
+                thinking: None, // thinking not relevant for review command
+                config: project_config,
+                project_root,
+                force: false,
+                force_override_user_config,
+                needs_edit: false,
+                tier: cli_tier,
+                force_ignore_tier_setting,
+                tool_is_auto_resolved: false,
+            })?;
         return Ok(ResolvedReviewSelection {
             tool,
             model_spec: resolved_model_spec,

@@ -1,7 +1,6 @@
 //! Tool selection, session selection, and failover helpers for `csa run`.
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
-
 use std::path::Path;
 
 use anyhow::Result;
@@ -177,20 +176,20 @@ pub(crate) fn resolve_tool_by_strategy(
     crate::run_helpers::validate_model_spec_tier_conflict(model_spec, tier, "run")?;
     match strategy {
         ToolSelectionStrategy::Explicit(t) => {
-            let (tool, ms, m) = resolve_tool_and_model(
-                Some(*t),
+            let (tool, ms, m) = resolve_tool_and_model(crate::run_helpers::RoutingRequest {
+                tool: Some(*t),
                 model_spec,
                 model,
                 thinking,
                 config,
-                project_root,
                 force,
                 force_override_user_config,
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
-                false, // user-explicit tool
-            )?;
+                tool_is_auto_resolved: false,
+                ..crate::run_helpers::RoutingRequest::new(project_root)
+            })?;
             Ok(StrategyResolution {
                 tool,
                 model_spec: ms,
@@ -202,20 +201,19 @@ pub(crate) fn resolve_tool_by_strategy(
             })
         }
         ToolSelectionStrategy::AnyAvailable => {
-            let (tool, ms, m) = resolve_tool_and_model(
-                None,
+            let (tool, ms, m) = resolve_tool_and_model(crate::run_helpers::RoutingRequest {
                 model_spec,
                 model,
                 thinking,
                 config,
-                project_root,
                 force,
                 force_override_user_config,
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
-                true, // auto-resolved tool
-            )?;
+                tool_is_auto_resolved: true,
+                ..crate::run_helpers::RoutingRequest::new(project_root)
+            })?;
             Ok(StrategyResolution {
                 tool,
                 model_spec: ms,
@@ -315,20 +313,20 @@ fn resolve_heterogeneous_preferred(
                 } else {
                     heterogeneous_candidates.into_iter().skip(1).collect()
                 };
-                let (t, ms, m) = resolve_tool_and_model(
-                    Some(tool),
+                let (t, ms, m) = resolve_tool_and_model(crate::run_helpers::RoutingRequest {
+                    tool: Some(tool),
                     model_spec,
                     model,
                     thinking,
                     config,
-                    project_root,
                     force,
                     force_override_user_config,
                     needs_edit,
                     tier,
                     force_ignore_tier_setting,
-                    true, // auto-resolved tool
-                )?;
+                    tool_is_auto_resolved: true,
+                    ..crate::run_helpers::RoutingRequest::new(project_root)
+                })?;
                 Ok(StrategyResolution {
                     tool: t,
                     model_spec: ms,
@@ -345,20 +343,19 @@ fn resolve_heterogeneous_preferred(
                     parent_tool.as_str(),
                     parent_tool.model_family()
                 );
-                let (t, ms, m) = resolve_tool_and_model(
-                    None,
+                let (t, ms, m) = resolve_tool_and_model(crate::run_helpers::RoutingRequest {
                     model_spec,
                     model,
                     thinking,
                     config,
-                    project_root,
                     force,
                     force_override_user_config,
                     needs_edit,
                     tier,
                     force_ignore_tier_setting,
-                    true, // auto-resolved tool
-                )?;
+                    tool_is_auto_resolved: true,
+                    ..crate::run_helpers::RoutingRequest::new(project_root)
+                })?;
                 Ok(StrategyResolution {
                     tool: t,
                     model_spec: ms,
@@ -374,20 +371,19 @@ fn resolve_heterogeneous_preferred(
         warn!(
             "HeterogeneousPreferred requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
         );
-        let (t, ms, m) = resolve_tool_and_model(
-            None,
+        let (t, ms, m) = resolve_tool_and_model(crate::run_helpers::RoutingRequest {
             model_spec,
             model,
             thinking,
             config,
-            project_root,
             force,
             force_override_user_config,
             needs_edit,
             tier,
             force_ignore_tier_setting,
-            true, // auto-resolved tool
-        )?;
+            tool_is_auto_resolved: true,
+            ..crate::run_helpers::RoutingRequest::new(project_root)
+        })?;
         Ok(StrategyResolution {
             tool: t,
             model_spec: ms,
@@ -420,20 +416,20 @@ fn resolve_heterogeneous_strict(
         let enabled_tools = collect_enabled_tools(config, global_config);
 
         match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
-            Some(tool) => resolve_tool_and_model(
-                Some(tool),
+            Some(tool) => resolve_tool_and_model(crate::run_helpers::RoutingRequest {
+                tool: Some(tool),
                 model_spec,
                 model,
                 thinking,
                 config,
-                project_root,
                 force,
                 force_override_user_config,
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
-                true, // auto-resolved tool
-            ),
+                tool_is_auto_resolved: true,
+                ..crate::run_helpers::RoutingRequest::new(project_root)
+            }),
             None => {
                 anyhow::bail!(
                     "No heterogeneous tool available (parent: {}, family: {}).\n\n\
@@ -448,20 +444,19 @@ fn resolve_heterogeneous_strict(
         warn!(
             "HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
         );
-        resolve_tool_and_model(
-            None,
+        resolve_tool_and_model(crate::run_helpers::RoutingRequest {
             model_spec,
             model,
             thinking,
             config,
-            project_root,
             force,
             force_override_user_config,
             needs_edit,
             tier,
             force_ignore_tier_setting,
-            true, // auto-resolved tool
-        )
+            tool_is_auto_resolved: true,
+            ..crate::run_helpers::RoutingRequest::new(project_root)
+        })
     }
 }
 

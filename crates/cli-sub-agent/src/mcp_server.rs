@@ -512,20 +512,20 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
 
     // Resolve tool and model
     let (resolved_tool, resolved_model_spec, resolved_model) =
-        crate::run_helpers::resolve_tool_and_model(
+        crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
             tool,
             model_spec,
-            None,
-            None, // MCP server does not support --thinking
-            config.as_ref(),
-            &project_root,
-            false,             // MCP server does not support --force
-            false,             // MCP server does not support --force-override-user-config
-            false,             // MCP tool dispatch always uses explicit tool
-            tier_arg,          // --tier from MCP arguments
-            force_ignore_tier, // --force-ignore-tier-setting from MCP arguments
-            false,             // user-explicit tool from MCP args
-        )?;
+            model: None,
+            thinking: None, // MCP server does not support --thinking
+            config: config.as_ref(),
+            project_root: &project_root,
+            force: false,                      // MCP server does not support --force
+            force_override_user_config: false, // MCP server does not support --force-override-user-config
+            needs_edit: false,                 // MCP tool dispatch always uses explicit tool
+            tier: tier_arg,                    // --tier from MCP arguments
+            force_ignore_tier_setting: force_ignore_tier, // --force-ignore-tier-setting from MCP arguments
+            tool_is_auto_resolved: false,                 // user-explicit tool from MCP args
+        })?;
 
     // Build executor
     let executor = crate::run_helpers::build_executor(
