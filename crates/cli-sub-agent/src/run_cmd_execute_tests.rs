@@ -461,6 +461,7 @@ fn primary_writer_spec_seeds_run_without_model_selecting_flags_and_bypasses_tier
         &ToolSelectionStrategy::AnyAvailable,
         Some(&spec),
         None,
+        None, // thinking
         Some(&config),
         &global_config,
         tmp.path(),

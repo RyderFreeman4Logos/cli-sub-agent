@@ -69,6 +69,7 @@ fn resolve_tool_by_strategy_model_spec_disables_default_tier_and_runtime_fallbac
         &ToolSelectionStrategy::HeterogeneousPreferred,
         Some("codex/openai/gpt-5.4/high"),
         None,
+        None, // thinking
         Some(&config),
         &global_config,
         tmp.path(),

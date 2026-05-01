@@ -95,6 +95,7 @@ pub(crate) fn resolve_tool_and_model(
     tool: Option<ToolName>,
     model_spec: Option<&str>,
     model: Option<&str>,
+    thinking: Option<&str>,
     config: Option<&ProjectConfig>,
     project_root: &Path,
     force: bool,
@@ -136,6 +137,30 @@ pub(crate) fn resolve_tool_and_model(
              Available tiers: [{tier_list}]{alias_hint}\n\
              Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );
+    }
+
+    if force_ignore_tier_setting && tiers_configured && tier.is_none() && model_spec.is_none() {
+        let mut missing = Vec::new();
+        if tool.is_none() {
+            missing.push("--tool");
+        }
+        if model.is_none() {
+            missing.push("--model");
+        }
+        if thinking.is_none() {
+            missing.push("--thinking");
+        }
+
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "When using --force-ignore-tier-setting to bypass tier enforcement, \
+                 you must provide complete model specification.\n\
+                 Missing required flags: {}\n\
+                 Example: csa run --force-ignore-tier-setting --tool claude-code \
+                 --model claude-3-5-sonnet-20241022 --thinking medium \"prompt\"",
+                missing.join(", ")
+            );
+        }
     }
 
     // Validate and canonicalize tier selector (accepts direct tier names and tier_mapping aliases).
@@ -744,6 +769,10 @@ mod tests_tail;
 #[cfg(test)]
 #[path = "run_helpers_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_tier_force_tests.rs"]
+mod tier_force_tests;
 
 #[cfg(test)]
 #[path = "run_helpers_transport_tests.rs"]

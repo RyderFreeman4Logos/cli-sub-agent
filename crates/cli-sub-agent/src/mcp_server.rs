@@ -516,6 +516,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             tool,
             model_spec,
             None,
+            None, // MCP server does not support --thinking
             config.as_ref(),
             &project_root,
             false,             // MCP server does not support --force

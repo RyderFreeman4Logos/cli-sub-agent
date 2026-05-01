@@ -68,6 +68,7 @@ fn resolve_tool_and_model_allows_matching_tool_with_model_spec_when_tiers_config
         Some(ToolName::Codex),
         Some("codex/openai/gpt-5.4/medium"),
         None,
+        None, // thinking
         Some(&config),
         std::path::Path::new("/tmp/test-project"),
         false,
@@ -92,6 +93,7 @@ fn resolve_tool_and_model_rejects_mismatched_tool_and_model_spec() {
         Some(ToolName::GeminiCli),
         Some("codex/openai/gpt-5.4/medium"),
         None,
+        None, // thinking
         Some(&config),
         std::path::Path::new("/tmp/test-project"),
         false,
@@ -115,6 +117,7 @@ fn resolve_tool_and_model_preserves_explicit_model_override_with_model_spec() {
         Some(ToolName::Codex),
         Some("codex/openai/gpt-5.4/medium"),
         Some("override-model"),
+        None, // thinking
         None,
         std::path::Path::new("/tmp/test-project"),
         false,

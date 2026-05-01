@@ -150,6 +150,7 @@ fn resolve_claude_sub_agent_tool_and_model(
         resolved_tool,
         model_spec,
         model,
+        None, // claude-sub-agent does not support --thinking
         project_config,
         project_root,
         false,               // claude-sub-agent does not support --force
@@ -392,6 +393,7 @@ mod tests {
             Some(tool),
             Some("codex/openai/gpt-5.4/high"),
             None,
+            None, // thinking not needed for test
             Some(&cfg),
             std::path::Path::new("/tmp/test-project"),
             false,

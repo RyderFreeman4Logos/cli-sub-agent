@@ -485,6 +485,7 @@ pub(crate) async fn handle_run(
         &strategy,
         model_spec.as_deref(),
         model.as_deref(),
+        thinking.as_deref(),
         config.as_ref(),
         &global_config,
         &project_root,
