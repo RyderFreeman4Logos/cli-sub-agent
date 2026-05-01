@@ -47,20 +47,12 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         filesystem_sandbox: Default::default(),
     };
 
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&config),
-        std::path::Path::new("/tmp"),
-        true,  // force tier bypass
-        false, // no override
-        false, // needs_edit
-        None,  // tier
-        false, // force_ignore_tier_setting
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&config),
+        force: true, // force tier bypass
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("disabled in user configuration"), "{msg}");
@@ -104,20 +96,13 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         filesystem_sandbox: Default::default(),
     };
 
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&config),
-        std::path::Path::new("/tmp"),
-        true,  // force tier bypass
-        true,  // override enabled
-        false, // needs_edit
-        None,  // tier
-        false, // force_ignore_tier_setting
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&config),
+        force: true,                      // force tier bypass
+        force_override_user_config: true, // override enabled
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_ok());
     let (tool, _, _) = result.unwrap();
     assert_eq!(tool, ToolName::Codex);
@@ -161,20 +146,12 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         filesystem_sandbox: Default::default(),
     };
 
-    let result = super::resolve_tool_and_model(
-        None,
-        Some("codex/openai/gpt-5.3-codex/high"),
-        None,
-        None, // thinking
-        Some(&config),
-        std::path::Path::new("/tmp"),
-        true,
-        false,
-        false, // needs_edit
-        None,  // tier
-        false, // force_ignore_tier_setting
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.3-codex/high"),
+        config: Some(&config),
+        force: true,
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("disabled in user configuration"), "{msg}");
@@ -341,20 +318,11 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::GeminiCli),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false, // force (tier whitelist bypass)
-        false, // force_override_user_config
-        false, // needs_edit
-        None,  // tier
-        false, // force_ignore_tier_setting
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::GeminiCli),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -410,20 +378,11 @@ fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_and_model(
-        None,                 // no --tool
-        None,                 // no --model-spec
-        Some("custom-model"), // --model provided
-        None,                 // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None,  // no --tier
-        false, // no --force-ignore-tier-setting
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model: Some("custom-model"), // --model provided
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(

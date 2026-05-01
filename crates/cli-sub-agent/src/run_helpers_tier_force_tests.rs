@@ -44,20 +44,13 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
     );
 
     // Missing only --thinking
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex), // --tool provided
-        None,                  // no --model-spec
-        Some("gpt-4"),         // --model provided
-        None,                  // missing --thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex), // --tool provided
+        model: Some("gpt-4"),        // --model provided
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(

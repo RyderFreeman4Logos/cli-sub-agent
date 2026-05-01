@@ -1,7 +1,6 @@
 //! Helper functions for `csa run`: tool resolution, executor building, token parsing.
 
 use anyhow::Result;
-use std::path::Path;
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
@@ -18,9 +17,10 @@ mod inline_review_context;
 mod prompt;
 #[path = "run_helpers_routing_conflict.rs"]
 mod routing_conflict;
+#[path = "run_helpers_routing_request.rs"]
+mod routing_request;
 #[path = "run_helpers_tool_availability.rs"]
 mod tool_availability;
-
 #[cfg(test)]
 pub(crate) use atomic_commit::atomic_commit_discipline_preamble;
 pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
@@ -33,6 +33,7 @@ pub(crate) use prompt::{
     resolve_prompt_with_file,
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
+pub(crate) use routing_request::RoutingRequest;
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_claude_code_transport,
     resolved_codex_transport, resolved_tool_binary_name, tool_binary_availability,
@@ -90,21 +91,24 @@ pub(crate) fn validate_model_spec_tier_conflict(
 /// `needs_edit`: when true, filters out tools with `allow_edit_existing_files = false`.
 /// `tool_is_auto_resolved`: when true, the `tool` param was auto-selected (not user CLI),
 ///   so it should not trigger tier enforcement blocking.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_tool_and_model(
-    tool: Option<ToolName>,
-    model_spec: Option<&str>,
-    model: Option<&str>,
-    thinking: Option<&str>,
-    config: Option<&ProjectConfig>,
-    project_root: &Path,
-    force: bool,
-    force_override_user_config: bool,
-    needs_edit: bool,
-    tier: Option<&str>,
-    force_ignore_tier_setting: bool,
-    tool_is_auto_resolved: bool,
+    request: RoutingRequest<'_>,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
+    // Destructure request at the top for clean access to all fields
+    let RoutingRequest {
+        tool,
+        model_spec,
+        model,
+        thinking,
+        config,
+        project_root,
+        force,
+        force_override_user_config,
+        needs_edit,
+        tier,
+        force_ignore_tier_setting,
+        tool_is_auto_resolved,
+    } = request;
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
     let exact_selection_active = model_spec.is_some();

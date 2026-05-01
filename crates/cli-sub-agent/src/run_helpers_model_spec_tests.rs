@@ -64,20 +64,13 @@ fn project_config_with_tier_tools(tools: &[&str]) -> ProjectConfig {
 fn resolve_tool_and_model_allows_matching_tool_with_model_spec_when_tiers_configured() {
     let config = project_config_with_tier_tools(&["codex", "gemini-cli"]);
 
-    let (tool, model_spec, model) = resolve_tool_and_model(
-        Some(ToolName::Codex),
-        Some("codex/openai/gpt-5.4/medium"),
-        None,
-        None, // thinking
-        Some(&config),
-        std::path::Path::new("/tmp/test-project"),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
+    let (tool, model_spec, model) = resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        model_spec: Some("codex/openai/gpt-5.4/medium"),
+        config: Some(&config),
+        project_root: std::path::Path::new("/tmp/test-project"),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp/test-project"))
+    })
     .expect("matching --tool + --model-spec should bypass tier enforcement");
 
     assert_eq!(tool, ToolName::Codex);

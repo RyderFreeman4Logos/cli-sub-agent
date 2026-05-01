@@ -151,20 +151,12 @@ fn auto_selection_uses_codex_cli_when_transport_is_unset() {
         "unset codex transport should probe `codex` (CLI binary), not `codex-acp`"
     );
 
-    let (tool, model_spec, model) = resolve_tool_and_model(
-        None,
-        None,
-        None,
-        None, // thinking
-        Some(&config),
-        td.path(),
-        false,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
+    let (tool, model_spec, model) = resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&config),
+        project_root: td.path(),
+        tool_is_auto_resolved: true,
+        ..super::RoutingRequest::new(td.path())
+    })
     .expect("resolve tool");
 
     assert_eq!(tool, ToolName::Codex);
@@ -269,20 +261,12 @@ fn auto_selection_uses_claude_cli_when_transport_is_unset() {
         "unset claude-code transport should probe `claude` (CLI binary), not `claude-code-acp`"
     );
 
-    let (tool, model_spec, model) = resolve_tool_and_model(
-        None,
-        None,
-        None,
-        None, // thinking
-        Some(&config),
-        td.path(),
-        false,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
+    let (tool, model_spec, model) = resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&config),
+        project_root: td.path(),
+        tool_is_auto_resolved: true,
+        ..super::RoutingRequest::new(td.path())
+    })
     .expect("resolve tool");
 
     assert_eq!(tool, ToolName::ClaudeCode);
