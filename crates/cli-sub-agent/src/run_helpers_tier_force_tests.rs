@@ -1,8 +1,13 @@
+use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use std::collections::HashMap;
 
 use super::tier_tests::config_with_tier;
+
+fn assume_tier_tools_available() -> ScopedTestEnvVar {
+    ScopedTestEnvVar::set(super::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
+}
 
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
@@ -104,6 +109,7 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
 
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_allows_complete_spec() {
+    let _guard = assume_tier_tools_available();
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // All required flags provided - should succeed
@@ -134,6 +140,7 @@ fn resolve_tool_and_model_force_ignore_tier_allows_complete_spec() {
 
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_bypassed_when_tier_provided() {
+    let _guard = assume_tier_tools_available();
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // When --tier is provided, validation should be skipped
@@ -161,6 +168,7 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_tier_provided() {
 
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_bypassed_when_model_spec_provided() {
+    let _guard = assume_tier_tools_available();
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // When --model-spec is provided, validation should be skipped
