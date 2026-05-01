@@ -14,20 +14,11 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // Missing all required flags
-    let result = super::resolve_tool_and_model(
-        None, // missing --tool
-        None, // no --model-spec
-        None, // missing --model
-        None, // missing --thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -59,20 +50,13 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
     );
 
     // Missing only --model
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex), // --tool provided
-        None,                  // no --model-spec
-        None,                  // missing --model
-        Some("high"),          // --thinking provided
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex), // --tool provided
+        thinking: Some("high"),      // --thinking provided
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -81,20 +65,13 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
     );
 
     // Missing only --tool
-    let result = super::resolve_tool_and_model(
-        None,          // missing --tool
-        None,          // no --model-spec
-        Some("gpt-4"), // --model provided
-        Some("high"),  // --thinking provided
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model: Some("gpt-4"),   // --model provided
+        thinking: Some("high"), // --thinking provided
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("Missing required flags: --tool"), "msg: {msg}");
@@ -106,20 +83,14 @@ fn resolve_tool_and_model_force_ignore_tier_allows_complete_spec() {
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // All required flags provided - should succeed
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex), // --tool provided
-        None,                  // no --model-spec
-        Some("gpt-4"),         // --model provided
-        Some("high"),          // --thinking provided
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex), // --tool provided
+        model: Some("gpt-4"),        // --model provided
+        thinking: Some("high"),      // --thinking provided
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(
         result.is_ok(),
         "Complete spec should be allowed: {:?}",
@@ -137,20 +108,12 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_tier_provided() {
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // When --tier is provided, validation should be skipped
-    let result = super::resolve_tool_and_model(
-        None, // no --tool
-        None, // no --model-spec
-        None, // no --model
-        None, // no --thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("tier-1"), // --tier provided
-        true,           // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        tier: Some("tier-1"),            // --tier provided
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     // Should succeed because tier is provided, bypassing the validation
     assert!(
         result.is_ok(),
@@ -165,20 +128,12 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_model_spec_provided() 
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // When --model-spec is provided, validation should be skipped
-    let result = super::resolve_tool_and_model(
-        None,                            // no --tool
-        Some("codex/openai/gpt-4/high"), // --model-spec provided
-        None,                            // no --model
-        None,                            // no --thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-4/high"), // --model-spec provided
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     // Should succeed because model_spec is provided, bypassing the validation
     assert!(
         result.is_ok(),
@@ -214,20 +169,11 @@ fn resolve_tool_and_model_force_ignore_tier_skipped_when_no_tiers_configured() {
     };
 
     // When no tiers are configured, validation should be skipped
-    let result = super::resolve_tool_and_model(
-        None, // no --tool
-        None, // no --model-spec
-        None, // no --model
-        None, // no --thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None, // no --tier
-        true, // force_ignore_tier_setting = true
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting = true
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     // Should succeed because no tiers are configured, so validation is skipped
     assert!(
         result.is_ok(),
@@ -241,20 +187,11 @@ fn resolve_tool_and_model_force_ignore_tier_skipped_when_flag_false() {
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     // When force_ignore_tier_setting = false, validation should be skipped
-    let result = super::resolve_tool_and_model(
-        None, // no --tool
-        None, // no --model-spec
-        None, // no --model
-        None, // no --thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None,  // no --tier
-        false, // force_ignore_tier_setting = false
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        force_ignore_tier_setting: false, // force_ignore_tier_setting = false
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     // Should fail for different reason (tier enforcement), but not our new validation
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();

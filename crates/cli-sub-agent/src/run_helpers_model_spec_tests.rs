@@ -82,20 +82,12 @@ fn resolve_tool_and_model_allows_matching_tool_with_model_spec_when_tiers_config
 fn resolve_tool_and_model_rejects_mismatched_tool_and_model_spec() {
     let config = project_config_with_tier_tools(&["codex", "gemini-cli"]);
 
-    let error = resolve_tool_and_model(
-        Some(ToolName::GeminiCli),
-        Some("codex/openai/gpt-5.4/medium"),
-        None,
-        None, // thinking
-        Some(&config),
-        std::path::Path::new("/tmp/test-project"),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
+    let error = resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::GeminiCli),
+        model_spec: Some("codex/openai/gpt-5.4/medium"),
+        config: Some(&config),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp/test-project"))
+    })
     .expect_err("mismatched --tool + --model-spec must error");
 
     let message = error.to_string();
@@ -106,20 +98,12 @@ fn resolve_tool_and_model_rejects_mismatched_tool_and_model_spec() {
 
 #[test]
 fn resolve_tool_and_model_preserves_explicit_model_override_with_model_spec() {
-    let (tool, model_spec, model) = resolve_tool_and_model(
-        Some(ToolName::Codex),
-        Some("codex/openai/gpt-5.4/medium"),
-        Some("override-model"),
-        None, // thinking
-        None,
-        std::path::Path::new("/tmp/test-project"),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
+    let (tool, model_spec, model) = resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        model_spec: Some("codex/openai/gpt-5.4/medium"),
+        model: Some("override-model"),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp/test-project"))
+    })
     .expect("resolver should preserve explicit model override");
 
     assert_eq!(tool, ToolName::Codex);

@@ -345,20 +345,11 @@ fn resolve_tool_and_model_allows_model_spec_exact_selection_when_tiers_configure
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli", "codex"],
     );
-    let result = super::resolve_tool_and_model(
-        None,
-        Some("codex/openai/gpt-5.4/high"),
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.4/high"),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(
         result.is_ok(),
         "model-spec should bypass tier whitelist: {}",
@@ -399,20 +390,14 @@ fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli", "codex"],
     );
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        Some("gpt-4"), // model required when bypassing tiers
-        Some("high"),  // thinking required when bypassing tiers
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false, // force_override_user_config
-        false,
-        None,
-        true,  // force_ignore_tier_setting
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        model: Some("gpt-4"),   // model required when bypassing tiers
+        thinking: Some("high"), // thinking required when bypassing tiers
+        config: Some(&cfg),
+        force_ignore_tier_setting: true, // force_ignore_tier_setting
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_ok(), "should bypass: {}", result.unwrap_err());
     let (tool, _, _) = result.unwrap();
     assert_eq!(tool, ToolName::Codex);
@@ -426,20 +411,12 @@ fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli", "codex"],
     );
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        true, // force_override_user_config → bypasses tier enforcement
-        false,
-        None,
-        false, // force_ignore_tier_setting is false, but override_user_config covers it
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        force_override_user_config: true, // force_override_user_config → bypasses tier enforcement
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_ok(), "should bypass: {}", result.unwrap_err());
     let (tool, _, _) = result.unwrap();
     assert_eq!(tool, ToolName::Codex);
@@ -475,20 +452,11 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     };
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     // Should succeed — no tiers means no enforcement
     assert!(
         result.is_ok(),
@@ -506,20 +474,11 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
         vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_and_model(
-        None,
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("quality"), // --tier quality
-        false,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        tier: Some("quality"), // --tier quality
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(
         result.is_ok(),
         "tier resolution failed: {}",
@@ -545,20 +504,12 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
         ],
         &["gemini-cli", "codex", "claude-code"],
     );
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("tier-4-critical"),
-        false,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        tier: Some("tier-4-critical"),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(
         result.is_ok(),
         "tier+tool should resolve requested tool from tier: {}",
@@ -580,20 +531,12 @@ fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
         &["gemini-cli", "codex", "claude-code"],
     );
 
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("quality"),
-        false,
-        false,
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        tier: Some("quality"),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
 
     let err = result.expect_err("missing tool in tier must error");
     let msg = err.to_string();
@@ -616,20 +559,13 @@ fn resolve_tool_and_model_tier_ignores_auto_resolved_tool_hint() {
         &["gemini-cli", "codex"],
     );
 
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("quality"),
-        false,
-        true, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        tier: Some("quality"),
+        tool_is_auto_resolved: true, // tool_is_auto_resolved
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
 
     assert!(
         result.is_ok(),
@@ -652,20 +588,13 @@ fn resolve_tool_and_model_tier_with_tool_and_force_ignore_errors_on_conflict() {
         &["gemini-cli", "codex"],
     );
 
-    let result = super::resolve_tool_and_model(
-        Some(ToolName::Codex),
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("quality"),
-        true,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        tier: Some("quality"),
+        force_ignore_tier_setting: true,
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
 
     let err = result.expect_err("tier + direct tool bypass must be explicit, not silent");
     let msg = err.to_string();
@@ -693,20 +622,11 @@ fn resolve_tool_and_model_tier_alias_resolves_correctly() {
     cfg.tier_mapping
         .insert("default".to_string(), "tier1".to_string());
 
-    let result = super::resolve_tool_and_model(
-        None,
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("default"), // tier_mapping alias for tier1
-        false,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        tier: Some("default"), // tier_mapping alias for tier1
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(
         result.is_ok(),
         "alias should resolve: {}",
@@ -730,20 +650,11 @@ fn resolve_tool_and_model_invalid_tier_selector_includes_aliases_in_error() {
     cfg.tier_mapping
         .insert("alias1".to_string(), "tier1".to_string());
 
-    let result = super::resolve_tool_and_model(
-        None,
-        None,
-        None,
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        Some("invalid"),
-        false,
-        false, // tool_is_auto_resolved
-    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        config: Some(&cfg),
+        tier: Some("invalid"),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(

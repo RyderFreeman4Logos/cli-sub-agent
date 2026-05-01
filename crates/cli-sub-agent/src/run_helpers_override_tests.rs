@@ -29,20 +29,12 @@ fn resolve_tool_and_model_model_spec_preserves_explicit_model_override() {
         filesystem_sandbox: Default::default(),
     };
 
-    let (tool, model_spec, model) = resolve_tool_and_model(
-        None,
-        Some("codex/openai/gpt-5.4/medium"),
-        Some("explicit-model"),
-        None, // thinking
-        Some(&cfg),
-        std::path::Path::new("/tmp"),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
+    let (tool, model_spec, model) = resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.4/medium"),
+        model: Some("explicit-model"),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    })
     .expect("resolver should preserve explicit --model alongside --model-spec");
 
     assert_eq!(tool, ToolName::Codex);
