@@ -132,16 +132,19 @@ pub(crate) fn resolve_sandbox_options(
             }
             // CLI --extra-writable / --expose-readable (no-config path).
             if !extra_writable.is_empty() {
-                if let Err(e) = csa_resource::isolation_plan::validate_writable_paths(
+                let resolved = match csa_resource::isolation_plan::resolve_writable_paths(
                     extra_writable,
                     project_root,
                 ) {
-                    return SandboxResolution::RequiredButUnavailable(format!(
-                        "--extra-writable validation failed: {e}"
-                    ));
-                }
-                for path in extra_writable {
-                    builder = builder.with_writable_path(path.clone());
+                    Ok(paths) => paths,
+                    Err(e) => {
+                        return SandboxResolution::RequiredButUnavailable(format!(
+                            "--extra-writable validation failed: {e}"
+                        ));
+                    }
+                };
+                for path in resolved {
+                    builder = builder.with_writable_path(path);
                 }
             }
             if !extra_readable.is_empty() {
@@ -297,21 +300,36 @@ pub(crate) fn resolve_sandbox_options(
     if !no_fs_sandbox {
         if let Some(ref paths) = per_tool_writable {
             // Validate user-provided writable paths before applying.
-            if let Err(e) =
-                csa_resource::isolation_plan::validate_writable_paths(paths, project_root)
-            {
-                return SandboxResolution::RequiredButUnavailable(format!(
-                    "Per-tool writable_paths validation failed for '{tool_name}': {e}"
-                ));
-            }
-            for path in paths {
-                builder = builder.with_writable_path(path.clone());
+            let resolved =
+                match csa_resource::isolation_plan::resolve_writable_paths(paths, project_root) {
+                    Ok(paths) => paths,
+                    Err(e) => {
+                        return SandboxResolution::RequiredButUnavailable(format!(
+                            "Per-tool writable_paths validation failed for '{tool_name}': {e}"
+                        ));
+                    }
+                };
+            for path in resolved {
+                builder = builder.with_writable_path(path);
             }
         } else {
             // No per-tool override — apply global extra_writable paths.
             let fs_config = &cfg.filesystem_sandbox;
-            for path in &fs_config.extra_writable {
-                builder = builder.with_writable_path(path.clone());
+            if !fs_config.extra_writable.is_empty() {
+                let resolved = match csa_resource::isolation_plan::resolve_writable_paths(
+                    &fs_config.extra_writable,
+                    project_root,
+                ) {
+                    Ok(paths) => paths,
+                    Err(e) => {
+                        return SandboxResolution::RequiredButUnavailable(format!(
+                            "filesystem_sandbox.extra_writable validation failed: {e}"
+                        ));
+                    }
+                };
+                for path in resolved {
+                    builder = builder.with_writable_path(path);
+                }
             }
         }
 
@@ -331,15 +349,19 @@ pub(crate) fn resolve_sandbox_options(
 
     // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
     if !no_fs_sandbox && !extra_writable.is_empty() {
-        if let Err(e) =
-            csa_resource::isolation_plan::validate_writable_paths(extra_writable, project_root)
-        {
-            return SandboxResolution::RequiredButUnavailable(format!(
-                "--extra-writable validation failed: {e}"
-            ));
-        }
-        for path in extra_writable {
-            builder = builder.with_writable_path(path.clone());
+        let resolved = match csa_resource::isolation_plan::resolve_writable_paths(
+            extra_writable,
+            project_root,
+        ) {
+            Ok(paths) => paths,
+            Err(e) => {
+                return SandboxResolution::RequiredButUnavailable(format!(
+                    "--extra-writable validation failed: {e}"
+                ));
+            }
+        };
+        for path in resolved {
+            builder = builder.with_writable_path(path);
         }
     }
 
