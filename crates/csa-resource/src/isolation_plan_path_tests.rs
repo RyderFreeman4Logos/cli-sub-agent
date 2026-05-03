@@ -48,6 +48,18 @@ fn test_resolve_writable_nonexistent_path_uses_existing_parent() {
     assert!(!expected.exists());
 }
 
+#[test]
+fn test_resolve_writable_accepts_config_path_outside_default_roots() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).expect("create project dir");
+
+    let resolved = resolve_writable_paths(&[PathBuf::from("/opt/data")], &project)
+        .expect("config extra_writable outside default roots should be accepted");
+
+    assert_eq!(resolved, vec![PathBuf::from("/opt/data")]);
+}
+
 #[cfg(unix)]
 #[test]
 fn test_writable_validation_error_includes_original_and_resolved_path() {
