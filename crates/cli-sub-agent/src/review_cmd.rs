@@ -469,6 +469,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let is_cumulative_review = review_scope_is_cumulative(&scope);
 
         if !should_run_fix_loop(args.fix, decision) {
+            post_review::suggest_review_failure_fix(&project_root, &review_meta, &sanitized);
             // Accumulate only on FINAL result to avoid double-counting when --fix resolves the same issues.
             if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {
                 crate::review_findings::accumulate_findings(&project_root, &sanitized);
