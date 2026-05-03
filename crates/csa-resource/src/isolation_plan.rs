@@ -2,7 +2,7 @@
 //! single, builder-configured plan that executors can apply uniformly.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::Context;
 
@@ -435,6 +435,23 @@ fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: 
 /// Returns an error listing any rejected paths that are not under an allowed
 /// parent directory.
 pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
+    resolve_writable_paths(paths, project_root).map(|_| ())
+}
+
+/// Resolve and validate writable sandbox paths.
+///
+/// Relative paths are resolved against `project_root`. Existing symlinks are
+/// resolved through their target before the path is returned, so the sandbox can
+/// bind-mount the actual host location.
+///
+/// # Errors
+///
+/// Returns an error listing any rejected paths that are not under an allowed
+/// parent directory.
+pub fn resolve_writable_paths(
+    paths: &[PathBuf],
+    project_root: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
     validate_sandbox_paths(
         paths,
         project_root,
@@ -443,7 +460,8 @@ pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
             require_absolute: false,
             require_exists: false,
             reject_tmp_root: false,
-            canonicalize_for_allowlist: false,
+            canonicalize_for_allowlist: true,
+            allow_requested_path_for_allowlist: true,
         },
     )
 }
@@ -464,8 +482,10 @@ pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
             require_exists: true,
             reject_tmp_root: true,
             canonicalize_for_allowlist: true,
+            allow_requested_path_for_allowlist: false,
         },
     )
+    .map(|_| ())
 }
 
 /// Canonicalize `path` by resolving its deepest existing ancestor, then
@@ -538,22 +558,26 @@ struct PathValidationOptions<'a> {
     require_exists: bool,
     reject_tmp_root: bool,
     canonicalize_for_allowlist: bool,
+    allow_requested_path_for_allowlist: bool,
 }
 
 fn validate_sandbox_paths(
     paths: &[PathBuf],
     project_root: &Path,
     options: PathValidationOptions<'_>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PathBuf>> {
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
-    let project_root = project_root.to_path_buf();
+    let project_root = canonicalize_or_fallback(project_root);
+    let project_root_for_join = project_root.clone();
     let home = canonicalize_or_fallback(home.as_path());
     let tmp_root = canonicalize_or_fallback(Path::new("/tmp"));
     let allowed_parents = [project_root, home, tmp_root];
     let mut rejected = Vec::new();
+    let mut resolved_paths = Vec::with_capacity(paths.len());
 
     for path in paths {
-        let path_for_allowlist = match validate_single_path(path, &allowed_parents, &options) {
+        let validated = match validate_single_path(path, &options, project_root_for_join.as_path())
+        {
             Ok(candidate) => candidate,
             Err(reason) => {
                 rejected.push(format!("{} ({reason})", path.display()));
@@ -563,17 +587,24 @@ fn validate_sandbox_paths(
 
         let is_allowed = allowed_parents
             .iter()
-            .any(|parent| path_for_allowlist.starts_with(parent));
+            .any(|parent| validated.resolved.starts_with(parent))
+            || (options.allow_requested_path_for_allowlist
+                && allowed_parents
+                    .iter()
+                    .any(|parent| validated.requested.starts_with(parent)));
         if !is_allowed {
             rejected.push(format!(
-                "{} (outside allowed roots: home, /tmp, project root)",
-                path.display()
+                "{} (resolved {}; outside allowed roots: home, /tmp, project root)",
+                path.display(),
+                validated.resolved.display()
             ));
+            continue;
         }
+        resolved_paths.push(validated.resolved);
     }
 
     if rejected.is_empty() {
-        return Ok(());
+        return Ok(resolved_paths);
     }
 
     anyhow::bail!(
@@ -583,11 +614,16 @@ fn validate_sandbox_paths(
     );
 }
 
+struct ValidatedPath {
+    requested: PathBuf,
+    resolved: PathBuf,
+}
+
 fn validate_single_path(
     path: &Path,
-    allowed_parents: &[PathBuf],
     options: &PathValidationOptions<'_>,
-) -> anyhow::Result<PathBuf> {
+    project_root: &Path,
+) -> anyhow::Result<ValidatedPath> {
     if path == Path::new("/") {
         anyhow::bail!("root path is forbidden");
     }
@@ -601,25 +637,56 @@ fn validate_single_path(
         anyhow::bail!("path must exist");
     }
 
-    if !options.canonicalize_for_allowlist {
-        return Ok(path.to_path_buf());
+    let requested = normalize_path_components(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    });
+    if requested == Path::new("/") {
+        anyhow::bail!("root path is forbidden");
+    }
+    if options.reject_tmp_root && requested == Path::new("/tmp") {
+        anyhow::bail!("/tmp itself is forbidden; expose a specific sub-path instead");
     }
 
-    let canonical = path.canonicalize()?;
-    let canonical_allowed = allowed_parents
-        .iter()
-        .any(|parent| canonical.starts_with(parent));
-    if !canonical_allowed {
-        anyhow::bail!(
-            "resolved path {} escapes allowed roots",
-            canonical.display()
-        );
+    if !options.canonicalize_for_allowlist {
+        return Ok(ValidatedPath {
+            requested: requested.clone(),
+            resolved: requested,
+        });
     }
-    Ok(canonical)
+
+    let resolved = canonicalize_through_existing_ancestors(&requested)?;
+    if is_sensitive_system_path(&resolved) {
+        anyhow::bail!("resolved path {} is forbidden", resolved.display());
+    }
+    Ok(ValidatedPath {
+        requested,
+        resolved,
+    })
 }
 
 fn canonicalize_or_fallback(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn normalize_path_components(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normalized.as_os_str().is_empty() || normalized == Path::new("/") {
+                    continue;
+                }
+                normalized.pop();
+            }
+        }
+    }
+    normalized
 }
 
 /// Add `dir` to `paths` if it exists, otherwise pre-create it when a
@@ -723,3 +790,7 @@ fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "isolation_plan_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "isolation_plan_path_tests.rs"]
+mod path_tests;
