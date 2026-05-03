@@ -284,6 +284,7 @@ fn persist_fix_final_artifacts(
         }
     }
     persist_review_verdict(project_root, review_meta, &[], Vec::new());
+    super::post_review::persist_review_failure_suggestion(project_root, review_meta);
 }
 
 #[cfg(test)]
