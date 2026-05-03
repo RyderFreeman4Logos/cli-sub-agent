@@ -425,32 +425,34 @@ fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: 
     }
 }
 
-/// Validate that all writable paths are subpaths of allowed parents.
-///
-/// Allowed parents: `project_root`, the user home directory, and `/tmp`.
-/// Paths like `/`, `/etc`, `/usr`, `/var` are rejected.
-///
+/// Strictly validate writable sandbox paths against default safe roots.
 /// # Errors
 ///
-/// Returns an error listing any rejected paths that are not under an allowed
-/// parent directory.
+/// Returns an error for root, sensitive system paths, or paths outside
+/// `project_root`, the user home directory, and `/tmp`.
 pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
-    resolve_writable_paths(paths, project_root).map(|_| ())
+    resolve_writable_paths_impl(paths, project_root, false).map(|_| ())
 }
 
-/// Resolve and validate writable sandbox paths.
+/// Resolve user-configured writable sandbox paths.
 ///
 /// Relative paths are resolved against `project_root`. Existing symlinks are
-/// resolved through their target before the path is returned, so the sandbox can
-/// bind-mount the actual host location.
-///
+/// resolved through their target, and trusted config roots may live outside the
+/// default safe roots.
 /// # Errors
 ///
-/// Returns an error listing any rejected paths that are not under an allowed
-/// parent directory.
+/// Returns an error for root, sensitive system paths, or unresolvable paths.
 pub fn resolve_writable_paths(
     paths: &[PathBuf],
     project_root: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
+    resolve_writable_paths_impl(paths, project_root, true)
+}
+
+fn resolve_writable_paths_impl(
+    paths: &[PathBuf],
+    project_root: &Path,
+    allow_outside_default_roots: bool,
 ) -> anyhow::Result<Vec<PathBuf>> {
     validate_sandbox_paths(
         paths,
@@ -462,6 +464,7 @@ pub fn resolve_writable_paths(
             reject_tmp_root: false,
             canonicalize_for_allowlist: true,
             allow_requested_path_for_allowlist: true,
+            allow_outside_default_roots,
         },
     )
 }
@@ -483,17 +486,16 @@ pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
             reject_tmp_root: true,
             canonicalize_for_allowlist: true,
             allow_requested_path_for_allowlist: false,
+            allow_outside_default_roots: false,
         },
     )
     .map(|_| ())
 }
 
-/// Canonicalize `path` by resolving its deepest existing ancestor, then
-/// re-attaching any missing tail components.
+/// Canonicalize `path` through its deepest existing ancestor.
 ///
-/// This preserves symlink resolution for already-existing prefixes without
-/// requiring the full path to exist yet, which is important for writable
-/// directories that may be pre-created later via `create_dir_all()`.
+/// Missing tail components are re-attached, allowing writable directories that
+/// may be pre-created later via `create_dir_all()`.
 pub fn canonicalize_through_existing_ancestors(path: &Path) -> anyhow::Result<PathBuf> {
     let mut candidate = path.to_path_buf();
     let mut missing_suffix = Vec::new();
@@ -559,6 +561,7 @@ struct PathValidationOptions<'a> {
     reject_tmp_root: bool,
     canonicalize_for_allowlist: bool,
     allow_requested_path_for_allowlist: bool,
+    allow_outside_default_roots: bool,
 }
 
 fn validate_sandbox_paths(
@@ -585,9 +588,10 @@ fn validate_sandbox_paths(
             }
         };
 
-        let is_allowed = allowed_parents
-            .iter()
-            .any(|parent| validated.resolved.starts_with(parent))
+        let is_allowed = options.allow_outside_default_roots
+            || allowed_parents
+                .iter()
+                .any(|parent| validated.resolved.starts_with(parent))
             || (options.allow_requested_path_for_allowlist
                 && allowed_parents
                     .iter()
