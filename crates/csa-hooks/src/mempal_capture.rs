@@ -406,6 +406,7 @@ mod tests {
     fn executable_mempal_script(path: &Path, body: &str) {
         let mut script = fs::File::create(path).expect("create fake mempal");
         write!(script, "{body}").expect("write fake mempal");
+        script.sync_all().expect("sync fake mempal");
         drop(script);
 
         #[cfg(unix)]
@@ -413,7 +414,15 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(path).expect("metadata").permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(path, perms).expect("chmod");
+            for attempt in 0..5 {
+                match fs::set_permissions(path, perms.clone()) {
+                    Ok(()) => return,
+                    Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("chmod fake mempal: {err}"),
+                }
+            }
         }
     }
 
@@ -520,23 +529,14 @@ mod tests {
         let log_path = temp.path().join("args.log");
         let stdin_path = temp.path().join("stdin.json");
         let script_path = temp.path().join("mempal-fake.sh");
-        let mut script = fs::File::create(&script_path).expect("create fake mempal");
-        writeln!(
-            script,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat > '{}'\n",
-            log_path.display(),
-            stdin_path.display()
-        )
-        .expect("write fake mempal");
-        drop(script);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&script_path, perms).expect("chmod");
-        }
+        executable_mempal_script(
+            &script_path,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat > '{}'\n",
+                log_path.display(),
+                stdin_path.display()
+            ),
+        );
 
         let input_dir = temp.path().join("01ABCSESSION");
         fs::create_dir(&input_dir).expect("create input dir");
@@ -568,28 +568,19 @@ mod tests {
         let temp = tempfile::tempdir().expect("create tempdir");
         let log_path = temp.path().join("args.log");
         let script_path = temp.path().join("mempal-fake.sh");
-        let mut script = fs::File::create(&script_path).expect("create fake mempal");
-        writeln!(
-            script,
-            r#"#!/bin/sh
+        executable_mempal_script(
+            &script_path,
+            &format!(
+                r#"#!/bin/sh
 if [ "$2" = "--stdin" ]; then
   cat >/dev/null
   exit 2
 fi
 printf '%s\n' "$@" > '{}'
 "#,
-            log_path.display()
-        )
-        .expect("write fake mempal");
-        drop(script);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&script_path, perms).expect("chmod");
-        }
+                log_path.display()
+            ),
+        );
 
         let input_dir = temp.path().join("session-output");
         fs::create_dir(&input_dir).expect("create input dir");

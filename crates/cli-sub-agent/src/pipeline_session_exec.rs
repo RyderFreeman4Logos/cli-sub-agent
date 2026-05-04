@@ -1,3 +1,4 @@
+use super::prompt_cache::PromptAssembly;
 use super::prompt_guard::emit_prompt_guard_to_caller;
 use super::result_contract::{
     clear_expected_result_artifacts_for_prompt, enforce_result_toml_path_contract,
@@ -361,26 +362,28 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
-    let mut effective_prompt = raw_prompt.clone();
+    let prompt_caching_enabled =
+        global_config.is_some_and(|cfg| cfg.experimental.enable_prompt_caching);
+    let mut prompt_assembly = PromptAssembly::new(raw_prompt.clone(), prompt_caching_enabled);
     if let Err(err) = crate::preflight_state_dir::enforce_state_dir_cap(global_config) {
         return Err(persist_pre_exec_failure(err));
     }
     if (session_arg.is_none() || fresh_spawn_preflight_override)
         && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)
     {
-        effective_prompt = format!("{w}{effective_prompt}");
+        prompt_assembly.prepend_dynamic(&w);
     }
     let is_first_turn = session
         .tools
         .get(executor.tool_name())
         .is_none_or(|ts| ts.provider_session_id.is_none());
     if is_first_turn {
-        super::design_context::inject_first_turn_context(
+        let first_turn_context = super::design_context::load_first_turn_context(
             &session.project_path,
             project_root,
             context_load_options,
-            &mut effective_prompt,
         );
+        prompt_assembly.add_first_turn_context(first_turn_context);
     }
     let is_review_or_debate = matches!(task_type, Some("review" | "debate"));
     if !is_review_or_debate {
@@ -395,7 +398,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             memory_project_key.as_deref(),
             project_root,
             executor.tool_name(),
-            &mut effective_prompt,
+            prompt_assembly.dynamic_prompt_mut(),
         );
     }
     if !can_edit || !can_write_new {
@@ -405,7 +408,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             can_write_new,
             "Applying filesystem restrictions via prompt injection"
         );
-        effective_prompt = executor.apply_restrictions(&effective_prompt, can_edit, can_write_new);
+        prompt_assembly.add_restriction_instructions(
+            executor.restriction_instructions(can_edit, can_write_new),
+        );
     }
     let edit_guard = if !can_edit {
         crate::edit_restriction_guard::maybe_capture_tracked_file_guard(project_root)?
@@ -511,7 +516,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 "Injecting prompt guard output into effective prompt"
             );
             emit_prompt_guard_to_caller(&guard_block, guard_results.len());
-            effective_prompt = format!("{effective_prompt}\n\n{guard_block}");
+            prompt_assembly.append_dynamic_block(&guard_block);
         }
     }
     // Inject structured output section markers when enabled in config.
@@ -520,8 +525,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         csa_executor::structured_output_instructions(structured_output_enabled)
     {
         info!("Injecting structured output instructions into prompt");
-        effective_prompt.push_str(instructions);
+        prompt_assembly.add_static_or_append_dynamic(instructions);
     }
+    let effective_prompt = prompt_assembly.finish();
     // Resolve sandbox configuration from project config and enforcement mode.
     let liveness_dead_seconds = resolve_liveness_dead_seconds(config);
     let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(

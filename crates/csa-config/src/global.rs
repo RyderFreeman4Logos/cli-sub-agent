@@ -71,6 +71,15 @@ pub struct GlobalConfig {
         skip_serializing_if = "crate::config_filesystem_sandbox::FilesystemSandboxConfig::is_default"
     )]
     pub filesystem_sandbox: crate::config_filesystem_sandbox::FilesystemSandboxConfig,
+    /// Experimental feature flags.
+    #[serde(default)]
+    pub experimental: ExperimentalConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExperimentalConfig {
+    #[serde(default)]
+    pub enable_prompt_caching: bool,
 }
 
 /// Configuration for `csa session wait`.

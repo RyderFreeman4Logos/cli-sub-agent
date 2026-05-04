@@ -264,10 +264,37 @@ pub fn git_wrapper_script() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use crate::test_support::ENV_LOCK;
+
     use super::{git_wrapper_script, inject_git_guard_env};
     use std::collections::HashMap;
     #[cfg(unix)]
+    use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::Path;
+    #[cfg(unix)]
+    use std::time::Duration;
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, contents: impl AsRef<[u8]>) {
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(contents.as_ref()).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        for attempt in 0..5 {
+            match std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)) {
+                Ok(()) => return,
+                Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("failed to mark {} executable: {err}", path.display()),
+            }
+        }
+    }
 
     #[test]
     fn inject_git_guard_env_sets_real_git_and_path() {
@@ -285,22 +312,20 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn wrapper_blocks_no_verify_before_real_git() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let temp = tempfile::tempdir().unwrap();
         let wrapper = temp.path().join("git");
-        std::fs::write(&wrapper, git_wrapper_script()).unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&wrapper, git_wrapper_script());
 
         let fake_git = temp.path().join("real-git");
         let marker = temp.path().join("called");
-        std::fs::write(
+        write_executable(
             &fake_git,
             format!(
                 "#!/usr/bin/env bash\necho called > '{}'\n",
                 marker.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&fake_git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         let output = std::process::Command::new(&wrapper)
             .arg("commit")
@@ -317,22 +342,20 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn wrapper_blocks_lefthook_bypass_env_before_real_git() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let temp = tempfile::tempdir().unwrap();
         let wrapper = temp.path().join("git");
-        std::fs::write(&wrapper, git_wrapper_script()).unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&wrapper, git_wrapper_script());
 
         let fake_git = temp.path().join("real-git");
         let marker = temp.path().join("called");
-        std::fs::write(
+        write_executable(
             &fake_git,
             format!(
                 "#!/usr/bin/env bash\necho called > '{}'\n",
                 marker.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&fake_git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         let output = std::process::Command::new(&wrapper)
             .arg("commit")
@@ -351,14 +374,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn wrapper_allows_long_commit_options_containing_n() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let temp = tempfile::tempdir().unwrap();
         let wrapper = temp.path().join("git");
-        std::fs::write(&wrapper, git_wrapper_script()).unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&wrapper, git_wrapper_script());
 
         let fake_git = temp.path().join("real-git");
-        std::fs::write(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n").unwrap();
-        std::fs::set_permissions(&fake_git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
 
         let output = std::process::Command::new(&wrapper)
             .arg("commit")
@@ -377,14 +399,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn wrapper_forwards_non_commit_commands() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let temp = tempfile::tempdir().unwrap();
         let wrapper = temp.path().join("git");
-        std::fs::write(&wrapper, git_wrapper_script()).unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&wrapper, git_wrapper_script());
 
         let fake_git = temp.path().join("real-git");
-        std::fs::write(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n").unwrap();
-        std::fs::set_permissions(&fake_git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
 
         let output = std::process::Command::new(&wrapper)
             .arg("status")

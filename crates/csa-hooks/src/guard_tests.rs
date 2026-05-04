@@ -142,6 +142,8 @@ fn test_xml_escape_no_double_escape() {
 
 #[cfg(unix)]
 mod unix_tests {
+    use crate::test_support::ENV_LOCK;
+
     use super::*;
 
     fn test_context() -> GuardContext {
@@ -155,6 +157,27 @@ mod unix_tests {
         }
     }
 
+    fn run_test_prompt_guards(
+        guards: &[PromptGuardEntry],
+        context: &GuardContext,
+    ) -> Vec<PromptGuardResult> {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        run_prompt_guards(guards, context)
+    }
+
+    fn command_output(command: &mut std::process::Command) -> std::process::Output {
+        for attempt in 0..5 {
+            match command.output() {
+                Ok(output) => return output,
+                Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(err) => panic!("failed to run command: {err}"),
+            }
+        }
+        unreachable!("bounded retry loop always returns or panics")
+    }
+
     #[test]
     fn test_run_guards_stdout_capture() {
         let guards = vec![PromptGuardEntry {
@@ -163,7 +186,7 @@ mod unix_tests {
             timeout_secs: 5,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "test-guard");
         assert_eq!(results[0].output, "Hello from guard");
@@ -177,7 +200,7 @@ mod unix_tests {
             timeout_secs: 5,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(results.is_empty(), "Empty stdout should be filtered out");
     }
 
@@ -189,7 +212,7 @@ mod unix_tests {
             timeout_secs: 5,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(results.is_empty(), "Non-zero exit guard should be skipped");
     }
 
@@ -201,7 +224,7 @@ mod unix_tests {
             timeout_secs: 1,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(results.is_empty(), "Timed-out guard should be skipped");
     }
 
@@ -220,7 +243,7 @@ mod unix_tests {
             },
         ];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "first");
         assert_eq!(results[0].output, "Guard 1 output");
@@ -239,7 +262,7 @@ mod unix_tests {
         }];
 
         let ctx = test_context();
-        let results = run_prompt_guards(&guards, &ctx);
+        let results = run_test_prompt_guards(&guards, &ctx);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].output, "codex");
     }
@@ -252,14 +275,14 @@ mod unix_tests {
             timeout_secs: 5,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(results.is_empty(), "Missing script guard should be skipped");
     }
 
     #[test]
     fn test_run_guards_empty_list() {
         let guards: Vec<PromptGuardEntry> = vec![];
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(results.is_empty());
     }
 
@@ -283,7 +306,7 @@ mod unix_tests {
             },
         ];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "good");
         assert_eq!(results[1].name, "good2");
@@ -297,7 +320,7 @@ mod unix_tests {
             timeout_secs: 5,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].output, "trimmed");
     }
@@ -312,7 +335,7 @@ mod unix_tests {
             timeout_secs: 5,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 1);
         assert!(
             results[0].output.len() <= super::MAX_GUARD_OUTPUT_BYTES,
@@ -335,7 +358,7 @@ mod unix_tests {
         }];
 
         let start = std::time::Instant::now();
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(
             start.elapsed() < std::time::Duration::from_secs(3),
             "Must not hang waiting for background process, took {:?}",
@@ -357,7 +380,7 @@ mod unix_tests {
         }];
 
         let start = std::time::Instant::now();
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(
             start.elapsed() < std::time::Duration::from_secs(4),
             "Must not hang on setsid-detached process, took {:?}",
@@ -379,7 +402,7 @@ mod unix_tests {
         }];
 
         let start = std::time::Instant::now();
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         // Must complete well before timeout — proves no pipe deadlock.
         assert!(
             start.elapsed() < std::time::Duration::from_secs(3),
@@ -419,7 +442,7 @@ mod unix_tests {
             timeout_secs: 1,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert!(
             results.is_empty(),
             "Timed-out guard should produce no results"
@@ -464,7 +487,7 @@ mod unix_tests {
             timeout_secs: 10,
         }];
 
-        let results = run_prompt_guards(&guards, &test_context());
+        let results = run_test_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 1);
         // Should have captured 1024 'a' characters (plus newlines, trimmed)
         let a_count = results[0].output.chars().filter(|&c| c == 'a').count();
@@ -494,7 +517,7 @@ mod unix_tests {
         // or non-git dirs it produces empty output. Both are valid.
         let guards = builtin_prompt_guards();
         let context_guard = &guards[0];
-        let results = run_prompt_guards(std::slice::from_ref(context_guard), &test_context());
+        let results = run_test_prompt_guards(std::slice::from_ref(context_guard), &test_context());
         assert!(
             results.len() <= 1,
             "branch-context should produce at most one result, got {}",
@@ -510,21 +533,21 @@ mod unix_tests {
         let tmp_path = tmp.path();
 
         // Initialize a git repo with a commit and create a feature branch.
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(tmp_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(tmp_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "feat/test-branch"])
-            .current_dir(tmp_path)
-            .output()
-            .unwrap();
+        command_output(
+            std::process::Command::new("git")
+                .args(["init"])
+                .current_dir(tmp_path),
+        );
+        command_output(
+            std::process::Command::new("git")
+                .args(["commit", "--allow-empty", "-m", "init"])
+                .current_dir(tmp_path),
+        );
+        command_output(
+            std::process::Command::new("git")
+                .args(["checkout", "-b", "feat/test-branch"])
+                .current_dir(tmp_path),
+        );
 
         let guards = builtin_prompt_guards();
         let context_guard = &guards[0];
@@ -535,7 +558,7 @@ mod unix_tests {
             is_resume: false,
             cwd: tmp_path.to_string_lossy().to_string(),
         };
-        let results = run_prompt_guards(std::slice::from_ref(context_guard), &ctx);
+        let results = run_test_prompt_guards(std::slice::from_ref(context_guard), &ctx);
         assert_eq!(results.len(), 1, "Should produce output on feature branch");
         assert!(
             results[0].output.contains("BRANCH CONTEXT"),
@@ -560,16 +583,16 @@ mod unix_tests {
         let tmp = tempfile::tempdir().unwrap();
         let tmp_path = tmp.path();
 
-        std::process::Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(tmp_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(tmp_path)
-            .output()
-            .unwrap();
+        command_output(
+            std::process::Command::new("git")
+                .args(["init", "-b", "main"])
+                .current_dir(tmp_path),
+        );
+        command_output(
+            std::process::Command::new("git")
+                .args(["commit", "--allow-empty", "-m", "init"])
+                .current_dir(tmp_path),
+        );
 
         let guards = builtin_prompt_guards();
         let context_guard = &guards[0];
@@ -580,7 +603,7 @@ mod unix_tests {
             is_resume: false,
             cwd: tmp_path.to_string_lossy().to_string(),
         };
-        let results = run_prompt_guards(std::slice::from_ref(context_guard), &ctx);
+        let results = run_test_prompt_guards(std::slice::from_ref(context_guard), &ctx);
         assert!(
             results.is_empty(),
             "branch-context should be silent on main, got {} result(s)",
@@ -595,7 +618,7 @@ mod unix_tests {
         // branches it produces empty output. Both are valid outcomes.
         let guards = builtin_prompt_guards();
         let branch_guard = &guards[1];
-        let _results = run_prompt_guards(std::slice::from_ref(branch_guard), &test_context());
+        let _results = run_test_prompt_guards(std::slice::from_ref(branch_guard), &test_context());
         // No assertion on output content — just verify no panic/timeout.
     }
 
@@ -606,7 +629,7 @@ mod unix_tests {
         // reminder (1 result). Both are valid.
         let guards = builtin_prompt_guards();
         let dirty_guard = &guards[2];
-        let results = run_prompt_guards(std::slice::from_ref(dirty_guard), &test_context());
+        let results = run_test_prompt_guards(std::slice::from_ref(dirty_guard), &test_context());
         assert!(
             results.len() <= 1,
             "dirty-tree-reminder should produce at most one result, got {}",
@@ -621,7 +644,7 @@ mod unix_tests {
         // unpushed commits (0 or 1 result). Both are valid.
         let guards = builtin_prompt_guards();
         let workflow_guard = &guards[3];
-        let results = run_prompt_guards(std::slice::from_ref(workflow_guard), &test_context());
+        let results = run_test_prompt_guards(std::slice::from_ref(workflow_guard), &test_context());
         assert!(
             results.len() <= 1,
             "commit-workflow should produce at most one result, got {}",

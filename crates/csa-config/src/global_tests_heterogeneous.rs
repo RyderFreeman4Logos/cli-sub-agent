@@ -69,6 +69,22 @@ max_concurrent = 3
 }
 
 #[test]
+fn test_experimental_prompt_caching_defaults_to_false() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert!(!config.experimental.enable_prompt_caching);
+}
+
+#[test]
+fn test_experimental_prompt_caching_can_be_enabled() {
+    let toml_str = r#"
+[experimental]
+enable_prompt_caching = true
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert!(config.experimental.enable_prompt_caching);
+}
+
+#[test]
 fn test_all_known_tools() {
     let tools = all_known_tools();
     assert_eq!(tools.len(), 5);
