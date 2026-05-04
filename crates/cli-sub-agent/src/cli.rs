@@ -173,9 +173,10 @@ pub enum Commands {
         /// Ephemeral session (no session persistence, auto-cleanup; tool runs in project dir)
         #[arg(long, conflicts_with = "session")]
         ephemeral: bool,
-        /// Allow csa run on protected base branches; prefer creating a feature branch first.
-        #[arg(long)]
-        allow_base_branch_commit: bool,
+        /// Allow working on the base branch (main/dev) without requiring a feature branch.
+        /// Use for read-only tasks or when you explicitly accept the risk.
+        #[arg(long, alias = "allow-base-branch-commit")]
+        allow_base_branch_working: bool,
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,

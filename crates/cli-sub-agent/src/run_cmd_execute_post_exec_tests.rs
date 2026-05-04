@@ -29,7 +29,7 @@ fn project_config_with_gate(gate: PostExecGateConfig) -> ProjectConfig {
         preferences: None,
         hooks: Default::default(),
         run: RunConfig {
-            allow_base_branch_commit: false,
+            allow_base_branch_working: false,
             post_exec_gate: gate,
         },
         execution: Default::default(),

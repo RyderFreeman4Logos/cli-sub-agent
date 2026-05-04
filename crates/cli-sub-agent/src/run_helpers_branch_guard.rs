@@ -71,7 +71,7 @@ impl BranchGuardRefusal {
              detected default branch: {}\n\
              reason: {}\n\
              recommend: git checkout -b feat/<your-feature> && csa run ...\n\
-             escape hatch: pass --allow-base-branch-commit to bypass (and accept risk)\n\
+             escape hatch: pass --allow-base-branch-working to bypass (and accept risk)\n\
              bypass source: {}",
             safe_display_option(self.current_branch.as_deref()),
             safe_display_option(self.detected_default.as_deref()),
@@ -104,9 +104,9 @@ impl BranchGuardRuntime {
         global_config: &GlobalConfig,
         read_only_mode: bool,
     ) -> Self {
-        let trusted_config_bypass = global_config.run.allow_base_branch_commit;
+        let trusted_config_bypass = global_config.run.allow_base_branch_working;
         let project_config_requested_bypass = project_config
-            .is_some_and(|config| config.run.allow_base_branch_commit)
+            .is_some_and(|config| config.run.allow_base_branch_working)
             && !trusted_config_bypass;
         Self {
             cli_bypass,
@@ -336,7 +336,7 @@ fn is_protected_branch(current: &str, detected_default: Option<&str>) -> bool {
 
 fn bypass_source_diagnostic(project_config_requested_bypass: bool) -> String {
     if project_config_requested_bypass {
-        "none (project-local allow_base_branch_commit is not trusted)".to_string()
+        "none (project-local allow_base_branch_working is not trusted)".to_string()
     } else {
         "none".to_string()
     }

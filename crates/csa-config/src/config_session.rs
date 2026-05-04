@@ -51,19 +51,19 @@ impl PostExecGateConfig {
 /// Run-command behavior (`[run]` in config).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RunConfig {
-    /// Allow `csa run` to execute on protected base branches.
+    /// Allow `csa run` to work on protected base branches.
     ///
     /// This is only honored from trusted user/global config or the explicit CLI
     /// flag; project-local config cannot disable the run branch guard.
-    #[serde(default)]
-    pub allow_base_branch_commit: bool,
+    #[serde(default, alias = "allow_base_branch_commit")]
+    pub allow_base_branch_working: bool,
     #[serde(default)]
     pub post_exec_gate: PostExecGateConfig,
 }
 
 impl RunConfig {
     pub fn is_default(&self) -> bool {
-        !self.allow_base_branch_commit && self.post_exec_gate.is_default()
+        !self.allow_base_branch_working && self.post_exec_gate.is_default()
     }
 }
 

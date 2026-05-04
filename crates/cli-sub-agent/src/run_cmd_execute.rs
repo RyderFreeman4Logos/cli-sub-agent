@@ -226,7 +226,7 @@ pub(crate) async fn handle_run(
     return_to: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
-    allow_base_branch_commit: bool,
+    allow_base_branch_working: bool,
     cd: Option<String>,
     model_spec: Option<String>,
     model: Option<String>,
@@ -333,7 +333,7 @@ pub(crate) async fn handle_run(
         return Ok(1);
     };
     let branch_guard = crate::run_helpers_branch_guard::BranchGuardRuntime::for_run(
-        allow_base_branch_commit,
+        allow_base_branch_working,
         config.as_ref(),
         &global_config,
     );

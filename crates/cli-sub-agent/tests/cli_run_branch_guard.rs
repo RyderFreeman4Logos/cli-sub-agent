@@ -156,7 +156,7 @@ fn assert_branch_guard_refused(output: &Output) {
     assert!(stderr.contains("main"), "stderr: {stderr}");
     assert!(stderr.contains("git checkout -b"), "stderr: {stderr}");
     assert!(
-        stderr.contains("--allow-base-branch-commit"),
+        stderr.contains("--allow-base-branch-working"),
         "stderr: {stderr}"
     );
     assert!(
@@ -329,7 +329,7 @@ impl Drop for EnvGuard {
 }
 
 #[test]
-fn run_help_displays_allow_base_branch_commit_flag() {
+fn run_help_displays_allow_base_branch_working_flag() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())
         .args(["run", "--help"])
@@ -338,11 +338,13 @@ fn run_help_displays_allow_base_branch_commit_flag() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--allow-base-branch-commit"));
+    assert!(stdout.contains("--allow-base-branch-working"));
+    assert!(!stdout.contains("--allow-base-branch-commit"));
+    assert!(stdout.contains("Allow working on the base branch"));
 }
 
 #[test]
-fn config_show_displays_default_allow_base_branch_commit_false() {
+fn config_show_displays_default_allow_base_branch_working_false() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_csa_project(tmp.path());
 
@@ -356,7 +358,7 @@ fn config_show_displays_default_allow_base_branch_commit_false() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[run]"), "stdout: {stdout}");
     assert!(
-        stdout.contains("allow_base_branch_commit = false"),
+        stdout.contains("allow_base_branch_working = false"),
         "stdout: {stdout}"
     );
 }
@@ -464,6 +466,17 @@ fn run_on_main_with_cli_bypass_allows_guard_to_later_tool_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_git_repo(tmp.path(), "main");
 
+    let output =
+        run_csa_with_missing_tool(tmp.path(), tmp.path(), &["--allow-base-branch-working"]);
+
+    assert_branch_guard_allowed_to_later_error(&output);
+}
+
+#[test]
+fn run_on_main_with_deprecated_cli_bypass_alias_allows_guard_to_later_tool_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+
     let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &["--allow-base-branch-commit"]);
 
     assert_branch_guard_allowed_to_later_error(&output);
@@ -475,7 +488,7 @@ fn daemon_run_on_main_with_cli_bypass_spawns_before_later_tool_error() {
     init_git_repo(tmp.path(), "main");
 
     let output =
-        run_csa_daemon_with_missing_tool(tmp.path(), tmp.path(), &["--allow-base-branch-commit"]);
+        run_csa_daemon_with_missing_tool(tmp.path(), tmp.path(), &["--allow-base-branch-working"]);
 
     assert_daemon_spawned_and_cleanup(&output, tmp.path(), tmp.path());
 }
@@ -486,7 +499,7 @@ fn run_on_main_with_project_config_bypass_still_refuses() {
     init_git_repo(tmp.path(), "main");
     let config_path = tmp.path().join(".csa/config.toml");
     std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
-    std::fs::write(config_path, "[run]\nallow_base_branch_commit = true\n")
+    std::fs::write(config_path, "[run]\nallow_base_branch_working = true\n")
         .expect("write project config");
 
     let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &[]);
@@ -498,6 +511,21 @@ fn run_on_main_with_project_config_bypass_still_refuses() {
 
 #[test]
 fn run_on_main_with_trusted_global_config_bypass_allows_guard_to_later_tool_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+    let config_path = global_config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("global config dir"))
+        .expect("create global config dir");
+    std::fs::write(config_path, "[run]\nallow_base_branch_working = true\n")
+        .expect("write global config");
+
+    let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &[]);
+
+    assert_branch_guard_allowed_to_later_error(&output);
+}
+
+#[test]
+fn run_on_main_with_legacy_trusted_global_config_bypass_allows_guard_to_later_tool_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_git_repo(tmp.path(), "main");
     let config_path = global_config_path(tmp.path());
