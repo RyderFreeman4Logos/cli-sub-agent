@@ -392,7 +392,6 @@ async fn run() -> Result<()> {
             {
                 exit_current_process(exit_code);
             }
-
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 no_daemon,
@@ -404,6 +403,8 @@ async fn run() -> Result<()> {
                     prompt.as_deref(),
                     prompt_flag.as_deref(),
                     prompt_file.as_deref(),
+                    no_fs_sandbox,
+                    &extra_writable,
                 ),
             )?;
 
