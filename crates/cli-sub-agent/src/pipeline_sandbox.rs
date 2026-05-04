@@ -33,6 +33,62 @@ fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> Pat
     })
 }
 
+fn validate_writable_sources_exist(
+    paths: &[PathBuf],
+    project_root: &Path,
+    source_label: &str,
+    removal_target: &str,
+) -> Result<(), String> {
+    for path in paths {
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            project_root.join(path)
+        };
+        match candidate.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(format!(
+                    "{source_label} path '{}' does not exist. Create it first or remove the {removal_target}.",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "{source_label} path '{}' could not be checked before session launch: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_run_extra_writable_sources_exist(
+    config: Option<&ProjectConfig>,
+    project_root: &Path,
+    no_fs_sandbox: bool,
+    extra_writable: &[PathBuf],
+) -> Result<(), String> {
+    if no_fs_sandbox {
+        return Ok(());
+    }
+    if !extra_writable.is_empty() {
+        validate_writable_sources_exist(extra_writable, project_root, "--extra-writable", "flag")?;
+    }
+    if let Some(cfg) = config
+        && !cfg.filesystem_sandbox.extra_writable.is_empty()
+    {
+        validate_writable_sources_exist(
+            &cfg.filesystem_sandbox.extra_writable,
+            project_root,
+            "filesystem_sandbox.extra_writable",
+            "config entry",
+        )?;
+    }
+    Ok(())
+}
+
 /// Resolve sandbox configuration from project config and enforcement mode.
 ///
 /// Returns `SandboxResolution::Ok` with the options (possibly enriched with
@@ -132,6 +188,14 @@ pub(crate) fn resolve_sandbox_options(
             }
             // CLI --extra-writable / --expose-readable (no-config path).
             if !extra_writable.is_empty() {
+                if let Err(message) = validate_writable_sources_exist(
+                    extra_writable,
+                    project_root,
+                    "--extra-writable",
+                    "flag",
+                ) {
+                    return SandboxResolution::RequiredButUnavailable(message);
+                }
                 let resolved = match csa_resource::isolation_plan::resolve_writable_paths(
                     extra_writable,
                     project_root,
@@ -299,7 +363,6 @@ pub(crate) fn resolve_sandbox_options(
 
     if !no_fs_sandbox {
         if let Some(ref paths) = per_tool_writable {
-            // Validate user-provided writable paths before applying.
             let resolved =
                 match csa_resource::isolation_plan::resolve_writable_paths(paths, project_root) {
                     Ok(paths) => paths,
@@ -316,6 +379,14 @@ pub(crate) fn resolve_sandbox_options(
             // No per-tool override — apply global extra_writable paths.
             let fs_config = &cfg.filesystem_sandbox;
             if !fs_config.extra_writable.is_empty() {
+                if let Err(message) = validate_writable_sources_exist(
+                    &fs_config.extra_writable,
+                    project_root,
+                    "filesystem_sandbox.extra_writable",
+                    "config entry",
+                ) {
+                    return SandboxResolution::RequiredButUnavailable(message);
+                }
                 let resolved = match csa_resource::isolation_plan::resolve_writable_paths(
                     &fs_config.extra_writable,
                     project_root,
@@ -349,6 +420,14 @@ pub(crate) fn resolve_sandbox_options(
 
     // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
     if !no_fs_sandbox && !extra_writable.is_empty() {
+        if let Err(message) = validate_writable_sources_exist(
+            extra_writable,
+            project_root,
+            "--extra-writable",
+            "flag",
+        ) {
+            return SandboxResolution::RequiredButUnavailable(message);
+        }
         let resolved = match csa_resource::isolation_plan::resolve_writable_paths(
             extra_writable,
             project_root,
@@ -534,6 +613,10 @@ pub(crate) fn check_sandbox_permission_errors(
          [tools.<name>.filesystem_sandbox] or pass --no-fs-sandbox to disable."
     );
 }
+
+#[cfg(test)]
+#[path = "pipeline_sandbox_extra_writable_tests.rs"]
+mod extra_writable_tests;
 
 #[cfg(test)]
 #[path = "pipeline_sandbox_tests.rs"]

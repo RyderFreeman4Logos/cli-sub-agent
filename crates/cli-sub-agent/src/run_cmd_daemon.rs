@@ -8,9 +8,11 @@ use anyhow::{Context, Result};
 
 const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DaemonSpawnOptions {
     run_stdin_prompt: RunStdinPrompt,
+    no_fs_sandbox: bool,
+    extra_writable: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -28,6 +30,8 @@ impl DaemonSpawnOptions {
         prompt: Option<&str>,
         prompt_flag: Option<&str>,
         prompt_file: Option<&Path>,
+        no_fs_sandbox: bool,
+        extra_writable: &[PathBuf],
     ) -> Self {
         let run_stdin_prompt =
             if prompt_file.is_some_and(crate::run_helpers::is_prompt_file_stdin_sentinel) {
@@ -42,7 +46,11 @@ impl DaemonSpawnOptions {
                 RunStdinPrompt::None
             };
 
-        Self { run_stdin_prompt }
+        Self {
+            run_stdin_prompt,
+            no_fs_sandbox,
+            extra_writable: extra_writable.to_vec(),
+        }
     }
 
     pub(crate) fn for_prompt_file(prompt_file: Option<&Path>) -> Self {
@@ -53,7 +61,10 @@ impl DaemonSpawnOptions {
                 RunStdinPrompt::None
             };
 
-        Self { run_stdin_prompt }
+        Self {
+            run_stdin_prompt,
+            ..Default::default()
+        }
     }
 }
 
@@ -174,11 +185,14 @@ pub(crate) fn spawn_and_exit(
     cd: Option<&str>,
     spawn_options: DaemonSpawnOptions,
 ) -> Result<()> {
-    let sid = csa_session::new_session_id();
     let project_root = crate::pipeline::determine_project_root(cd)?;
+    if subcommand == "run" {
+        validate_run_daemon_writable_sources(&project_root, &spawn_options)?;
+    }
+    let sid = csa_session::new_session_id();
     let session_root = csa_session::get_session_root(&project_root)?;
     let session_dir = session_root.join("sessions").join(&sid);
-    let stdin_prompt = read_stdin_prompt_if_needed(spawn_options)?;
+    let stdin_prompt = read_stdin_prompt_if_needed(&spawn_options)?;
     persist_daemon_placeholder_session(&project_root, &session_dir, &sid, subcommand)?;
     let stdin_prompt_file = write_stdin_prompt_if_needed(&session_dir, stdin_prompt)?;
 
@@ -190,7 +204,7 @@ pub(crate) fn spawn_and_exit(
     let forwarded_args = build_forwarded_args(
         &all_args,
         subcommand,
-        spawn_options,
+        &spawn_options,
         stdin_prompt_file.as_deref(),
     );
 
@@ -243,6 +257,20 @@ pub(crate) fn spawn_and_exit(
     std::process::exit(0);
 }
 
+fn validate_run_daemon_writable_sources(
+    project_root: &Path,
+    spawn_options: &DaemonSpawnOptions,
+) -> Result<()> {
+    let config = csa_config::ProjectConfig::load(project_root)?;
+    crate::pipeline_sandbox::validate_run_extra_writable_sources_exist(
+        config.as_ref(),
+        project_root,
+        spawn_options.no_fs_sandbox,
+        &spawn_options.extra_writable,
+    )
+    .map_err(anyhow::Error::msg)
+}
+
 fn persist_daemon_placeholder_session(
     project_root: &Path,
     session_dir: &Path,
@@ -266,7 +294,7 @@ fn persist_daemon_placeholder_session(
     Ok(())
 }
 
-fn read_stdin_prompt_if_needed(spawn_options: DaemonSpawnOptions) -> Result<Option<String>> {
+fn read_stdin_prompt_if_needed(spawn_options: &DaemonSpawnOptions) -> Result<Option<String>> {
     if spawn_options.run_stdin_prompt == RunStdinPrompt::None {
         return Ok(None);
     }
@@ -329,7 +357,7 @@ fn write_stdin_prompt_if_needed(
 fn build_forwarded_args(
     all_args: &[String],
     subcommand: &str,
-    spawn_options: DaemonSpawnOptions,
+    spawn_options: &DaemonSpawnOptions,
     stdin_prompt_file: Option<&Path>,
 ) -> Vec<String> {
     let run_pos = all_args.iter().position(|a| a == subcommand).unwrap_or(1);
@@ -387,25 +415,26 @@ mod tests {
 
     #[test]
     fn run_daemon_options_detect_omitted_stdin_prompt_without_skill() {
-        let options = DaemonSpawnOptions::for_run(None, None, None, None);
+        let options = DaemonSpawnOptions::for_run(None, None, None, None, false, &[]);
         assert_eq!(options.run_stdin_prompt, RunStdinPrompt::Omitted);
     }
 
     #[test]
     fn run_daemon_options_do_not_capture_stdin_for_skill_only_run() {
-        let options = DaemonSpawnOptions::for_run(Some("demo"), None, None, None);
+        let options = DaemonSpawnOptions::for_run(Some("demo"), None, None, None, false, &[]);
         assert_eq!(options.run_stdin_prompt, RunStdinPrompt::None);
     }
 
     #[test]
     fn run_daemon_options_detect_positional_stdin_sentinel() {
-        let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None);
+        let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None, false, &[]);
         assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PositionalSentinel);
     }
 
     #[test]
     fn run_daemon_options_detect_prompt_file_stdin_sentinel() {
-        let options = DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")));
+        let options =
+            DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")), false, &[]);
         assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
     }
 
@@ -428,8 +457,9 @@ mod tests {
         let forwarded = build_forwarded_args(
             &all_args,
             "run",
-            DaemonSpawnOptions {
+            &DaemonSpawnOptions {
                 run_stdin_prompt: RunStdinPrompt::Omitted,
+                ..Default::default()
             },
             Some(prompt_file),
         );
@@ -459,8 +489,9 @@ mod tests {
         let forwarded = build_forwarded_args(
             &all_args,
             "run",
-            DaemonSpawnOptions {
+            &DaemonSpawnOptions {
                 run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
+                ..Default::default()
             },
             Some(prompt_file),
         );
@@ -491,8 +522,9 @@ mod tests {
         let forwarded = build_forwarded_args(
             &all_args,
             "debate",
-            DaemonSpawnOptions {
+            &DaemonSpawnOptions {
                 run_stdin_prompt: RunStdinPrompt::PromptFileSentinel,
+                ..Default::default()
             },
             Some(prompt_file),
         );
@@ -522,8 +554,9 @@ mod tests {
         let forwarded = build_forwarded_args(
             &all_args,
             "run",
-            DaemonSpawnOptions {
+            &DaemonSpawnOptions {
                 run_stdin_prompt: RunStdinPrompt::PromptFileSentinel,
+                ..Default::default()
             },
             Some(prompt_file),
         );
@@ -554,8 +587,9 @@ mod tests {
         let forwarded = build_forwarded_args(
             &all_args,
             "run",
-            DaemonSpawnOptions {
+            &DaemonSpawnOptions {
                 run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
+                ..Default::default()
             },
             Some(prompt_file),
         );

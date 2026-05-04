@@ -35,29 +35,29 @@ fn test_resolve_writable_symlink_inside_project_to_external_target() {
 }
 
 #[test]
-fn test_resolve_writable_nonexistent_path_uses_existing_parent() {
+fn test_resolve_writable_allows_nonexistent_path_with_existing_parent() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).expect("create project dir");
 
-    let resolved =
-        resolve_writable_paths(&[PathBuf::from("drafts/new")], &project).expect("valid path");
+    let resolved = resolve_writable_paths(&[PathBuf::from("drafts/new")], &project)
+        .expect("generic writable_paths may target a creatable child path");
 
-    let expected = project.canonicalize().unwrap().join("drafts/new");
-    assert_eq!(resolved, vec![expected.clone()]);
-    assert!(!expected.exists());
+    assert_eq!(resolved, vec![project.join("drafts/new")]);
 }
 
 #[test]
 fn test_resolve_writable_accepts_config_path_outside_default_roots() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
+    let external = tmp.path().join("external-data");
     std::fs::create_dir_all(&project).expect("create project dir");
+    std::fs::create_dir_all(&external).expect("create external dir");
 
-    let resolved = resolve_writable_paths(&[PathBuf::from("/opt/data")], &project)
+    let resolved = resolve_writable_paths(std::slice::from_ref(&external), &project)
         .expect("config extra_writable outside default roots should be accepted");
 
-    assert_eq!(resolved, vec![PathBuf::from("/opt/data")]);
+    assert_eq!(resolved, vec![external.canonicalize().unwrap()]);
 }
 
 #[cfg(unix)]

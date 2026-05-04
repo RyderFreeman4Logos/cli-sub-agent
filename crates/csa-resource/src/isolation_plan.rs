@@ -434,14 +434,6 @@ pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
     resolve_writable_paths_impl(paths, project_root, false).map(|_| ())
 }
 
-/// Resolve user-configured writable sandbox paths.
-///
-/// Relative paths are resolved against `project_root`. Existing symlinks are
-/// resolved through their target, and trusted config roots may live outside the
-/// default safe roots.
-/// # Errors
-///
-/// Returns an error for root, sensitive system paths, or unresolvable paths.
 pub fn resolve_writable_paths(
     paths: &[PathBuf],
     project_root: &Path,
@@ -493,7 +485,6 @@ pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
 }
 
 /// Canonicalize `path` through its deepest existing ancestor.
-///
 /// Missing tail components are re-attached, allowing writable directories that
 /// may be pre-created later via `create_dir_all()`.
 pub fn canonicalize_through_existing_ancestors(path: &Path) -> anyhow::Result<PathBuf> {
@@ -637,10 +628,6 @@ fn validate_single_path(
     if options.require_absolute && !path.is_absolute() {
         anyhow::bail!("path must be absolute");
     }
-    if options.require_exists && !path.exists() {
-        anyhow::bail!("path must exist");
-    }
-
     let requested = normalize_path_components(if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -651,6 +638,19 @@ fn validate_single_path(
     }
     if options.reject_tmp_root && requested == Path::new("/tmp") {
         anyhow::bail!("/tmp itself is forbidden; expose a specific sub-path instead");
+    }
+    let path_exists = !options.require_exists
+        || requested.try_exists().with_context(|| {
+            format!(
+                "failed to probe path '{}' before sandbox launch",
+                path.display()
+            )
+        })?;
+    if !path_exists {
+        anyhow::bail!(
+            "path '{}' does not exist. Create it first or remove the flag.",
+            path.display()
+        );
     }
 
     if !options.canonicalize_for_allowlist {
