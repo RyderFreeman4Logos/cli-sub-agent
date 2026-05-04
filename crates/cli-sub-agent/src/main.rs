@@ -29,6 +29,7 @@ mod mcp_server;
 mod memory_capture;
 mod memory_cmd;
 mod memory_migrate;
+mod merge_cmd;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_env;
@@ -472,9 +473,8 @@ async fn run() -> Result<()> {
             daemon_guard.finalize();
             exit_current_process(exit_code);
         }
-        Commands::Session { cmd } => {
-            session_dispatch::dispatch(cmd, output_format)?;
-        }
+        Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format)?,
+        Commands::Merge(args) => merge_cmd::handle_merge(args)?,
         Commands::Audit { command } => {
             audit_cmds::handle_audit(command)?;
         }
