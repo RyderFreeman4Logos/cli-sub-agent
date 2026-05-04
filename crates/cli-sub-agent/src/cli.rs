@@ -287,6 +287,9 @@ pub enum Commands {
         cmd: SessionCommands,
     },
 
+    /// Push the current branch only after a passing review covers HEAD
+    Push(PushArgs),
+
     /// Merge a GitHub pull request and return to the default branch
     Merge(MergeArgs),
 
@@ -462,6 +465,34 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: HooksCommands,
     },
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(
+    after_help = "Pass additional git push arguments after `--`, for example: csa push origin HEAD -- --tags"
+)]
+pub struct PushArgs {
+    /// Remote to push to (default: origin)
+    pub remote: Option<String>,
+
+    /// Refspec to push (default: current branch)
+    pub refspec: Option<String>,
+
+    /// Bypass review checks and pass --force to git push
+    #[arg(long)]
+    pub force: bool,
+
+    /// Pass --force-with-lease to git push while still requiring review coverage
+    #[arg(long = "force-with-lease")]
+    pub force_with_lease: bool,
+
+    /// Check review coverage without running git push
+    #[arg(long)]
+    pub check_only: bool,
+
+    /// Extra git push arguments, supplied after `--`
+    #[arg(last = true, value_name = "GIT_PUSH_ARG")]
+    pub passthrough: Vec<String>,
 }
 
 #[derive(Args)]

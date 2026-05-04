@@ -47,6 +47,7 @@ mod plan_display;
 mod preflight_state_dir;
 mod preflight_symlink;
 mod process_tree;
+mod push_cmd;
 mod review_cmd;
 mod review_consensus;
 mod review_context;
@@ -189,7 +190,6 @@ fn link_bug_class_pipeline() {
 }
 
 #[tokio::main]
-
 async fn main() {
     if let Err(err) = run().await {
         eprintln!("{}", error_report::render_user_facing_error(&err));
@@ -474,6 +474,7 @@ async fn run() -> Result<()> {
             exit_current_process(exit_code);
         }
         Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format)?,
+        Commands::Push(args) => push_cmd::handle_push(args)?,
         Commands::Merge(args) => merge_cmd::handle_merge(args)?,
         Commands::Audit { command } => {
             audit_cmds::handle_audit(command)?;
