@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use csa_core::types::{OutputFormat, ToolArg};
 
 #[path = "cli_session.rs"]
@@ -287,6 +287,9 @@ pub enum Commands {
         cmd: SessionCommands,
     },
 
+    /// Merge a GitHub pull request and return to the default branch
+    Merge(MergeArgs),
+
     /// Manage audit manifest lifecycle
     Audit {
         #[command(subcommand)]
@@ -459,6 +462,21 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: HooksCommands,
     },
+}
+
+#[derive(Args)]
+pub struct MergeArgs {
+    /// Pull request number to merge
+    #[arg(value_name = "PR_NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
+    pub pr_number: u64,
+
+    /// Use GitHub's rebase merge strategy instead of a merge commit
+    #[arg(long)]
+    pub rebase: bool,
+
+    /// Bypass pre-merge working tree checks
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Subcommand)]
