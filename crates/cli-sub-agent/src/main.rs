@@ -355,7 +355,7 @@ async fn run() -> Result<()> {
             return_to,
             parent,
             ephemeral,
-            allow_base_branch_commit,
+            allow_base_branch_working,
             cd,
             model_spec,
             model,
@@ -387,7 +387,7 @@ async fn run() -> Result<()> {
                 && !daemon_child
                 && session_id.is_none()
                 && let Some(exit_code) = run_helpers_branch_guard::evaluate_run_refusal_for_cd(
-                    allow_base_branch_commit,
+                    allow_base_branch_working,
                     cd.as_deref(),
                 )?
             {
@@ -436,7 +436,7 @@ async fn run() -> Result<()> {
                 return_to,
                 parent,
                 ephemeral,
-                allow_base_branch_commit,
+                allow_base_branch_working,
                 cd,
                 model_spec,
                 model,
