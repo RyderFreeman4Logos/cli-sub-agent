@@ -108,6 +108,18 @@ fn run_accepts_openai_compat_with_arbitrary_model() {
 }
 
 #[test]
+fn run_accepts_goal_at_clap_parse() {
+    let cli = try_parse_cli(&["csa", "run", "--goal", "tests pass", "fix it"]).unwrap();
+
+    match cli.command {
+        crate::cli::Commands::Run { goal, .. } => {
+            assert_eq!(goal.as_deref(), Some("tests pass"));
+        }
+        _ => panic!("expected run command"),
+    }
+}
+
+#[test]
 fn run_cli_hint_difficulty_parses() {
     let cli = try_parse_cli(&[
         "csa",

@@ -75,6 +75,13 @@ fn test_experimental_prompt_caching_defaults_to_false() {
 }
 
 #[test]
+fn test_experimental_goal_defaults() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.experimental.max_goal_loops, 3);
+    assert_eq!(config.experimental.max_goal_tokens, 500_000);
+}
+
+#[test]
 fn test_experimental_prompt_caching_can_be_enabled() {
     let toml_str = r#"
 [experimental]
@@ -82,6 +89,18 @@ enable_prompt_caching = true
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert!(config.experimental.enable_prompt_caching);
+}
+
+#[test]
+fn test_experimental_goal_limits_can_be_configured() {
+    let toml_str = r#"
+[experimental]
+max_goal_loops = 5
+max_goal_tokens = 123456
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.experimental.max_goal_loops, 5);
+    assert_eq!(config.experimental.max_goal_tokens, 123_456);
 }
 
 #[test]

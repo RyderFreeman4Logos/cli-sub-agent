@@ -76,10 +76,32 @@ pub struct GlobalConfig {
     pub experimental: ExperimentalConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub fn default_max_goal_loops() -> u32 {
+    3
+}
+
+pub fn default_max_goal_tokens() -> u64 {
+    500_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentalConfig {
     #[serde(default)]
     pub enable_prompt_caching: bool,
+    #[serde(default = "default_max_goal_loops")]
+    pub max_goal_loops: u32,
+    #[serde(default = "default_max_goal_tokens")]
+    pub max_goal_tokens: u64,
+}
+
+impl Default for ExperimentalConfig {
+    fn default() -> Self {
+        Self {
+            enable_prompt_caching: false,
+            max_goal_loops: default_max_goal_loops(),
+            max_goal_tokens: default_max_goal_tokens(),
+        }
+    }
 }
 
 /// Configuration for `csa session wait`.
