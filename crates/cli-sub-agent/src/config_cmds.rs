@@ -371,7 +371,9 @@ struct LookupResolution {
 }
 
 fn is_global_only_key(key: &str) -> bool {
-    key.starts_with("kv_cache.") || key.starts_with("state_dir.")
+    key.starts_with("experimental.")
+        || key.starts_with("kv_cache.")
+        || key.starts_with("state_dir.")
 }
 
 #[derive(Debug, Clone)]
@@ -689,7 +691,10 @@ fn build_global_display_toml(config: &GlobalConfig) -> Result<toml::Value> {
 
 #[cfg(test)]
 fn resolve_effective_global_key(key: &str) -> Result<Option<toml::Value>> {
-    if !(key.starts_with("execution.") || key.starts_with("kv_cache.")) {
+    if !(key.starts_with("execution.")
+        || key.starts_with("experimental.")
+        || key.starts_with("kv_cache."))
+    {
         return Ok(None);
     }
 
@@ -734,6 +739,10 @@ pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
 #[cfg(test)]
 #[path = "config_cmds_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_cmds_experimental_tests.rs"]
+mod experimental_tests;
 
 #[cfg(test)]
 #[path = "config_cmds_transport_display_tests.rs"]

@@ -10,36 +10,41 @@ use std::path::Path;
 
 use tracing::{debug, info};
 
-/// Inject project context and design context into the prompt on first turn.
-///
-/// Loads CLAUDE.md/AGENTS.md via [`csa_executor::load_project_context`] and
-/// prepends them to the prompt. Then checks for design context and appends it.
-pub(crate) fn inject_first_turn_context(
+#[derive(Debug, Default)]
+pub(crate) struct FirstTurnContext {
+    pub project_context: Option<String>,
+    pub design_context: Option<String>,
+}
+
+/// Load project context and design context for the first turn of a session.
+pub(crate) fn load_first_turn_context(
     session_project_path: &str,
     project_root: &Path,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
-    prompt: &mut String,
-) {
+) -> FirstTurnContext {
     // Project context (CLAUDE.md, AGENTS.md).
     let opts = context_load_options.cloned().unwrap_or_default();
     let files = csa_executor::load_project_context(Path::new(session_project_path), &opts);
-    if !files.is_empty() {
+    let project_context = if files.is_empty() {
+        None
+    } else {
         let ctx = csa_executor::format_context_for_prompt(&files);
         info!(
             files = files.len(),
             bytes = ctx.len(),
             "Injecting project context"
         );
-        *prompt = format!("{ctx}{prompt}");
-    }
+        Some(ctx)
+    };
 
     // Design context from TODO plan's design.md reference.
-    if let Some(dc) = load_design_context(project_root) {
+    let design_context = load_design_context(project_root).inspect(|dc| {
         info!(bytes = dc.len(), "Injecting design context into prompt");
-        if !prompt.ends_with('\n') {
-            prompt.push('\n');
-        }
-        prompt.push_str(&dc);
+    });
+
+    FirstTurnContext {
+        project_context,
+        design_context,
     }
 }
 

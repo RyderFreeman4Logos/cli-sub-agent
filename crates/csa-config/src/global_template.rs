@@ -79,6 +79,10 @@ same_model_fallback = true
 [fallback]
 cloud_review_exhausted = "ask-user"
 
+# Experimental feature flags. Disabled by default.
+[experimental]
+enable_prompt_caching = false
+
 # KV cache-aware polling defaults.
 # `frequent_poll_seconds`: fast external state (GitHub API, bot responses).
 # `long_poll_seconds`: long waits that return control before the caller cache goes cold.

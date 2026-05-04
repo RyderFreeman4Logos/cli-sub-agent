@@ -24,6 +24,9 @@ pub(crate) mod gate;
 #[path = "pipeline_prompt_guard.rs"]
 pub(crate) mod prompt_guard;
 
+#[path = "pipeline_prompt_cache.rs"]
+mod prompt_cache;
+
 #[path = "pipeline_changed_paths.rs"]
 pub(crate) mod changed_paths;
 
