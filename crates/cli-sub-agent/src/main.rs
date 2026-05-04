@@ -24,6 +24,8 @@ mod error_report;
 mod eval_cmd;
 mod gc;
 mod hooks_cmd;
+mod hunt_cmd;
+mod main_bootstrap;
 mod mcp_hub;
 mod mcp_server;
 mod memory_capture;
@@ -103,6 +105,9 @@ use cli::{
     validate_command_args,
 };
 use csa_core::types::OutputFormat;
+use main_bootstrap::{
+    link_bug_class_pipeline, resolve_effective_min_timeout, should_attempt_auto_weave_upgrade,
+};
 use sa_mode::apply_sa_mode_prompt_guard;
 
 mod migrate_cmd;
@@ -143,50 +148,6 @@ fn exit_current_process(exit_code: i32) -> ! {
     let _ = std::io::stderr().flush();
     crate::session_cmds_daemon::persist_daemon_completion_from_env(exit_code);
     std::process::exit(exit_code);
-}
-
-/// Resolve the effective minimum timeout from project and global configs.
-///
-/// Priority: project `[execution].min_timeout_seconds` > global > compile-time default.
-/// Config loading errors are silently ignored (fall back to compile-time default).
-fn resolve_effective_min_timeout() -> u64 {
-    let compile_default = csa_config::ExecutionConfig::default_min_timeout();
-
-    // Try to load project config (merged with user-level).
-    // This is the same merged config that pipeline uses, so project overrides global
-    // via the standard TOML deep-merge path.
-    if let Ok(cwd) = std::env::current_dir()
-        && let Ok(Some(config)) = csa_config::ProjectConfig::load(&cwd)
-        && !config.execution.is_default()
-    {
-        return config.execution.min_timeout_seconds;
-    }
-
-    // Fall back to global config.
-    if let Ok(global) = csa_config::GlobalConfig::load()
-        && !global.execution.is_default()
-    {
-        return global.execution.min_timeout_seconds;
-    }
-
-    compile_default
-}
-
-fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
-    // Only execution commands need upgraded weave patterns.
-    // All management/read-only commands stay available even when weave is unhealthy.
-    match command {
-        Commands::Run { .. } => true,
-        Commands::Review(args) => !args.check_verdict,
-        Commands::Debate(_) | Commands::Batch { .. } | Commands::Plan { .. } => true,
-        Commands::ClaudeSubAgent(_) | Commands::McpServer => true,
-        _ => false,
-    }
-}
-
-fn link_bug_class_pipeline() {
-    let _ = bug_class::BugClassCandidate::aggregate_from_review_artifacts(&[]);
-    bug_class::link_bug_class_pipeline_symbols();
 }
 
 #[tokio::main]
@@ -471,6 +432,23 @@ async fn run() -> Result<()> {
                 matches!(output_format, OutputFormat::Text),
             );
             daemon_guard.finalize();
+            exit_current_process(exit_code);
+        }
+        Commands::Hunt {
+            description,
+            tool,
+            timeout,
+            allow_base_branch_working,
+        } => {
+            let exit_code = hunt_cmd::handle_hunt(
+                description,
+                tool,
+                timeout,
+                allow_base_branch_working,
+                current_depth,
+                output_format,
+            )
+            .await?;
             exit_current_process(exit_code);
         }
         Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format)?,

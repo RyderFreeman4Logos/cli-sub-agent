@@ -282,6 +282,21 @@ pub enum Commands {
         session_id: Option<String>,
     },
 
+    /// Start a root-cause-first diagnostic debugging session
+    Hunt {
+        /// Bug description
+        description: String,
+        /// Tool to use
+        #[arg(long)]
+        tool: Option<String>,
+        /// Session timeout in seconds
+        #[arg(long, default_value = "7200")]
+        timeout: u64,
+        /// Allow working on base branch
+        #[arg(long, alias = "allow-base-branch-commit")]
+        allow_base_branch_working: bool,
+    },
+
     /// Manage sessions
     Session {
         #[command(subcommand)]

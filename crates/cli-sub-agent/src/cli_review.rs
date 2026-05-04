@@ -291,6 +291,9 @@ pub fn validate_command_args(
         Commands::Run { timeout, .. } => {
             validate_timeout(*timeout, min_timeout)?;
         }
+        Commands::Hunt { timeout, .. } => {
+            validate_timeout(Some(*timeout), min_timeout)?;
+        }
         Commands::Review(args) => {
             validate_review_args(args)?;
             if !args.check_verdict {
