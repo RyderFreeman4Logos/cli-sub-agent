@@ -84,6 +84,10 @@ pub fn default_max_goal_tokens() -> u64 {
     500_000
 }
 
+pub fn default_task_pool_workers() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentalConfig {
     #[serde(default)]
@@ -92,6 +96,8 @@ pub struct ExperimentalConfig {
     pub max_goal_loops: u32,
     #[serde(default = "default_max_goal_tokens")]
     pub max_goal_tokens: u64,
+    #[serde(default = "default_task_pool_workers")]
+    pub task_pool_workers: u32,
 }
 
 impl Default for ExperimentalConfig {
@@ -100,6 +106,7 @@ impl Default for ExperimentalConfig {
             enable_prompt_caching: false,
             max_goal_loops: default_max_goal_loops(),
             max_goal_tokens: default_max_goal_tokens(),
+            task_pool_workers: default_task_pool_workers(),
         }
     }
 }

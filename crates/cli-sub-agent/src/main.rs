@@ -76,6 +76,8 @@ mod session_observability;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_resolver;
+#[cfg(any(feature = "parallel-tasks", test))]
+pub mod task_lock;
 mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;

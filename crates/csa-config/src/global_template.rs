@@ -84,6 +84,7 @@ cloud_review_exhausted = "ask-user"
 enable_prompt_caching = false
 max_goal_loops = 3
 max_goal_tokens = 500000
+task_pool_workers = 1
 
 # KV cache-aware polling defaults.
 # `frequent_poll_seconds`: fast external state (GitHub API, bot responses).

@@ -84,6 +84,7 @@ strix_runs
 .repomix/
 # CSA local state (plans, sessions, markers) is per-installation.
 # Project-level config (.csa/config.toml) IS tracked for shared hook config.
+.csa/tasks/
 .csa/*
 !.csa/config.toml
 

@@ -82,6 +82,12 @@ fn test_experimental_goal_defaults() {
 }
 
 #[test]
+fn test_experimental_task_pool_workers_defaults_to_serial() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.experimental.task_pool_workers, 1);
+}
+
+#[test]
 fn test_experimental_prompt_caching_can_be_enabled() {
     let toml_str = r#"
 [experimental]
@@ -97,10 +103,12 @@ fn test_experimental_goal_limits_can_be_configured() {
 [experimental]
 max_goal_loops = 5
 max_goal_tokens = 123456
+task_pool_workers = 4
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.experimental.max_goal_loops, 5);
     assert_eq!(config.experimental.max_goal_tokens, 123_456);
+    assert_eq!(config.experimental.task_pool_workers, 4);
 }
 
 #[test]
