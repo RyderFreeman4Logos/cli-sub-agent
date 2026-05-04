@@ -145,6 +145,11 @@ mod unix_tests {
     use crate::test_support::ENV_LOCK;
 
     use super::*;
+    use serial_test::serial;
+
+    // These tests execute shell commands and some verify timeout cleanup.
+    // Keep them serial so one guard's process cleanup cannot race another
+    // prompt guard's output collection under libtest parallelism.
 
     fn test_context() -> GuardContext {
         let temp_root = "/tmp".to_string();
@@ -179,6 +184,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_stdout_capture() {
         let guards = vec![PromptGuardEntry {
             name: "test-guard".to_string(),
@@ -193,6 +199,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_empty_stdout_skipped() {
         let guards = vec![PromptGuardEntry {
             name: "empty-guard".to_string(),
@@ -205,6 +212,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_nonzero_exit_skipped() {
         let guards = vec![PromptGuardEntry {
             name: "fail-guard".to_string(),
@@ -217,6 +225,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_timeout_skipped() {
         let guards = vec![PromptGuardEntry {
             name: "slow-guard".to_string(),
@@ -229,6 +238,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_multiple_merge() {
         let guards = vec![
             PromptGuardEntry {
@@ -252,6 +262,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_stdin_receives_json_context() {
         // Read stdin and extract the "tool" field using pure shell (no jq).
         let guards = vec![PromptGuardEntry {
@@ -268,6 +279,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_missing_script_skipped() {
         let guards = vec![PromptGuardEntry {
             name: "missing".to_string(),
@@ -280,6 +292,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_empty_list() {
         let guards: Vec<PromptGuardEntry> = vec![];
         let results = run_test_prompt_guards(&guards, &test_context());
@@ -287,6 +300,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_mixed_success_and_failure() {
         let guards = vec![
             PromptGuardEntry {
@@ -313,6 +327,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_stdout_trimmed() {
         let guards = vec![PromptGuardEntry {
             name: "trim-test".to_string(),
@@ -326,6 +341,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_output_capped_at_max_size() {
         // Generate output larger than MAX_GUARD_OUTPUT_BYTES (32 KB).
         // `dd` writes 40 KB of 'A' characters.
@@ -346,6 +362,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_background_process_no_hang() {
         // A guard that backgrounds a long-running process inheriting stdout.
         // With tempfile stdout, the background process holds a file descriptor
@@ -369,6 +386,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_setsid_detached_no_hang() {
         // A guard that spawns a detached child via setsid, which escapes the
         // process group. With tempfile stdout, neither pipes nor process groups
@@ -391,6 +409,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_large_output_no_deadlock() {
         // Produces 128 KB — exceeds typical 64 KB pipe buffer.
         // With tempfile stdout, there is no pipe buffer limit, so the child
@@ -428,6 +447,7 @@ mod unix_tests {
     /// sleeps past the timeout. After the guard returns, verify no orphan
     /// processes remain from the guard's process tree.
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_timeout_kills_escaped_descendants() {
         // Use a unique sleep duration as marker (POSIX-compatible, unlike `exec -a`
         // which is bash-only and fails on dash-based /bin/sh).
@@ -480,6 +500,7 @@ mod unix_tests {
     /// correctly. The tempfile approach reads all output after child exit, so
     /// fragmentation does not affect correctness.
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_run_guards_fragmented_output_no_memory_bloat() {
         let guards = vec![PromptGuardEntry {
             name: "fragmented-test".to_string(),
@@ -498,6 +519,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_prompt_guards_returns_four_entries() {
         let guards = builtin_prompt_guards();
         assert_eq!(guards.len(), 4);
@@ -511,6 +533,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_branch_context_executes_successfully() {
         // Verify the guard runs without error. On feature branches it
         // produces a "BRANCH CONTEXT" preamble; on protected branches
@@ -526,6 +549,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_branch_context_on_feature_branch() {
         // Simulate a feature branch by running the guard command directly
         // in a temporary git repo on a feature branch.
@@ -578,6 +602,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_branch_context_silent_on_main() {
         // Verify the guard produces no output on a protected branch (main).
         let tmp = tempfile::tempdir().unwrap();
@@ -612,6 +637,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_branch_protection_executes_successfully() {
         // Verify the guard runs without error regardless of current branch.
         // On protected branches (main/dev) it produces a warning; on feature
@@ -623,6 +649,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_dirty_tree_reminder_executes_successfully() {
         // Verify the guard runs without error. On clean trees the guard
         // produces no output (0 results); on dirty trees it produces a
@@ -638,6 +665,7 @@ mod unix_tests {
     }
 
     #[test]
+    #[serial(prompt_guard_process)]
     fn test_builtin_commit_workflow_executes_successfully() {
         // Verify the guard runs without error. On protected branches it
         // exits early (0 results); on feature branches it may report
