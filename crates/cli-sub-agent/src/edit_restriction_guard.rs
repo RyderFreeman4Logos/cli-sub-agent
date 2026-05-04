@@ -382,6 +382,7 @@ impl TrackedFileEditGuard {
 
 fn is_git_repo(project_root: &Path) -> Result<bool> {
     let output = Command::new("git")
+        .current_dir("/")
         .arg("-C")
         .arg(project_root)
         .arg("rev-parse")
@@ -403,6 +404,7 @@ fn is_git_repo(project_root: &Path) -> Result<bool> {
 
 fn git_name_only_set(project_root: &Path, args: &[&str]) -> Result<BTreeSet<PathBuf>> {
     let output = Command::new("git")
+        .current_dir("/")
         .arg("-C")
         .arg(project_root)
         .args(args)
@@ -620,6 +622,7 @@ mod tests {
 
     fn run_git(repo: &Path, args: &[&str]) {
         let output = Command::new(git_binary())
+            .current_dir("/")
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -648,6 +651,7 @@ mod tests {
 
     pub(super) fn git_status_porcelain(repo: &Path) -> String {
         let output = Command::new("git")
+            .current_dir("/")
             .arg("-C")
             .arg(repo)
             .args(["status", "--porcelain"])

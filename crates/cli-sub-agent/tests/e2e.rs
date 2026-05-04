@@ -219,6 +219,22 @@ fn review_help_shows_options() {
 }
 
 #[test]
+fn push_help_shows_review_gate_options() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
+        .args(["push", "--help"])
+        .output()
+        .expect("failed to run csa push --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Push the current branch only after a passing review covers HEAD"));
+    assert!(stdout.contains("--force"));
+    assert!(stdout.contains("--force-with-lease"));
+    assert!(stdout.contains("--check-only"));
+}
+
+#[test]
 fn review_cli_validation_applies_red_team_defaults() {
     let cli = Cli::try_parse_from(["csa", "review", "--red-team", "--diff"])
         .expect("review args should parse");

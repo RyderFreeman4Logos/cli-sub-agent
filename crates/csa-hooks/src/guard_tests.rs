@@ -145,12 +145,13 @@ mod unix_tests {
     use super::*;
 
     fn test_context() -> GuardContext {
+        let temp_root = "/tmp".to_string();
         GuardContext {
-            project_root: std::env::temp_dir().to_string_lossy().to_string(),
+            project_root: temp_root.clone(),
             session_id: "01TEST000000000000000000000".to_string(),
             tool: "codex".to_string(),
             is_resume: false,
-            cwd: std::env::temp_dir().to_string_lossy().to_string(),
+            cwd: temp_root,
         }
     }
 
