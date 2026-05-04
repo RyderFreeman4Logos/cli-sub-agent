@@ -493,6 +493,35 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
 }
 
 #[test]
+fn resolve_tool_and_model_tier_shorthand_resolves_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
+    let cfg = config_with_tier(
+        "tier-4-critical",
+        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
+        &["gemini-cli"],
+    );
+
+    for selector in ["tier4", "tier-4"] {
+        let result = super::resolve_tool_and_model(super::RoutingRequest {
+            config: Some(&cfg),
+            tier: Some(selector),
+            ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+        });
+        assert!(
+            result.is_ok(),
+            "{selector} tier resolution failed: {}",
+            result.unwrap_err()
+        );
+        let (tool, model_spec, _) = result.unwrap();
+        assert_eq!(tool, ToolName::GeminiCli);
+        assert_eq!(
+            model_spec.as_deref(),
+            Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
+        );
+    }
+}
+
+#[test]
 fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
     let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
