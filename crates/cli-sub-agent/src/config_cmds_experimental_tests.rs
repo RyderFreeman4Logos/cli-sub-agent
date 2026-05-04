@@ -52,8 +52,16 @@ fn resolve_effective_global_key_uses_experimental_defaults_when_global_config_mi
     let value = resolve_effective_global_key("experimental.enable_prompt_caching")
         .unwrap()
         .expect("global prompt caching flag should resolve");
+    let max_loops = resolve_effective_global_key("experimental.max_goal_loops")
+        .unwrap()
+        .expect("global goal loop limit should resolve");
+    let max_tokens = resolve_effective_global_key("experimental.max_goal_tokens")
+        .unwrap()
+        .expect("global goal token limit should resolve");
 
     assert_eq!(value.as_bool(), Some(false));
+    assert_eq!(max_loops.as_integer(), Some(3));
+    assert_eq!(max_tokens.as_integer(), Some(500_000));
 }
 
 #[test]
@@ -69,12 +77,22 @@ fn resolve_effective_global_key_uses_configured_experimental_prompt_caching() {
         r#"
 [experimental]
 enable_prompt_caching = true
+max_goal_loops = 7
+max_goal_tokens = 42
 "#,
     );
 
     let value = resolve_effective_global_key("experimental.enable_prompt_caching")
         .unwrap()
         .expect("configured prompt caching flag should resolve");
+    let max_loops = resolve_effective_global_key("experimental.max_goal_loops")
+        .unwrap()
+        .expect("configured goal loop limit should resolve");
+    let max_tokens = resolve_effective_global_key("experimental.max_goal_tokens")
+        .unwrap()
+        .expect("configured goal token limit should resolve");
 
     assert_eq!(value.as_bool(), Some(true));
+    assert_eq!(max_loops.as_integer(), Some(7));
+    assert_eq!(max_tokens.as_integer(), Some(42));
 }

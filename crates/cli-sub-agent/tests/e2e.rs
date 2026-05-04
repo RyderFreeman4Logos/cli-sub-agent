@@ -125,13 +125,14 @@ fn cli_help_displays_correctly() {
 fn run_help_shows_tool_options() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())
-        .args(["run", "--help"])
+        .args(["run", "--goal", "test", "--help"])
         .output()
-        .expect("failed to run csa run --help");
+        .expect("failed to run csa run --goal test --help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--tool"));
+    assert!(stdout.contains("--goal"));
     assert!(stdout.contains("--session"));
     assert!(stdout.contains("--ephemeral"));
     assert!(stdout.contains("--model"));

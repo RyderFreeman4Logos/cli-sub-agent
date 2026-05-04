@@ -82,6 +82,8 @@ cloud_review_exhausted = "ask-user"
 # Experimental feature flags. Disabled by default.
 [experimental]
 enable_prompt_caching = false
+max_goal_loops = 3
+max_goal_tokens = 500000
 
 # KV cache-aware polling defaults.
 # `frequent_poll_seconds`: fast external state (GitHub API, bot responses).

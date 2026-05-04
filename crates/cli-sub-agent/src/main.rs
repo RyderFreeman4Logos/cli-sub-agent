@@ -23,6 +23,7 @@ mod error_hints;
 mod error_report;
 mod eval_cmd;
 mod gc;
+mod goal_loop;
 mod hooks_cmd;
 mod hunt_cmd;
 mod main_bootstrap;
@@ -304,6 +305,7 @@ async fn run() -> Result<()> {
             skill,
             sa_mode: _,
             prompt,
+            goal,
             prompt_flag,
             prompt_file,
             inline_context_from_review_session,
@@ -354,9 +356,10 @@ async fn run() -> Result<()> {
             {
                 exit_current_process(exit_code);
             }
+            let effective_no_daemon = no_daemon || goal.is_some();
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
-                no_daemon,
+                effective_no_daemon,
                 daemon_child,
                 &session_id,
                 cd.as_deref(),
@@ -379,7 +382,8 @@ async fn run() -> Result<()> {
                 csa_process::StreamMode::BufferOnly
             };
 
-            let result = run_cmd::handle_run(
+            let result = goal_loop::handle_run_or_goal(goal_loop::GoalRunRequest {
+                goal_criteria: goal,
                 tool,
                 auto_route,
                 hint_difficulty,
@@ -420,7 +424,7 @@ async fn run() -> Result<()> {
                 no_fs_sandbox,
                 extra_writable,
                 extra_readable,
-            )
+            })
             .await;
             // Report errors while fd 2 is still open (guard holds stderr rotation).
             // Dropping the guard closes fd 2, so eprintln! must happen first.

@@ -129,6 +129,9 @@ pub enum Commands {
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
+        /// Autonomous goal mode: loop until success criteria met or budget exhausted
+        #[arg(long)]
+        goal: Option<String>,
         /// Task prompt (flag form; same as the positional prompt)
         #[arg(long = "prompt", value_name = "PROMPT", conflicts_with_all = ["prompt", "prompt_file"])]
         prompt_flag: Option<String>,
