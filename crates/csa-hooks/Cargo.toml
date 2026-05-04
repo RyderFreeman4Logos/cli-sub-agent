@@ -25,4 +25,5 @@ which.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+serial_test = "3.4"
 tempfile.workspace = true
