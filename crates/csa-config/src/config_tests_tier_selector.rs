@@ -265,8 +265,24 @@ fn test_resolve_tier_selector_prefix_unique() {
 
     // Unique prefix → resolves
     assert_eq!(
+        config.resolve_tier_selector("tier1"),
+        Some("tier-1-quick".to_string()),
+    );
+    assert_eq!(
         config.resolve_tier_selector("tier-1"),
         Some("tier-1-quick".to_string()),
+    );
+    assert_eq!(
+        config.resolve_tier_selector("tier2"),
+        Some("tier-2-standard".to_string()),
+    );
+    assert_eq!(
+        config.resolve_tier_selector("tier3"),
+        Some("tier-3-complex".to_string()),
+    );
+    assert_eq!(
+        config.resolve_tier_selector("tier4"),
+        Some("tier-4-critical".to_string()),
     );
     assert_eq!(
         config.resolve_tier_selector("tier-4"),
@@ -320,8 +336,13 @@ fn test_resolve_tier_selector_prefix_ambiguous() {
         filesystem_sandbox: Default::default(),
     };
 
-    // Ambiguous prefix → None
-    assert_eq!(config.resolve_tier_selector("tier-1"), None);
+    // Numeric shorthand picks the first deterministic prefix match.
+    assert_eq!(
+        config.resolve_tier_selector("tier-1"),
+        Some("tier-1-extended".to_string()),
+    );
+    // Non-shorthand ambiguous prefix → None
+    assert_eq!(config.resolve_tier_selector("tier-1-"), None);
 }
 
 #[test]

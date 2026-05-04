@@ -79,6 +79,15 @@ fn is_default_strategy(s: &TierStrategy) -> bool {
     *s == TierStrategy::Priority
 }
 
+fn numeric_tier_prefix(selector: &str) -> Option<String> {
+    let suffix = selector.strip_prefix("tier")?;
+    let digits = suffix.strip_prefix('-').unwrap_or(suffix);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("tier-{digits}"))
+}
+
 /// Current schema version for config.toml
 pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
@@ -481,8 +490,10 @@ impl ProjectConfig {
         project_root.join(".csa").join("config.toml")
     }
 
-    /// Resolve a tier selector (direct name, `tier_mapping` alias, or unambiguous prefix)
-    /// to canonical tier name. Priority: exact name > alias > unique prefix. No tier3 fallback.
+    /// Resolve a tier selector (direct name, `tier_mapping` alias, numeric shorthand, or
+    /// unambiguous prefix) to canonical tier name.
+    ///
+    /// Priority: exact name > alias > numeric shorthand > unique prefix. No tier3 fallback.
     pub fn resolve_tier_selector(&self, selector: &str) -> Option<String> {
         // Reject empty/whitespace-only selectors early — prevents prefix matching
         // from silently resolving "" to the sole tier in single-tier configs.
@@ -499,7 +510,20 @@ impl ProjectConfig {
         {
             return Some(mapped.clone());
         }
-        // 3. Unambiguous prefix match: selector must match exactly one tier name
+        // 3. Numeric shorthand: tier4 and tier-4 match the first tier whose name starts
+        // with tier-4 (for example, tier-4-critical). Sort for deterministic HashMap order.
+        if let Some(prefix) = numeric_tier_prefix(selector) {
+            let mut prefix_matches: Vec<&String> = self
+                .tiers
+                .keys()
+                .filter(|name| name.starts_with(&prefix))
+                .collect();
+            prefix_matches.sort();
+            if let Some(match_name) = prefix_matches.first() {
+                return Some((*match_name).clone());
+            }
+        }
+        // 4. Unambiguous prefix match: selector must match exactly one tier name
         let prefix_matches: Vec<&String> = self
             .tiers
             .keys()
