@@ -206,6 +206,7 @@ pub fn note_from_session(session: &crate::MetaSessionState) -> CheckpointNote {
 mod tests {
     use super::*;
     use crate::test_env::TEST_ENV_LOCK;
+    use std::process::Output;
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -230,6 +231,55 @@ mod tests {
                 .and_then(std::io::Error::raw_os_error)
                 == Some(ETXTBSY_RAW_OS_ERROR)
         })
+    }
+
+    fn run_git_output_with_etxtbsy_retry(sessions_dir: &Path, args: &[&str]) -> Output {
+        let max_attempts = 4;
+        for attempt in 0..max_attempts {
+            match Command::new("git")
+                .args(args)
+                .current_dir(sessions_dir)
+                .output()
+            {
+                Ok(output) => return output,
+                Err(err)
+                    if err.raw_os_error() == Some(ETXTBSY_RAW_OS_ERROR)
+                        && attempt + 1 < max_attempts =>
+                {
+                    std::thread::sleep(Duration::from_millis(25_u64 << attempt));
+                }
+                Err(err) => panic!("git {args:?} failed: {err}"),
+            }
+        }
+        unreachable!("retry loop should have returned or panicked")
+    }
+
+    fn stage_session_dir_for_commit(sessions_dir: &Path, session_id: &str) {
+        let session_path = format!("{session_id}/");
+        let output = run_git_output_with_etxtbsy_retry(sessions_dir, &["add", "--", &session_path]);
+        assert!(
+            output.status.success(),
+            "git add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn has_staged_session_changes(sessions_dir: &Path, session_id: &str) -> bool {
+        let session_path = format!("{session_id}/");
+        let output = run_git_output_with_etxtbsy_retry(
+            sessions_dir,
+            &["diff", "--cached", "--quiet", "--", &session_path],
+        );
+
+        match output.status.code() {
+            Some(0) => false,
+            Some(1) => true,
+            Some(code) => panic!(
+                "git diff --cached failed (exit {code}): {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            None => panic!("git diff --cached terminated by signal"),
+        }
     }
 
     fn make_note() -> CheckpointNote {
@@ -410,13 +460,26 @@ mod tests {
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
+        ensure_git_init_with_etxtbsy_retry(&sessions_dir);
 
         // Create a commit to attach the note to
         let session_id = ulid::Ulid::new().to_string();
         let session_dir = sessions_dir.join(&session_id);
         std::fs::create_dir_all(&session_dir).unwrap();
         std::fs::write(session_dir.join("state.toml"), "test = true").unwrap();
+        stage_session_dir_for_commit(&sessions_dir, &session_id);
+        if !has_staged_session_changes(&sessions_dir, &session_id) {
+            std::fs::write(
+                session_dir.join("state.toml"),
+                "test = true\nroundtrip = true",
+            )
+            .unwrap();
+            stage_session_dir_for_commit(&sessions_dir, &session_id);
+        }
+        assert!(
+            has_staged_session_changes(&sessions_dir, &session_id),
+            "test fixture must have staged changes before commit_session"
+        );
         crate::git::commit_session(&sessions_dir, &session_id, "test session").unwrap();
 
         // Get the commit SHA for this session
