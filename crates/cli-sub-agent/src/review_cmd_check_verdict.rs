@@ -9,6 +9,7 @@ use csa_session::state::{MetaSessionState, ReviewSessionMeta};
 use tracing::debug;
 
 const REQUIRED_FULL_DIFF_SCOPE: &str = "range:main...HEAD";
+const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReviewVerdictMatch {
@@ -225,10 +226,16 @@ fn session_matches_branch(session: &MetaSessionState, branch: &str) -> bool {
 }
 
 fn session_is_reviewer_sub_session(session: &MetaSessionState) -> bool {
-    session
-        .description
-        .as_deref()
-        .is_some_and(|description| description.trim_start().starts_with("review["))
+    let has_marker =
+        session.task_context.task_type.as_deref() == Some(REVIEWER_SUB_SESSION_TASK_TYPE);
+    let legacy_child = session.genealogy.parent_session_id.is_some()
+        && session
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .trim_start()
+            .starts_with("review[");
+    has_marker || legacy_child
 }
 
 fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
@@ -414,6 +421,13 @@ mod tests {
         .expect("write review verdict");
 
         session.meta_session_id
+    }
+
+    fn set_task_type(project_root: &Path, session_id: &str, task_type: &str) {
+        let mut session =
+            csa_session::load_session(project_root, session_id).expect("load session");
+        session.task_context.task_type = Some(task_type.to_string());
+        csa_session::save_session(&session).expect("save session");
     }
 
     fn set_review_diff_fingerprint(
@@ -607,7 +621,7 @@ mod tests {
         let project = temp.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
 
-        write_review_session_with_description(
+        let sub_session_id = write_review_session_with_description(
             &project,
             "feature",
             "abcdef1234567890",
@@ -617,6 +631,7 @@ mod tests {
             None,
             "review[1]: range:main...HEAD",
         );
+        set_task_type(&project, &sub_session_id, REVIEWER_SUB_SESSION_TASK_TYPE);
         write_review_session(
             &project,
             "feature",
@@ -632,6 +647,32 @@ mod tests {
             found.is_none(),
             "unparented reviewer sub-session pass must not satisfy gate"
         );
+    }
+
+    #[test]
+    fn check_verdict_accepts_consensus_parent_named_like_reviewer() {
+        let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let temp = TempDir::new().unwrap();
+        let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let session_id = write_review_session_with_description(
+            &project,
+            "feature",
+            "abcdef1234567890",
+            REQUIRED_FULL_DIFF_SCOPE,
+            ReviewDecision::Pass,
+            "CLEAN",
+            None,
+            "review[2]: range:main...HEAD",
+        );
+        set_task_type(&project, &session_id, "review");
+
+        let found = check_review_verdict_for_target(&project, "feature", "abcdef1234567890", None)
+            .unwrap()
+            .expect("consensus parent session should satisfy gate");
+        assert_eq!(found.session_id, session_id);
     }
 
     #[test]

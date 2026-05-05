@@ -48,6 +48,8 @@ use failures::{
     repair_completed_review_restriction_result,
 };
 
+const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
+
 pub(crate) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
     pub persistable_session_id: Option<String>,
@@ -537,7 +539,7 @@ async fn execute_review_once(
         project_root,
         project_config,
         extra_env,
-        Some("review"),
+        Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         tier_name,
         None,
         stream_mode,
