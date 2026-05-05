@@ -375,7 +375,9 @@ fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
         script_tokens.extend(tokenize_shell_tokens(token));
     }
 
-    tokens_contain_no_verify_commit(&script_tokens, |_| 0)
+    tokens_contain_no_verify_commit(&script_tokens, |tokens| {
+        skip_command_prefix_tokens(tokens, 0)
+    })
 }
 
 fn tokens_contain_no_verify_commit<F>(tokens: &[String], skip_prefix: F) -> bool
