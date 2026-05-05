@@ -361,14 +361,15 @@ fn push_shell_token(tokens: &mut Vec<String>, current: &mut String) {
 }
 
 fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
-    if tokens.len() < 3 || !is_shell_token(tokens[0].as_str()) {
+    let idx = skip_command_prefix_tokens(tokens, 0);
+    if idx + 2 >= tokens.len() || !is_shell_token(tokens[idx].as_str()) {
         return None;
     }
-    let shell_flag = tokens[1].as_str();
+    let shell_flag = tokens[idx + 1].as_str();
     if !shell_flag.starts_with('-') || !shell_flag.contains('c') {
         return None;
     }
-    Some(&tokens[2..])
+    Some(&tokens[idx + 2..])
 }
 
 fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
@@ -396,16 +397,12 @@ fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
 }
 
 fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
-    let mut idx = 0usize;
-    while idx < tokens.len() {
-        let token = tokens[idx].as_str();
-        if is_git_token(token) {
-            let scan = find_git_commit_subcommand(tokens, idx + 1)?;
-            return Some((idx, scan));
-        }
-        idx += 1;
+    let idx = skip_command_prefix_tokens(tokens, 0);
+    if idx >= tokens.len() || !is_git_token(tokens[idx].as_str()) {
+        return None;
     }
-    None
+    let scan = find_git_commit_subcommand(tokens, idx + 1)?;
+    Some((idx, scan))
 }
 
 fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
@@ -517,6 +514,44 @@ fn is_shell_token(token: &str) -> bool {
         token.rsplit('/').next(),
         Some("bash" | "sh" | "zsh" | "fish")
     )
+}
+
+fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+        if is_env_assignment(token) {
+            idx += 1;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("sudo") || token.rsplit('/').next() == Some("sudo") {
+            idx += 1;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+            idx += 1;
+            while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
+                idx += 1;
+            }
+            continue;
+        }
+        if token.eq_ignore_ascii_case("command") || token.eq_ignore_ascii_case("time") {
+            idx += 1;
+            continue;
+        }
+        if token == "--" {
+            idx += 1;
+            continue;
+        }
+        break;
+    }
+
+    idx
+}
+
+fn is_env_assignment(token: &str) -> bool {
+    token
+        .find('=')
+        .is_some_and(|eq_pos| eq_pos > 0 && !token.starts_with('-'))
 }
 
 fn git_global_option_consumes_value(token: &str) -> bool {

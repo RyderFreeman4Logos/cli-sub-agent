@@ -252,3 +252,10 @@ fn command_looks_like_no_verify_commit_detects_later_commit_in_shell_payload() {
         "bash -lc \"git commit -m safe; git commit -n -m unsafe\""
     ));
 }
+
+#[test]
+fn command_looks_like_no_verify_commit_detects_prefixed_shell_wrappers() {
+    assert!(command_looks_like_no_verify_commit(
+        "sudo bash -lc \"git commit -n -m unsafe\""
+    ));
+}
