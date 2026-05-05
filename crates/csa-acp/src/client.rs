@@ -259,14 +259,377 @@ impl SessionEventStore {
 /// `apply_no_verify_commit_policy`; this flag merely ensures the event is
 /// never silently evicted from the bounded ring buffer.
 fn command_looks_like_no_verify_commit(cmd: &str) -> bool {
-    let lower = cmd.to_ascii_lowercase();
-    if !lower.contains("git") || !lower.contains("commit") {
+    let tokens = tokenize_shell_tokens(cmd);
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
+        && shell_script_contains_no_verify_commit(shell_script_tokens)
+    {
+        return true;
+    }
+    tokens_contain_no_verify_commit(&tokens, |tokens| skip_command_prefix_tokens(tokens, 0))
+}
+
+fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = segment.chars().peekable();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if escaped {
+            if ch != '\n' {
+                current.push(ch);
+            }
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if in_single_quote {
+            if ch == '\'' {
+                in_single_quote = false;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if in_double_quote {
+            if ch == '"' {
+                in_double_quote = false;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single_quote = true,
+            '"' => in_double_quote = true,
+            '\n' => {
+                push_shell_token(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
+            ';' => {
+                push_shell_token(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
+            '&' => {
+                push_shell_token(&mut tokens, &mut current);
+                if chars.peek().is_some_and(|next| *next == '&') {
+                    let _ = chars.next();
+                    tokens.push("&&".to_string());
+                } else {
+                    tokens.push("&".to_string());
+                }
+            }
+            '|' => {
+                push_shell_token(&mut tokens, &mut current);
+                if chars.peek().is_some_and(|next| *next == '|') {
+                    let _ = chars.next();
+                    tokens.push("||".to_string());
+                } else {
+                    tokens.push("|".to_string());
+                }
+            }
+            c if c.is_whitespace() => push_shell_token(&mut tokens, &mut current),
+            _ => current.push(ch),
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    push_shell_token(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_shell_token(tokens: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        tokens.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
+    let idx = skip_command_prefix_tokens(tokens, 0);
+    if idx + 2 >= tokens.len() || !is_shell_token(tokens[idx].as_str()) {
+        return None;
+    }
+    let shell_flag = tokens[idx + 1].as_str();
+    if !shell_flag.starts_with('-') || !shell_flag.contains('c') {
+        return None;
+    }
+    Some(&tokens[idx + 2..])
+}
+
+fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
+    let mut script_tokens = Vec::new();
+    for token in tokens {
+        script_tokens.extend(tokenize_shell_tokens(token));
+    }
+
+    tokens_contain_no_verify_commit(&script_tokens, |tokens| {
+        skip_command_prefix_tokens(tokens, 0)
+    })
+}
+
+fn tokens_contain_no_verify_commit<F>(tokens: &[String], skip_prefix: F) -> bool
+where
+    F: Fn(&[String]) -> usize,
+{
+    let mut command_start = 0usize;
+
+    while command_start < tokens.len() {
+        let command_end = tokens[command_start..]
+            .iter()
+            .position(|token| is_command_separator_token(token.as_str()))
+            .map_or(tokens.len(), |idx| command_start + idx);
+
+        if command_segment_contains_no_verify_commit(
+            &tokens[command_start..command_end],
+            &skip_prefix,
+        ) {
+            return true;
+        }
+
+        command_start = command_end.saturating_add(1);
+    }
+
+    false
+}
+
+fn command_segment_contains_no_verify_commit<F>(tokens: &[String], skip_prefix: &F) -> bool
+where
+    F: Fn(&[String]) -> usize,
+{
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(tokens)
+        && shell_script_contains_no_verify_commit(shell_script_tokens)
+    {
+        return true;
+    }
+
+    let idx = skip_prefix(tokens);
+    if idx >= tokens.len() || !is_git_token(tokens[idx].as_str()) {
         return false;
     }
-    lower.contains("--no-verify")
-        || lower.contains("-n ")
-        || lower.ends_with("-n")
-        || lower.contains("--no-gpg-sign") // also suspicious in same context
+    let Some(commit_idx) = find_git_commit_subcommand(tokens, idx + 1) else {
+        return false;
+    };
+    commit_args_include_no_verify(&tokens[commit_idx + 1..])
+}
+
+fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
+    while idx < tokens.len() {
+        let current = tokens[idx].as_str();
+        if current == "commit" {
+            return Some(idx);
+        }
+        if current == "--" {
+            break;
+        }
+        if current.starts_with('-') {
+            idx += 1;
+            if git_global_option_consumes_value(current) && !current.contains('=') {
+                idx = consume_option_value(tokens, idx);
+            }
+            continue;
+        }
+        break;
+    }
+
+    None
+}
+
+fn commit_args_include_no_verify(args: &[String]) -> bool {
+    let mut idx = 0usize;
+    while idx < args.len() {
+        let token = args[idx].as_str();
+        if token == "--" || is_command_separator_token(token) {
+            break;
+        }
+        if token.eq_ignore_ascii_case("--no-verify") {
+            return true;
+        }
+        if token.starts_with("--") {
+            idx += 1;
+            if commit_long_option_consumes_value(token) && !token.contains('=') {
+                idx = consume_option_value(args, idx);
+            }
+            continue;
+        }
+        if token.starts_with('-') && token.len() > 1 {
+            let mut chars = token[1..].chars().peekable();
+            let mut consumes_value = false;
+            while let Some(flag) = chars.next() {
+                if flag == 'n' {
+                    return true;
+                }
+                if commit_short_option_consumes_value(flag) {
+                    consumes_value = chars.peek().is_none();
+                    break;
+                }
+            }
+            idx += 1;
+            if consumes_value {
+                idx = consume_option_value(args, idx);
+            }
+            continue;
+        }
+        idx += 1;
+    }
+    false
+}
+
+fn is_command_separator_token(token: &str) -> bool {
+    matches!(token, ";" | "&&" | "||" | "|" | "&")
+        || token.ends_with(';')
+        || token.ends_with("&&")
+        || token.ends_with("||")
+        || token.ends_with('|')
+        || token.ends_with('&')
+}
+
+fn consume_option_value(args: &[String], mut idx: usize) -> usize {
+    if idx < args.len() {
+        idx += 1;
+    }
+    idx
+}
+
+fn commit_short_option_consumes_value(flag: char) -> bool {
+    matches!(flag, 'm' | 'F' | 'c' | 'C' | 't')
+}
+
+fn commit_long_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "--message"
+            | "--file"
+            | "--template"
+            | "--reuse-message"
+            | "--reedit-message"
+            | "--fixup"
+            | "--squash"
+            | "--author"
+            | "--date"
+            | "--trailer"
+            | "--pathspec-from-file"
+            | "--cleanup"
+    )
+}
+
+fn is_git_token(token: &str) -> bool {
+    token.eq_ignore_ascii_case("git") || token.ends_with("/git")
+}
+
+fn is_shell_token(token: &str) -> bool {
+    matches!(
+        token.rsplit('/').next(),
+        Some("bash" | "sh" | "zsh" | "fish")
+    )
+}
+
+fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+        if is_env_assignment(token) {
+            idx += 1;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("sudo") || token.rsplit('/').next() == Some("sudo") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, sudo_option_consumes_value);
+            continue;
+        }
+        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
+            while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
+                idx += 1;
+            }
+            continue;
+        }
+        if token.eq_ignore_ascii_case("command") || token == "--" {
+            idx += 1;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("time") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, |_token| false);
+            continue;
+        }
+        break;
+    }
+
+    idx
+}
+
+fn skip_prefixed_command_options<F>(tokens: &[String], mut idx: usize, consumes_value: F) -> usize
+where
+    F: Fn(&str) -> bool,
+{
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+        if token == "--" {
+            idx += 1;
+            break;
+        }
+        if !token.starts_with('-') {
+            break;
+        }
+        let takes_value = consumes_value(token) && !token.contains('=');
+        idx += 1;
+        if takes_value && idx < tokens.len() {
+            idx += 1;
+        }
+    }
+    idx
+}
+
+fn is_env_assignment(token: &str) -> bool {
+    token
+        .find('=')
+        .is_some_and(|eq_pos| eq_pos > 0 && !token.starts_with('-'))
+}
+
+fn env_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-u" | "--unset" | "-C" | "--chdir" | "-S" | "--split-string"
+    )
+}
+
+fn sudo_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-u" | "--user"
+            | "-g"
+            | "--group"
+            | "-h"
+            | "--host"
+            | "-p"
+            | "--prompt"
+            | "-r"
+            | "--role"
+            | "-t"
+            | "--type"
+            | "-C"
+            | "--chdir"
+    )
+}
+
+fn git_global_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-c" | "-C" | "--exec-path" | "--git-dir" | "--work-tree" | "--namespace" | "--config-env"
+    )
 }
 
 pub(crate) type SharedEvents = Rc<RefCell<SessionEventStore>>;
@@ -396,211 +759,4 @@ impl Client for AcpClient {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{
-        cell::RefCell,
-        rc::Rc,
-        time::{Duration, Instant},
-    };
-
-    use agent_client_protocol::{
-        ContentBlock, ContentChunk, SessionUpdate, TextContent, ToolCall, ToolCallStatus,
-        ToolCallUpdate, ToolCallUpdateFields, ToolKind,
-    };
-
-    use super::{
-        AcpClient, MAX_EXTRACTED_COMMANDS, MAX_RETAINED_EVENTS, SessionEvent, SessionEventStore,
-    };
-
-    #[test]
-    fn test_update_to_event_agent_message_chunk() {
-        let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("hello")));
-        let event = AcpClient::update_to_event(SessionUpdate::AgentMessageChunk(chunk))
-            .expect("AgentMessageChunk should produce an event");
-
-        match event {
-            SessionEvent::AgentMessage(text) => assert_eq!(text, "hello"),
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_update_to_event_agent_thought_chunk() {
-        let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("thinking")));
-        let event = AcpClient::update_to_event(SessionUpdate::AgentThoughtChunk(chunk))
-            .expect("AgentThoughtChunk should produce an event");
-
-        match event {
-            SessionEvent::AgentThought(text) => assert_eq!(text, "thinking"),
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_update_to_event_tool_call_started() {
-        let tool_call = ToolCall::new("call-1", "Run tests").kind(ToolKind::Execute);
-        let event = AcpClient::update_to_event(SessionUpdate::ToolCall(tool_call))
-            .expect("ToolCall should produce an event");
-
-        match event {
-            SessionEvent::ToolCallStarted { id, title, kind } => {
-                assert_eq!(id, "call-1");
-                assert_eq!(title, "Run tests");
-                assert_eq!(kind, "Execute");
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_update_to_event_tool_call_completed() {
-        let fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
-        let update = ToolCallUpdate::new("call-2", fields);
-        let event = AcpClient::update_to_event(SessionUpdate::ToolCallUpdate(update))
-            .expect("ToolCallUpdate with status should produce an event");
-
-        match event {
-            SessionEvent::ToolCallCompleted { id, status } => {
-                assert_eq!(id, "call-2");
-                assert_eq!(status, "Completed");
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_update_to_event_suppresses_protocol_overhead() {
-        use agent_client_protocol::{AvailableCommand, AvailableCommandsUpdate};
-
-        let commands_update =
-            AvailableCommandsUpdate::new(vec![AvailableCommand::new("/help", "Get help")]);
-        let result =
-            AcpClient::update_to_event(SessionUpdate::AvailableCommandsUpdate(commands_update));
-        assert!(
-            result.is_none(),
-            "AvailableCommandsUpdate should be suppressed"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_session_notification_appends_content_event() {
-        use agent_client_protocol::{Client, SessionNotification};
-
-        let events = Rc::new(RefCell::new(SessionEventStore::default()));
-        let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
-        let last_meaningful_activity =
-            Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
-        let before = *last_activity.borrow();
-        let meaningful_before = *last_meaningful_activity.borrow();
-        let client = AcpClient::new(
-            Rc::clone(&events),
-            Rc::clone(&last_activity),
-            Rc::clone(&last_meaningful_activity),
-        );
-
-        let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("hello")));
-        let notification =
-            SessionNotification::new("test-session", SessionUpdate::AgentMessageChunk(chunk));
-        client.session_notification(notification).await.unwrap();
-
-        let stored = events.borrow();
-        let retained = stored.events();
-        assert_eq!(retained.len(), 1);
-        match &retained[0] {
-            SessionEvent::AgentMessage(text) => assert_eq!(text, "hello"),
-            other => panic!("unexpected stored event: {other:?}"),
-        }
-        assert!(
-            *last_activity.borrow() > before,
-            "session_notification must refresh last_activity"
-        );
-        assert!(
-            *last_meaningful_activity.borrow() > meaningful_before,
-            "content events must refresh last_meaningful_activity"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_session_notification_suppresses_protocol_event_but_refreshes_activity() {
-        use agent_client_protocol::{
-            AvailableCommand, AvailableCommandsUpdate, Client, SessionNotification,
-        };
-
-        let events = Rc::new(RefCell::new(SessionEventStore::default()));
-        let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
-        let last_meaningful_activity =
-            Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
-        let before = *last_activity.borrow();
-        let meaningful_before = *last_meaningful_activity.borrow();
-        let client = AcpClient::new(
-            Rc::clone(&events),
-            Rc::clone(&last_activity),
-            Rc::clone(&last_meaningful_activity),
-        );
-
-        let commands_update =
-            AvailableCommandsUpdate::new(vec![AvailableCommand::new("/help", "Get help")]);
-        let notification = SessionNotification::new(
-            "test-session",
-            SessionUpdate::AvailableCommandsUpdate(commands_update),
-        );
-        client.session_notification(notification).await.unwrap();
-
-        assert!(
-            events.borrow().is_empty(),
-            "protocol overhead should not produce events"
-        );
-        assert!(
-            *last_activity.borrow() > before,
-            "session_notification must refresh last_activity even for suppressed events"
-        );
-        assert_eq!(
-            *last_meaningful_activity.borrow(),
-            meaningful_before,
-            "protocol-only notifications must not refresh last_meaningful_activity"
-        );
-    }
-
-    #[test]
-    fn session_event_store_bounds_retained_events_and_metadata() {
-        let mut store = SessionEventStore::default();
-        for i in 0..(MAX_RETAINED_EVENTS + 25) {
-            store.push(SessionEvent::AgentMessage(format!("msg-{i}")));
-        }
-        store.push(SessionEvent::PlanUpdate("step".to_string()));
-        for i in 0..(MAX_EXTRACTED_COMMANDS + 10) {
-            store.push(SessionEvent::ToolCallStarted {
-                id: format!("call-{i}"),
-                title: format!("cmd-{i}"),
-                kind: "Execute".to_string(),
-            });
-        }
-
-        assert_eq!(store.len(), MAX_RETAINED_EVENTS);
-        assert_eq!(
-            store.total_events_count(),
-            MAX_RETAINED_EVENTS + 25 + 1 + MAX_EXTRACTED_COMMANDS + 10
-        );
-        assert!(store.has_tool_calls());
-        assert!(store.has_execute_tool_calls());
-        assert!(store.has_plan_updates());
-
-        let retained = store.events();
-        let first_retained_message_index = store.total_events_count() - MAX_RETAINED_EVENTS;
-        match retained.first() {
-            Some(SessionEvent::AgentMessage(text)) => {
-                assert_eq!(text, &format!("msg-{first_retained_message_index}"))
-            }
-            other => panic!("unexpected first retained event: {other:?}"),
-        }
-
-        let commands = store.extracted_commands();
-        assert_eq!(commands.len(), MAX_EXTRACTED_COMMANDS);
-        assert_eq!(commands.first().map(String::as_str), Some("cmd-10"));
-        let expected_last = format!("cmd-{}", MAX_EXTRACTED_COMMANDS + 9);
-        assert_eq!(
-            commands.last().map(String::as_str),
-            Some(expected_last.as_str())
-        );
-    }
-}
+mod tests;

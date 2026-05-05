@@ -7,7 +7,7 @@ use crate::run_cmd_tool_selection::{
 };
 use chrono::{TimeZone, Utc};
 use clap::Parser;
-use csa_core::transport_events::{SessionEvent, StreamingMetadata};
+use csa_core::transport_events::SessionEvent;
 use csa_core::types::{OutputFormat, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};
@@ -147,6 +147,9 @@ mod tier_tests;
 
 #[path = "run_cmd_tests_tail.rs"]
 mod tail_tests;
+
+#[path = "run_cmd_tests_no_verify.rs"]
+mod no_verify_tests;
 
 #[path = "run_cmd_tests_lefthook.rs"]
 mod lefthook_tests;

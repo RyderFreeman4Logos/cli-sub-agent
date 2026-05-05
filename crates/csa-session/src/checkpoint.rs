@@ -205,6 +205,7 @@ pub fn note_from_session(session: &crate::MetaSessionState) -> CheckpointNote {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::TEST_ENV_LOCK;
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -286,6 +287,7 @@ mod tests {
 
     #[test]
     fn test_write_checkpoint_no_commits_errors() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         crate::git::ensure_git_init(&sessions_dir).unwrap();
@@ -302,6 +304,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_targets_session_commit_not_head() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -403,6 +406,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_checkpoint_roundtrip() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -436,6 +440,7 @@ mod tests {
 
     #[test]
     fn test_read_checkpoint_no_note_returns_none() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -461,6 +466,7 @@ mod tests {
 
     #[test]
     fn test_list_checkpoints_empty_repo() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -472,6 +478,7 @@ mod tests {
 
     #[test]
     fn test_list_checkpoints_with_notes() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -558,6 +565,7 @@ mod tests {
 
     #[test]
     fn test_list_checkpoints_skips_malformed_note_with_warning() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -600,6 +608,7 @@ mod tests {
 
     #[test]
     fn test_write_checkpoint_mismatched_session_id_targets_correct_commit() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
         // Demonstrates the importance of the caller overriding session_id:
         // if note.session_id doesn't match any committed session directory,
         // write_checkpoint correctly fails.
