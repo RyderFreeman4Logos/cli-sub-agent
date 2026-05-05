@@ -226,11 +226,16 @@ fn session_matches_branch(session: &MetaSessionState, branch: &str) -> bool {
 }
 
 fn session_is_reviewer_sub_session(session: &MetaSessionState) -> bool {
-    session
-        .task_context
-        .task_type
-        .as_deref()
-        .is_some_and(|task_type| task_type == REVIEWER_SUB_SESSION_TASK_TYPE)
+    let has_marker =
+        session.task_context.task_type.as_deref() == Some(REVIEWER_SUB_SESSION_TASK_TYPE);
+    let legacy_child = session.genealogy.parent_session_id.is_some()
+        && session
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .trim_start()
+            .starts_with("review[");
+    has_marker || legacy_child
 }
 
 fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
