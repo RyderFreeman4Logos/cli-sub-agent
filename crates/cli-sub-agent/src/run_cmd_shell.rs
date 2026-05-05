@@ -258,7 +258,9 @@ fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
 
     while let Some(ch) = chars.next() {
         if escaped {
-            current.push(ch);
+            if ch != '\n' {
+                current.push(ch);
+            }
             escaped = false;
             continue;
         }
@@ -289,6 +291,10 @@ fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
         match ch {
             '\'' => in_single_quote = true,
             '"' => in_double_quote = true,
+            '\n' => {
+                push_shell_token(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
             ch if ch.is_whitespace() => push_shell_token(&mut tokens, &mut current),
             ';' => {
                 push_shell_token(&mut tokens, &mut current);
@@ -755,4 +761,40 @@ fn is_lefthook_env_assignment(token: &str) -> bool {
     FORBIDDEN_LEFTHOOK_ENV_VARS
         .iter()
         .any(|forbidden| var_name.eq_ignore_ascii_case(forbidden))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        command_contains_forbidden_no_verify_commit, detect_no_verify_commit_commands,
+        tokenize_shell_tokens,
+    };
+
+    #[test]
+    fn detect_no_verify_commit_commands_ignores_following_commands_after_newline() {
+        assert!(!command_contains_forbidden_no_verify_commit(
+            "git commit -m msg\necho -n ok"
+        ));
+    }
+
+    #[test]
+    fn tokenize_shell_tokens_treats_newline_as_command_separator() {
+        let tokens = tokenize_shell_tokens("git commit -m msg\necho -n ok");
+        assert_eq!(
+            tokens,
+            ["git", "commit", "-m", "msg", ";", "echo", "-n", "ok"]
+        );
+    }
+
+    #[test]
+    fn tokenize_shell_tokens_drops_escaped_newlines() {
+        let tokens = tokenize_shell_tokens("git commit -m msg\\\necho ok");
+        assert_eq!(tokens, ["git", "commit", "-m", "msgecho", "ok"]);
+    }
+
+    #[test]
+    fn detect_no_verify_commit_commands_ignores_multiline_scripts() {
+        let commands = vec!["git commit -m msg\necho -n ok".to_string()];
+        assert!(detect_no_verify_commit_commands(&commands).is_empty());
+    }
 }
