@@ -64,55 +64,14 @@ pub(crate) async fn handle_hunt(
         })
         .transpose()?;
     let prompt = build_hunt_prompt(&description);
-    let stream_mode = if matches!(output_format, OutputFormat::Text) {
-        csa_process::StreamMode::TeeToStderr
-    } else {
-        csa_process::StreamMode::BufferOnly
-    };
 
-    crate::run_cmd::handle_run(
-        tool,
-        None,
-        None,
-        None,
-        Some(prompt),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        false,
-        None,
-        false,
-        None,
-        None,
-        false,
-        allow_base_branch_working,
-        None,
-        None,
-        None,
-        None,
-        false,
-        false,
-        false,
-        false,
-        None,
-        None,
-        Some(timeout),
-        false,
-        false,
-        None,
-        current_depth,
-        output_format,
-        stream_mode,
-        None,
-        false,
-        false,
-        Vec::new(),
-        Vec::new(),
-    )
-    .await
+    crate::run_cmd::SubagentRunConfig::new(prompt, output_format)
+        .tool(tool)
+        .timeout(timeout)
+        .allow_base_branch_working(allow_base_branch_working)
+        .current_depth(current_depth)
+        .run()
+        .await
 }
 
 #[cfg(test)]
