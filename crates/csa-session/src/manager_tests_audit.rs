@@ -81,11 +81,7 @@ fn test_compute_repo_write_audit_detects_committed_and_uncommitted_changes() {
 
     std::fs::write(td.path().join("tracked.txt"), "uncommitted mutation\n").unwrap();
 
-    let pre_porcelain = std::process::Command::new("git")
-        .args(["status", "--porcelain=v1", "-z"])
-        .current_dir(td.path())
-        .output()
-        .unwrap();
+    let pre_porcelain = run_git_output(td.path(), &["status", "--porcelain=v1", "-z"]);
     let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
 
     let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
@@ -112,11 +108,7 @@ fn test_compute_repo_write_audit_clean_session_is_empty() {
     run_git(td.path(), &["commit", "-m", "init"]);
 
     let pre_head = detect_git_head(td.path()).unwrap();
-    let pre_porcelain = std::process::Command::new("git")
-        .args(["status", "--porcelain=v1", "-z"])
-        .current_dir(td.path())
-        .output()
-        .unwrap();
+    let pre_porcelain = run_git_output(td.path(), &["status", "--porcelain=v1", "-z"]);
     let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
 
     let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
@@ -135,11 +127,7 @@ fn test_pre_existing_dirty_file_not_attributed_to_session() {
 
     let pre_head = detect_git_head(td.path()).unwrap();
     std::fs::write(td.path().join("src.txt"), "dirty before session\n").unwrap();
-    let pre_porcelain = std::process::Command::new("git")
-        .args(["status", "--porcelain=v1", "-z"])
-        .current_dir(td.path())
-        .output()
-        .unwrap();
+    let pre_porcelain = run_git_output(td.path(), &["status", "--porcelain=v1", "-z"]);
     let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
 
     let audit = compute_repo_write_audit(td.path(), &pre_head, Some(&pre_porcelain)).unwrap();
@@ -158,11 +146,7 @@ fn test_pre_existing_dirty_plus_session_add() {
 
     let pre_head = detect_git_head(td.path()).unwrap();
     std::fs::write(td.path().join("src.txt"), "dirty before session\n").unwrap();
-    let pre_porcelain = std::process::Command::new("git")
-        .args(["status", "--porcelain=v1", "-z"])
-        .current_dir(td.path())
-        .output()
-        .unwrap();
+    let pre_porcelain = run_git_output(td.path(), &["status", "--porcelain=v1", "-z"]);
     let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
 
     std::fs::write(td.path().join("output-new.md"), "created during session\n").unwrap();
@@ -186,11 +170,7 @@ fn test_session_further_modifies_pre_existing_dirty_file_is_conservatively_ignor
 
     let pre_head = detect_git_head(td.path()).unwrap();
     std::fs::write(td.path().join("src.txt"), "dirty before session\n").unwrap();
-    let pre_porcelain = std::process::Command::new("git")
-        .args(["status", "--porcelain=v1", "-z"])
-        .current_dir(td.path())
-        .output()
-        .unwrap();
+    let pre_porcelain = run_git_output(td.path(), &["status", "--porcelain=v1", "-z"]);
     let pre_porcelain = String::from_utf8(pre_porcelain.stdout).unwrap();
 
     std::fs::write(td.path().join("src.txt"), "dirty and changed again\n").unwrap();
@@ -225,4 +205,36 @@ fn test_write_audit_warning_artifact_persists_session_local_warning() {
     assert!(contents.contains("src/old.rs"));
     assert!(contents.contains("src/a.rs"));
     assert!(contents.contains("src/b.rs"));
+}
+
+#[test]
+fn test_find_sessions_backward_compat_without_branch_field() {
+    let td = tempdir().unwrap();
+    let mut legacy = create_session_in(td.path(), td.path(), Some("legacy"), None, None).unwrap();
+    legacy.phase = SessionPhase::Available;
+    legacy.task_context.task_type = Some("plan".to_string());
+    save_session_in(td.path(), &legacy).unwrap();
+
+    let matched = find_sessions_in(
+        td.path(),
+        Some(td.path()),
+        None,
+        Some("plan"),
+        Some(SessionPhase::Available),
+        None,
+    )
+    .unwrap();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].meta_session_id, legacy.meta_session_id);
+
+    let no_match = find_sessions_in(
+        td.path(),
+        Some(td.path()),
+        Some("feature/a"),
+        Some("plan"),
+        Some(SessionPhase::Available),
+        None,
+    )
+    .unwrap();
+    assert!(no_match.is_empty());
 }

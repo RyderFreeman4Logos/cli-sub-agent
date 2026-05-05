@@ -105,14 +105,6 @@ pub(crate) fn check_review_verdict_for_target(
             );
             continue;
         }
-        if session.genealogy.parent_session_id.is_some() {
-            debug!(
-                session_id = %session.meta_session_id,
-                parent_session_id = ?session.genealogy.parent_session_id,
-                "Skipping review verdict session: child reviewer session"
-            );
-            continue;
-        }
         if session_is_reviewer_sub_session(&session) {
             debug!(
                 session_id = %session.meta_session_id,
@@ -226,16 +218,11 @@ fn session_matches_branch(session: &MetaSessionState, branch: &str) -> bool {
 }
 
 fn session_is_reviewer_sub_session(session: &MetaSessionState) -> bool {
-    let has_marker =
-        session.task_context.task_type.as_deref() == Some(REVIEWER_SUB_SESSION_TASK_TYPE);
-    let legacy_child = session.genealogy.parent_session_id.is_some()
-        && session
-            .description
-            .as_deref()
-            .unwrap_or("")
-            .trim_start()
-            .starts_with("review[");
-    has_marker || legacy_child
+    if session.task_context.task_type.as_deref() == Some(REVIEWER_SUB_SESSION_TASK_TYPE) {
+        return true;
+    }
+    // Any session with a parent is a child (reviewer sub-session), not a consensus parent.
+    session.genealogy.parent_session_id.is_some()
 }
 
 fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
