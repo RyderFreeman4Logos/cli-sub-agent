@@ -525,21 +525,24 @@ fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
         }
         if token.eq_ignore_ascii_case("sudo") || token.rsplit('/').next() == Some("sudo") {
             idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, sudo_option_consumes_value);
             continue;
         }
         if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
             idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
             while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
                 idx += 1;
             }
             continue;
         }
-        if token.eq_ignore_ascii_case("command") || token.eq_ignore_ascii_case("time") {
+        if token.eq_ignore_ascii_case("command") || token == "--" {
             idx += 1;
             continue;
         }
-        if token == "--" {
+        if token.eq_ignore_ascii_case("time") {
             idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, |_token| false);
             continue;
         }
         break;
@@ -548,10 +551,58 @@ fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
     idx
 }
 
+fn skip_prefixed_command_options<F>(tokens: &[String], mut idx: usize, consumes_value: F) -> usize
+where
+    F: Fn(&str) -> bool,
+{
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+        if token == "--" {
+            idx += 1;
+            break;
+        }
+        if !token.starts_with('-') {
+            break;
+        }
+        let takes_value = consumes_value(token) && !token.contains('=');
+        idx += 1;
+        if takes_value && idx < tokens.len() {
+            idx += 1;
+        }
+    }
+    idx
+}
+
 fn is_env_assignment(token: &str) -> bool {
     token
         .find('=')
         .is_some_and(|eq_pos| eq_pos > 0 && !token.starts_with('-'))
+}
+
+fn env_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-u" | "--unset" | "-C" | "--chdir" | "-S" | "--split-string"
+    )
+}
+
+fn sudo_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-u" | "--user"
+            | "-g"
+            | "--group"
+            | "-h"
+            | "--host"
+            | "-p"
+            | "--prompt"
+            | "-r"
+            | "--role"
+            | "-t"
+            | "--type"
+            | "-C"
+            | "--chdir"
+    )
 }
 
 fn git_global_option_consumes_value(token: &str) -> bool {

@@ -205,6 +205,33 @@ fn session_event_store_bounds_retained_events_and_metadata() {
 }
 
 #[test]
+fn session_event_store_keeps_no_verify_sticky_after_command_ring_eviction() {
+    let mut store = SessionEventStore::default();
+    store.push(SessionEvent::ToolCallStarted {
+        id: "call-unsafe".to_string(),
+        title: "sudo -u root git commit -n -m unsafe".to_string(),
+        kind: "Execute".to_string(),
+    });
+    for i in 0..MAX_EXTRACTED_COMMANDS {
+        store.push(SessionEvent::ToolCallStarted {
+            id: format!("call-safe-{i}"),
+            title: format!("cmd-{i}"),
+            kind: "Execute".to_string(),
+        });
+    }
+
+    assert!(store.has_no_verify_commit());
+    assert_eq!(store.extracted_commands().len(), MAX_EXTRACTED_COMMANDS);
+    assert!(
+        !store
+            .extracted_commands()
+            .iter()
+            .any(|cmd| cmd.contains("git commit -n")),
+        "forbidden command should be evicted from ring buffer while sticky metadata remains"
+    );
+}
+
+#[test]
 fn command_looks_like_no_verify_commit_ignores_message_values_starting_with_dash() {
     assert!(!command_looks_like_no_verify_commit(
         "git commit -m 'msg' -m '- Verification: pre-commit'"
@@ -257,5 +284,17 @@ fn command_looks_like_no_verify_commit_detects_later_commit_in_shell_payload() {
 fn command_looks_like_no_verify_commit_detects_prefixed_shell_wrappers() {
     assert!(command_looks_like_no_verify_commit(
         "sudo bash -lc \"git commit -n -m unsafe\""
+    ));
+    assert!(command_looks_like_no_verify_commit(
+        "sudo -u root bash -lc \"git commit -n -m unsafe\""
+    ));
+    assert!(command_looks_like_no_verify_commit(
+        "env -i bash -lc \"git commit --no-verify -m unsafe\""
+    ));
+    assert!(command_looks_like_no_verify_commit(
+        "sudo -u root git commit -n -m unsafe"
+    ));
+    assert!(command_looks_like_no_verify_commit(
+        "env -i git commit --no-verify -m unsafe"
     ));
 }
