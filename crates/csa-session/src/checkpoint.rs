@@ -205,7 +205,31 @@ pub fn note_from_session(session: &crate::MetaSessionState) -> CheckpointNote {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tempfile::tempdir;
+
+    const ETXTBSY_RAW_OS_ERROR: i32 = 26;
+
+    fn ensure_git_init_with_etxtbsy_retry(sessions_dir: &Path) {
+        for attempt in 0..=3 {
+            match crate::git::ensure_git_init(sessions_dir) {
+                Ok(()) => return,
+                Err(err) if is_text_file_busy(&err) && attempt < 3 => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(err) => panic!("failed to initialize test git repository: {err:#}"),
+            }
+        }
+    }
+
+    fn is_text_file_busy(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                == Some(ETXTBSY_RAW_OS_ERROR)
+        })
+    }
 
     fn make_note() -> CheckpointNote {
         CheckpointNote {
@@ -451,7 +475,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let sessions_dir = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
+        ensure_git_init_with_etxtbsy_retry(&sessions_dir);
 
         // Create commit + checkpoint
         let session_id = ulid::Ulid::new().to_string();
