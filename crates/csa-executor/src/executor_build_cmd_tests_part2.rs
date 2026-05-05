@@ -667,11 +667,16 @@ fn test_build_execute_in_command_gemini_adds_include_directories_from_env() {
         model_override: None,
         thinking_budget: None,
     };
-    let work_dir = std::path::Path::new("/tmp/test-project");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let include_a = workspace.path().join("a");
+    let include_b = workspace.path().join("b");
+    std::fs::create_dir_all(&include_a).expect("create include a");
+    std::fs::create_dir_all(&include_b).expect("create include b");
+    let work_dir = workspace.path();
     let mut extra = HashMap::new();
     extra.insert(
         "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
-        "/tmp/a,/tmp/b".to_string(),
+        format!("{},{}", include_a.display(), include_b.display()),
     );
 
     let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
@@ -689,9 +694,9 @@ fn test_build_execute_in_command_gemini_adds_include_directories_from_env() {
         include_flag_count, 3,
         "Gemini execute_in should receive work_dir and both include directories"
     );
-    assert!(args.contains(&"/tmp/test-project".to_string()));
-    assert!(args.contains(&"/tmp/a".to_string()));
-    assert!(args.contains(&"/tmp/b".to_string()));
+    assert!(args.contains(&work_dir.to_string_lossy().to_string()));
+    assert!(args.contains(&include_a.to_string_lossy().to_string()));
+    assert!(args.contains(&include_b.to_string_lossy().to_string()));
 }
 
 #[cfg(unix)]

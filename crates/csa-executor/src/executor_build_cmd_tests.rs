@@ -403,11 +403,22 @@ fn test_build_command_gemini_adds_include_directories_from_env() {
         model_override: None,
         thinking_budget: None,
     };
-    let session = make_test_session();
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let include_one = workspace.path().join("one");
+    let include_two = workspace.path().join("two");
+    std::fs::create_dir_all(&include_one).expect("create include one");
+    std::fs::create_dir_all(&include_two).expect("create include two");
+    let mut session = make_test_session();
+    session.project_path = workspace.path().to_string_lossy().to_string();
     let mut extra = HashMap::new();
     extra.insert(
         "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
-        " /tmp/one ,/tmp/two\n/tmp/one ".to_string(),
+        format!(
+            " {} ,{}\n{} ",
+            include_one.display(),
+            include_two.display(),
+            include_one.display()
+        ),
     );
 
     let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
@@ -427,9 +438,9 @@ fn test_build_command_gemini_adds_include_directories_from_env() {
         include_flag_count, 3,
         "Expected execution dir + deduplicated include directories from env"
     );
-    assert!(args.contains(&"/tmp/test-project".to_string()));
-    assert!(args.contains(&"/tmp/one".to_string()));
-    assert!(args.contains(&"/tmp/two".to_string()));
+    assert!(args.contains(&workspace.path().to_string_lossy().to_string()));
+    assert!(args.contains(&include_one.to_string_lossy().to_string()));
+    assert!(args.contains(&include_two.to_string_lossy().to_string()));
 }
 
 #[test]
@@ -438,11 +449,15 @@ fn test_build_command_gemini_supports_fallback_include_directories_key() {
         model_override: None,
         thinking_budget: None,
     };
-    let session = make_test_session();
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let fallback = workspace.path().join("fallback");
+    std::fs::create_dir_all(&fallback).expect("create fallback include dir");
+    let mut session = make_test_session();
+    session.project_path = workspace.path().to_string_lossy().to_string();
     let mut extra = HashMap::new();
     extra.insert(
         "GEMINI_INCLUDE_DIRECTORIES".to_string(),
-        "/tmp/fallback".to_string(),
+        fallback.to_string_lossy().to_string(),
     );
 
     let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
@@ -458,8 +473,8 @@ fn test_build_command_gemini_supports_fallback_include_directories_key() {
         args.contains(&"--include-directories".to_string()),
         "Expected --include-directories when fallback env key is set"
     );
-    assert!(args.contains(&"/tmp/test-project".to_string()));
-    assert!(args.contains(&"/tmp/fallback".to_string()));
+    assert!(args.contains(&workspace.path().to_string_lossy().to_string()));
+    assert!(args.contains(&fallback.to_string_lossy().to_string()));
 }
 
 #[cfg(unix)]
@@ -513,8 +528,11 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
         model_override: None,
         thinking_budget: None,
     };
-    let session = make_test_session();
     let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let mut session = make_test_session();
+    session.project_path = workspace.to_string_lossy().to_string();
     let dir_with_space = temp.path().join("with space");
     std::fs::create_dir_all(&dir_with_space).expect("create spaced dir");
     let file_path = dir_with_space.join("sample.txt");
@@ -533,7 +551,7 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
         std::fs::canonicalize(&dir_with_space).unwrap_or_else(|_| dir_with_space.clone());
 
     assert!(args.contains(&"--include-directories".to_string()));
-    assert!(args.contains(&"/tmp/test-project".to_string()));
+    assert!(args.contains(&workspace.to_string_lossy().to_string()));
     assert!(args.contains(&expected_dir.to_string_lossy().to_string()));
 }
 
@@ -543,7 +561,9 @@ fn test_build_command_gemini_never_includes_filesystem_root_directory() {
         model_override: None,
         thinking_budget: None,
     };
-    let session = make_test_session();
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let mut session = make_test_session();
+    session.project_path = workspace.path().to_string_lossy().to_string();
     let mut extra = HashMap::new();
     extra.insert(
         "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
@@ -565,7 +585,7 @@ fn test_build_command_gemini_never_includes_filesystem_root_directory() {
         "Filesystem root must not be injected into --include-directories"
     );
     assert!(
-        args.contains(&"/tmp/test-project".to_string()),
+        args.contains(&workspace.path().to_string_lossy().to_string()),
         "Execution directory should still be included"
     );
 }
