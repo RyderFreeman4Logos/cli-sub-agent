@@ -66,6 +66,14 @@ impl PlanRunPipelineSource {
             Self::CliAlias => PLAN_PIPELINE_SOURCE_CLI_ALIAS,
         }
     }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            PLAN_PIPELINE_SOURCE_DIRECT => Some(Self::DirectPlanRun),
+            PLAN_PIPELINE_SOURCE_CLI_ALIAS => Some(Self::CliAlias),
+            _ => None,
+        }
+    }
 }
 
 fn default_plan_pipeline_source() -> String {
@@ -109,6 +117,7 @@ impl PlanRunJournal {
 struct PlanResumeContext {
     initial_vars: HashMap<String, String>,
     completed_steps: HashSet<usize>,
+    pipeline_source: Option<String>,
     resumed: bool,
 }
 
@@ -217,6 +226,7 @@ fn load_plan_resume_context(
         return Ok(PlanResumeContext {
             initial_vars,
             completed_steps: HashSet::new(),
+            pipeline_source: None,
             resumed: false,
         });
     }
@@ -236,6 +246,7 @@ fn load_plan_resume_context(
         return Ok(PlanResumeContext {
             initial_vars,
             completed_steps: HashSet::new(),
+            pipeline_source: None,
             resumed: false,
         });
     }
@@ -252,6 +263,7 @@ fn load_plan_resume_context(
         return Ok(PlanResumeContext {
             initial_vars,
             completed_steps: HashSet::new(),
+            pipeline_source: None,
             resumed: false,
         });
     }
@@ -276,6 +288,7 @@ fn load_plan_resume_context(
             return Ok(PlanResumeContext {
                 initial_vars,
                 completed_steps: HashSet::new(),
+                pipeline_source: None,
                 resumed: false,
             });
         }
@@ -286,6 +299,7 @@ fn load_plan_resume_context(
         );
     }
 
+    let pipeline_source = journal.pipeline_source.clone();
     for (key, value) in journal.vars {
         initial_vars.insert(key, value);
     }
@@ -297,6 +311,7 @@ fn load_plan_resume_context(
     Ok(PlanResumeContext {
         initial_vars,
         completed_steps: journal.completed_steps.into_iter().collect(),
+        pipeline_source: Some(pipeline_source),
         resumed: true,
     })
 }
@@ -548,7 +563,10 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         &workflow_path,
         resume_context.initial_vars.clone(),
     );
-    journal.pipeline_source = pipeline_source.as_str().to_string();
+    journal.pipeline_source = resume_context
+        .pipeline_source
+        .clone()
+        .unwrap_or_else(|| pipeline_source.as_str().to_string());
     journal.completed_steps = resume_context.completed_steps.iter().copied().collect();
     apply_repo_fingerprint(&mut journal, &current_repo_fingerprint);
     persist_plan_journal(&journal_path, &journal)?;

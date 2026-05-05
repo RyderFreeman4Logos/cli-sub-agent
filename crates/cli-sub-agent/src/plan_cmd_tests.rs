@@ -85,6 +85,59 @@ fn load_plan_resume_context_reads_running_journal() {
         ctx.initial_vars.get("STEP_1_OUTPUT").map(String::as_str),
         Some("cached")
     );
+    assert_eq!(
+        ctx.pipeline_source.as_deref(),
+        Some(PLAN_PIPELINE_SOURCE_DIRECT)
+    );
+}
+
+#[test]
+fn load_plan_resume_context_preserves_cli_alias_pipeline_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='dev2merge'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "dev2merge".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("dev2merge.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "dev2merge".into(),
+        workflow_path: normalize_path(&workflow_path),
+        pipeline_source: PLAN_PIPELINE_SOURCE_CLI_ALIAS.to_string(),
+        status: "manual-handoff".into(),
+        vars: HashMap::new(),
+        completed_steps: vec![1],
+        last_error: Some("manual handoff required".to_string()),
+        repo_head: Some("abc123".to_string()),
+        repo_dirty: Some(false),
+    };
+    persist_plan_journal(&journal_path, &journal).unwrap();
+
+    let repo_fingerprint = RepoFingerprint {
+        head: Some("different-head".to_string()),
+        dirty: Some(true),
+    };
+    let ctx = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &HashMap::new(),
+        &repo_fingerprint,
+        true,
+    )
+    .unwrap();
+
+    assert!(ctx.resumed);
+    assert_eq!(
+        ctx.pipeline_source.as_deref(),
+        Some(PLAN_PIPELINE_SOURCE_CLI_ALIAS)
+    );
 }
 
 #[test]

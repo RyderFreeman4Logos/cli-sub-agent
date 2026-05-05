@@ -186,6 +186,7 @@ async fn run() -> Result<()> {
 
     let cli = Cli::parse_from(cli::normalize_epic_format_args(std::env::args_os()));
     let output_format = cli.format;
+    let text_output = matches!(output_format, OutputFormat::Text);
     let command = cli.command;
 
     // Resolve effective min_timeout_seconds from configs (project overrides global).
@@ -381,7 +382,7 @@ async fn run() -> Result<()> {
             // Daemon child path: continue with normal run logic and resolve stream mode.
             let stream_mode = if no_stream_stdout {
                 csa_process::StreamMode::BufferOnly
-            } else if stream_stdout || matches!(output_format, OutputFormat::Text) {
+            } else if stream_stdout || text_output {
                 csa_process::StreamMode::TeeToStderr
             } else {
                 csa_process::StreamMode::BufferOnly
@@ -438,7 +439,7 @@ async fn run() -> Result<()> {
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
-                matches!(output_format, OutputFormat::Text),
+                text_output,
             );
             daemon_guard.finalize();
             exit_current_process(exit_code);
@@ -542,7 +543,7 @@ async fn run() -> Result<()> {
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
-                matches!(output_format, OutputFormat::Text),
+                text_output,
             );
             daemon_guard.finalize();
             exit_current_process(exit_code);
@@ -561,7 +562,7 @@ async fn run() -> Result<()> {
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
-                matches!(output_format, OutputFormat::Text),
+                text_output,
             );
             daemon_guard.finalize();
             exit_current_process(exit_code);
@@ -590,7 +591,7 @@ async fn run() -> Result<()> {
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
-                matches!(output_format, OutputFormat::Text),
+                text_output,
             );
         }
         Commands::McpServer => {
@@ -759,15 +760,12 @@ async fn run() -> Result<()> {
         },
         Commands::Checklist { command } => checklist_cmd::handle_checklist_command(command)?,
         Commands::Plan { cmd } => {
-            plan_cmd_daemon::dispatch(
-                cmd,
-                current_depth,
-                sa_mode_active,
-                matches!(output_format, OutputFormat::Text),
-            )
-            .await?;
+            plan_cmd_daemon::dispatch(cmd, current_depth, sa_mode_active, text_output).await?;
         }
-        Commands::Dev2merge(args) => dev2merge_cmd::handle_dev2merge(args, current_depth).await?,
+        Commands::Dev2merge(args) => {
+            dev2merge_cmd::handle_dev2merge(args, current_depth, sa_mode_active, text_output)
+                .await?
+        }
         Commands::Migrate { dry_run, status } => {
             migrate_cmd::handle_migrate(dry_run, status)?;
         }
@@ -780,7 +778,7 @@ async fn run() -> Result<()> {
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
-                matches!(output_format, OutputFormat::Text),
+                text_output,
             );
             exit_current_process(exit_code);
         }
