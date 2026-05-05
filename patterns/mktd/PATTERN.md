@@ -296,6 +296,33 @@ e) **"## Debate Findings" section** (left empty in draft, populated after Phase 
    - Which debate points were adopted
    - Which were deferred and why
 
+f) ADR creation guidance:
+   - When the plan involves a hard-to-reverse architectural decision, the planner SHOULD produce an ADR.
+   - Create an ADR only when ALL of these criteria are true:
+     1. The decision is hard to reverse.
+     2. The decision would be surprising without context.
+     3. The decision is the result of a real trade-off.
+   - If any criterion is missing, skip the ADR.
+   - ADRs MUST use this format: Title, Status (`Proposed`, `Accepted`, or `Deprecated`), Context, Decision, Consequences.
+   - ADRs MUST NOT be embedded in the saved TODO body. Emit each ADR after the TODO plan using this extraction block so Step 14 can persist it as a reference:
+
+```text
+<!-- CSA:ADR:START adr-0001-short-title.md -->
+# Title
+
+Status: Proposed
+
+## Context
+
+## Decision
+
+## Consequences
+<!-- CSA:ADR:END -->
+```
+
+   - Use `adr-NNNN-<title>.md` filenames with zero-padded sequence numbers and lowercase kebab-case titles.
+   - Do NOT auto-load ADR contents into later planning context. ADRs are discoverable via `csa todo ref list` and `csa todo ref show`.
+
 #### Formatting Rules
 
 Each item is a [ ] checkbox with executor tag.
@@ -607,6 +634,13 @@ elif [[ -n "${STEP_7_OUTPUT:-}" ]]; then
 else
   echo "Neither STEP_12_OUTPUT (revised) nor STEP_7_OUTPUT (draft) is available" >&2; exit 1
 fi
+# ADR extraction blocks are persisted as TODO references in Step 14.
+# Strip them before saving TODO.md so agents do not auto-load ADR bodies.
+FINAL_TODO=$(printf '%s\n' "${FINAL_TODO}" | awk '
+  /^<!-- CSA:ADR:START / { in_adr=1; next }
+  /^<!-- CSA:ADR:END -->$/ { in_adr=0; next }
+  !in_adr { print }
+')
 printf '%s\n' "${FINAL_TODO}" | grep -qE '^- \[ \] .+' || { echo "TODO has no non-empty checkbox tasks" >&2; exit 1; }
 printf '%s\n' "${FINAL_TODO}" | grep -q 'DONE WHEN:' || { echo "TODO has no DONE WHEN clauses" >&2; exit 1; }
 [[ -n "${STEP_8_OUTPUT:-}" ]] || { echo "STEP_8_OUTPUT is empty — Step 8 must output spec.toml content" >&2; exit 1; }
@@ -691,12 +725,18 @@ csa todo show -t "${TODO_TS}" --path
 
 Tool: bash
 
-After TODO is saved, persist RECON, threat model, debate findings, and a
-consolidated design document as references for progressive disclosure.
+After TODO is saved, persist RECON, threat model, debate findings, ADRs,
+and a consolidated design document as references for progressive disclosure.
 The design document aggregates all RECON findings into a single reference
 stored in `~/.local/state/cli-sub-agent/` (not git-tracked). Agents
 executing the plan can retrieve it via `csa todo ref show design.md`
 without loading the full plan into their context window.
+
+If Step 7 or Step 12 emitted ADR extraction blocks, save each ADR as a
+reference via `csa todo ref add -t <timestamp> adr-NNNN-<title>.md`.
+Also create or update `adr-index.md` as a reference listing all ADR titles
+for future RECON discovery. Do not auto-load ADR bodies into context; they
+remain discoverable through `csa todo ref list` and `csa todo ref show`.
 
 ```bash
 TODO_PATH="${STEP_13_OUTPUT}"
@@ -720,6 +760,43 @@ if [[ -n "${STEP_9_OUTPUT:-}" ]]; then
 fi
 if [[ -n "${STEP_10_OUTPUT:-}" ]]; then
   csa todo ref add -t "${TODO_TS}" --content "${STEP_10_OUTPUT}" debate-evidence.md 2>/dev/null || true
+fi
+
+# Persist ADR extraction blocks emitted by Step 12 when present, otherwise Step 7.
+ADR_SOURCE=""
+if printf '%s\n' "${STEP_12_OUTPUT:-}" | grep -q '^<!-- CSA:ADR:START '; then
+  ADR_SOURCE="${STEP_12_OUTPUT}"
+elif printf '%s\n' "${STEP_7_OUTPUT:-}" | grep -q '^<!-- CSA:ADR:START '; then
+  ADR_SOURCE="${STEP_7_OUTPUT}"
+fi
+ADR_INDEX=""
+ADR_FILE=""
+ADR_CONTENT=""
+while IFS= read -r line || [[ -n "${line}" ]]; do
+  if [[ "${line}" == '<!-- CSA:ADR:START '* ]]; then
+    ADR_FILE="${line#<!-- CSA:ADR:START }"
+    ADR_FILE="${ADR_FILE% -->}"
+    ADR_CONTENT=""
+    if [[ ! "${ADR_FILE}" =~ ^adr-[0-9]{4}-[a-z0-9][a-z0-9-]*\.md$ ]]; then
+      echo "WARNING: skip invalid ADR ref name: ${ADR_FILE}" >&2
+      ADR_FILE=""
+    fi
+  elif [[ "${line}" == "<!-- CSA:ADR:END -->" ]]; then
+    if [[ -n "${ADR_FILE:-}" && -n "${ADR_CONTENT:-}" ]]; then
+      ADR_TITLE=$(printf '%s\n' "${ADR_CONTENT}" | sed -n 's/^# //p' | head -n1)
+      [[ -n "${ADR_TITLE:-}" ]] || ADR_TITLE="${ADR_FILE%.md}"
+      csa todo ref add -t "${TODO_TS}" --content "${ADR_CONTENT}" "${ADR_FILE}" 2>/dev/null || true
+      ADR_INDEX="${ADR_INDEX}- ${ADR_FILE}: ${ADR_TITLE}"$'\n'
+    fi
+    ADR_FILE=""
+    ADR_CONTENT=""
+  elif [[ -n "${ADR_FILE:-}" ]]; then
+    ADR_CONTENT="${ADR_CONTENT}${line}"$'\n'
+  fi
+done <<< "${ADR_SOURCE}"
+if [[ -n "${ADR_INDEX:-}" ]]; then
+  ADR_INDEX_DOC=$(printf '%s\n\n%s' "# ADR Index: ${FEATURE}" "${ADR_INDEX}")
+  csa todo ref add -t "${TODO_TS}" --content "${ADR_INDEX_DOC}" adr-index.md 2>/dev/null || true
 fi
 
 # Generate consolidated design document (not git-tracked)
