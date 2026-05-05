@@ -50,6 +50,13 @@ fn build_plan_run_args(
 async fn fetch_issue_body(issue: u64) -> Result<String> {
     let issue_arg = issue.to_string();
     let output = Command::new("gh")
+        .env(
+            "GH_CONFIG_DIR",
+            format!(
+                "{}/.config/gh-aider",
+                std::env::var("HOME").unwrap_or_default()
+            ),
+        )
         .args([
             "issue",
             "view",
