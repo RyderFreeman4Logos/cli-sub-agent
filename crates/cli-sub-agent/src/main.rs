@@ -28,6 +28,8 @@ mod gc;
 mod goal_loop;
 mod hooks_cmd;
 mod hunt_cmd;
+#[cfg(test)]
+mod main_auto_weave_tests;
 mod main_bootstrap;
 mod mcp_hub;
 mod mcp_server;
@@ -35,6 +37,7 @@ mod memory_capture;
 mod memory_cmd;
 mod memory_migrate;
 mod merge_cmd;
+mod mktsk_cmd;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_env;
@@ -68,6 +71,8 @@ mod run_cmd_post;
 mod run_cmd_tool_selection;
 mod run_helpers;
 mod run_helpers_branch_guard;
+#[cfg(test)]
+mod sa_mode_tests;
 mod self_update;
 mod session_cmds;
 mod session_cmds_daemon;
@@ -80,6 +85,10 @@ mod skill_cmds;
 mod skill_resolver;
 #[cfg(any(feature = "parallel-tasks", test))]
 pub mod task_lock;
+#[cfg(test)]
+mod test_env_lock;
+#[cfg(test)]
+mod test_session_sandbox;
 mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;
@@ -87,17 +96,6 @@ mod todo_epic_cmd;
 mod todo_ref_cmd;
 mod tool_version;
 mod triage_cmd;
-
-#[cfg(test)]
-mod sa_mode_tests;
-
-#[cfg(test)]
-mod main_auto_weave_tests;
-
-#[cfg(test)]
-mod test_env_lock;
-#[cfg(test)]
-mod test_session_sandbox;
 #[cfg(test)]
 include!("review_cmd_exact_tests.rs");
 #[cfg(test)]
@@ -470,6 +468,11 @@ async fn run() -> Result<()> {
                 output_format,
             )
             .await?;
+            exit_current_process(exit_code);
+        }
+        Commands::Mktsk(args) => {
+            let exit_code =
+                mktsk_cmd::handle_mktsk_args(args, current_depth, output_format).await?;
             exit_current_process(exit_code);
         }
         Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format)?,
