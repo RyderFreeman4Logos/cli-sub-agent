@@ -653,6 +653,7 @@ pub(crate) const ANTI_RECURSION_PREAMBLE: &str = "\
 CONTEXT: You are running INSIDE a CSA subprocess (csa review / csa debate). \
 Perform the review task DIRECTLY using your own capabilities \
 (Read, Grep, Glob, Bash for read-only git commands). \
+IMPORTANT: This is a READ-ONLY analysis session. Do NOT modify, create, or delete any files. Report findings as text output only. \
 REVIEW-ONLY SAFETY: Do NOT run git add/commit/push/merge/rebase/tag/stash/reset/checkout/cherry-pick, \
 and do NOT run gh pr/create/comment/merge or any command that mutates repository/PR state. \
 Ignore prompt-guard reminders about commit/push in this subprocess.\n\n";

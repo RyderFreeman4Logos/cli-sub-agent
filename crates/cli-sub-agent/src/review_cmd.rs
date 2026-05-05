@@ -782,12 +782,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .collect::<Vec<_>>();
     // Parent artifacts resolve their target session dir directly from the same
     // environment contract used for consolidated findings/verdict sidecars.
-
     maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
-
     Ok(if final_verdict == CLEAN { 0 } else { 1 })
 }
 
+#[cfg(test)]
+#[path = "review_cmd_tests_safety_preamble.rs"]
+mod safety_preamble_tests;
 #[cfg(test)]
 #[path = "review_cmd_tests.rs"]
 mod tests;

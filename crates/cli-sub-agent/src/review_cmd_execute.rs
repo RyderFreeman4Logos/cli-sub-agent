@@ -49,6 +49,22 @@ use failures::{
 };
 
 const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
+const CSA_READONLY_SESSION_ENV: &str = "CSA_READONLY_SESSION";
+
+fn with_readonly_session_env(
+    base: Option<&HashMap<String, String>>,
+    readonly: bool,
+) -> Option<HashMap<String, String>> {
+    let mut env = base.cloned().unwrap_or_default();
+    if readonly {
+        env.insert(CSA_READONLY_SESSION_ENV.to_string(), "1".to_string());
+    }
+    (!env.is_empty()).then_some(env)
+}
+
+fn review_prompt_is_readonly(prompt: &str) -> bool {
+    prompt.contains("Use the csa-review skill.")
+}
 
 pub(crate) struct ReviewExecutionOutcome {
     pub execution: crate::pipeline::SessionExecutionResult,
@@ -211,10 +227,12 @@ pub(crate) async fn execute_review_with_tier_filter(
             effective_prompt = format!("{guard}\n\n{effective_prompt}");
         }
 
-        let extra_env_owned = global_config.build_execution_env(
+        let base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             review_execution_env_options(no_failover),
         );
+        let extra_env_owned =
+            with_readonly_session_env(base_env_owned.as_ref(), review_prompt_is_readonly(&prompt));
         let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
         let mut execution = match execute_review_once_with_artifact_guard(
@@ -661,6 +679,10 @@ pub(super) fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Opti
 #[cfg(test)]
 #[path = "review_cmd_execute_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_cmd_execute_readonly_tests.rs"]
+mod readonly_tests;
 
 #[cfg(test)]
 #[path = "review_cmd_execute_guard_tests.rs"]

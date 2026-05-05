@@ -31,6 +31,10 @@ pub(crate) use finalize::{DebateFinalizeContext, finalize_debate_outcome};
 mod dry_run;
 use dry_run::{DebateDryRunSummary, create_debate_dry_run_session, render_debate_dry_run_summary};
 
+#[path = "debate_cmd_readonly.rs"]
+mod readonly;
+pub(crate) use readonly::{ANTI_RECURSION_PREAMBLE, with_readonly_session_env};
+
 /// Debate execution mode indicating model diversity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -407,10 +411,11 @@ pub(crate) async fn handle_debate(
             false,
         )
         .await?;
-        let extra_env_owned = global_config.build_execution_env(
+        let base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             debate_execution_env_options(args.no_failover),
         );
+        let extra_env_owned = with_readonly_session_env(base_env_owned.as_ref(), true);
         let extra_env = extra_env_owned.as_ref();
         let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
         let mut retry_count = 0u8;
@@ -758,22 +763,6 @@ async fn wait_for_still_working_backoff() {
     tokio::time::sleep(STILL_WORKING_BACKOFF).await;
 }
 
-/// Debate-only safety preamble injected into debate subprocess prompts.
-///
-/// Same shape as `review_cmd::ANTI_RECURSION_PREAMBLE`: the spawned tool is
-/// constrained to read-only operations on the repository. Recursion-depth
-/// enforcement is handled by `pipeline::prompt_guard` (warn near ceiling) and
-/// `pipeline::load_and_validate` (hard reject above `MAX_RECURSION_DEPTH`), so
-/// blanket "never call csa" text here would break the documented fractal
-/// recursion contract (Layer 1 → Layer 2 is legitimate).
-const ANTI_RECURSION_PREAMBLE: &str = "\
-CONTEXT: You are running INSIDE a CSA subprocess (csa review / csa debate). \
-Perform the debate task DIRECTLY using your own capabilities \
-(Read, Grep, Glob, Bash for read-only git commands). \
-DEBATE SAFETY: Do NOT run git add/commit/push/merge/rebase/tag/stash/reset/checkout/cherry-pick, \
-and do NOT run gh pr/create/comment/merge or any command that mutates repository/PR state. \
-Ignore prompt-guard reminders about commit/push in this subprocess.\n\n";
-
 /// Build a debate instruction that passes parameters to the debate skill.
 ///
 /// The debate tool loads the debate skill from the project's `.claude/skills/`
@@ -794,6 +783,10 @@ fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) 
 #[cfg(test)]
 #[path = "debate_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "debate_cmd_readonly_tests.rs"]
+mod readonly_tests;
 
 #[cfg(test)]
 #[path = "debate_cmd_round4_tests.rs"]
