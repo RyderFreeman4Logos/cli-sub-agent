@@ -6,39 +6,19 @@ use agent_client_protocol::{
     RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
 };
 
-/// Maximum bytes retained in the tail text buffer.
-///
-/// Agent message and thought text beyond this limit is discarded from memory
-/// after being written to the output spool on disk.  1 MiB is sufficient for
-/// summary extraction and token-usage parsing, which only inspect the tail.
-///
-/// Canonical values shared with `csa-process::output_helpers` (same 1 MiB / 2 MiB).
+/// Maximum bytes retained in the tail text buffer; shared with `csa-process::output_helpers`.
 const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024;
 
-/// High-water mark for tail buffer trimming (2× the target size).
-///
-/// We allow the buffer to grow to this size before trimming it back to
-/// [`TAIL_BUFFER_MAX_BYTES`].  This amortises the O(N) cost of
-/// `String::drain` so that trimming occurs once per MiB of new text
-/// rather than once per chunk, avoiding O(N²) behaviour.
+/// High-water mark for trimming, set to 2x [`TAIL_BUFFER_MAX_BYTES`] to amortize drain cost.
 const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2;
 
-/// Maximum number of ACP session events retained in memory.
-///
-/// Set high enough to absorb bursts from parallel test output (cargo
-/// nextest can emit thousands of lines per second) without overrunning
-/// the 200ms polling interval in `stream_new_agent_messages`.  At ~200
-/// bytes per event, 10K events ≈ 2 MiB — negligible vs the old unbounded
-/// accumulation that reached 6+ GiB.
+/// Maximum ACP session events retained in memory; 10K events is about 2 MiB at ~200 B/event.
 pub(crate) const MAX_RETAINED_EVENTS: usize = 10_000;
 
 /// Maximum number of execute command titles retained for post-run policy checks.
 const MAX_EXTRACTED_COMMANDS: usize = 100;
 
 /// Incrementally accumulated metadata from streamed ACP events.
-///
-/// Built up by [`super::connection::stream_new_agent_messages`] as events flow
-/// through, avoiding the need to keep the full event vector in memory.
 #[derive(Debug, Clone, Default)]
 pub struct StreamingMetadata {
     /// Total number of events seen across the entire prompt turn, including dropped events.
@@ -94,8 +74,7 @@ impl StreamingMetadata {
     }
 }
 
-/// Trim a tail buffer back to [`TAIL_BUFFER_MAX_BYTES`] when it exceeds
-/// [`TAIL_BUFFER_HIGH_WATER`], respecting UTF-8 char boundaries.
+/// Trim a tail buffer back to [`TAIL_BUFFER_MAX_BYTES`] once it exceeds [`TAIL_BUFFER_HIGH_WATER`].
 pub(crate) fn trim_tail_buffer(buf: &mut String) {
     if buf.len() > TAIL_BUFFER_HIGH_WATER {
         let excess = buf.len() - TAIL_BUFFER_MAX_BYTES;
@@ -543,12 +522,12 @@ fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
             idx += 1;
             continue;
         }
-        if token.eq_ignore_ascii_case("sudo") || token.rsplit('/').next() == Some("sudo") {
+        if command_name_is(token, "sudo") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, sudo_option_consumes_value);
             continue;
         }
-        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
+        if command_name_is(token, "env") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
             while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
@@ -556,13 +535,33 @@ fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
             }
             continue;
         }
-        if token.eq_ignore_ascii_case("command") || token == "--" {
+        if command_name_is(token, "nice") {
             idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, nice_option_consumes_value);
             continue;
         }
-        if token.eq_ignore_ascii_case("time") {
+        if command_name_is(token, "ionice") {
             idx += 1;
-            idx = skip_prefixed_command_options(tokens, idx, |_token| false);
+            idx = skip_prefixed_command_options(tokens, idx, ionice_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "strace") || command_name_is(token, "ltrace") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, trace_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "command") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, command_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "time") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, time_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "exec") || token == "--" {
+            idx += 1;
             continue;
         }
         break;
@@ -623,6 +622,36 @@ fn sudo_option_consumes_value(token: &str) -> bool {
             | "-C"
             | "--chdir"
     )
+}
+
+fn nice_option_consumes_value(token: &str) -> bool {
+    matches!(token, "-n" | "--adjustment")
+}
+
+fn ionice_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-c" | "--class" | "-n" | "--classdata" | "-t" | "--ignore" | "-p" | "--pid"
+    )
+}
+
+fn trace_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-e" | "--trace" | "-o" | "--output" | "-p" | "--attach" | "-u" | "--user"
+    )
+}
+
+fn command_option_consumes_value(_token: &str) -> bool {
+    false
+}
+
+fn time_option_consumes_value(_token: &str) -> bool {
+    false
+}
+
+fn command_name_is(token: &str, name: &str) -> bool {
+    token.eq_ignore_ascii_case(name) || token.rsplit('/').next() == Some(name)
 }
 
 fn git_global_option_consumes_value(token: &str) -> bool {
