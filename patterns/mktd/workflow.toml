@@ -317,6 +317,42 @@ ${STEP_6_OUTPUT}
 
 CONSTRAINT VERIFICATION: Before drafting, check that RECON findings align with the user's original feature request (${FEATURE}). If the user specified a target crate, architecture, or key files, the plan MUST target those — not alternatives suggested by codebase pattern matching. If RECON findings contradict user constraints, note the conflict and follow the user's intent.
 
+#### TODO Structure Requirements
+
+The TODO plan MUST include the following sections for context recovery:
+
+a) **"## Design Overview" section** at the top with:
+   - Problem statement (1-2 sentences)
+   - Key design decisions with rationale
+   - Architecture constraints discovered during recon
+
+b) Each task item MUST include:
+   - A descriptive title (not just "Implement X")
+   - Context sub-bullet explaining WHY this task exists and HOW it relates to the design
+   - Dependencies on other tasks with specific details (not just "depends on task 1")
+   - `Acceptance Criteria:` field listing behavior-level checks for this task
+   - `Blocked by:` field listing concrete prerequisite tasks, or `None` if independent
+   - Each task description MUST be >= 20 words to provide sufficient context
+
+c) Task decomposition MUST use thin vertical slices:
+   - Each task MUST cut through all integration layers needed for one behavior end-to-end, such as schema, API, business logic, and tests.
+   - Do NOT use horizontal slices that finish all models, then all handlers, then all tests.
+   - Prefer many thin vertical slices over a few thick tasks.
+   - Anti-pattern:
+     WRONG (horizontal): Task 1: write all models; Task 2: write all handlers; Task 3: write all tests.
+     RIGHT (vertical): Task 1: Feature A end-to-end (model + handler + test); Task 2: Feature B end-to-end.
+
+d) TDD guidance for implementation tasks:
+   - Prefer one-test-one-implementation cycles inside each vertical slice, not write-all-tests-then-all-implementation sequencing.
+   - Tests should verify behavior through public interfaces, not implementation details.
+   - This is guidance only, not a hard enforcement gate. Do not turn it into a `DONE WHEN:` clause or spec criterion unless the user explicitly requests TDD enforcement.
+
+e) **"## Debate Findings" section** (left empty in draft, populated after Phase 3):
+   - Which debate points were adopted
+   - Which were deferred and why
+
+#### Formatting Rules
+
 Each item is a [ ] checkbox with executor tag.
 Write all TODO descriptions, section headers, and task names in `${STEP_2_OUTPUT}`.
 Technical terms, code snippets, commit scope strings, and executor tags remain in English.
