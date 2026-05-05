@@ -118,6 +118,32 @@ fn apply_no_verify_commit_policy_does_not_block_echo_mentions() {
 }
 
 #[test]
+fn apply_no_verify_commit_policy_blocks_escaped_newline_continuations() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        summary: "ok".to_string(),
+        ..Default::default()
+    };
+    let executed_shell_commands = vec!["git commit -m msg \\\n-n".to_string()];
+
+    apply_no_verify_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        "normal prompt",
+        &executed_shell_commands,
+        !executed_shell_commands.is_empty(),
+    );
+
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(
+        result.summary,
+        "post-run policy blocked: forbidden git commit --no-verify detected"
+    );
+    assert!(result.stderr_output.contains("Matched commands:"));
+    assert!(result.stderr_output.contains("git commit -m msg"));
+}
+
+#[test]
 fn apply_no_verify_commit_policy_blocks_shell_wrapped_git_commit() {
     let mut result = ExecutionResult {
         output: String::new(),

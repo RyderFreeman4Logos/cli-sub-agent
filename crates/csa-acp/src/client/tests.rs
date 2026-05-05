@@ -245,3 +245,10 @@ fn command_looks_like_no_verify_commit_treats_newline_as_command_separator() {
         "git commit -m msg\necho -n ok"
     ));
 }
+
+#[test]
+fn command_looks_like_no_verify_commit_detects_later_commit_in_shell_payload() {
+    assert!(command_looks_like_no_verify_commit(
+        "bash -lc \"git commit -m safe; git commit -n -m unsafe\""
+    ));
+}

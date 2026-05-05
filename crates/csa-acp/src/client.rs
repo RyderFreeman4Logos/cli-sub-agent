@@ -377,10 +377,22 @@ fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
         script_tokens.extend(tokenize_shell_tokens(token));
     }
 
-    let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&script_tokens) else {
-        return false;
-    };
-    commit_args_include_no_verify(&script_tokens[git_commit_subcommand_idx + 1..])
+    for git_idx in 0..script_tokens.len() {
+        if !is_git_token(script_tokens[git_idx].as_str())
+            || (git_idx > 0 && !is_command_separator_token(script_tokens[git_idx - 1].as_str()))
+        {
+            continue;
+        }
+
+        let Some(commit_idx) = find_git_commit_subcommand(&script_tokens, git_idx + 1) else {
+            continue;
+        };
+        if commit_args_include_no_verify(&script_tokens[commit_idx + 1..]) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
@@ -388,27 +400,33 @@ fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
     while idx < tokens.len() {
         let token = tokens[idx].as_str();
         if is_git_token(token) {
-            let mut scan = idx + 1;
-            while scan < tokens.len() {
-                let current = tokens[scan].as_str();
-                if current == "commit" {
-                    return Some((idx, scan));
-                }
-                if current == "--" {
-                    break;
-                }
-                if current.starts_with('-') {
-                    scan += 1;
-                    if git_global_option_consumes_value(current) && !current.contains('=') {
-                        scan = consume_option_value(tokens, scan);
-                    }
-                    continue;
-                }
-                break;
-            }
+            let scan = find_git_commit_subcommand(tokens, idx + 1)?;
+            return Some((idx, scan));
         }
         idx += 1;
     }
+    None
+}
+
+fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
+    while idx < tokens.len() {
+        let current = tokens[idx].as_str();
+        if current == "commit" {
+            return Some(idx);
+        }
+        if current == "--" {
+            break;
+        }
+        if current.starts_with('-') {
+            idx += 1;
+            if git_global_option_consumes_value(current) && !current.contains('=') {
+                idx = consume_option_value(tokens, idx);
+            }
+            continue;
+        }
+        break;
+    }
+
     None
 }
 
