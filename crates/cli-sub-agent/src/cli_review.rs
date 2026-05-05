@@ -300,6 +300,9 @@ pub fn validate_command_args(
         Commands::Triage(args) => {
             validate_timeout(Some(args.timeout), min_timeout)?;
         }
+        Commands::Mktsk(args) => {
+            validate_timeout(Some(args.timeout), min_timeout)?;
+        }
         Commands::Review(args) => {
             validate_review_args(args)?;
             if !args.check_verdict {
