@@ -209,7 +209,7 @@ fn session_event_store_keeps_no_verify_sticky_after_command_ring_eviction() {
     let mut store = SessionEventStore::default();
     store.push(SessionEvent::ToolCallStarted {
         id: "call-unsafe".to_string(),
-        title: "sudo -u root git commit -n -m unsafe".to_string(),
+        title: "echo pre; sudo -u root git commit -n -m unsafe".to_string(),
         kind: "Execute".to_string(),
     });
     for i in 0..MAX_EXTRACTED_COMMANDS {
@@ -277,6 +277,13 @@ fn command_looks_like_no_verify_commit_treats_newline_as_command_separator() {
 fn command_looks_like_no_verify_commit_detects_later_commit_in_shell_payload() {
     assert!(command_looks_like_no_verify_commit(
         "bash -lc \"git commit -m safe; git commit -n -m unsafe\""
+    ));
+}
+
+#[test]
+fn command_looks_like_no_verify_commit_detects_later_top_level_commands() {
+    assert!(command_looks_like_no_verify_commit(
+        "echo pre; git commit -n -m unsafe"
     ));
 }
 

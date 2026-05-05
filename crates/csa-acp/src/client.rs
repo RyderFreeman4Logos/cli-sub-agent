@@ -265,10 +265,7 @@ fn command_looks_like_no_verify_commit(cmd: &str) -> bool {
     {
         return true;
     }
-    let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&tokens) else {
-        return false;
-    };
-    commit_args_include_no_verify(&tokens[git_commit_subcommand_idx + 1..])
+    tokens_contain_no_verify_commit(&tokens, |tokens| skip_command_prefix_tokens(tokens, 0))
 }
 
 fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
@@ -378,31 +375,46 @@ fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
         script_tokens.extend(tokenize_shell_tokens(token));
     }
 
-    for git_idx in 0..script_tokens.len() {
-        if !is_git_token(script_tokens[git_idx].as_str())
-            || (git_idx > 0 && !is_command_separator_token(script_tokens[git_idx - 1].as_str()))
-        {
-            continue;
-        }
+    tokens_contain_no_verify_commit(&script_tokens, |_| 0)
+}
 
-        let Some(commit_idx) = find_git_commit_subcommand(&script_tokens, git_idx + 1) else {
-            continue;
-        };
-        if commit_args_include_no_verify(&script_tokens[commit_idx + 1..]) {
+fn tokens_contain_no_verify_commit<F>(tokens: &[String], skip_prefix: F) -> bool
+where
+    F: Fn(&[String]) -> usize,
+{
+    let mut command_start = 0usize;
+
+    while command_start < tokens.len() {
+        let command_end = tokens[command_start..]
+            .iter()
+            .position(|token| is_command_separator_token(token.as_str()))
+            .map_or(tokens.len(), |idx| command_start + idx);
+
+        if command_segment_contains_no_verify_commit(
+            &tokens[command_start..command_end],
+            &skip_prefix,
+        ) {
             return true;
         }
+
+        command_start = command_end.saturating_add(1);
     }
 
     false
 }
 
-fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
-    let idx = skip_command_prefix_tokens(tokens, 0);
+fn command_segment_contains_no_verify_commit<F>(tokens: &[String], skip_prefix: &F) -> bool
+where
+    F: Fn(&[String]) -> usize,
+{
+    let idx = skip_prefix(tokens);
     if idx >= tokens.len() || !is_git_token(tokens[idx].as_str()) {
-        return None;
+        return false;
     }
-    let scan = find_git_commit_subcommand(tokens, idx + 1)?;
-    Some((idx, scan))
+    let Some(commit_idx) = find_git_commit_subcommand(tokens, idx + 1) else {
+        return false;
+    };
+    commit_args_include_no_verify(&tokens[commit_idx + 1..])
 }
 
 fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
