@@ -1,6 +1,15 @@
-//! Shell command parsing helpers for post-run commit policy enforcement.
-//!
-//! Extracted from `run_cmd.rs` to keep module sizes manageable.
+//! Shell command parsing helpers for post-run commit policy enforcement, extracted from `run_cmd.rs`.
+
+#[path = "run_cmd_shell_lefthook.rs"]
+mod lefthook;
+
+#[cfg(test)]
+pub(crate) use lefthook::{
+    command_contains_forbidden_lefthook_bypass, segment_contains_forbidden_lefthook_bypass,
+};
+pub(crate) use lefthook::{
+    detect_lefthook_bypass_commands, detect_lefthook_bypass_commands_from_tool_output,
+};
 
 pub(crate) fn detect_no_verify_commit_commands(executed_shell_commands: &[String]) -> Vec<String> {
     let mut matches = Vec::new();
@@ -17,71 +26,6 @@ pub(crate) fn detect_no_verify_commit_commands(executed_shell_commands: &[String
         }
     }
     matches
-}
-
-/// Detect commands that set `LEFTHOOK=0` or `LEFTHOOK_SKIP` to bypass
-/// pre-commit hooks.  Mirrors `detect_no_verify_commit_commands` for the
-/// hook-bypass-prevention policy (AGENTS.md rule 029).
-pub(crate) fn detect_lefthook_bypass_commands(executed_shell_commands: &[String]) -> Vec<String> {
-    let mut matches = Vec::new();
-    for command in executed_shell_commands {
-        let trimmed = command.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !command_contains_forbidden_lefthook_bypass(trimmed) {
-            continue;
-        }
-        if !matches.iter().any(|existing| existing == trimmed) {
-            matches.push(trimmed.to_string());
-        }
-    }
-    matches
-}
-
-pub(crate) fn detect_lefthook_bypass_commands_from_tool_output(
-    result: &csa_process::ExecutionResult,
-    trace_only: bool,
-) -> Vec<String> {
-    let mut matches = Vec::new();
-    collect_lefthook_bypass_command_like_lines(&result.output, &mut matches, trace_only);
-    collect_lefthook_bypass_command_like_lines(&result.summary, &mut matches, trace_only);
-    collect_lefthook_bypass_command_like_lines(&result.stderr_output, &mut matches, trace_only);
-    matches
-}
-
-fn collect_lefthook_bypass_command_like_lines(
-    source: &str,
-    matches: &mut Vec<String>,
-    trace_only: bool,
-) {
-    let mut inside_code_fence = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            inside_code_fence = !inside_code_fence;
-            continue;
-        }
-        if inside_code_fence || trimmed.is_empty() {
-            continue;
-        }
-        if trace_only && !has_command_prompt_prefix(trimmed) {
-            continue;
-        }
-        if !looks_like_shell_command_line(trimmed) {
-            continue;
-        }
-        let normalized_command = strip_command_prompt_prefix(trimmed);
-        if !command_contains_forbidden_lefthook_bypass(normalized_command) {
-            continue;
-        }
-        if !matches
-            .iter()
-            .any(|existing| existing == normalized_command)
-        {
-            matches.push(normalized_command.to_string());
-        }
-    }
 }
 
 pub(crate) fn detect_no_verify_commit_commands_from_tool_output(
@@ -154,7 +98,7 @@ fn strip_command_prompt_prefix(line: &str) -> &str {
         .unwrap_or(line)
 }
 
-fn command_contains_forbidden_no_verify_commit(command: &str) -> bool {
+pub(crate) fn command_contains_forbidden_no_verify_commit(command: &str) -> bool {
     split_shell_segments_preserving_quotes(command)
         .into_iter()
         .any(|segment| segment_contains_forbidden_no_verify_commit(&segment))
@@ -250,7 +194,7 @@ fn segment_contains_forbidden_no_verify_commit(segment: &str) -> bool {
     commit_args_include_no_verify(&tokens[git_commit_subcommand_idx + 1..])
 }
 
-fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
+pub(crate) fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut chars = segment.chars().peekable();
@@ -368,19 +312,36 @@ fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
 
 fn shell_script_contains_forbidden_no_verify_commit(tokens: &[String]) -> bool {
     let script_tokens = expand_shell_script_tokens(tokens);
-    for git_idx in 0..script_tokens.len() {
-        if !is_git_token(script_tokens[git_idx].as_str())
-            || !is_shell_command_boundary(&script_tokens, git_idx)
+    let mut command_start = 0usize;
+
+    while command_start < script_tokens.len() {
+        while command_start < script_tokens.len()
+            && is_command_separator_token(script_tokens[command_start].as_str())
         {
-            continue;
+            command_start += 1;
         }
-        let Some(commit_idx) = find_git_commit_subcommand(&script_tokens, git_idx + 1) else {
-            continue;
-        };
-        if commit_args_include_no_verify(&script_tokens[commit_idx + 1..]) {
+        if command_start >= script_tokens.len() {
+            break;
+        }
+
+        let command_end = script_tokens[command_start..]
+            .iter()
+            .position(|token| is_command_separator_token(token.as_str()))
+            .map_or(script_tokens.len(), |idx| command_start + idx);
+        let command_tokens = &script_tokens[command_start..command_end];
+        let git_idx = skip_command_prefix_tokens(command_tokens, 0);
+
+        if git_idx < command_tokens.len()
+            && is_git_token(command_tokens[git_idx].as_str())
+            && let Some(commit_idx) = find_git_commit_subcommand(command_tokens, git_idx + 1)
+            && commit_args_include_no_verify(&command_tokens[commit_idx + 1..])
+        {
             return true;
         }
+
+        command_start = command_end.saturating_add(1);
     }
+
     false
 }
 
@@ -394,10 +355,6 @@ fn expand_shell_script_tokens(tokens: &[String]) -> Vec<String> {
         expanded.extend(nested_tokens);
     }
     expanded
-}
-
-fn is_shell_command_boundary(tokens: &[String], idx: usize) -> bool {
-    idx == 0 || is_command_separator_token(tokens[idx - 1].as_str())
 }
 
 fn is_command_separator_token(token: &str) -> bool {
@@ -434,14 +391,12 @@ fn skip_command_prefix_tokens_with_mode(
             idx += 1;
             continue;
         }
-        if token.eq_ignore_ascii_case("sudo") || token.rsplit('/').next() == Some("sudo") {
+        if command_name_is(token, "sudo") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, sudo_option_consumes_value);
             continue;
         }
-        if mode == PrefixSkipMode::FullCommandPrefix
-            && (token.eq_ignore_ascii_case("env") || token.ends_with("/env"))
-        {
+        if mode == PrefixSkipMode::FullCommandPrefix && command_name_is(token, "env") {
             idx += 1;
             idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
             while idx < tokens.len() && is_env_assignment(tokens[idx].as_str()) {
@@ -449,13 +404,33 @@ fn skip_command_prefix_tokens_with_mode(
             }
             continue;
         }
-        if token.eq_ignore_ascii_case("command") || token == "--" {
+        if command_name_is(token, "nice") {
             idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, nice_option_consumes_value);
             continue;
         }
-        if token.eq_ignore_ascii_case("time") {
+        if command_name_is(token, "ionice") {
             idx += 1;
-            idx = skip_prefixed_command_options(tokens, idx, |_token| false);
+            idx = skip_prefixed_command_options(tokens, idx, ionice_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "strace") || command_name_is(token, "ltrace") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, trace_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "command") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, command_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "time") {
+            idx += 1;
+            idx = skip_prefixed_command_options(tokens, idx, time_option_consumes_value);
+            continue;
+        }
+        if command_name_is(token, "exec") || token == "--" {
+            idx += 1;
             continue;
         }
         break;
@@ -540,6 +515,36 @@ fn sudo_option_consumes_value(token: &str) -> bool {
             | "-C"
             | "--chdir"
     )
+}
+
+fn nice_option_consumes_value(token: &str) -> bool {
+    matches!(token, "-n" | "--adjustment")
+}
+
+fn ionice_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-c" | "--class" | "-n" | "--classdata" | "-t" | "--ignore" | "-p" | "--pid"
+    )
+}
+
+fn trace_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-e" | "--trace" | "-o" | "--output" | "-p" | "--attach" | "-u" | "--user"
+    )
+}
+
+fn command_option_consumes_value(_token: &str) -> bool {
+    false
+}
+
+fn time_option_consumes_value(_token: &str) -> bool {
+    false
+}
+
+fn command_name_is(token: &str, name: &str) -> bool {
+    token.eq_ignore_ascii_case(name) || token.rsplit('/').next() == Some(name)
 }
 
 fn is_env_assignment(token: &str) -> bool {
@@ -629,172 +634,4 @@ fn long_option_consumes_value(token: &str) -> bool {
             | "--pathspec-from-file"
             | "--cleanup"
     )
-}
-
-// ── LEFTHOOK bypass detection ──────────────────────────────────────
-
-/// Forbidden LEFTHOOK env var names that disable pre-commit hooks.
-const FORBIDDEN_LEFTHOOK_ENV_VARS: &[&str] = &["LEFTHOOK", "LEFTHOOK_SKIP"];
-
-pub(crate) fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
-    split_shell_segments_preserving_quotes(command)
-        .into_iter()
-        .any(|segment| segment_contains_forbidden_lefthook_bypass(&segment))
-}
-
-/// Check whether a single shell segment sets a forbidden LEFTHOOK env var.
-///
-/// Detects patterns:
-/// - `LEFTHOOK=0 git commit ...`  (inline env assignment before command)
-/// - `export LEFTHOOK=0`
-/// - `env LEFTHOOK=0 git commit ...`
-/// - `LEFTHOOK_SKIP=... git push ...`
-pub(crate) fn segment_contains_forbidden_lefthook_bypass(segment: &str) -> bool {
-    let tokens = tokenize_shell_tokens(segment);
-    if tokens.is_empty() {
-        return false;
-    }
-
-    // Check for `sh -c "export LEFTHOOK=0; ..."` or similar shell wrappers.
-    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
-        && shell_script_contains_forbidden_lefthook_bypass(shell_script_tokens)
-    {
-        return true;
-    }
-
-    tokens_contain_lefthook_bypass(&tokens)
-}
-
-fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
-    let script_tokens = expand_shell_script_tokens(tokens);
-    tokens_contain_lefthook_bypass(&script_tokens)
-}
-
-fn skip_to_next_command_boundary(tokens: &[String], mut idx: usize) -> usize {
-    while idx < tokens.len() && !is_command_separator_token(tokens[idx].as_str()) {
-        idx += 1;
-    }
-    idx
-}
-
-/// Scan a flat token list for any LEFTHOOK bypass env assignment.
-///
-/// Handles:
-///   - Inline env prefix: `LEFTHOOK=0 git commit`
-///   - `export LEFTHOOK=0`
-///   - `env LEFTHOOK=0 git ...`
-fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
-    let mut idx = skip_command_wrapper_tokens(tokens, 0);
-
-    while idx < tokens.len() {
-        let token = tokens[idx].as_str();
-
-        if is_command_separator_token(token) {
-            idx += 1;
-            idx = skip_command_wrapper_tokens(tokens, idx);
-            continue;
-        }
-
-        if token.eq_ignore_ascii_case("env") || token.ends_with("/env") {
-            idx += 1;
-            idx = skip_prefixed_command_options(tokens, idx, env_option_consumes_value);
-            let (contains_bypass, next_idx) = scan_env_assignments_for_lefthook_bypass(tokens, idx);
-            if contains_bypass {
-                return true;
-            }
-            idx = next_idx;
-            continue;
-        }
-
-        if token.eq_ignore_ascii_case("export") {
-            idx += 1;
-            let (contains_bypass, next_idx) = scan_env_assignments_for_lefthook_bypass(tokens, idx);
-            if contains_bypass {
-                return true;
-            }
-            idx = next_idx;
-            continue;
-        }
-
-        if is_env_assignment(token) {
-            if is_lefthook_env_assignment(token) {
-                return true;
-            }
-            idx += 1;
-            continue;
-        }
-
-        idx = skip_to_next_command_boundary(tokens, idx + 1);
-    }
-
-    false
-}
-
-fn scan_env_assignments_for_lefthook_bypass(tokens: &[String], mut idx: usize) -> (bool, usize) {
-    while idx < tokens.len() {
-        let next = tokens[idx].as_str();
-        if is_command_separator_token(next) {
-            idx += 1;
-            idx = skip_command_wrapper_tokens(tokens, idx);
-            break;
-        }
-        if !is_env_assignment(next) {
-            idx = skip_to_next_command_boundary(tokens, idx + 1);
-            break;
-        }
-        if is_lefthook_env_assignment(next) {
-            return (true, idx);
-        }
-        idx += 1;
-    }
-
-    (false, idx)
-}
-
-/// Return true if `token` is `LEFTHOOK=<val>` or `LEFTHOOK_SKIP=<val>`.
-fn is_lefthook_env_assignment(token: &str) -> bool {
-    let Some(eq_pos) = token.find('=') else {
-        return false;
-    };
-    if eq_pos == 0 || token.starts_with('-') {
-        return false;
-    }
-    let var_name = &token[..eq_pos];
-    FORBIDDEN_LEFTHOOK_ENV_VARS
-        .iter()
-        .any(|forbidden| var_name.eq_ignore_ascii_case(forbidden))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        command_contains_forbidden_no_verify_commit, detect_no_verify_commit_commands,
-        tokenize_shell_tokens,
-    };
-    #[test]
-    fn detect_no_verify_commit_commands_ignores_following_commands_after_newline() {
-        assert!(!command_contains_forbidden_no_verify_commit(
-            "git commit -m msg\necho -n ok"
-        ));
-    }
-    #[test]
-    fn tokenize_shell_tokens_treats_newline_as_command_separator() {
-        let tokens = tokenize_shell_tokens("git commit -m msg\necho -n ok");
-        assert_eq!(
-            tokens,
-            ["git", "commit", "-m", "msg", ";", "echo", "-n", "ok"]
-        );
-    }
-
-    #[test]
-    fn tokenize_shell_tokens_drops_escaped_newlines() {
-        let tokens = tokenize_shell_tokens("git commit -m msg\\\necho ok");
-        assert_eq!(tokens, ["git", "commit", "-m", "msgecho", "ok"]);
-    }
-
-    #[test]
-    fn detect_no_verify_commit_commands_ignores_multiline_scripts() {
-        let commands = vec!["git commit -m msg\necho -n ok".to_string()];
-        assert!(detect_no_verify_commit_commands(&commands).is_empty());
-    }
 }

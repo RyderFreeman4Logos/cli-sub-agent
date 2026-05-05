@@ -1,5 +1,65 @@
 use super::*;
+use crate::run_cmd::shell::{command_contains_forbidden_no_verify_commit, tokenize_shell_tokens};
 use csa_core::types::OutputFormat;
+
+#[test]
+fn detect_no_verify_commit_commands_ignores_following_commands_after_newline() {
+    assert!(!command_contains_forbidden_no_verify_commit(
+        "git commit -m msg\necho -n ok"
+    ));
+}
+
+#[test]
+fn tokenize_shell_tokens_treats_newline_as_command_separator() {
+    let tokens = tokenize_shell_tokens("git commit -m msg\necho -n ok");
+    assert_eq!(
+        tokens,
+        ["git", "commit", "-m", "msg", ";", "echo", "-n", "ok"]
+    );
+}
+
+#[test]
+fn tokenize_shell_tokens_drops_escaped_newlines() {
+    let tokens = tokenize_shell_tokens("git commit -m msg\\\necho ok");
+    assert_eq!(tokens, ["git", "commit", "-m", "msgecho", "ok"]);
+}
+
+#[test]
+fn detect_no_verify_commit_commands_ignores_multiline_scripts() {
+    let commands = vec!["git commit -m msg\necho -n ok".to_string()];
+    assert!(detect_no_verify_commit_commands(&commands).is_empty());
+}
+
+#[test]
+fn detect_no_verify_commit_commands_blocks_prefixed_commit_with_sudo() {
+    assert!(command_contains_forbidden_no_verify_commit(
+        "sudo git commit -n -m msg"
+    ));
+}
+
+#[test]
+fn detect_no_verify_commit_commands_blocks_prefixed_commit_with_env() {
+    assert!(command_contains_forbidden_no_verify_commit(
+        "env GIT_DIR=/x git commit --no-verify -m msg"
+    ));
+}
+
+#[test]
+fn detect_no_verify_commit_commands_allows_safe_prefixed_git_command() {
+    assert!(!command_contains_forbidden_no_verify_commit(
+        "nice -n10 git commit -m safe"
+    ));
+}
+
+#[test]
+fn detect_no_verify_commit_commands_ignores_non_commit_prefixed_commands() {
+    assert!(!command_contains_forbidden_no_verify_commit(
+        "sudo apt install git"
+    ));
+    assert!(!command_contains_forbidden_no_verify_commit(
+        "time git status"
+    ));
+}
 
 #[test]
 fn apply_no_verify_commit_policy_allows_explicit_override_marker() {

@@ -243,7 +243,18 @@ fn command_looks_like_no_verify_commit_detects_real_no_verify_flags() {
     assert!(command_looks_like_no_verify_commit(
         "git commit -m 'msg' -n"
     ));
+    assert!(command_looks_like_no_verify_commit(
+        "sudo git commit -n -m msg"
+    ));
+    assert!(command_looks_like_no_verify_commit(
+        "env GIT_DIR=/x git commit --no-verify -m msg"
+    ));
     assert!(!command_looks_like_no_verify_commit("git commit -am 'msg'"));
+    assert!(!command_looks_like_no_verify_commit(
+        "nice -n10 git commit -m safe"
+    ));
+    assert!(!command_looks_like_no_verify_commit("sudo apt install git"));
+    assert!(!command_looks_like_no_verify_commit("time git status"));
     assert!(command_looks_like_no_verify_commit("git commit -nm 'msg'"));
 }
 
