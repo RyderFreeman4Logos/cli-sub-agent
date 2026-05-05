@@ -14,6 +14,21 @@ PHASE 2 — REPRODUCE
 - Write a minimal failing test or reproduction script
 - Run it to confirm the bug exists
 - The test MUST fail demonstrating the bug
+- Construct the fastest deterministic feedback loop that reaches the bug
+- Use one of these feedback loop strategies:
+  1. Failing test at whatever seam reaches the bug
+  2. Curl / HTTP script against a running dev server
+  3. CLI invocation with fixture input, diffing stdout against a known-good snapshot
+  4. Headless browser script (Playwright/Puppeteer)
+  5. Replay a captured trace (network request / payload / event log)
+  6. Throwaway harness that exercises the minimal subset of the system
+  7. Property / fuzz loop, such as 1000 random inputs for "sometimes wrong output"
+  8. Bisection harness with `git bisect run` between known good and bad states
+  9. Differential loop comparing old vs new versions and diffing outputs
+  10. HITL bash script as a last resort, with structured prompts for human-in-the-loop checks
+- Iterate on the loop itself: make it faster, sharper, and more deterministic before diagnosing
+- For non-deterministic bugs, the goal is a higher reproduction rate: run the loop 100x, parallelize it, and add stress
+- If you cannot construct any feedback loop, STOP and explain what you tried and what missing access, fixture, trace, or command is needed
 
 PHASE 3 — DIAGNOSE
 - State the root cause in ONE sentence
