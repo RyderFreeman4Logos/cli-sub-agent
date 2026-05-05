@@ -7,6 +7,9 @@ use csa_core::types::{OutputFormat, ToolArg};
 #[path = "cli_session.rs"]
 mod cli_session;
 pub use cli_session::*;
+#[path = "cli_arch.rs"]
+mod cli_arch;
+pub use cli_arch::*;
 #[path = "cli_todo.rs"]
 mod cli_todo;
 pub use cli_todo::*;
@@ -290,6 +293,9 @@ pub enum Commands {
 
     /// Start a root-cause-first diagnostic debugging session
     Hunt(HuntArgs),
+
+    /// Run deep module architecture analysis
+    Arch(ArchArgs),
 
     /// Triage a GitHub issue into category and state roles
     Triage(TriageArgs),

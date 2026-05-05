@@ -294,6 +294,9 @@ pub fn validate_command_args(
         Commands::Hunt(args) => {
             validate_timeout(Some(args.timeout), min_timeout)?;
         }
+        Commands::Arch(args) => {
+            validate_timeout(Some(args.timeout), min_timeout)?;
+        }
         Commands::Triage(args) => {
             validate_timeout(Some(args.timeout), min_timeout)?;
         }

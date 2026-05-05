@@ -44,6 +44,20 @@ fn triage_commands_still_attempt_auto_weave_upgrade() {
 }
 
 #[test]
+fn arch_commands_still_attempt_auto_weave_upgrade() {
+    let cli = Cli::parse_from(["csa", "arch", "module depth in command dispatch"]);
+    assert!(should_attempt_auto_weave_upgrade(&cli.command));
+}
+
+#[test]
+fn arch_command_is_listed_in_help() {
+    let help = Cli::command().render_long_help().to_string();
+
+    assert!(help.contains("arch"));
+    assert!(help.contains("Run deep module architecture analysis"));
+}
+
+#[test]
 fn triage_command_is_listed_in_help() {
     let help = Cli::command().render_long_help().to_string();
 
