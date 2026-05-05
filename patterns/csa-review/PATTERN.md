@@ -21,6 +21,7 @@ Check initial prompt for "Use the csa-review skill" literal string.
 If present → review agent mode (skip orchestration, execute review directly).
 If invoked by user → orchestrator mode (follow steps below).
 Review agents should perform analysis directly; spawning nested `csa` sub-agents is allowed up to `project.max_recursion_depth` (enforced by `pipeline::load_and_validate`, default 5) but rarely adds value for a read-only review.
+Review agents are in a READ-ONLY analysis session: do NOT modify, create, or delete files; report findings as text output only.
 
 ## Step 2: Determine Review Tool
 
@@ -59,27 +60,28 @@ and AGENTS.md autonomously — do NOT pre-read them here.
 Review prompt instructs agent to:
 1. Read project context (CLAUDE.md + AGENTS.md)
 2. Collect diff for given scope
-3. Three-pass review (discovery, evidence filtering, adversarial security)
-4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules), including:
+3. Treat the session as READ-ONLY analysis: do NOT modify, create, or delete files; report findings as text output only
+4. Three-pass review (discovery, evidence filtering, adversarial security)
+5. AGENTS.md compliance checklist (root-to-leaf, all applicable rules), including:
    - Rule 027 `pattern-workflow-sync` when diff touches `PATTERN.md` or `workflow.toml`
    - Rust rule 015 `subprocess-lifecycle` when diff touches process spawning/lifecycle code
-5. **Contract Alignment** (when spec context available via TODO.md, spec.toml, or .spec):
+6. **Contract Alignment** (when spec context available via TODO.md, spec.toml, or .spec):
    - **Intent verification**: Does the diff fulfill the spec's stated intent and decisions?
    - **Boundary compliance**: Are the spec's boundary constraints (what NOT to do) respected?
    - **Completion criteria**: Can each criterion's DONE WHEN condition be mechanically verified?
    - Emit categories: `spec-deviation` (implementation contradicts spec),
      `unverified-criterion` (criterion not addressed by diff),
      `boundary-violation` (change exceeds spec scope)
-6. When `review_mode=red-team`, load `references/red-team-mode.md` and review
+7. When `review_mode=red-team`, load `references/red-team-mode.md` and review
    adversarially (counterexamples, boundary conditions, break attempts).
-7. Emit exactly one final verdict token: PASS, FAIL, SKIP, UNCERTAIN, or UNAVAILABLE.
+8. Emit exactly one final verdict token: PASS, FAIL, SKIP, UNCERTAIN, or UNAVAILABLE.
    Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.
    Use `UNAVAILABLE` when reviewer infrastructure cannot complete the review
    because all configured tier models failed (for example quota/auth/network).
    Use `UNCERTAIN` only when the reviewer is available but lacks confidence in
    the current evidence.
-8. Generate `$CSA_SESSION_DIR/review-findings.json`, `$CSA_SESSION_DIR/output/review-verdict.json`, and `$CSA_SESSION_DIR/review-report.md`
-9. Parse `[project_profile: <value>]` metadata from the instruction and apply
+9. Generate `$CSA_SESSION_DIR/review-findings.json`, `$CSA_SESSION_DIR/output/review-verdict.json`, and `$CSA_SESSION_DIR/review-report.md`
+10. Parse `[project_profile: <value>]` metadata from the instruction and apply
    framework-aware review dimensions from `references/review-protocol.md`
 
 ## Step 5: Execute Review via CSA

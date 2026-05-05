@@ -371,6 +371,8 @@ fn build_debate_instruction_contains_safety_preamble() {
         prompt.contains("DEBATE SAFETY"),
         "Debate instruction must constrain to read-only operations"
     );
+    assert!(prompt.contains("READ-ONLY analysis session"));
+    assert!(prompt.contains("Do NOT modify, create, or delete any files"));
     assert!(
         !prompt.contains("Do NOT invoke"),
         "Legacy blanket anti-csa text must not be reintroduced (breaks fractal recursion contract)"

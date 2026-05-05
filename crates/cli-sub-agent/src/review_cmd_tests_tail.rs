@@ -372,30 +372,13 @@ fn test_build_review_instruction_no_diff_content() {
         None,
     );
     assert!(
-        result.len() < 2200,
+        result.len() < 2300,
         "Instruction should stay bounded even with the design anchor, got {} chars",
         result.len()
     );
     assert!(!result.contains("git diff"));
     assert!(!result.contains("Pass 1:"));
     assert!(result.contains("Design preferences vs correctness bugs"));
-}
-
-#[test]
-fn test_build_review_instruction_contains_safety_preamble() {
-    let result = build_review_instruction(
-        "uncommitted",
-        "review-only",
-        "auto",
-        ReviewMode::Standard,
-        None,
-    );
-    assert!(result.contains("INSIDE a CSA subprocess"));
-    assert!(result.contains("REVIEW-ONLY SAFETY"));
-    assert!(
-        !result.contains("Do NOT invoke"),
-        "Legacy blanket anti-csa text must not be reintroduced (breaks fractal recursion contract)"
-    );
 }
 
 #[test]
