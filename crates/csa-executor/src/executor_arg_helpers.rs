@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -181,6 +182,14 @@ fn trim_prompt_path_token(raw: &str) -> String {
 }
 
 fn push_unique_directory_string(directories: &mut Vec<String>, directory: &str) {
+    push_unique_directory_string_with_exists(directories, directory, |path| path.try_exists());
+}
+
+fn push_unique_directory_string_with_exists(
+    directories: &mut Vec<String>,
+    directory: &str,
+    try_exists: impl FnOnce(&Path) -> io::Result<bool>,
+) {
     let trimmed = directory.trim();
     if trimmed.is_empty() {
         return;
@@ -195,9 +204,139 @@ fn push_unique_directory_string(directories: &mut Vec<String>, directory: &str) 
     if directories.iter().any(|existing| existing == trimmed) {
         return;
     }
+
+    match try_exists(path) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(
+                directory = %trimmed,
+                "Skipping Gemini include directory because it does not exist"
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(
+                directory = %trimmed,
+                error = %error,
+                "Skipping Gemini include directory because existence could not be checked"
+            );
+            return;
+        }
+    }
+
     directories.push(trimmed.to_string());
 }
 
 fn is_filesystem_root(path: &Path) -> bool {
     path.is_absolute() && path.parent().is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct SharedBufferWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl io::Write for SharedBufferWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            let mut guard = self.buf.lock().expect("buffer lock poisoned");
+            guard.extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedMakeWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl<'a> MakeWriter<'a> for SharedMakeWriter {
+        type Writer = SharedBufferWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedBufferWriter {
+                buf: Arc::clone(&self.buf),
+            }
+        }
+    }
+
+    fn capture_warn_logs(action: impl FnOnce()) -> String {
+        let log_buf = Arc::new(Mutex::new(Vec::new()));
+        let make_writer = SharedMakeWriter {
+            buf: Arc::clone(&log_buf),
+        };
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(make_writer)
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, action);
+
+        String::from_utf8(log_buf.lock().expect("buffer lock poisoned").clone())
+            .expect("logs should be valid UTF-8")
+    }
+
+    #[test]
+    fn push_unique_directory_string_skips_nonexistent_path_with_warning() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let missing = temp.path().join("missing");
+        let missing = missing.to_string_lossy().to_string();
+        let mut directories = Vec::new();
+
+        let logs = capture_warn_logs(|| {
+            push_unique_directory_string(&mut directories, &missing);
+        });
+
+        assert!(directories.is_empty());
+        assert!(logs.contains("Skipping Gemini include directory because it does not exist"));
+        assert!(logs.contains(&missing));
+    }
+
+    #[test]
+    fn push_unique_directory_string_skips_permission_error_with_warning() {
+        let mut directories = Vec::new();
+
+        let logs = capture_warn_logs(|| {
+            push_unique_directory_string_with_exists(&mut directories, "/inaccessible", |_| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "permission denied",
+                ))
+            });
+        });
+
+        assert!(directories.is_empty());
+        assert!(
+            logs.contains(
+                "Skipping Gemini include directory because existence could not be checked"
+            )
+        );
+        assert!(logs.contains("permission denied"));
+    }
+
+    #[test]
+    fn push_unique_directory_string_adds_existing_path_normally() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let existing = temp.path().to_string_lossy().to_string();
+        let mut directories = Vec::new();
+
+        let logs = capture_warn_logs(|| {
+            push_unique_directory_string(&mut directories, &existing);
+        });
+
+        assert_eq!(directories, vec![existing]);
+        assert!(!logs.contains("Skipping Gemini include directory"));
+    }
 }
