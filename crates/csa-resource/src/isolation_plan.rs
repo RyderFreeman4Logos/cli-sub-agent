@@ -301,17 +301,11 @@ impl IsolationPlanBuilder {
                 add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
             }
 
-            // NOTE: mise-managed Rust toolchain paths are intentionally NOT added
-            // as writable. Making the entire install dir writable (rustc, stdlib)
-            // is an isolation regression. The cargo registry/git cache dirs are
-            // already covered by the CARGO_HOME logic above — when mise sets
-            // CARGO_HOME into the toolchain dir, those subdirs get write access.
+            // Do not make mise-managed toolchain install dirs writable; only the
+            // registry/git cache subdirs above need write access.
 
-            // Codex writes rollout JSONL and arg0 PATH shim files under
-            // CODEX_HOME (default: ~/.codex).  Expose an existing Codex home
-            // for every sandboxed parent because CSA sessions can recursively
-            // spawn Codex ACP children; an inner bwrap cannot make a source
-            // path writable if the parent bwrap mounted it read-only.
+            // Expose existing CODEX_HOME for every sandboxed parent so nested
+            // Codex CSA children inherit a writable source path.
             codex_paths::add_codex_home_for_tool(
                 tool_name,
                 &home,
@@ -319,19 +313,25 @@ impl IsolationPlanBuilder {
                 &mut self.required_writable_dirs,
             );
 
-            // Tool-specific config/data directories (only if they exist).
-            let tool_dirs: &[&str] = match tool_name {
-                "claude-code" => &[".claude"],
-                "codex" => &[],
-                "gemini-cli" => &[".gemini", ".config/gemini-cli"],
-                "opencode" => &[".config/opencode"],
-                _ => &[],
-            };
-            for rel in tool_dirs {
-                let p = home.join(rel);
-                if p.exists() {
-                    self.writable_paths.push(p);
+            // claude-code may cold-start by creating ~/.claude/session-env/<uuid>
+            // during review; pre-create ~/.claude so HOME does not stay read-only.
+            match tool_name {
+                "claude-code" => {
+                    let claude_dir = home.join(".claude");
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &claude_dir);
                 }
+                "gemini-cli" => [".gemini", ".config/gemini-cli"]
+                    .into_iter()
+                    .map(|rel| home.join(rel))
+                    .filter(|path| path.exists())
+                    .for_each(|path| self.writable_paths.push(path)),
+                "opencode" => {
+                    let p = home.join(".config/opencode");
+                    if p.exists() {
+                        self.writable_paths.push(p);
+                    }
+                }
+                _ => {}
             }
         }
         self
