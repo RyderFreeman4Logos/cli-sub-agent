@@ -407,6 +407,12 @@ fn command_segment_contains_no_verify_commit<F>(tokens: &[String], skip_prefix: 
 where
     F: Fn(&[String]) -> usize,
 {
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(tokens)
+        && shell_script_contains_no_verify_commit(shell_script_tokens)
+    {
+        return true;
+    }
+
     let idx = skip_prefix(tokens);
     if idx >= tokens.len() || !is_git_token(tokens[idx].as_str()) {
         return false;
