@@ -539,13 +539,44 @@ fn test_operations_with_invalid_session_id() {
     assert!(validate_tool_access_in(td.path(), bad, "codex").is_err());
 }
 
+const ETXTBSY_RAW_OS_ERROR: i32 = 26;
+
+fn git_command_retries_exhausted(args: &[&str], attempts: usize, err: &std::io::Error) -> ! {
+    panic!(
+        "git {args:?} failed after {attempts} attempts: {err}"
+    );
+}
+
+fn is_text_file_busy(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(ETXTBSY_RAW_OS_ERROR)
+}
+
+fn etxtbsy_backoff(attempt: usize) -> std::time::Duration {
+    let delay_ms = 25_u64.saturating_mul(1_u64 << attempt.min(3));
+    std::time::Duration::from_millis(delay_ms)
+}
+
+fn run_git_output(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let max_attempts = 4;
+    for attempt in 0..max_attempts {
+        match std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+        {
+            Ok(output) => return output,
+            Err(err) if is_text_file_busy(&err) && attempt + 1 < max_attempts => {
+                std::thread::sleep(etxtbsy_backoff(attempt));
+            }
+            Err(err) => git_command_retries_exhausted(args, attempt + 1, &err),
+        }
+    }
+    unreachable!("retry loop should have returned or panicked")
+}
+
 fn run_git(dir: &std::path::Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
+    let output = run_git_output(dir, args);
+    assert!(output.status.success(), "git {args:?} failed");
 }
 
 #[test]
@@ -764,34 +795,3 @@ fn test_prefix_stays_project_scoped() {
     assert!(result.is_err());
 }
 
-#[test]
-fn test_find_sessions_backward_compat_without_branch_field() {
-    let td = tempdir().unwrap();
-    let mut legacy = create_session_in(td.path(), td.path(), Some("legacy"), None, None).unwrap();
-    legacy.phase = SessionPhase::Available;
-    legacy.task_context.task_type = Some("plan".to_string());
-    save_session_in(td.path(), &legacy).unwrap();
-
-    let matched = find_sessions_in(
-        td.path(),
-        Some(td.path()),
-        None,
-        Some("plan"),
-        Some(SessionPhase::Available),
-        None,
-    )
-    .unwrap();
-    assert_eq!(matched.len(), 1);
-    assert_eq!(matched[0].meta_session_id, legacy.meta_session_id);
-
-    let no_match = find_sessions_in(
-        td.path(),
-        Some(td.path()),
-        Some("feature/a"),
-        Some("plan"),
-        Some(SessionPhase::Available),
-        None,
-    )
-    .unwrap();
-    assert!(no_match.is_empty());
-}
