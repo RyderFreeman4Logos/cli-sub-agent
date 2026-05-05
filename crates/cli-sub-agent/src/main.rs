@@ -3,6 +3,7 @@ use std::io::Write;
 use anyhow::Result;
 use clap::Parser;
 
+mod arch_cmd;
 mod audit;
 mod audit_cmds;
 mod batch;
@@ -451,6 +452,10 @@ async fn run() -> Result<()> {
                 output_format,
             )
             .await?;
+            exit_current_process(exit_code);
+        }
+        Commands::Arch(args) => {
+            let exit_code = arch_cmd::handle_arch_args(args, current_depth, output_format).await?;
             exit_current_process(exit_code);
         }
         Commands::Triage(args) => {
