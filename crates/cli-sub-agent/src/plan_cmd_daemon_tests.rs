@@ -14,6 +14,7 @@ fn make_args() -> PlanRunArgs {
         resume: None,
         cd: None,
         current_depth: 0,
+        pipeline_source: crate::plan_cmd::PlanRunPipelineSource::DirectPlanRun,
     }
 }
 

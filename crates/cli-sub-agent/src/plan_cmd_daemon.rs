@@ -18,10 +18,20 @@ use tracing::warn;
 
 use crate::cli::PlanCommands;
 use crate::pipeline::determine_project_root;
-use crate::plan_cmd::{self, PlanRunArgs, handle_plan_run};
+use crate::plan_cmd::{self, PlanRunArgs, PlanRunPipelineSource, handle_plan_run};
 use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
+const PLAN_PIPELINE_SOURCE_ENV: &str = "CSA_PLAN_PIPELINE_SOURCE";
+
+pub(crate) struct PlanRunDispatchInput {
+    pub foreground: bool,
+    pub daemon_child: bool,
+    pub session_id: Option<String>,
+    pub sa_mode_active: bool,
+    pub text_output: bool,
+    pub forwarded_args: Option<Vec<String>>,
+}
 
 /// Dispatch entry point for the `csa plan` subcommand group.
 ///
@@ -48,6 +58,14 @@ pub(crate) async fn dispatch(
         daemon_child,
         session_id,
     } = cmd;
+    let pipeline_source = if daemon_child {
+        std::env::var(PLAN_PIPELINE_SOURCE_ENV)
+            .ok()
+            .and_then(|value| PlanRunPipelineSource::from_str(&value))
+            .unwrap_or(PlanRunPipelineSource::DirectPlanRun)
+    } else {
+        PlanRunPipelineSource::DirectPlanRun
+    };
     let plan_args = PlanRunArgs {
         file,
         pattern,
@@ -58,9 +76,29 @@ pub(crate) async fn dispatch(
         resume,
         cd,
         current_depth,
+        pipeline_source,
     };
-    if daemon_child {
-        let sid = session_id.ok_or_else(|| {
+    dispatch_plan_run(
+        plan_args,
+        PlanRunDispatchInput {
+            foreground,
+            daemon_child,
+            session_id,
+            sa_mode_active,
+            text_output,
+            forwarded_args: None,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn dispatch_plan_run(
+    plan_args: PlanRunArgs,
+    input: PlanRunDispatchInput,
+) -> Result<()> {
+    let current_depth = plan_args.current_depth;
+    if input.daemon_child {
+        let sid = input.session_id.ok_or_else(|| {
             anyhow::anyhow!("--daemon-child requires --session-id (set by daemon parent)")
         })?;
         let exit_code = match handle_plan_run_daemon_child(plan_args, &sid).await {
@@ -75,19 +113,19 @@ pub(crate) async fn dispatch(
             }
         };
         crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
-            sa_mode_active,
+            input.sa_mode_active,
             current_depth,
-            text_output,
+            input.text_output,
         );
         exit_current_process(exit_code);
     }
 
-    if session_id.is_some() {
+    if input.session_id.is_some() {
         anyhow::bail!("--session-id is an internal flag and must not be used directly");
     }
 
     let needs_foreground = decide_needs_foreground(ForegroundDecisionInput {
-        foreground,
+        foreground: input.foreground,
         dry_run: plan_args.dry_run,
         chunked: plan_args.chunked,
         has_resume: plan_args.resume.is_some(),
@@ -96,15 +134,15 @@ pub(crate) async fn dispatch(
     });
 
     if !needs_foreground {
-        spawn_and_exit(&plan_args)?;
+        spawn_and_exit(&plan_args, input.forwarded_args)?;
         unreachable!("plan daemon spawn returned without exiting");
     }
 
     plan_cmd::handle_plan_run(plan_args).await?;
     crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
-        sa_mode_active,
+        input.sa_mode_active,
         current_depth,
-        text_output,
+        input.text_output,
     );
     Ok(())
 }
@@ -116,7 +154,10 @@ pub(crate) async fn dispatch(
 /// prints the ULID to stdout and an RPJ directive to stderr, then exits 0.
 ///
 /// On the daemon-child path, [`handle_plan_run_daemon_child`] takes over.
-pub(crate) fn spawn_and_exit(args: &PlanRunArgs) -> Result<()> {
+pub(crate) fn spawn_and_exit(
+    args: &PlanRunArgs,
+    forwarded_args: Option<Vec<String>>,
+) -> Result<()> {
     let session_id = csa_session::new_session_id();
     let project_root = determine_project_root(args.cd.as_deref())?;
     let session_root = csa_session::get_session_root(&project_root)?;
@@ -125,7 +166,8 @@ pub(crate) fn spawn_and_exit(args: &PlanRunArgs) -> Result<()> {
     let description = describe_plan_run(args);
     persist_placeholder_plan_session(&project_root, &session_dir, &session_id, &description)?;
 
-    let forwarded_args = build_forwarded_plan_args(&std::env::args().collect::<Vec<_>>());
+    let forwarded_args = forwarded_args
+        .unwrap_or_else(|| build_forwarded_plan_args(&std::env::args().collect::<Vec<_>>()));
 
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
     let mut daemon_env = HashMap::new();
@@ -137,6 +179,10 @@ pub(crate) fn spawn_and_exit(args: &PlanRunArgs) -> Result<()> {
     daemon_env.insert(
         "CSA_DAEMON_PROJECT_ROOT".to_string(),
         project_root.display().to_string(),
+    );
+    daemon_env.insert(
+        PLAN_PIPELINE_SOURCE_ENV.to_string(),
+        args.pipeline_source.as_str().to_string(),
     );
 
     let config = csa_process::daemon::DaemonSpawnConfig {

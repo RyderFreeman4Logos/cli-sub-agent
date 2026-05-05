@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::cli::{Cli, Commands, PlanCommands};
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use std::sync::{LazyLock, Mutex};
 
     static SA_MODE_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -41,7 +41,7 @@ mod tests {
     }
 
     #[test]
-    fn sa_mode_parses_for_batch_plan_and_claude_sub_agent() {
+    fn sa_mode_parses_for_batch_plan_dev2merge_and_claude_sub_agent() {
         let batch_cli = Cli::try_parse_from(["csa", "batch", "task.toml", "--sa-mode", "true"])
             .expect("batch cli should parse");
         match batch_cli.command {
@@ -59,6 +59,18 @@ mod tests {
             _ => panic!("expected plan command"),
         }
 
+        let dev2merge_cli =
+            Cli::try_parse_from(["csa", "dev2merge", "--sa-mode", "true", "--issue", "1287"])
+                .expect("dev2merge cli should parse");
+        match dev2merge_cli.command {
+            Commands::Dev2merge(args) => {
+                assert_eq!(args.sa_mode, Some(true));
+                assert_eq!(args.issue, Some(1287));
+                assert_eq!(args.timeout, None);
+            }
+            _ => panic!("expected dev2merge command"),
+        }
+
         let claude_cli =
             Cli::try_parse_from(["csa", "claude-sub-agent", "--sa-mode", "true", "question"])
                 .expect("claude-sub-agent cli should parse");
@@ -66,6 +78,15 @@ mod tests {
             Commands::ClaudeSubAgent(args) => assert_eq!(args.sa_mode, Some(true)),
             _ => panic!("expected claude-sub-agent command"),
         }
+    }
+
+    #[test]
+    fn top_level_help_lists_dev2merge_subcommand() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(
+            help.contains("dev2merge"),
+            "top-level help should list dev2merge subcommand:\n{help}"
+        );
     }
 
     #[test]
@@ -116,6 +137,7 @@ mod tests {
             &["csa", "debate", "question"],
             &["csa", "batch", "task.toml"],
             &["csa", "plan", "run", "flow.toml"],
+            &["csa", "dev2merge"],
             &["csa", "claude-sub-agent", "question"],
         ];
 

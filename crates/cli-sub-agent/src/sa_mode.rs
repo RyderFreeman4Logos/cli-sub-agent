@@ -14,6 +14,7 @@ fn command_name_for_sa_mode(command: &Commands) -> Option<&'static str> {
         Commands::Plan {
             cmd: PlanCommands::Run { .. },
         } => Some("plan run"),
+        Commands::Dev2merge(_) => Some("dev2merge"),
         Commands::ClaudeSubAgent(_) => Some("claude-sub-agent"),
         _ => None,
     }
@@ -29,6 +30,7 @@ pub(crate) fn command_sa_mode_arg(command: &Commands) -> Option<Option<bool>> {
         Commands::Plan {
             cmd: PlanCommands::Run { sa_mode, .. },
         } => Some(*sa_mode),
+        Commands::Dev2merge(args) => Some(args.sa_mode),
         Commands::ClaudeSubAgent(args) => Some(args.sa_mode),
         _ => None,
     }
