@@ -31,6 +31,7 @@ pub(crate) use policy::{
     apply_lefthook_bypass_policy, apply_no_verify_commit_policy, apply_post_run_commit_policy,
     apply_unverifiable_commit_policy, execute_tool_calls_observed, extract_executed_shell_commands,
 };
+pub(crate) use shell::detect_no_verify_commit_commands;
 
 #[cfg(test)]
 pub(crate) use git::{PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status};

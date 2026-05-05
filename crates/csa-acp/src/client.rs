@@ -259,14 +259,181 @@ impl SessionEventStore {
 /// `apply_no_verify_commit_policy`; this flag merely ensures the event is
 /// never silently evicted from the bounded ring buffer.
 fn command_looks_like_no_verify_commit(cmd: &str) -> bool {
-    let lower = cmd.to_ascii_lowercase();
-    if !lower.contains("git") || !lower.contains("commit") {
+    let tokens = tokenize_shell_tokens(cmd);
+    let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&tokens) else {
         return false;
+    };
+    commit_args_include_no_verify(&tokens[git_commit_subcommand_idx + 1..])
+}
+
+fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for ch in segment.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if in_single_quote {
+            if ch == '\'' {
+                current.push(ch);
+                in_single_quote = false;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if in_double_quote {
+            match ch {
+                '"' => {
+                    current.push(ch);
+                    in_double_quote = false;
+                }
+                '\\' => escaped = true,
+                _ => current.push(ch),
+            }
+            continue;
+        }
+
+        match ch {
+            '\\' => escaped = true,
+            '\'' => {
+                current.push(ch);
+                in_single_quote = true;
+            }
+            '"' => {
+                current.push(ch);
+                in_double_quote = true;
+            }
+            c if c.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
     }
-    lower.contains("--no-verify")
-        || lower.contains("-n ")
-        || lower.ends_with("-n")
-        || lower.contains("--no-gpg-sign") // also suspicious in same context
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
+    let mut idx = 0usize;
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+        if is_git_token(token) {
+            let mut scan = idx + 1;
+            while scan < tokens.len() {
+                let current = tokens[scan].as_str();
+                if current == "commit" {
+                    return Some((idx, scan));
+                }
+                if current == "--" {
+                    break;
+                }
+                if current.starts_with('-') {
+                    scan += 1;
+                    if git_global_option_consumes_value(current) && !current.contains('=') {
+                        scan = consume_option_value(tokens, scan);
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn commit_args_include_no_verify(args: &[String]) -> bool {
+    let mut idx = 0usize;
+    while idx < args.len() {
+        let token = args[idx].as_str();
+        if token == "--" {
+            break;
+        }
+        if token.eq_ignore_ascii_case("--no-verify") {
+            return true;
+        }
+        if token.starts_with("--") {
+            idx += 1;
+            if commit_long_option_consumes_value(token) && !token.contains('=') {
+                idx = consume_option_value(args, idx);
+            }
+            continue;
+        }
+        if token.starts_with('-') && token.len() > 1 {
+            let mut chars = token[1..].chars().peekable();
+            let mut consumes_value = false;
+            while let Some(flag) = chars.next() {
+                if flag == 'n' {
+                    return true;
+                }
+                if commit_short_option_consumes_value(flag) {
+                    consumes_value = chars.peek().is_none();
+                    break;
+                }
+            }
+            idx += 1;
+            if consumes_value {
+                idx = consume_option_value(args, idx);
+            }
+            continue;
+        }
+        idx += 1;
+    }
+    false
+}
+
+fn consume_option_value(args: &[String], mut idx: usize) -> usize {
+    if idx < args.len() {
+        idx += 1;
+    }
+    idx
+}
+
+fn commit_short_option_consumes_value(flag: char) -> bool {
+    matches!(flag, 'm' | 'F' | 'c' | 'C' | 't')
+}
+
+fn commit_long_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "--message"
+            | "--file"
+            | "--template"
+            | "--reuse-message"
+            | "--reedit-message"
+            | "--fixup"
+            | "--squash"
+            | "--author"
+            | "--date"
+            | "--trailer"
+            | "--pathspec-from-file"
+            | "--cleanup"
+    )
+}
+
+fn is_git_token(token: &str) -> bool {
+    token.eq_ignore_ascii_case("git") || token.ends_with("/git")
+}
+
+fn git_global_option_consumes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-c" | "-C" | "--exec-path" | "--git-dir" | "--work-tree" | "--namespace" | "--config-env"
+    )
 }
 
 pub(crate) type SharedEvents = Rc<RefCell<SessionEventStore>>;
@@ -410,6 +577,7 @@ mod tests {
 
     use super::{
         AcpClient, MAX_EXTRACTED_COMMANDS, MAX_RETAINED_EVENTS, SessionEvent, SessionEventStore,
+        command_looks_like_no_verify_commit,
     };
 
     #[test]
@@ -602,5 +770,21 @@ mod tests {
             commands.last().map(String::as_str),
             Some(expected_last.as_str())
         );
+    }
+
+    #[test]
+    fn command_looks_like_no_verify_commit_ignores_message_values_starting_with_dash() {
+        assert!(!command_looks_like_no_verify_commit(
+            "git commit -m 'msg' -m '- Verification: pre-commit'"
+        ));
+    }
+
+    #[test]
+    fn command_looks_like_no_verify_commit_detects_real_no_verify_flags() {
+        assert!(command_looks_like_no_verify_commit(
+            "git commit -m 'msg' -n"
+        ));
+        assert!(!command_looks_like_no_verify_commit("git commit -am 'msg'"));
+        assert!(command_looks_like_no_verify_commit("git commit -nm 'msg'"));
     }
 }

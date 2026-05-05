@@ -565,7 +565,7 @@ fn commit_args_include_no_verify(args: &[String]) -> bool {
         if token.starts_with("--") {
             idx += 1;
             if long_option_consumes_value(token) && !token.contains('=') {
-                idx = consume_option_value(args, idx, long_option_is_message_like(token));
+                idx = consume_option_value(args, idx);
             }
             continue;
         }
@@ -573,20 +573,18 @@ fn commit_args_include_no_verify(args: &[String]) -> bool {
         if token.starts_with('-') && token.len() > 1 {
             let mut chars = token[1..].chars().peekable();
             let mut consumes_value = false;
-            let mut message_like = false;
             while let Some(flag) = chars.next() {
                 if flag == 'n' {
                     return true;
                 }
                 if short_option_consumes_value(flag) {
                     consumes_value = chars.peek().is_none();
-                    message_like = short_option_is_message_like(flag);
                     break;
                 }
             }
             idx += 1;
             if consumes_value {
-                idx = consume_option_value(args, idx, message_like);
+                idx = consume_option_value(args, idx);
             }
             continue;
         }
@@ -596,23 +594,8 @@ fn commit_args_include_no_verify(args: &[String]) -> bool {
     false
 }
 
-fn consume_option_value(args: &[String], mut idx: usize, message_like: bool) -> usize {
-    if !message_like {
-        if idx < args.len() {
-            idx += 1;
-        }
-        return idx;
-    }
-
+fn consume_option_value(args: &[String], mut idx: usize) -> usize {
     if idx < args.len() {
-        idx += 1;
-    }
-
-    while idx < args.len() {
-        let token = args[idx].as_str();
-        if is_command_separator_token(token) || token.starts_with('-') {
-            break;
-        }
         idx += 1;
     }
     idx
@@ -620,10 +603,6 @@ fn consume_option_value(args: &[String], mut idx: usize, message_like: bool) -> 
 
 fn short_option_consumes_value(flag: char) -> bool {
     matches!(flag, 'm' | 'F' | 'c' | 'C' | 't')
-}
-
-fn short_option_is_message_like(flag: char) -> bool {
-    matches!(flag, 'm')
 }
 
 fn long_option_consumes_value(token: &str) -> bool {
@@ -642,10 +621,6 @@ fn long_option_consumes_value(token: &str) -> bool {
             | "--pathspec-from-file"
             | "--cleanup"
     )
-}
-
-fn long_option_is_message_like(token: &str) -> bool {
-    token == "--message"
 }
 
 // ── LEFTHOOK bypass detection ──────────────────────────────────────

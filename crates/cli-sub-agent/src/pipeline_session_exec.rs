@@ -618,9 +618,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     );
     // Re-inject --no-verify commit if evicted from ring buffer.
     if transport_result.metadata.has_no_verify_commit
-        && !executed_shell_commands
-            .iter()
-            .any(|c| c.contains("--no-verify") || c.contains("-n"))
+        && crate::run_cmd::detect_no_verify_commit_commands(&executed_shell_commands).is_empty()
     {
         executed_shell_commands.push("git commit --no-verify".to_string());
     }
