@@ -22,6 +22,9 @@ pub use cli_tokuin::*;
 #[path = "cli_xurl.rs"]
 mod cli_xurl;
 pub use cli_xurl::*;
+#[path = "cli_triage.rs"]
+mod cli_triage;
+pub use cli_triage::*;
 #[path = "cli_plan.rs"]
 mod cli_plan;
 pub use cli_plan::*;
@@ -286,19 +289,10 @@ pub enum Commands {
     },
 
     /// Start a root-cause-first diagnostic debugging session
-    Hunt {
-        /// Bug description
-        description: String,
-        /// Tool to use
-        #[arg(long)]
-        tool: Option<String>,
-        /// Session timeout in seconds
-        #[arg(long, default_value = "7200")]
-        timeout: u64,
-        /// Allow working on base branch
-        #[arg(long, alias = "allow-base-branch-commit")]
-        allow_base_branch_working: bool,
-    },
+    Hunt(HuntArgs),
+
+    /// Triage a GitHub issue into category and state roles
+    Triage(TriageArgs),
 
     /// Manage sessions
     Session {

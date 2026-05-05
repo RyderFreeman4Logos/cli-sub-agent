@@ -84,6 +84,7 @@ mod todo_cmd;
 mod todo_epic_cmd;
 mod todo_ref_cmd;
 mod tool_version;
+mod triage_cmd;
 
 #[cfg(test)]
 mod sa_mode_tests;
@@ -440,17 +441,24 @@ async fn run() -> Result<()> {
             daemon_guard.finalize();
             exit_current_process(exit_code);
         }
-        Commands::Hunt {
-            description,
-            tool,
-            timeout,
-            allow_base_branch_working,
-        } => {
+        Commands::Hunt(args) => {
             let exit_code = hunt_cmd::handle_hunt(
-                description,
-                tool,
-                timeout,
-                allow_base_branch_working,
+                args.description,
+                args.tool,
+                args.timeout,
+                args.allow_base_branch_working,
+                current_depth,
+                output_format,
+            )
+            .await?;
+            exit_current_process(exit_code);
+        }
+        Commands::Triage(args) => {
+            let exit_code = triage_cmd::handle_triage(
+                args.description,
+                args.tool,
+                args.timeout,
+                args.allow_base_branch_working,
                 current_depth,
                 output_format,
             )
