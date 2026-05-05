@@ -18,7 +18,7 @@ use tracing::warn;
 
 use crate::cli::PlanCommands;
 use crate::pipeline::determine_project_root;
-use crate::plan_cmd::{self, PlanRunArgs, handle_plan_run};
+use crate::plan_cmd::{self, PlanRunArgs, PlanRunPipelineSource, handle_plan_run};
 use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
@@ -58,6 +58,7 @@ pub(crate) async fn dispatch(
         resume,
         cd,
         current_depth,
+        pipeline_source: PlanRunPipelineSource::DirectPlanRun,
     };
     if daemon_child {
         let sid = session_id.ok_or_else(|| {

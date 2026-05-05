@@ -3,6 +3,10 @@
 use clap::Subcommand;
 use csa_core::types::ToolName;
 
+#[path = "cli_dev2merge.rs"]
+mod cli_dev2merge;
+pub use cli_dev2merge::*;
+
 #[derive(Subcommand)]
 pub enum PlanCommands {
     /// Execute a weave workflow file

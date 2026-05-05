@@ -425,6 +425,8 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: PlanCommands,
     },
+    #[command(name = "dev2merge", about = "Run the dev2merge workflow alias")]
+    Dev2merge(Dev2mergeArgs),
 
     /// Run pending config/state migrations
     Migrate {

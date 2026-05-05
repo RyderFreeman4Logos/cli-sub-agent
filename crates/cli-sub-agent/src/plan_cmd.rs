@@ -50,12 +50,35 @@ pub(crate) use plan_cmd_steps::{
 };
 
 const PLAN_JOURNAL_SCHEMA_VERSION: u8 = 1;
+const PLAN_PIPELINE_SOURCE_DIRECT: &str = "direct-plan-run";
+const PLAN_PIPELINE_SOURCE_CLI_ALIAS: &str = "cli-alias";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanRunPipelineSource {
+    DirectPlanRun,
+    CliAlias,
+}
+
+impl PlanRunPipelineSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectPlanRun => PLAN_PIPELINE_SOURCE_DIRECT,
+            Self::CliAlias => PLAN_PIPELINE_SOURCE_CLI_ALIAS,
+        }
+    }
+}
+
+fn default_plan_pipeline_source() -> String {
+    PLAN_PIPELINE_SOURCE_DIRECT.to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanRunJournal {
     schema_version: u8,
     workflow_name: String,
     workflow_path: String,
+    #[serde(default = "default_plan_pipeline_source")]
+    pipeline_source: String,
     status: String,
     vars: HashMap<String, String>,
     completed_steps: Vec<usize>,
@@ -72,6 +95,7 @@ impl PlanRunJournal {
             schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
             workflow_name: workflow_name.to_string(),
             workflow_path: normalize_path(workflow_path),
+            pipeline_source: default_plan_pipeline_source(),
             status: "running".to_string(),
             vars,
             completed_steps: Vec::new(),
@@ -368,6 +392,7 @@ pub(crate) struct PlanRunArgs {
     pub resume: Option<String>,
     pub cd: Option<String>,
     pub current_depth: u32,
+    pub pipeline_source: PlanRunPipelineSource,
 }
 
 /// Handle `csa plan run <file>` or `csa plan run --pattern <name>`.
@@ -388,6 +413,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         resume,
         cd,
         current_depth,
+        pipeline_source,
     } = args;
 
     // 1. Determine project root
@@ -522,6 +548,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         &workflow_path,
         resume_context.initial_vars.clone(),
     );
+    journal.pipeline_source = pipeline_source.as_str().to_string();
     journal.completed_steps = resume_context.completed_steps.iter().copied().collect();
     apply_repo_fingerprint(&mut journal, &current_repo_fingerprint);
     persist_plan_journal(&journal_path, &journal)?;

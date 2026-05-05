@@ -17,6 +17,7 @@ mod debate_cmd;
 mod debate_cmd_output;
 mod debate_cmd_resolve;
 mod debate_errors;
+mod dev2merge_cmd;
 mod difficulty_routing;
 mod doctor;
 mod edit_restriction_guard;
@@ -766,6 +767,7 @@ async fn run() -> Result<()> {
             )
             .await?;
         }
+        Commands::Dev2merge(args) => dev2merge_cmd::handle_dev2merge(args, current_depth).await?,
         Commands::Migrate { dry_run, status } => {
             migrate_cmd::handle_migrate(dry_run, status)?;
         }

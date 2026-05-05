@@ -9,6 +9,23 @@ fn safe_plan_name_normalizes_non_alphanumeric_characters() {
 }
 
 #[test]
+fn plan_journal_defaults_pipeline_source_for_legacy_json() {
+    let raw = r#"{
+        "schema_version": 1,
+        "workflow_name": "dev2merge",
+        "workflow_path": "/repo/patterns/dev2merge/workflow.toml",
+        "status": "running",
+        "vars": {},
+        "completed_steps": [],
+        "last_error": null
+    }"#;
+
+    let journal: PlanRunJournal = serde_json::from_str(raw).unwrap();
+
+    assert_eq!(journal.pipeline_source, PLAN_PIPELINE_SOURCE_DIRECT);
+}
+
+#[test]
 fn load_plan_resume_context_reads_running_journal() {
     let tmp = tempfile::tempdir().unwrap();
     let workflow_path = tmp.path().join("workflow.toml");
@@ -29,6 +46,7 @@ fn load_plan_resume_context_reads_running_journal() {
         schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
         workflow_name: "test".into(),
         workflow_path: normalize_path(&workflow_path),
+        pipeline_source: default_plan_pipeline_source(),
         status: "running".into(),
         vars: HashMap::from([
             ("FEATURE".to_string(), "from-journal".to_string()),
@@ -87,6 +105,7 @@ fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
         schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
         workflow_name: "test".into(),
         workflow_path: normalize_path(&workflow_path),
+        pipeline_source: default_plan_pipeline_source(),
         status: "running".into(),
         vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
         completed_steps: vec![1],
@@ -134,6 +153,7 @@ fn load_plan_resume_context_requires_explicit_resume_for_manual_handoff() {
         schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
         workflow_name: "test".into(),
         workflow_path: normalize_path(&workflow_path),
+        pipeline_source: default_plan_pipeline_source(),
         status: "manual-handoff".into(),
         vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
         completed_steps: vec![1],
@@ -194,6 +214,7 @@ fn load_plan_resume_context_rejects_awaiting_user_journal_even_with_explicit_res
         schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
         workflow_name: "test".into(),
         workflow_path: normalize_path(&workflow_path),
+        pipeline_source: default_plan_pipeline_source(),
         status: "awaiting-user".into(),
         vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
         completed_steps: vec![1],
