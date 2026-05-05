@@ -291,8 +291,11 @@ pub fn validate_command_args(
         Commands::Run { timeout, .. } => {
             validate_timeout(*timeout, min_timeout)?;
         }
-        Commands::Hunt { timeout, .. } => {
-            validate_timeout(Some(*timeout), min_timeout)?;
+        Commands::Hunt(args) => {
+            validate_timeout(Some(args.timeout), min_timeout)?;
+        }
+        Commands::Triage(args) => {
+            validate_timeout(Some(args.timeout), min_timeout)?;
         }
         Commands::Review(args) => {
             validate_review_args(args)?;

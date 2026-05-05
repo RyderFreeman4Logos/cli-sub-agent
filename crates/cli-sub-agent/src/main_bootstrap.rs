@@ -31,7 +31,7 @@ pub(crate) fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
     // Only execution commands need upgraded weave patterns.
     // All management/read-only commands stay available even when weave is unhealthy.
     match command {
-        Commands::Run { .. } | Commands::Hunt { .. } => true,
+        Commands::Run { .. } | Commands::Hunt(_) | Commands::Triage(_) => true,
         Commands::Review(args) => !args.check_verdict,
         Commands::Debate(_) | Commands::Batch { .. } | Commands::Plan { .. } => true,
         Commands::ClaudeSubAgent(_) | Commands::McpServer => true,

@@ -1,5 +1,5 @@
 use super::{Cli, should_attempt_auto_weave_upgrade};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 #[test]
 fn todo_commands_skip_auto_weave_upgrade() {
@@ -35,6 +35,20 @@ fn gc_skips_auto_weave_upgrade() {
 fn run_commands_still_attempt_auto_weave_upgrade() {
     let cli = Cli::parse_from(["csa", "run", "--sa-mode", "false", "status"]);
     assert!(should_attempt_auto_weave_upgrade(&cli.command));
+}
+
+#[test]
+fn triage_commands_still_attempt_auto_weave_upgrade() {
+    let cli = Cli::parse_from(["csa", "triage", "issue description"]);
+    assert!(should_attempt_auto_weave_upgrade(&cli.command));
+}
+
+#[test]
+fn triage_command_is_listed_in_help() {
+    let help = Cli::command().render_long_help().to_string();
+
+    assert!(help.contains("triage"));
+    assert!(help.contains("Triage a GitHub issue into category and state roles"));
 }
 
 #[test]
