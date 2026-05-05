@@ -260,6 +260,11 @@ impl SessionEventStore {
 /// never silently evicted from the bounded ring buffer.
 fn command_looks_like_no_verify_commit(cmd: &str) -> bool {
     let tokens = tokenize_shell_tokens(cmd);
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
+        && shell_script_contains_no_verify_commit(shell_script_tokens)
+    {
+        return true;
+    }
     let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&tokens) else {
         return false;
     };
@@ -276,7 +281,9 @@ fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
 
     while let Some(ch) = chars.next() {
         if escaped {
-            current.push(ch);
+            if ch != '\n' {
+                current.push(ch);
+            }
             escaped = false;
             continue;
         }
@@ -307,6 +314,10 @@ fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
         match ch {
             '\'' => in_single_quote = true,
             '"' => in_double_quote = true,
+            '\n' => {
+                push_shell_token(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
             ';' => {
                 push_shell_token(&mut tokens, &mut current);
                 tokens.push(";".to_string());
@@ -347,6 +358,29 @@ fn push_shell_token(tokens: &mut Vec<String>, current: &mut String) {
         tokens.push(trimmed.to_string());
     }
     current.clear();
+}
+
+fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
+    if tokens.len() < 3 || !is_shell_token(tokens[0].as_str()) {
+        return None;
+    }
+    let shell_flag = tokens[1].as_str();
+    if !shell_flag.starts_with('-') || !shell_flag.contains('c') {
+        return None;
+    }
+    Some(&tokens[2..])
+}
+
+fn shell_script_contains_no_verify_commit(tokens: &[String]) -> bool {
+    let mut script_tokens = Vec::new();
+    for token in tokens {
+        script_tokens.extend(tokenize_shell_tokens(token));
+    }
+
+    let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&script_tokens) else {
+        return false;
+    };
+    commit_args_include_no_verify(&script_tokens[git_commit_subcommand_idx + 1..])
 }
 
 fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
@@ -458,6 +492,13 @@ fn commit_long_option_consumes_value(token: &str) -> bool {
 
 fn is_git_token(token: &str) -> bool {
     token.eq_ignore_ascii_case("git") || token.ends_with("/git")
+}
+
+fn is_shell_token(token: &str) -> bool {
+    matches!(
+        token.rsplit('/').next(),
+        Some("bash" | "sh" | "zsh" | "fish")
+    )
 }
 
 fn git_global_option_consumes_value(token: &str) -> bool {

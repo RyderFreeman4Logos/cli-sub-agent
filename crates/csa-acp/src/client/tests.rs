@@ -231,3 +231,17 @@ fn command_looks_like_no_verify_commit_stops_at_shell_operators() {
 fn command_looks_like_no_verify_commit_detects_quoted_flags() {
     assert!(command_looks_like_no_verify_commit("git commit \"-n\""));
 }
+
+#[test]
+fn command_looks_like_no_verify_commit_detects_shell_wrapped_commits() {
+    assert!(command_looks_like_no_verify_commit(
+        "bash -lc \"git commit -n -m unsafe\""
+    ));
+}
+
+#[test]
+fn command_looks_like_no_verify_commit_treats_newline_as_command_separator() {
+    assert!(!command_looks_like_no_verify_commit(
+        "git commit -m msg\necho -n ok"
+    ));
+}
