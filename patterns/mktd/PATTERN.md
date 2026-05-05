@@ -275,9 +275,24 @@ b) Each task item MUST include:
    - A descriptive title (not just "Implement X")
    - Context sub-bullet explaining WHY this task exists and HOW it relates to the design
    - Dependencies on other tasks with specific details (not just "depends on task 1")
+   - `Acceptance Criteria:` field listing behavior-level checks for this task
+   - `Blocked by:` field listing concrete prerequisite tasks, or `None` if independent
    - Each task description MUST be >= 20 words to provide sufficient context
 
-c) **"## Debate Findings" section** (left empty in draft, populated after Phase 3):
+c) Task decomposition MUST use thin vertical slices:
+   - Each task MUST cut through all integration layers needed for one behavior end-to-end, such as schema, API, business logic, and tests.
+   - Do NOT use horizontal slices that finish all models, then all handlers, then all tests.
+   - Prefer many thin vertical slices over a few thick tasks.
+   - Anti-pattern:
+     WRONG (horizontal): Task 1: write all models; Task 2: write all handlers; Task 3: write all tests.
+     RIGHT (vertical): Task 1: Feature A end-to-end (model + handler + test); Task 2: Feature B end-to-end.
+
+d) TDD guidance for implementation tasks:
+   - Prefer one-test-one-implementation cycles inside each vertical slice, not write-all-tests-then-all-implementation sequencing.
+   - Tests should verify behavior through public interfaces, not implementation details.
+   - This is guidance only, not a hard enforcement gate. Do not turn it into a `DONE WHEN:` clause or spec criterion unless the user explicitly requests TDD enforcement.
+
+e) **"## Debate Findings" section** (left empty in draft, populated after Phase 3):
    - Which debate points were adopted
    - Which were deferred and why
 
