@@ -511,6 +511,7 @@ fn spawn_attach_resume_daemon(
         "false".to_string(),
         "--tool".to_string(),
         tool.to_string(),
+        "--force-ignore-tier-setting".to_string(),
         "--session".to_string(),
         session_id.to_string(),
         "--cd".to_string(),
