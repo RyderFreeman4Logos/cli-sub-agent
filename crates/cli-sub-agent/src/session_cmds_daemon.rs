@@ -412,7 +412,6 @@ fn reactivate_session_with_prompt(
         );
     }
 
-    clear_attach_reactivation_artifacts(session_dir)?;
     let prompt_path = persist_attach_prompt_file(session_dir, prompt)?;
     spawn_attach_resume_daemon(
         session_dir,
@@ -420,7 +419,11 @@ fn reactivate_session_with_prompt(
         &actual_project_root,
         &metadata.tool,
         &prompt_path,
-    )
+    )?;
+    // Clear old artifacts only after daemon successfully spawns — prevents
+    // data loss if spawn fails (review finding 01KQXX5M279K1MWZ76EY2JDQJA).
+    clear_attach_reactivation_artifacts(session_dir)?;
+    Ok(())
 }
 
 fn clear_attach_reactivation_artifacts(session_dir: &Path) -> Result<()> {
