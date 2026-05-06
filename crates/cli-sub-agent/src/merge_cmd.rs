@@ -25,12 +25,7 @@ pub(crate) fn handle_merge(args: MergeArgs) -> Result<()> {
         verify_pr_bot_gate(pr_number, &head_sha)?;
     }
 
-    let merge_flag = if args.rebase { "--rebase" } else { "--merge" };
-    let mut gh_args = vec!["pr".to_string(), "merge".to_string(), pr_number.to_string()];
-    gh_args.push(merge_flag.to_string());
-    if args.skip_pr_bot {
-        gh_args.push("--force-skip-pr-bot".to_string());
-    }
+    let gh_args = build_gh_merge_args(pr_number, args.rebase);
     let gh_arg_refs = gh_args.iter().map(String::as_str).collect::<Vec<_>>();
     run_checked("gh", &gh_arg_refs, "merge pull request")?;
 
@@ -54,6 +49,16 @@ pub(crate) fn handle_merge(args: MergeArgs) -> Result<()> {
     println!("Merged PR #{pr_number}; current branch: {current_branch}");
 
     Ok(())
+}
+
+fn build_gh_merge_args(pr_number: u64, rebase: bool) -> Vec<String> {
+    let merge_flag = if rebase { "--rebase" } else { "--merge" };
+    vec![
+        "pr".to_string(),
+        "merge".to_string(),
+        pr_number.to_string(),
+        merge_flag.to_string(),
+    ]
 }
 
 fn verify_pr_bot_gate(pr_number: u64, head_sha: &str) -> Result<()> {
@@ -306,7 +311,7 @@ fn command_output_text(output: &Output) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_default_branch, parse_remote_repo_slug};
+    use super::{build_gh_merge_args, parse_default_branch, parse_remote_repo_slug};
 
     #[test]
     fn parses_origin_head_branch() {
@@ -365,5 +370,17 @@ mod tests {
     #[test]
     fn rejects_unparseable_remote_slug() {
         assert_eq!(parse_remote_repo_slug("owner-only"), None);
+    }
+
+    #[test]
+    fn gh_merge_args_use_merge_strategy_without_csa_only_flags() {
+        assert_eq!(
+            build_gh_merge_args(1334, false),
+            vec!["pr", "merge", "1334", "--merge"]
+        );
+        assert_eq!(
+            build_gh_merge_args(1334, true),
+            vec!["pr", "merge", "1334", "--rebase"]
+        );
     }
 }
