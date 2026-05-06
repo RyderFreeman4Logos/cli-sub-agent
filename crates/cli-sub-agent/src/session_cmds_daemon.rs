@@ -446,14 +446,14 @@ fn clear_attach_reactivation_artifacts(session_dir: &Path) -> Result<()> {
         remove_file_if_exists(&path)?;
     }
 
+    // Only remove prior-run result artifacts. Do NOT remove live log files
+    // (stdout.log, stderr.log, output.log) — the daemon binds these at spawn
+    // and removing them breaks attach visibility.
     for path in [
         session_dir.join("daemon-completion.toml"),
         session_dir.join("result.toml"),
         csa_session::contract_result_path(session_dir),
         csa_session::legacy_user_result_path(session_dir),
-        session_dir.join("stdout.log"),
-        session_dir.join("stderr.log"),
-        session_dir.join("output.log"),
         session_dir.join("output.log.rotated"),
         output_dir.join("index.toml"),
         output_dir.join("acp-events.jsonl"),
@@ -514,7 +514,7 @@ fn spawn_attach_resume_daemon(
         "false".to_string(),
         "--tool".to_string(),
         tool.to_string(),
-        "--force-ignore-tier-setting".to_string(),
+        "--force".to_string(),
         "--session".to_string(),
         session_id.to_string(),
         "--cd".to_string(),
