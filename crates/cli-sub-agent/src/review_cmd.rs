@@ -93,7 +93,7 @@ pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_rev
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     if args.check_verdict {
-        return check_verdict::handle_check_verdict(&project_root);
+        return check_verdict::handle_check_verdict(&project_root, &args);
     }
     let project_root_for_hooks = project_root.display().to_string();
     let Some((config, global_config)) =
