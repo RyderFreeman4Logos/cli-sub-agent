@@ -363,7 +363,7 @@ fn wait_for_attach_live_output_path_keeps_waiting_past_sixty_seconds_for_codex_o
 }
 
 #[test]
-fn handle_session_attach_with_prompt_rejects_non_claude_code_sessions() {
+fn handle_session_attach_with_prompt_accepts_non_claude_sessions_via_soft_fork() {
     let td = tempfile::tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -372,23 +372,52 @@ fn handle_session_attach_with_prompt_rejects_non_claude_code_sessions() {
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
 
-    let session =
-        csa_session::create_session(project, Some("attach-non-claude"), None, Some("opencode"))
-            .expect("create session");
-    let err = handle_session_attach_with_prompt(
-        session.meta_session_id,
-        false,
-        Some(project.to_string_lossy().into_owned()),
-        Some("resume".to_string()),
-        None,
-        None,
-    )
-    .expect_err("non-claude attach resume must fail");
+    for tool in ["codex", "gemini-cli"] {
+        let session =
+            csa_session::create_session(project, Some("attach-non-claude"), None, Some(tool))
+                .expect("create session");
+        let session_id = session.meta_session_id.clone();
+        handle_session_attach_with_prompt(
+            session_id.clone(),
+            false,
+            Some(project.to_string_lossy().into_owned()),
+            Some("resume".to_string()),
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{tool} attach resume should use soft fork: {err:#}"));
 
-    assert!(
-        err.to_string().contains("only supports claude-code"),
-        "unexpected error: {err:#}"
-    );
+        let session_dir = csa_session::get_session_dir(project, &session_id).expect("session dir");
+        assert!(
+            session_dir.join("input").join("attach-prompt.txt").exists(),
+            "attach should persist the prompt before soft-fork spawn for {tool}"
+        );
+        assert!(
+            session_dir.join("daemon.pid").exists(),
+            "attach soft-fork spawn should write daemon.pid for {tool}"
+        );
+    }
+}
+
+#[test]
+fn build_attach_resume_args_selects_resume_flag_by_tool_mode() {
+    let project_root = std::path::Path::new("/tmp/project");
+    let prompt_path = std::path::Path::new("/tmp/session/input/attach-prompt.txt");
+    for (tool, use_native_resume, expected_flag, unexpected_flag) in [
+        ("claude-code", true, "--session", "--fork-from"),
+        ("codex", false, "--fork-from", "--session"),
+        ("gemini-cli", false, "--fork-from", "--session"),
+    ] {
+        let args = build_attach_resume_args(
+            "01KTEST1234567890ABCDEFGHJK",
+            project_root,
+            tool,
+            prompt_path,
+            use_native_resume,
+        );
+        assert!(args.iter().any(|arg| arg == expected_flag));
+        assert!(!args.iter().any(|arg| arg == unexpected_flag));
+    }
 }
 
 #[test]

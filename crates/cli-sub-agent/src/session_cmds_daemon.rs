@@ -385,13 +385,8 @@ fn reactivate_session_with_prompt(
         .ok_or_else(|| anyhow::anyhow!("session {session_id} is missing metadata.toml"))?;
     let session = csa_session::load_session(project_root, session_id)?;
     let actual_project_root = PathBuf::from(&session.project_path);
+    let use_native_resume = metadata.tool == "claude-code";
 
-    if metadata.tool != "claude-code" {
-        anyhow::bail!(
-            "session attach --prompt only supports claude-code sessions; session {session_id} uses {}",
-            metadata.tool
-        );
-    }
     if session.phase == csa_session::SessionPhase::Retired {
         anyhow::bail!("session {session_id} is retired and cannot be resumed");
     }
@@ -403,13 +398,15 @@ fn reactivate_session_with_prompt(
         );
     }
 
-    let provider_session_id =
-        csa_session::resolve_resume_session(project_root, session_id, "claude-code")?
-            .provider_session_id;
-    if provider_session_id.is_none() {
-        anyhow::bail!(
-            "session {session_id} has no claude-code provider session ID recorded; cannot resume it with --prompt"
-        );
+    if use_native_resume {
+        let provider_session_id =
+            csa_session::resolve_resume_session(project_root, session_id, "claude-code")?
+                .provider_session_id;
+        if provider_session_id.is_none() {
+            anyhow::bail!(
+                "session {session_id} has no claude-code provider session ID recorded; cannot resume it with --prompt"
+            );
+        }
     }
 
     // Clean old artifacts BEFORE spawn to avoid racing with the child process.
@@ -425,6 +422,7 @@ fn reactivate_session_with_prompt(
         &actual_project_root,
         &metadata.tool,
         &prompt_path,
+        use_native_resume,
     )
 }
 
@@ -500,6 +498,7 @@ fn spawn_attach_resume_daemon(
     project_root: &Path,
     tool: &str,
     prompt_path: &Path,
+    use_native_resume: bool,
 ) -> Result<()> {
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("csa"));
     let env = std::collections::HashMap::from([
@@ -513,19 +512,13 @@ fn spawn_attach_resume_daemon(
             project_root.display().to_string(),
         ),
     ]);
-    let args = vec![
-        "--sa-mode".to_string(),
-        "false".to_string(),
-        "--tool".to_string(),
-        tool.to_string(),
-        "--force".to_string(),
-        "--session".to_string(),
-        session_id.to_string(),
-        "--cd".to_string(),
-        project_root.display().to_string(),
-        "--prompt-file".to_string(),
-        prompt_path.display().to_string(),
-    ];
+    let args = build_attach_resume_args(
+        session_id,
+        project_root,
+        tool,
+        prompt_path,
+        use_native_resume,
+    );
 
     csa_process::daemon::spawn_daemon(csa_process::daemon::DaemonSpawnConfig {
         session_id: session_id.to_string(),
@@ -537,6 +530,33 @@ fn spawn_attach_resume_daemon(
     })
     .map(|_| ())
     .context("failed to spawn resumed daemon session")
+}
+
+fn build_attach_resume_args(
+    session_id: &str,
+    project_root: &Path,
+    tool: &str,
+    prompt_path: &Path,
+    use_native_resume: bool,
+) -> Vec<String> {
+    let resume_flag = if use_native_resume {
+        "--session"
+    } else {
+        "--fork-from"
+    };
+    vec![
+        "--sa-mode".to_string(),
+        "false".to_string(),
+        "--tool".to_string(),
+        tool.to_string(),
+        "--force".to_string(),
+        resume_flag.to_string(),
+        session_id.to_string(),
+        "--cd".to_string(),
+        project_root.display().to_string(),
+        "--prompt-file".to_string(),
+        prompt_path.display().to_string(),
+    ]
 }
 
 /// Kill a session with SIGTERM, then SIGKILL after a 5-second grace period if needed.
