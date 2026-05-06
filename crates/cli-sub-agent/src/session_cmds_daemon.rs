@@ -5,9 +5,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use csa_session::get_session_dir;
+use anyhow::{Context, Result};
 use csa_session::state::ReviewSessionMeta;
+use csa_session::{get_session_dir, load_output_index};
 use serde::{Deserialize, Serialize};
 
 #[path = "session_cmds_daemon_attach.rs"]
@@ -208,9 +208,29 @@ pub(crate) fn handle_session_attach(
     show_stderr: bool,
     cd: Option<String>,
 ) -> Result<i32> {
-    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    handle_session_attach_with_prompt(session, show_stderr, cd, None, None, None)
+}
+
+pub(crate) fn handle_session_attach_with_prompt(
+    session: String,
+    show_stderr: bool,
+    cd: Option<String>,
+    prompt: Option<String>,
+    prompt_flag: Option<String>,
+    prompt_file: Option<PathBuf>,
+) -> Result<i32> {
+    let caller_project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let resolved = resolve_session_prefix_with_global_fallback(&caller_project_root, &session)?;
+    let project_root = resolved
+        .foreign_project_root
+        .clone()
+        .unwrap_or_else(|| caller_project_root.clone());
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
+
+    let prompt = resolve_attach_prompt(prompt, prompt_flag, prompt_file.as_deref())?;
+    if let Some(prompt) = prompt {
+        reactivate_session_with_prompt(&project_root, &session_dir, &resolved.session_id, &prompt)?;
+    }
 
     let stdout_path = session_dir.join("stdout.log");
     let stderr_path = session_dir.join("stderr.log");
@@ -341,6 +361,174 @@ pub(crate) fn handle_session_attach(
             std::thread::sleep(poll_interval);
         }
     }
+}
+
+fn resolve_attach_prompt(
+    prompt: Option<String>,
+    prompt_flag: Option<String>,
+    prompt_file: Option<&Path>,
+) -> Result<Option<String>> {
+    let prompt = crate::run_helpers::resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
+    if let Some(path) = prompt_file {
+        return crate::run_helpers::resolve_prompt_with_file(prompt, Some(path)).map(Some);
+    }
+    Ok(prompt)
+}
+
+fn reactivate_session_with_prompt(
+    project_root: &Path,
+    session_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+) -> Result<()> {
+    let metadata = csa_session::load_metadata(project_root, session_id)?
+        .ok_or_else(|| anyhow::anyhow!("session {session_id} is missing metadata.toml"))?;
+    let session = csa_session::load_session(project_root, session_id)?;
+    let actual_project_root = PathBuf::from(&session.project_path);
+
+    if metadata.tool != "claude-code" {
+        anyhow::bail!(
+            "session attach --prompt only supports claude-code sessions; session {session_id} uses {}",
+            metadata.tool
+        );
+    }
+    if session.phase == csa_session::SessionPhase::Retired {
+        anyhow::bail!("session {session_id} is retired and cannot be resumed");
+    }
+    if session.phase == csa_session::SessionPhase::Active
+        && session_has_terminal_process(session_dir)
+    {
+        anyhow::bail!(
+            "session {session_id} is already active with a running process; attach without --prompt or wait for it to finish"
+        );
+    }
+
+    let provider_session_id =
+        csa_session::resolve_resume_session(project_root, session_id, "claude-code")?
+            .provider_session_id;
+    if provider_session_id.is_none() {
+        anyhow::bail!(
+            "session {session_id} has no claude-code provider session ID recorded; cannot resume it with --prompt"
+        );
+    }
+
+    clear_attach_reactivation_artifacts(session_dir)?;
+    let prompt_path = persist_attach_prompt_file(session_dir, prompt)?;
+    spawn_attach_resume_daemon(
+        session_dir,
+        session_id,
+        &actual_project_root,
+        &metadata.tool,
+        &prompt_path,
+    )
+}
+
+fn clear_attach_reactivation_artifacts(session_dir: &Path) -> Result<()> {
+    let output_dir = session_dir.join("output");
+    let indexed_paths = load_output_index(session_dir)
+        .ok()
+        .flatten()
+        .map(|index| {
+            index
+                .sections
+                .into_iter()
+                .filter_map(|section| section.file_path)
+                .filter(|path| output_relative_path_is_safe(path))
+                .map(|path| output_dir.join(path))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    for path in indexed_paths {
+        remove_file_if_exists(&path)?;
+    }
+
+    for path in [
+        session_dir.join("daemon-completion.toml"),
+        session_dir.join("result.toml"),
+        csa_session::contract_result_path(session_dir),
+        csa_session::legacy_user_result_path(session_dir),
+        session_dir.join("stdout.log"),
+        session_dir.join("stderr.log"),
+        session_dir.join("output.log"),
+        session_dir.join("output.log.rotated"),
+        output_dir.join("index.toml"),
+        output_dir.join("acp-events.jsonl"),
+    ] {
+        remove_file_if_exists(&path)?;
+    }
+
+    Ok(())
+}
+
+fn output_relative_path_is_safe(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+fn persist_attach_prompt_file(session_dir: &Path, prompt: &str) -> Result<PathBuf> {
+    let input_dir = session_dir.join("input");
+    fs::create_dir_all(&input_dir)
+        .with_context(|| format!("failed to create {}", input_dir.display()))?;
+    let prompt_path = input_dir.join("attach-prompt.txt");
+    fs::write(&prompt_path, prompt)
+        .with_context(|| format!("failed to write {}", prompt_path.display()))?;
+    Ok(prompt_path)
+}
+
+fn spawn_attach_resume_daemon(
+    session_dir: &Path,
+    session_id: &str,
+    project_root: &Path,
+    tool: &str,
+    prompt_path: &Path,
+) -> Result<()> {
+    let csa_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("csa"));
+    let env = std::collections::HashMap::from([
+        ("CSA_DAEMON_SESSION_ID".to_string(), session_id.to_string()),
+        (
+            "CSA_DAEMON_SESSION_DIR".to_string(),
+            session_dir.display().to_string(),
+        ),
+        (
+            "CSA_DAEMON_PROJECT_ROOT".to_string(),
+            project_root.display().to_string(),
+        ),
+    ]);
+    let args = vec![
+        "--sa-mode".to_string(),
+        "false".to_string(),
+        "--tool".to_string(),
+        tool.to_string(),
+        "--session".to_string(),
+        session_id.to_string(),
+        "--cd".to_string(),
+        project_root.display().to_string(),
+        "--prompt-file".to_string(),
+        prompt_path.display().to_string(),
+    ];
+
+    csa_process::daemon::spawn_daemon(csa_process::daemon::DaemonSpawnConfig {
+        session_id: session_id.to_string(),
+        session_dir: session_dir.to_path_buf(),
+        csa_binary,
+        subcommand: "run".to_string(),
+        args,
+        env,
+    })
+    .map(|_| ())
+    .context("failed to spawn resumed daemon session")
 }
 
 /// Kill a session with SIGTERM, then SIGKILL after a 5-second grace period if needed.

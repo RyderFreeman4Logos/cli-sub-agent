@@ -1,5 +1,7 @@
 //! CLI subcommands for the `csa session` command group.
 
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 #[derive(Subcommand)]
@@ -294,6 +296,17 @@ pub enum SessionCommands {
         /// Session ID to attach to
         #[arg(long)]
         session: Option<String>,
+
+        /// Continuation prompt
+        prompt: Option<String>,
+
+        /// Continuation prompt (flag form; same as the positional prompt)
+        #[arg(long = "prompt", value_name = "PROMPT", conflicts_with_all = ["prompt", "prompt_file"])]
+        prompt_flag: Option<String>,
+
+        /// Read continuation prompt from a file. Use `-` to read from stdin.
+        #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
+        prompt_file: Option<PathBuf>,
 
         /// Show stderr alongside stdout
         #[arg(long)]

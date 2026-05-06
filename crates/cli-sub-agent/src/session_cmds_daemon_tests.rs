@@ -1,4 +1,6 @@
 use super::*;
+use crate::cli::{Cli, Commands, SessionCommands};
+use clap::Parser;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_env_lock::TEST_ENV_LOCK;
@@ -72,6 +74,87 @@ fn attach_primary_output_uses_stdout_for_runtime_binary_missing_without_output_l
         attach_primary_output_for_session(td.path()),
         AttachPrimaryOutput::StdoutLog
     );
+}
+
+fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(args)
+}
+
+#[test]
+fn session_attach_accepts_prompt_flag_and_prompt_file() {
+    let cli = try_parse_cli(&[
+        "csa",
+        "session",
+        "attach",
+        "--session",
+        "01KTEST1234567890ABCDEFGHJK",
+        "--prompt",
+        "resume work",
+    ])
+    .expect("attach --prompt should parse");
+    match cli.command {
+        Commands::Session {
+            cmd:
+                SessionCommands::Attach {
+                    prompt_flag,
+                    prompt_file,
+                    ..
+                },
+        } => {
+            assert_eq!(prompt_flag.as_deref(), Some("resume work"));
+            assert!(prompt_file.is_none());
+        }
+        _ => panic!("expected session attach command"),
+    }
+
+    let cli = try_parse_cli(&[
+        "csa",
+        "session",
+        "attach",
+        "--session",
+        "01KTEST1234567890ABCDEFGHJK",
+        "--prompt-file",
+        "/tmp/prompt.md",
+    ])
+    .expect("attach --prompt-file should parse");
+    match cli.command {
+        Commands::Session {
+            cmd:
+                SessionCommands::Attach {
+                    prompt_flag,
+                    prompt_file,
+                    ..
+                },
+        } => {
+            assert!(prompt_flag.is_none());
+            assert_eq!(
+                prompt_file.as_deref(),
+                Some(std::path::Path::new("/tmp/prompt.md"))
+            );
+        }
+        _ => panic!("expected session attach command"),
+    }
+}
+
+#[test]
+fn session_attach_rejects_prompt_and_prompt_file_together() {
+    let result = try_parse_cli(&[
+        "csa",
+        "session",
+        "attach",
+        "--session",
+        "01KTEST1234567890ABCDEFGHJK",
+        "--prompt",
+        "resume work",
+        "--prompt-file",
+        "/tmp/prompt.md",
+    ]);
+    let err = match result {
+        Ok(_) => panic!("attach --prompt and --prompt-file must conflict"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("--prompt-file"), "error: {err}");
 }
 
 #[test]
@@ -276,6 +359,35 @@ fn wait_for_attach_live_output_path_keeps_waiting_past_sixty_seconds_for_codex_o
     assert!(
         elapsed_ms.load(Ordering::Relaxed) >= 61_000,
         "attach should keep waiting well past the old 30s failure threshold"
+    );
+}
+
+#[test]
+fn handle_session_attach_with_prompt_rejects_non_claude_code_sessions() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session =
+        csa_session::create_session(project, Some("attach-non-claude"), None, Some("opencode"))
+            .expect("create session");
+    let err = handle_session_attach_with_prompt(
+        session.meta_session_id,
+        false,
+        Some(project.to_string_lossy().into_owned()),
+        Some("resume".to_string()),
+        None,
+        None,
+    )
+    .expect_err("non-claude attach resume must fail");
+
+    assert!(
+        err.to_string().contains("only supports claude-code"),
+        "unexpected error: {err:#}"
     );
 }
 

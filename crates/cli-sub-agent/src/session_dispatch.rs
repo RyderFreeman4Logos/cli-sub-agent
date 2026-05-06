@@ -173,11 +173,25 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         SessionCommands::Attach {
             session_id,
             session,
+            prompt,
+            prompt_flag,
+            prompt_file,
             stderr,
             cd,
         } => {
             let sid = resolve_session_id(session_id, session)?;
-            let exit_code = session_cmds::handle_session_attach(sid, stderr, cd)?;
+            let exit_code = if prompt.is_none() && prompt_flag.is_none() && prompt_file.is_none() {
+                session_cmds::handle_session_attach(sid, stderr, cd)?
+            } else {
+                session_cmds::handle_session_attach_with_prompt(
+                    sid,
+                    stderr,
+                    cd,
+                    prompt,
+                    prompt_flag,
+                    prompt_file,
+                )?
+            };
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);

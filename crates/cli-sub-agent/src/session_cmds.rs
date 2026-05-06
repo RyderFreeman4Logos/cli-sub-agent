@@ -777,7 +777,8 @@ pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
 #[cfg(test)]
 pub(crate) use crate::session_cmds_daemon::handle_session_wait;
 pub(crate) use crate::session_cmds_daemon::{
-    handle_session_attach, handle_session_kill, handle_session_wait_with_memory_warn,
+    handle_session_attach, handle_session_attach_with_prompt, handle_session_kill,
+    handle_session_wait_with_memory_warn,
 };
 
 #[cfg(test)]
