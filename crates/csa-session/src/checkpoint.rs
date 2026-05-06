@@ -1,14 +1,129 @@
-//! Git Notes checkpoint for session audit trail.
-//!
-//! Writes structured TOML metadata to `refs/notes/csa-checkpoints` for a session.
-//! This provides a lightweight, git-native audit trail without modifying session files.
+//! Session checkpoints for mid-flight observability and git-note audit trails.
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use chrono::{DateTime, Utc};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Checkpoint metadata stored under `<session_dir>/checkpoints/*.toml`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Checkpoint {
+    pub phase: String,
+    pub summary: String,
+    pub timestamp: DateTime<Utc>,
+    pub sequence: u32,
+}
 
 /// The git notes ref namespace for CSA checkpoints.
 const NOTES_REF: &str = "refs/notes/csa-checkpoints";
+
+const CHECKPOINTS_DIR_NAME: &str = "checkpoints";
+
+/// Emit a checkpoint file to the session's checkpoints directory.
+pub fn emit_checkpoint(session_dir: &Path, phase: &str, summary: &str) -> Result<PathBuf> {
+    let checkpoints_dir = checkpoints_dir(session_dir);
+    fs::create_dir_all(&checkpoints_dir).with_context(|| {
+        format!(
+            "Failed to create checkpoints directory '{}'",
+            checkpoints_dir.display()
+        )
+    })?;
+
+    let sequence = next_checkpoint_sequence(&checkpoints_dir)?;
+    let checkpoint = Checkpoint {
+        phase: phase.to_string(),
+        summary: summary.to_string(),
+        timestamp: Utc::now(),
+        sequence,
+    };
+
+    let path = checkpoint_path(&checkpoints_dir, sequence);
+    let tmp_path = path.with_extension("toml.tmp");
+    let body = toml::to_string_pretty(&checkpoint).context("Failed to serialize checkpoint")?;
+    fs::write(&tmp_path, body)
+        .with_context(|| format!("Failed to write checkpoint '{}'", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path)
+        .with_context(|| format!("Failed to move checkpoint '{}' into place", path.display()))?;
+
+    Ok(path)
+}
+
+/// Read the latest checkpoint from a session's checkpoints directory.
+pub fn read_latest_checkpoint(session_dir: &Path) -> Result<Option<Checkpoint>> {
+    let mut checkpoints = read_checkpoints(session_dir)?;
+    Ok(checkpoints.pop())
+}
+
+/// Read all checkpoints in sequence order.
+pub fn read_checkpoints(session_dir: &Path) -> Result<Vec<Checkpoint>> {
+    let checkpoints_dir = checkpoints_dir(session_dir);
+    if !checkpoints_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&checkpoints_dir).with_context(|| {
+        format!(
+            "Failed to read checkpoints directory '{}'",
+            checkpoints_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(sequence) = checkpoint_sequence_from_path(&path) else {
+            continue;
+        };
+        entries.push((sequence, path));
+    }
+    entries.sort_by_key(|(sequence, _)| *sequence);
+
+    entries
+        .into_iter()
+        .map(|(_, path)| read_checkpoint_file(&path))
+        .collect()
+}
+
+fn checkpoints_dir(session_dir: &Path) -> PathBuf {
+    session_dir.join(CHECKPOINTS_DIR_NAME)
+}
+
+fn checkpoint_path(checkpoints_dir: &Path, sequence: u32) -> PathBuf {
+    checkpoints_dir.join(format!("{sequence:04}.toml"))
+}
+
+fn next_checkpoint_sequence(checkpoints_dir: &Path) -> Result<u32> {
+    let mut max_sequence = 0;
+    for entry in fs::read_dir(checkpoints_dir).with_context(|| {
+        format!(
+            "Failed to read checkpoints directory '{}'",
+            checkpoints_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        if let Some(sequence) = checkpoint_sequence_from_path(&path) {
+            max_sequence = max_sequence.max(sequence);
+        }
+    }
+    Ok(max_sequence + 1)
+}
+
+fn checkpoint_sequence_from_path(path: &Path) -> Option<u32> {
+    let file_name = path.file_name()?.to_str()?;
+    let number = file_name.strip_suffix(".toml")?;
+    if number.len() != 4 || !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    number.parse().ok()
+}
+
+fn read_checkpoint_file(path: &Path) -> Result<Checkpoint> {
+    let body = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read checkpoint '{}'", path.display()))?;
+    toml::from_str(&body)
+        .with_context(|| format!("Failed to parse checkpoint '{}'", path.display()))
+}
 
 /// Checkpoint metadata written as a git note.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -38,7 +153,7 @@ pub struct TokenUsageSummary {
 /// Finds the most recent commit that modified this session's directory
 /// and attaches a TOML-formatted git note to it.
 /// If no commits exist for the session, returns an error.
-pub fn write_checkpoint(sessions_dir: &Path, note: &CheckpointNote) -> Result<()> {
+pub fn write_checkpoint_note(sessions_dir: &Path, note: &CheckpointNote) -> Result<()> {
     crate::git::ensure_git_init(sessions_dir)?;
 
     let target_commit = find_session_commit(sessions_dir, &note.session_id)?;
@@ -104,7 +219,7 @@ fn find_session_commit(sessions_dir: &Path, session_id: &str) -> Result<String> 
 }
 
 /// Read the checkpoint note attached to a specific commit.
-pub fn read_checkpoint(sessions_dir: &Path, commit: &str) -> Result<Option<CheckpointNote>> {
+pub fn read_checkpoint_note(sessions_dir: &Path, commit: &str) -> Result<Option<CheckpointNote>> {
     if !sessions_dir.join(".git").exists() {
         anyhow::bail!("No git repository in sessions directory");
     }
@@ -128,7 +243,7 @@ pub fn read_checkpoint(sessions_dir: &Path, commit: &str) -> Result<Option<Check
 
 /// List all checkpoint notes in the sessions repo.
 /// Returns a list of (commit_hash, CheckpointNote) pairs.
-pub fn list_checkpoints(sessions_dir: &Path) -> Result<Vec<(String, CheckpointNote)>> {
+pub fn list_checkpoint_notes(sessions_dir: &Path) -> Result<Vec<(String, CheckpointNote)>> {
     if !sessions_dir.join(".git").exists() {
         return Ok(Vec::new());
     }
@@ -153,7 +268,7 @@ pub fn list_checkpoints(sessions_dir: &Path) -> Result<Vec<(String, CheckpointNo
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 {
             let commit_sha = parts[1];
-            match read_checkpoint(sessions_dir, commit_sha) {
+            match read_checkpoint_note(sessions_dir, commit_sha) {
                 Ok(Some(note)) => results.push((commit_sha.to_string(), note)),
                 Ok(None) => {} // note disappeared between list and show — benign race
                 Err(e) => {
@@ -203,498 +318,5 @@ pub fn note_from_session(session: &crate::MetaSessionState) -> CheckpointNote {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_env::TEST_ENV_LOCK;
-    use std::process::Output;
-    use std::time::Duration;
-    use tempfile::tempdir;
-
-    const ETXTBSY_RAW_OS_ERROR: i32 = 26;
-
-    fn ensure_git_init_with_etxtbsy_retry(sessions_dir: &Path) {
-        for attempt in 0..=3 {
-            match crate::git::ensure_git_init(sessions_dir) {
-                Ok(()) => return,
-                Err(err) if is_text_file_busy(&err) && attempt < 3 => {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(err) => panic!("failed to initialize test git repository: {err:#}"),
-            }
-        }
-    }
-
-    fn is_text_file_busy(error: &anyhow::Error) -> bool {
-        error.chain().any(|cause| {
-            cause
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::raw_os_error)
-                == Some(ETXTBSY_RAW_OS_ERROR)
-        })
-    }
-
-    fn run_git_output_with_etxtbsy_retry(sessions_dir: &Path, args: &[&str]) -> Output {
-        let max_attempts = 4;
-        for attempt in 0..max_attempts {
-            match Command::new("git")
-                .args(args)
-                .current_dir(sessions_dir)
-                .output()
-            {
-                Ok(output) => return output,
-                Err(err)
-                    if err.raw_os_error() == Some(ETXTBSY_RAW_OS_ERROR)
-                        && attempt + 1 < max_attempts =>
-                {
-                    std::thread::sleep(Duration::from_millis(25_u64 << attempt));
-                }
-                Err(err) => panic!("git {args:?} failed: {err}"),
-            }
-        }
-        unreachable!("retry loop should have returned or panicked")
-    }
-
-    fn stage_session_dir_for_commit(sessions_dir: &Path, session_id: &str) {
-        let session_path = format!("{session_id}/");
-        let output = run_git_output_with_etxtbsy_retry(sessions_dir, &["add", "--", &session_path]);
-        assert!(
-            output.status.success(),
-            "git add failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn has_staged_session_changes(sessions_dir: &Path, session_id: &str) -> bool {
-        let session_path = format!("{session_id}/");
-        let output = run_git_output_with_etxtbsy_retry(
-            sessions_dir,
-            &["diff", "--cached", "--quiet", "--", &session_path],
-        );
-
-        match output.status.code() {
-            Some(0) => false,
-            Some(1) => true,
-            Some(code) => panic!(
-                "git diff --cached failed (exit {code}): {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-            None => panic!("git diff --cached terminated by signal"),
-        }
-    }
-
-    fn make_note() -> CheckpointNote {
-        CheckpointNote {
-            session_id: "01TESTID000000000000000000".to_string(),
-            tool: Some("codex".to_string()),
-            status: "Completed".to_string(),
-            created_at: "2026-02-13T10:00:00+00:00".to_string(),
-            completed_at: "2026-02-13T10:05:00+00:00".to_string(),
-            turn_count: 3,
-            token_usage: Some(TokenUsageSummary {
-                input_tokens: 5000,
-                output_tokens: 1200,
-            }),
-            description: Some("Test session".to_string()),
-            op_id: None,
-        }
-    }
-
-    #[test]
-    fn test_checkpoint_note_toml_roundtrip() {
-        let note = make_note();
-        let toml_str = toml::to_string_pretty(&note).unwrap();
-        let parsed: CheckpointNote = toml::from_str(&toml_str).unwrap();
-        assert_eq!(note, parsed);
-    }
-
-    #[test]
-    fn test_checkpoint_note_toml_format() {
-        let note = make_note();
-        let toml_str = toml::to_string_pretty(&note).unwrap();
-        assert!(toml_str.contains("session_id = \"01TESTID000000000000000000\""));
-        assert!(toml_str.contains("tool = \"codex\""));
-        assert!(toml_str.contains("turn_count = 3"));
-        assert!(toml_str.contains("input_tokens = 5000"));
-    }
-
-    #[test]
-    fn test_checkpoint_note_without_optional_fields() {
-        let note = CheckpointNote {
-            session_id: "01TESTID000000000000000000".to_string(),
-            tool: None,
-            status: "Running".to_string(),
-            created_at: "2026-02-13T10:00:00+00:00".to_string(),
-            completed_at: "2026-02-13T10:00:00+00:00".to_string(),
-            turn_count: 0,
-            token_usage: None,
-            description: None,
-            op_id: None,
-        };
-        let toml_str = toml::to_string_pretty(&note).unwrap();
-        let parsed: CheckpointNote = toml::from_str(&toml_str).unwrap();
-        assert_eq!(note, parsed);
-    }
-
-    #[test]
-    fn test_write_checkpoint_no_commits_errors() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
-
-        let note = make_note();
-        let result = write_checkpoint(&sessions_dir, &note);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("commit") || err_msg.contains("No commits"),
-            "Should mention commits, got: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn test_checkpoint_targets_session_commit_not_head() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
-
-        // Create session A and commit
-        let session_a = ulid::Ulid::new().to_string();
-        let dir_a = sessions_dir.join(&session_a);
-        std::fs::create_dir_all(&dir_a).unwrap();
-        std::fs::write(dir_a.join("state.toml"), "a = true").unwrap();
-        crate::git::commit_session(&sessions_dir, &session_a, "session A").unwrap();
-
-        let commit_a = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&sessions_dir)
-            .output()
-            .unwrap();
-        let commit_a_sha = String::from_utf8_lossy(&commit_a.stdout).trim().to_string();
-
-        // Create session B and commit (now HEAD moves forward)
-        let session_b = ulid::Ulid::new().to_string();
-        let dir_b = sessions_dir.join(&session_b);
-        std::fs::create_dir_all(&dir_b).unwrap();
-        std::fs::write(dir_b.join("state.toml"), "b = true").unwrap();
-        crate::git::commit_session(&sessions_dir, &session_b, "session B").unwrap();
-
-        // Write checkpoint for session A (should target commit_a, NOT HEAD)
-        let mut note = make_note();
-        note.session_id.clone_from(&session_a);
-        write_checkpoint(&sessions_dir, &note).unwrap();
-
-        // Verify note is on commit_a, not HEAD
-        let read_back = read_checkpoint(&sessions_dir, &commit_a_sha).unwrap();
-        assert!(read_back.is_some(), "Note should be on session A's commit");
-        assert_eq!(read_back.unwrap().session_id, session_a);
-    }
-
-    #[test]
-    fn test_note_from_session_deterministic_tool_selection() {
-        let session = crate::MetaSessionState {
-            meta_session_id: "01TEST".to_string(),
-            description: None,
-            project_path: "/tmp".to_string(),
-            branch: None,
-            created_at: chrono::Utc::now(),
-            last_accessed: chrono::Utc::now(),
-            csa_version: None,
-            genealogy: Default::default(),
-            tools: {
-                let mut m = std::collections::HashMap::new();
-                m.insert(
-                    "gemini-cli".to_string(),
-                    crate::state::ToolState {
-                        provider_session_id: None,
-                        last_action_summary: String::new(),
-                        last_exit_code: 0,
-                        tool_version: None,
-                        token_usage: None,
-                        updated_at: chrono::Utc::now(),
-                    },
-                );
-                m.insert(
-                    "codex".to_string(),
-                    crate::state::ToolState {
-                        provider_session_id: None,
-                        last_action_summary: String::new(),
-                        last_exit_code: 0,
-                        tool_version: None,
-                        token_usage: None,
-                        updated_at: chrono::Utc::now(),
-                    },
-                );
-                m
-            },
-            context_status: Default::default(),
-            total_token_usage: None,
-            phase: crate::state::SessionPhase::Active,
-            task_context: Default::default(),
-            turn_count: 0,
-            token_budget: None,
-            sandbox_info: None,
-
-            termination_reason: None,
-            is_seed_candidate: false,
-            git_head_at_creation: None,
-            pre_session_porcelain: None,
-            last_return_packet: None,
-            change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
-        };
-
-        // Should deterministically pick "codex" (alphabetically first)
-        let note = note_from_session(&session);
-        assert_eq!(note.tool, Some("codex".to_string()));
-    }
-
-    #[test]
-    fn test_write_and_read_checkpoint_roundtrip() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        ensure_git_init_with_etxtbsy_retry(&sessions_dir);
-
-        // Create a commit to attach the note to
-        let session_id = ulid::Ulid::new().to_string();
-        let session_dir = sessions_dir.join(&session_id);
-        std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("state.toml"), "test = true").unwrap();
-        stage_session_dir_for_commit(&sessions_dir, &session_id);
-        if !has_staged_session_changes(&sessions_dir, &session_id) {
-            std::fs::write(
-                session_dir.join("state.toml"),
-                "test = true\nroundtrip = true",
-            )
-            .unwrap();
-            stage_session_dir_for_commit(&sessions_dir, &session_id);
-        }
-        assert!(
-            has_staged_session_changes(&sessions_dir, &session_id),
-            "test fixture must have staged changes before commit_session"
-        );
-        crate::git::commit_session(&sessions_dir, &session_id, "test session").unwrap();
-
-        // Get the commit SHA for this session
-        let head = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&sessions_dir)
-            .output()
-            .unwrap();
-        let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
-
-        // Write checkpoint — note session_id must match the committed session
-        let mut note = make_note();
-        note.session_id.clone_from(&session_id);
-        write_checkpoint(&sessions_dir, &note).unwrap();
-
-        // Read it back
-        let read_back = read_checkpoint(&sessions_dir, &head_sha).unwrap();
-        assert!(read_back.is_some());
-        assert_eq!(read_back.unwrap(), note);
-    }
-
-    #[test]
-    fn test_read_checkpoint_no_note_returns_none() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
-
-        // Create a commit without a note
-        let session_id = ulid::Ulid::new().to_string();
-        let session_dir = sessions_dir.join(&session_id);
-        std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("state.toml"), "test = true").unwrap();
-        crate::git::commit_session(&sessions_dir, &session_id, "test").unwrap();
-
-        let head = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&sessions_dir)
-            .output()
-            .unwrap();
-        let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
-
-        let result = read_checkpoint(&sessions_dir, &head_sha).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_list_checkpoints_empty_repo() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
-
-        let results = list_checkpoints(&sessions_dir).unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_list_checkpoints_with_notes() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        ensure_git_init_with_etxtbsy_retry(&sessions_dir);
-
-        // Create commit + checkpoint
-        let session_id = ulid::Ulid::new().to_string();
-        let session_dir = sessions_dir.join(&session_id);
-        std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("state.toml"), "test = true").unwrap();
-        crate::git::commit_session(&sessions_dir, &session_id, "test").unwrap();
-
-        let mut note = make_note();
-        note.session_id.clone_from(&session_id);
-        write_checkpoint(&sessions_dir, &note).unwrap();
-
-        let results = list_checkpoints(&sessions_dir).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].1.session_id, session_id);
-    }
-
-    #[test]
-    fn test_note_from_session() {
-        let session = crate::MetaSessionState {
-            meta_session_id: "01TEST".to_string(),
-            description: Some("test desc".to_string()),
-            project_path: "/tmp".to_string(),
-            branch: None,
-            created_at: chrono::Utc::now(),
-            last_accessed: chrono::Utc::now(),
-            csa_version: None,
-            genealogy: Default::default(),
-            tools: {
-                let mut m = std::collections::HashMap::new();
-                m.insert(
-                    "codex".to_string(),
-                    crate::state::ToolState {
-                        provider_session_id: None,
-                        last_action_summary: String::new(),
-                        last_exit_code: 0,
-                        tool_version: None,
-                        token_usage: None,
-                        updated_at: chrono::Utc::now(),
-                    },
-                );
-                m
-            },
-            context_status: Default::default(),
-            total_token_usage: Some(crate::state::TokenUsage {
-                input_tokens: Some(1000),
-                output_tokens: Some(500),
-                total_tokens: Some(1500),
-                estimated_cost_usd: None,
-            }),
-            phase: crate::state::SessionPhase::Retired,
-            task_context: Default::default(),
-            turn_count: 5,
-            token_budget: None,
-            sandbox_info: None,
-
-            termination_reason: None,
-            is_seed_candidate: false,
-            git_head_at_creation: None,
-            pre_session_porcelain: None,
-            last_return_packet: None,
-            change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
-        };
-
-        let note = note_from_session(&session);
-        assert_eq!(note.session_id, "01TEST");
-        assert_eq!(note.tool, Some("codex".to_string()));
-        assert_eq!(note.status, "Retired");
-        assert_eq!(note.turn_count, 5);
-        assert!(note.token_usage.is_some());
-        let usage = note.token_usage.unwrap();
-        assert_eq!(usage.input_tokens, 1000);
-        assert_eq!(usage.output_tokens, 500);
-        assert_eq!(note.description, Some("test desc".to_string()));
-    }
-
-    #[test]
-    fn test_list_checkpoints_skips_malformed_note_with_warning() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
-
-        // Create a commit
-        let session_id = ulid::Ulid::new().to_string();
-        let session_dir = sessions_dir.join(&session_id);
-        std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("state.toml"), "test = true").unwrap();
-        crate::git::commit_session(&sessions_dir, &session_id, "test").unwrap();
-
-        let head = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&sessions_dir)
-            .output()
-            .unwrap();
-        let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
-
-        // Write malformed note directly via git
-        let output = Command::new("git")
-            .args([
-                "notes",
-                "--ref=refs/notes/csa-checkpoints",
-                "add",
-                "-f",
-                "-m",
-                "this is not valid TOML {{{",
-                &head_sha,
-            ])
-            .current_dir(&sessions_dir)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-
-        // list_checkpoints should return empty (malformed note skipped)
-        let results = list_checkpoints(&sessions_dir).unwrap();
-        assert!(results.is_empty(), "Malformed note should be skipped");
-    }
-
-    #[test]
-    fn test_write_checkpoint_mismatched_session_id_targets_correct_commit() {
-        let _env_lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
-        // Demonstrates the importance of the caller overriding session_id:
-        // if note.session_id doesn't match any committed session directory,
-        // write_checkpoint correctly fails.
-        let tmp = tempdir().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-        crate::git::ensure_git_init(&sessions_dir).unwrap();
-
-        // Create and commit session A
-        let session_a = ulid::Ulid::new().to_string();
-        let dir_a = sessions_dir.join(&session_a);
-        std::fs::create_dir_all(&dir_a).unwrap();
-        std::fs::write(dir_a.join("state.toml"), "a = true").unwrap();
-        crate::git::commit_session(&sessions_dir, &session_a, "session A").unwrap();
-
-        // Build a note with a fabricated session_id that has no commits
-        let mut note = make_note();
-        note.session_id = "NONEXISTENT_SESSION_ID_00000".to_string();
-
-        let result = write_checkpoint(&sessions_dir, &note);
-        assert!(
-            result.is_err(),
-            "Should fail when session_id has no matching commits"
-        );
-    }
-}
+#[path = "checkpoint_tests.rs"]
+mod tests;

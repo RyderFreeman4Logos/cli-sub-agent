@@ -125,8 +125,17 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         SessionCommands::Log { session, cd } => {
             session_cmds::handle_session_log(session, cd)?;
         }
-        SessionCommands::Checkpoint { session, cd } => {
-            session_cmds::handle_session_checkpoint(session, cd)?;
+        SessionCommands::Checkpoint {
+            session_id,
+            session,
+            cd,
+            all,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            let found = session_cmds::handle_session_checkpoint(sid, all, cd)?;
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().flush();
+            std::process::exit(if found { 0 } else { 1 });
         }
         SessionCommands::Checkpoints { cd } => {
             session_cmds::handle_session_checkpoints(cd)?;

@@ -42,14 +42,14 @@ pub(super) fn list_checkpoints_from_dirs(
     primary_sessions_dir: &Path,
     legacy_sessions_dir: Option<&Path>,
 ) -> Result<Vec<(String, CheckpointNote)>> {
-    let mut checkpoints = csa_session::checkpoint::list_checkpoints(primary_sessions_dir)?;
+    let mut checkpoints = csa_session::checkpoint::list_checkpoint_notes(primary_sessions_dir)?;
     let mut seen_ids: HashSet<String> = checkpoints
         .iter()
         .map(|(_, note)| note.session_id.clone())
         .collect();
 
     if let Some(legacy_dir) = legacy_sessions_dir {
-        for (commit, note) in csa_session::checkpoint::list_checkpoints(legacy_dir)? {
+        for (commit, note) in csa_session::checkpoint::list_checkpoint_notes(legacy_dir)? {
             if seen_ids.insert(note.session_id.clone()) {
                 checkpoints.push((commit, note));
             }

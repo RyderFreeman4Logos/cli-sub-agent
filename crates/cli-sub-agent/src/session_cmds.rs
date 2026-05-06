@@ -720,31 +720,45 @@ pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<
     Ok(())
 }
 
-pub(crate) fn handle_session_checkpoint(session: String, cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_session_checkpoint(
+    session: String,
+    all: bool,
+    cd: Option<String>,
+) -> Result<bool> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let SessionPrefixResolution {
         session_id: resolved_id,
         sessions_dir,
-        ..
-    } = resolve_session_prefix_with_fallback(&project_root, &session)?;
+        foreign_project_root,
+    } = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    let _effective_project_root = foreign_project_root.unwrap_or(project_root);
+    let session_dir = sessions_dir.join(&resolved_id);
 
-    // Load the session state to build the checkpoint note
-    let state = csa_session::load_session(&project_root, &resolved_id)?;
-    let mut note = csa_session::checkpoint::note_from_session(&state);
-    // Use the CLI-resolved ID as the authoritative session identity,
-    // not state.meta_session_id which could be stale or tampered.
-    note.session_id.clone_from(&resolved_id);
+    if all {
+        let checkpoints = csa_session::checkpoint::read_checkpoints(&session_dir)?;
+        if checkpoints.is_empty() {
+            return Ok(false);
+        }
 
-    csa_session::checkpoint::write_checkpoint(&sessions_dir, &note)?;
-    eprintln!(
-        "Checkpoint written for session '{}' (tool={}, turns={}, status={})",
-        resolved_id,
-        note.tool.as_deref().unwrap_or("none"),
-        note.turn_count,
-        note.status,
-    );
+        #[derive(serde::Serialize)]
+        struct CheckpointList<'a> {
+            checkpoints: &'a [csa_session::checkpoint::Checkpoint],
+        }
 
-    Ok(())
+        print!(
+            "{}",
+            toml::to_string_pretty(&CheckpointList {
+                checkpoints: &checkpoints,
+            })?
+        );
+        return Ok(true);
+    }
+
+    let Some(checkpoint) = csa_session::checkpoint::read_latest_checkpoint(&session_dir)? else {
+        return Ok(false);
+    };
+    print!("{}", toml::to_string_pretty(&checkpoint)?);
+    Ok(true)
 }
 
 pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {

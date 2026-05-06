@@ -366,6 +366,38 @@ fn session_list_cli_parses_branch_filter() {
 }
 
 #[test]
+fn session_checkpoint_cli_parses_all_flag_and_session_selector() {
+    let cli = Cli::try_parse_from([
+        "csa",
+        "session",
+        "checkpoint",
+        "01ABCDEF",
+        "--all",
+        "--cd",
+        "/tmp/project",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Session {
+            cmd:
+                SessionCommands::Checkpoint {
+                    session_id,
+                    session,
+                    cd,
+                    all,
+                },
+        } => {
+            assert_eq!(session_id.as_deref(), Some("01ABCDEF"));
+            assert!(session.is_none());
+            assert_eq!(cd.as_deref(), Some("/tmp/project"));
+            assert!(all);
+        }
+        _ => panic!("expected session checkpoint command"),
+    }
+}
+
+#[test]
 fn session_list_cli_parses_csa_version_filter() {
     let cli = Cli::try_parse_from([
         "csa",

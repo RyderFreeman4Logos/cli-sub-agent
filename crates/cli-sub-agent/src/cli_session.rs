@@ -190,15 +190,23 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
-    /// Write a checkpoint note (git notes) for audit trail
+    /// Show checkpoints recorded for a session
     Checkpoint {
-        /// Session ID or prefix
-        #[arg(short, long)]
-        session: String,
+        /// Session ULID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
+        /// Session ULID or prefix
+        #[arg(long)]
+        session: Option<String>,
 
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
+
+        /// Show all checkpoints, not just the latest
+        #[arg(long)]
+        all: bool,
     },
 
     /// List all checkpoint notes

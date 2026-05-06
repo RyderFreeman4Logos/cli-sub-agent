@@ -3,8 +3,14 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
+
+fn git_binary() -> &'static Path {
+    static GIT_BINARY: OnceLock<PathBuf> = OnceLock::new();
+    GIT_BINARY.get_or_init(|| which::which("git").unwrap_or_else(|_| PathBuf::from("git")))
+}
 
 #[derive(Debug)]
 pub(crate) struct TrackedFileEditGuard {
@@ -381,7 +387,7 @@ impl TrackedFileEditGuard {
 }
 
 fn is_git_repo(project_root: &Path) -> Result<bool> {
-    let output = Command::new("git")
+    let output = Command::new(git_binary())
         .current_dir("/")
         .arg("-C")
         .arg(project_root)
@@ -403,7 +409,7 @@ fn is_git_repo(project_root: &Path) -> Result<bool> {
 }
 
 fn git_name_only_set(project_root: &Path, args: &[&str]) -> Result<BTreeSet<PathBuf>> {
-    let output = Command::new("git")
+    let output = Command::new(git_binary())
         .current_dir("/")
         .arg("-C")
         .arg(project_root)
@@ -440,7 +446,7 @@ fn git_restore_paths(
         return Ok(());
     }
 
-    let mut command = Command::new("git");
+    let mut command = Command::new(git_binary());
     command.arg("-C").arg(project_root).arg("restore");
     if staged {
         command.arg("--staged");
