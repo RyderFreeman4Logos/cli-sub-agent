@@ -1,6 +1,8 @@
 use super::*;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_session::{create_session, get_session_dir, load_session};
+use std::fs;
+use std::io::Write as _;
 use std::path::Path;
 use std::process::Command;
 
@@ -403,5 +405,143 @@ fn read_output_log_tail_reads_from_file_end_window() {
     assert!(
         !tail.contains("line-0000"),
         "tail reader should not depend on loading the full file"
+    );
+}
+
+struct CurrentDirGuard {
+    original: std::path::PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn enter(path: &Path) -> Self {
+        let original = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(path).expect("set current dir");
+        Self { original }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.original).expect("restore current dir");
+    }
+}
+
+fn write_executable_script(path: &Path, body: &str) {
+    let mut script = fs::File::create(path).expect("create script");
+    write!(script, "{body}").expect("write script");
+    script.sync_all().expect("sync script");
+    drop(script);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod script");
+    }
+}
+
+#[tokio::test]
+async fn process_execution_result_mempal_payload_uses_target_project_cwd() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut sandbox = ScopedSessionSandbox::new(&temp).await;
+    sandbox.track_env("PATH");
+
+    let invocation_cwd = temp.path().join("cli-sub-agent-install");
+    let project_root = temp.path().join("warifu-ce");
+    fs::create_dir_all(&invocation_cwd).expect("create invocation cwd");
+    fs::create_dir_all(&project_root).expect("create project root");
+    let _cwd = CurrentDirGuard::enter(&invocation_cwd);
+
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir_all(&fake_bin).expect("create fake bin");
+    let payload_path = temp.path().join("mempal-payload.json");
+    write_executable_script(
+        &fake_bin.join("mempal"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'mempal mock 0.0.0\\n'\n  exit 0\nfi\nif [ \"$1\" = \"ingest\" ] && [ \"$2\" = \"--stdin\" ] && [ \"$3\" = \"--json\" ]; then\n  cat > '{}'\n  exit 0\nfi\nexit 64\n",
+            payload_path.display()
+        ),
+    );
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![fake_bin.clone()];
+    path_entries.extend(std::env::split_paths(&original_path));
+    let joined_path = std::env::join_paths(path_entries).expect("join PATH");
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for this test.
+    unsafe { std::env::set_var("PATH", joined_path) };
+
+    let executor = csa_executor::Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: csa_executor::codex_runtime::codex_runtime_metadata(),
+    };
+    let config: csa_config::ProjectConfig = toml::from_str(
+        r#"
+schema_version = 1
+
+[memory]
+backend = "mempal"
+auto_capture = true
+"#,
+    )
+    .expect("project config");
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let mut session =
+        create_session(&project_root, Some("target cwd"), None, Some("codex")).expect("session");
+    let session_dir =
+        get_session_dir(&project_root, &session.meta_session_id).expect("resolve session dir");
+
+    let ctx = PostExecContext {
+        executor: &executor,
+        prompt: "test prompt",
+        effective_prompt: "test prompt",
+        task_type: Some("run"),
+        readonly_project_root: false,
+        project_root: &project_root,
+        config: Some(&config),
+        global_config: None,
+        session_dir,
+        sessions_root: "test-root".to_string(),
+        execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+        hooks_config: &hooks_config,
+        memory_project_key: None,
+        provider_session_id: None,
+        events_count: 1,
+        transcript_artifacts: vec![],
+        changed_paths: vec![],
+        pre_exec_snapshot: None,
+        has_tool_calls: true,
+        sa_mode: false,
+    };
+    let mut result = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "captured via session complete".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+    };
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process result");
+
+    for _ in 0..50 {
+        if payload_path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(payload_path.exists(), "mempal payload should be written");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&payload_path).expect("read payload"))
+            .expect("parse payload");
+    assert_eq!(payload["project"], "warifu-ce");
+    assert_eq!(payload["cwd"], project_root.display().to_string());
+    assert_eq!(payload["claude_cwd"], project_root.display().to_string());
+    assert_ne!(
+        payload["cwd"],
+        invocation_cwd.display().to_string(),
+        "session mempal payload must use target project root, not process cwd"
     );
 }

@@ -321,6 +321,7 @@ pub(crate) async fn process_execution_result(
             memory_config,
             "csa-session",
             &ctx.session_dir.join("result.toml"),
+            ctx.project_root,
             Some(ctx.executor.tool_name()),
         );
     }

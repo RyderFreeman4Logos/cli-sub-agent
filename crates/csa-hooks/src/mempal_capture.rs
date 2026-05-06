@@ -12,7 +12,6 @@ use csa_config::{GlobalConfig, MemoryBackend, MemoryConfig, ProjectConfig};
 
 const INGEST_TIMEOUT: Duration = Duration::from_secs(30);
 const WING: &str = "cli-sub-agent";
-const PROJECT: &str = "cli-sub-agent";
 const SOURCE_FILE: &str = "stdin://csa-hook";
 const CLAUDE_CODE_TOOL: &str = "claude-code";
 
@@ -43,17 +42,24 @@ pub fn spawn_mempal_ingest(
     config: &MemoryConfig,
     room: &'static str,
     input_path: &Path,
+    project_root: &Path,
     tool_name: Option<&str>,
 ) {
-    let _ = spawn_mempal_ingest_with_resolver(config, room, input_path, tool_name, |config| {
-        resolve_mempal_binary(config)
-    });
+    let _ = spawn_mempal_ingest_with_resolver(
+        config,
+        room,
+        input_path,
+        project_root,
+        tool_name,
+        resolve_mempal_binary,
+    );
 }
 
 fn spawn_mempal_ingest_with_resolver<F>(
     config: &MemoryConfig,
     room: &'static str,
     input_path: &Path,
+    project_root: &Path,
     tool_name: Option<&str>,
     resolve_binary: F,
 ) -> Option<thread::JoinHandle<()>>
@@ -78,8 +84,15 @@ where
     let binary_path = resolve_binary(config)?;
 
     let input_path = input_path.to_path_buf();
+    let project_root = project_root.to_path_buf();
     Some(thread::spawn(move || {
-        if let Err(err) = run_mempal_ingest(&binary_path, room, &input_path, INGEST_TIMEOUT) {
+        if let Err(err) = run_mempal_ingest(
+            &binary_path,
+            room,
+            &input_path,
+            &project_root,
+            INGEST_TIMEOUT,
+        ) {
             tracing::warn!(
                 room,
                 input = %input_path.display(),
@@ -99,7 +112,7 @@ pub fn spawn_mempal_ingest_for_project(
     tool_name: Option<&str>,
 ) {
     if let Some(config) = load_effective_memory_config(project_root) {
-        spawn_mempal_ingest(&config, room, input_path, tool_name);
+        spawn_mempal_ingest(&config, room, input_path, project_root, tool_name);
     }
 }
 
@@ -116,9 +129,10 @@ fn run_mempal_ingest(
     binary_path: &Path,
     room: &str,
     input_path: &Path,
+    project_root: &Path,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    let stdin_result = build_mempal_payload(room, input_path)
+    let stdin_result = build_mempal_payload(room, input_path, project_root)
         .and_then(|payload| run_mempal_ingest_stdin(binary_path, &payload, timeout));
     match stdin_result {
         Ok(()) => Ok(()),
@@ -146,14 +160,22 @@ fn legacy_ingest_path(input_path: &Path) -> PathBuf {
     input_path.to_path_buf()
 }
 
-fn build_mempal_payload(room: &str, input_path: &Path) -> anyhow::Result<Vec<u8>> {
+fn build_mempal_payload(
+    room: &str,
+    input_path: &Path,
+    project_root: &Path,
+) -> anyhow::Result<Vec<u8>> {
     let content = read_ingest_content(input_path)?;
     let source = infer_source(input_path, room);
+    let project_name = infer_project_name(project_root);
+    let cwd = project_root.display().to_string();
     serde_json::to_vec(&serde_json::json!({
         "content": content,
         "wing": WING,
         "room": room,
-        "project": PROJECT,
+        "project": project_name,
+        "cwd": cwd,
+        "claude_cwd": cwd,
         "source": source,
         "source_file": SOURCE_FILE,
     }))
@@ -257,6 +279,15 @@ fn infer_source(input_path: &Path, room: &str) -> String {
         .filter(|name| !name.is_empty())
         .map(|name| format!("csa-session-{name}"))
         .unwrap_or_else(|| format!("csa-session-{room}"))
+}
+
+fn infer_project_name(project_root: &Path) -> String {
+    project_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| project_root.display().to_string())
 }
 
 fn run_mempal_ingest_stdin(
@@ -438,9 +469,16 @@ mod tests {
         which::which("mempal").ok()
     }
 
+    fn temp_project_root(temp: &tempfile::TempDir) -> PathBuf {
+        let project_root = temp.path().join("warifu-ce");
+        fs::create_dir(&project_root).expect("create project root");
+        project_root
+    }
+
     #[test]
     fn capture_with_mempal_available_sends_json_payload_to_stdin() {
         let temp = tempfile::tempdir().expect("create tempdir");
+        let project_root = temp_project_root(&temp);
         let fake_bin = temp.path().join("bin");
         fs::create_dir(&fake_bin).expect("create fake bin");
         let log_path = temp.path().join("stdin.json");
@@ -462,6 +500,7 @@ mod tests {
             &mempal_config(),
             "csa-session",
             &result_path,
+            &project_root,
             Some("codex"),
             which_mempal,
         )
@@ -474,7 +513,9 @@ mod tests {
         assert_eq!(payload["content"], "captured via hook");
         assert_eq!(payload["wing"], "cli-sub-agent");
         assert_eq!(payload["room"], "csa-session");
-        assert_eq!(payload["project"], "cli-sub-agent");
+        assert_eq!(payload["project"], "warifu-ce");
+        assert_eq!(payload["cwd"], project_root.display().to_string());
+        assert_eq!(payload["claude_cwd"], project_root.display().to_string());
         assert_eq!(payload["source"], "csa-session-01KSESSION");
         assert_eq!(payload["source_file"], "stdin://csa-hook");
     }
@@ -482,6 +523,7 @@ mod tests {
     #[test]
     fn capture_skips_when_mempal_unavailable() {
         let temp = tempfile::tempdir().expect("create tempdir");
+        let project_root = temp_project_root(&temp);
         let empty_bin = temp.path().join("empty-bin");
         fs::create_dir(&empty_bin).expect("create empty bin");
         let _path = ScopedPath::set_only(&empty_bin);
@@ -493,6 +535,7 @@ mod tests {
             &mempal_config(),
             "csa-session",
             &result_path,
+            &project_root,
             Some("codex"),
             which_mempal,
         );
@@ -506,6 +549,7 @@ mod tests {
     #[test]
     fn capture_skips_for_claude_code_sessions() {
         let temp = tempfile::tempdir().expect("create tempdir");
+        let project_root = temp_project_root(&temp);
         let result_path = temp.path().join("result.toml");
         fs::write(&result_path, "summary = \"claude-code owns mempal\"\n").expect("write result");
 
@@ -513,6 +557,7 @@ mod tests {
             &mempal_config(),
             "csa-session",
             &result_path,
+            &project_root,
             Some("claude-code"),
             |_| panic!("resolver must not run for claude-code sessions"),
         );
@@ -526,6 +571,7 @@ mod tests {
     #[test]
     fn run_mempal_ingest_passes_expected_args() {
         let temp = tempfile::tempdir().expect("create tempdir");
+        let project_root = temp_project_root(&temp);
         let log_path = temp.path().join("args.log");
         let stdin_path = temp.path().join("stdin.json");
         let script_path = temp.path().join("mempal-fake.sh");
@@ -546,6 +592,7 @@ mod tests {
             &script_path,
             "csa-session",
             &result_path,
+            &project_root,
             Duration::from_secs(5),
         )
         .expect("run fake mempal");
@@ -558,7 +605,9 @@ mod tests {
         assert_eq!(payload["content"], "captured summary");
         assert_eq!(payload["wing"], "cli-sub-agent");
         assert_eq!(payload["room"], "csa-session");
-        assert_eq!(payload["project"], "cli-sub-agent");
+        assert_eq!(payload["project"], "warifu-ce");
+        assert_eq!(payload["cwd"], project_root.display().to_string());
+        assert_eq!(payload["claude_cwd"], project_root.display().to_string());
         assert_eq!(payload["source"], "csa-session-01ABCSESSION");
         assert_eq!(payload["source_file"], "stdin://csa-hook");
     }
@@ -566,6 +615,7 @@ mod tests {
     #[test]
     fn run_mempal_ingest_falls_back_to_path_args_when_stdin_is_unsupported() {
         let temp = tempfile::tempdir().expect("create tempdir");
+        let project_root = temp_project_root(&temp);
         let log_path = temp.path().join("args.log");
         let script_path = temp.path().join("mempal-fake.sh");
         executable_mempal_script(
@@ -590,6 +640,7 @@ printf '%s\n' "$@" > '{}'
             &script_path,
             "csa-session",
             &result_path,
+            &project_root,
             Duration::from_secs(5),
         )
         .expect("run fake mempal");
@@ -620,5 +671,11 @@ printf '%s\n' "$@" > '{}'
         assert!(!tool_has_own_mempal("codex"));
         assert!(!tool_has_own_mempal("gemini-cli"));
         assert!(!tool_has_own_mempal("opencode"));
+    }
+
+    #[test]
+    fn infer_project_name_falls_back_to_full_path_when_basename_missing() {
+        let root = Path::new("/");
+        assert_eq!(infer_project_name(root), root.display().to_string());
     }
 }
