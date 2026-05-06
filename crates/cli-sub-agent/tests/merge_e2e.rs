@@ -22,4 +22,5 @@ fn merge_help_shows_post_merge_checkout_options() {
     assert!(stdout.contains("PR_NUMBER"));
     assert!(stdout.contains("--rebase"));
     assert!(stdout.contains("--force"));
+    assert!(stdout.contains("--skip-pr-bot"));
 }

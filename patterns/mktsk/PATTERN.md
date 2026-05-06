@@ -108,9 +108,13 @@ parent), complete the full pipeline:
 
 **CRITICAL — pr-bot is a SEPARATE step from PR creation:**
 - NEVER skip pr-bot after creating a PR.
-- NEVER merge the PR manually or via `gh pr merge`.
+- NEVER merge the PR manually or via raw `gh pr merge`.
 - NEVER consider the pipeline "done" after PR creation.
 - pr-bot performs cloud review and the actual merge. It is the final gate.
+
+If an explicitly approved emergency path requires a manual merge after a
+recorded pr-bot pass, use `csa merge <PR_NUMBER>` so the deterministic local
+gate still verifies the pr-bot artifact before merge.
 
 **Skipped when**: `CSA_SKIP_PUBLISH=true` is set by the parent workflow.
 dev2merge sets this before calling mktsk, since it handles publish in its

@@ -70,6 +70,10 @@ ABSOLUTE PROHIBITION (#1122): Squash-merge primitives are FORBIDDEN at every lev
 - GitHub Web UI "Squash and merge" button
 - ANY `--squash` flag passed to a merge command
 
+If an explicitly approved emergency path requires a manual merge after a
+recorded pr-bot pass, use `csa merge <PR_NUMBER>` rather than raw
+`gh pr merge` so the deterministic local pr-bot gate still runs.
+
 dev2merge delegates the actual merge to pr-bot (Step 15). pr-bot reads `pr_review.merge_strategy` from config (default `merge`). If a normal `gh pr merge --merge` fails (e.g. lefthook re-stage race producing an empty-diff PR, or upstream advancing during the wait), DO NOT escalate to `--squash`. Surface `merge_blocked` (or the structural variant `merge_blocked_empty_diff`) to the orchestrator.
 
 EMPTY-DIFF GUARD: Before any merge, verify `gh pr diff <PR>` is non-empty. An empty-diff PR is the structural fingerprint of the lefthook-race scenario in #1122 -- the branch tip drifted, the PR body still references the intended fix, but the actual diff vs the default branch is empty. Aborting at the empty-diff signal is the correct behavior. Squash-merging an empty-diff PR produces an empty squash commit on the default branch and corrupts the audit trail; this is the exact bug #1122 documents.
