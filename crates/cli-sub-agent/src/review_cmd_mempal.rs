@@ -30,6 +30,7 @@ pub(crate) fn maybe_capture_review_mempal(
                 memory_config,
                 "csa-review",
                 &result_path,
+                project_root,
                 Some(tool_name),
             );
         }
