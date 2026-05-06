@@ -476,6 +476,10 @@ pub struct MergeArgs {
     /// Bypass pre-merge working tree checks
     #[arg(long)]
     pub force: bool,
+
+    /// Emergency bypass for the deterministic pr-bot gate
+    #[arg(long = "skip-pr-bot", alias = "skip-prbot")]
+    pub skip_pr_bot: bool,
 }
 
 #[derive(Subcommand)]

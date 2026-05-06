@@ -18,7 +18,10 @@ Pre-PR Verdict Check → PR Creation → **pr-bot Hard Gate** → Post-Merge Syn
 **CRITICAL PIPELINE INVARIANT**: PR creation (Step 14) and pr-bot (Step 15) are
 **two separate hard gates**. Creating a PR does NOT complete the pipeline. You
 MUST run pr-bot (Step 15) after PR creation. NEVER skip Step 15. NEVER merge
-the PR manually or via `gh pr merge`. The pr-bot workflow handles the merge.
+the PR manually or via raw `gh pr merge`. The pr-bot workflow handles the merge.
+If an explicitly approved emergency path requires a manual merge after a
+recorded pr-bot pass, use `csa merge <PR_NUMBER>` so the local pr-bot gate
+still executes.
 Agents that stop after Step 14 leave the PR unmerged — this is a known failure
 mode that this invariant exists to prevent.
 
