@@ -205,8 +205,8 @@ fn default_recursion_depth() -> u32 {
 }
 
 pub use super::config_session::{
-    DEFAULT_COOLDOWN_SECS, ExecutionConfig, HooksSection, PostExecGateConfig, RunConfig,
-    SessionConfig, SnapshotTrigger, VcsConfig,
+    DEFAULT_COOLDOWN_SECS, DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES, ExecutionConfig,
+    HooksSection, PostExecGateConfig, RunConfig, SessionConfig, SnapshotTrigger, VcsConfig,
 };
 pub use super::config_tool::{
     ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions, TransportKind,
@@ -657,6 +657,7 @@ schema_version = 1
 [session]
 transcript_enabled = false
 transcript_redaction = true
+# result_report_spill_threshold_bytes = 10240
 # require_commit_on_mutation = true
 [resources]
 min_free_memory_mb = 4096

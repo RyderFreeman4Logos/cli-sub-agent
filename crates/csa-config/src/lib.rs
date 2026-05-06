@@ -27,10 +27,10 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    DEFAULT_COOLDOWN_SECS, EnforcementMode, ExecutionConfig, HooksSection, PostExecGateConfig,
-    ProjectConfig, ProjectMeta, RunConfig, SessionConfig, SnapshotTrigger, TierConfig,
-    TierStrategy, ToolConfig, ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions,
-    VcsConfig,
+    DEFAULT_COOLDOWN_SECS, DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES, EnforcementMode,
+    ExecutionConfig, HooksSection, PostExecGateConfig, ProjectConfig, ProjectMeta, RunConfig,
+    SessionConfig, SnapshotTrigger, TierConfig, TierStrategy, ToolConfig,
+    ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions, VcsConfig,
 };
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
