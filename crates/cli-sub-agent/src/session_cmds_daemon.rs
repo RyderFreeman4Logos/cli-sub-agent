@@ -412,6 +412,14 @@ fn reactivate_session_with_prompt(
         );
     }
 
+    // Truncate ACP spool before spawn so resumed output starts clean.
+    // The ACP child opens output.log in append mode; without truncation
+    // attach would replay the entire prior run's transcript.
+    let output_log = session_dir.join("output.log");
+    if output_log.exists() {
+        fs::write(&output_log, b"")?;
+    }
+
     let prompt_path = persist_attach_prompt_file(session_dir, prompt)?;
     spawn_attach_resume_daemon(
         session_dir,
@@ -420,7 +428,7 @@ fn reactivate_session_with_prompt(
         &metadata.tool,
         &prompt_path,
     )?;
-    // Clear old artifacts only after daemon successfully spawns — prevents
+    // Clear old result artifacts only after daemon successfully spawns — prevents
     // data loss if spawn fails (review finding 01KQXX5M279K1MWZ76EY2JDQJA).
     clear_attach_reactivation_artifacts(session_dir)?;
     Ok(())
