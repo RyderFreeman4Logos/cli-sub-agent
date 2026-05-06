@@ -25,6 +25,9 @@ const RUNTIME_RESULT_KEYS: [&str; 11] = [
     "artifacts",
 ];
 
+#[path = "manager_result_spillover.rs"]
+mod manager_result_spillover;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SaveOptions {
     /// When true, an empty manager_fields save deletes any existing
@@ -65,14 +68,39 @@ pub fn save_result_with_options(
     options: SaveOptions,
 ) -> Result<()> {
     let base_dir = super::resolve_write_base_dir(project_path, session_id)?;
-    save_result_in(&base_dir, session_id, result, options)
+    let spill_threshold_bytes =
+        manager_result_spillover::resolve_report_spill_threshold_bytes(project_path);
+    save_result_in_with_threshold(
+        &base_dir,
+        session_id,
+        result,
+        options,
+        spill_threshold_bytes,
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn save_result_in(
     base_dir: &Path,
     session_id: &str,
     result: &SessionResult,
     options: SaveOptions,
+) -> Result<()> {
+    save_result_in_with_threshold(
+        base_dir,
+        session_id,
+        result,
+        options,
+        csa_config::DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES,
+    )
+}
+
+fn save_result_in_with_threshold(
+    base_dir: &Path,
+    session_id: &str,
+    result: &SessionResult,
+    options: SaveOptions,
+    spill_threshold_bytes: u64,
 ) -> Result<()> {
     validate_session_id(session_id)?;
     let session_dir = super::get_session_dir_in(base_dir, session_id);
@@ -99,8 +127,8 @@ pub(crate) fn save_result_in(
     }
 
     let mut persisted_result = result.clone();
-    let manager_sidecar = persisted_result.manager_fields.as_sidecar();
-    let preserve_existing_manager_sidecar = manager_sidecar.is_some()
+    let requested_manager_sidecar = persisted_result.manager_fields.as_sidecar();
+    let preserve_existing_manager_sidecar = requested_manager_sidecar.is_some()
         || (!options.clear_stale_manager_sidecar && manager_sidecar_exists(&session_dir));
     if has_custom_schema {
         let Some(contents) = existing_contents.as_deref() else {
@@ -113,6 +141,24 @@ pub(crate) fn save_result_in(
         &mut persisted_result,
         preserve_existing_manager_sidecar,
     )?;
+    let manager_sidecar = if let Some(sidecar) = requested_manager_sidecar {
+        Some(
+            manager_result_spillover::prepare_manager_sidecar_for_publish(
+                &session_dir,
+                &mut persisted_result,
+                sidecar,
+                spill_threshold_bytes,
+            )?,
+        )
+    } else if preserve_existing_manager_sidecar {
+        manager_result_spillover::load_existing_manager_sidecar_for_publish(
+            &session_dir,
+            &mut persisted_result,
+            spill_threshold_bytes,
+        )?
+    } else {
+        None
+    };
     if manager_sidecar.is_none() && preserve_existing_manager_sidecar {
         ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
     } else {
@@ -531,133 +577,4 @@ pub(crate) fn list_artifacts_in(base_dir: &Path, session_id: &str) -> Result<Vec
     }
     artifacts.sort();
     Ok(artifacts)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::redact_result_sidecar_value;
-    use super::*;
-    use chrono::Utc;
-    use tempfile::tempdir;
-
-    #[test]
-    fn manager_result_redaction_preserves_toml_datetime_values() {
-        let sidecar = toml::toml! {
-            started_at = 2026-04-19T12:34:56Z
-            [auth]
-            token = "secret-token"
-        }
-        .into();
-
-        let redacted = redact_result_sidecar_value(&sidecar).expect("redacted sidecar");
-
-        assert!(matches!(
-            redacted.get("started_at"),
-            Some(toml::Value::Datetime(_))
-        ));
-        assert_eq!(
-            redacted
-                .get("auth")
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get("token")),
-            Some(&toml::Value::String("[REDACTED]".to_string()))
-        );
-    }
-
-    #[test]
-    fn manager_result_redaction_preserves_nested_json_string_redaction() {
-        let sidecar = toml::toml! {
-            payload = "{\"secret\":\"top-secret\"}"
-        }
-        .into();
-
-        let redacted = redact_result_sidecar_value(&sidecar).expect("redacted sidecar");
-        let payload = redacted
-            .get("payload")
-            .and_then(toml::Value::as_str)
-            .expect("payload string");
-
-        assert!(!payload.contains("top-secret"));
-        assert!(payload.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn load_result_in_ignores_orphaned_sidecar() {
-        let td = tempdir().expect("tempdir");
-        let session_id = crate::validate::new_session_id();
-        let session_dir = super::super::get_session_dir_in(td.path(), &session_id);
-        std::fs::create_dir_all(session_dir.join("output")).expect("create output dir");
-        let result_path = session_dir.join(RESULT_FILE_NAME);
-
-        let now = Utc::now();
-        let turn_1_result = SessionResult {
-            status: "success".to_string(),
-            exit_code: 0,
-            summary: "turn 1".to_string(),
-            tool: "codex".to_string(),
-            original_tool: None,
-            fallback_tool: None,
-            fallback_reason: None,
-            started_at: now,
-            completed_at: now,
-            events_count: 1,
-            artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
-            peak_memory_mb: None,
-            manager_fields: crate::result::SessionManagerFields {
-                report: Some(
-                    toml::toml! {
-                        [repo_write_audit]
-                        added = ["turn-1.txt"]
-                    }
-                    .into(),
-                ),
-                ..Default::default()
-            },
-        };
-        save_result_in(
-            td.path(),
-            &session_id,
-            &turn_1_result,
-            SaveOptions::default(),
-        )
-        .expect("save turn 1");
-
-        let turn_2_result = SessionResult {
-            summary: "turn 2".to_string(),
-            manager_fields: Default::default(),
-            ..turn_1_result
-        };
-        save_result_in(
-            td.path(),
-            &session_id,
-            &turn_2_result,
-            SaveOptions::default(),
-        )
-        .expect("save turn 2");
-
-        let mut turn_2_envelope: SessionResult =
-            toml::from_str(&std::fs::read_to_string(&result_path).expect("read turn 2 envelope"))
-                .expect("parse turn 2 envelope");
-        turn_2_envelope
-            .artifacts
-            .retain(|artifact| artifact.path != CONTRACT_RESULT_ARTIFACT_PATH);
-        let contents =
-            toml::to_string_pretty(&turn_2_envelope).expect("serialize orphaned envelope");
-        write_file_atomically(&result_path, &contents).expect("persist orphaned envelope");
-
-        let reloaded = load_result_in(td.path(), &session_id)
-            .expect("load result")
-            .expect("result should exist");
-        assert!(
-            reloaded
-                .artifacts
-                .iter()
-                .all(|artifact| artifact.path != CONTRACT_RESULT_ARTIFACT_PATH),
-            "turn 2 envelope must not advertise the manager sidecar"
-        );
-        assert!(
-            reloaded.manager_fields.as_sidecar().is_none(),
-            "orphaned sidecar must not leak prior manager fields into turn 2"
-        );
-    }
 }

@@ -269,6 +269,10 @@ fn test_session_config_default_has_structured_output_enabled() {
     assert!(cfg.structured_output);
     assert_eq!(cfg.resolved_spool_max_mb(), 32);
     assert!(cfg.resolved_spool_keep_rotated());
+    assert_eq!(
+        cfg.result_report_spill_threshold_bytes,
+        DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES
+    );
 }
 
 #[test]
@@ -348,6 +352,24 @@ fn test_session_config_is_default_reflects_spool_overrides() {
 
     let cfg = SessionConfig {
         spool_keep_rotated: Some(false),
+        ..Default::default()
+    };
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_session_config_deserializes_result_report_spill_threshold() {
+    let toml_str = r#"
+result_report_spill_threshold_bytes = 2048
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.result_report_spill_threshold_bytes, 2048);
+}
+
+#[test]
+fn test_session_config_is_default_reflects_result_report_spill_threshold() {
+    let cfg = SessionConfig {
+        result_report_spill_threshold_bytes: 2048,
         ..Default::default()
     };
     assert!(!cfg.is_default());

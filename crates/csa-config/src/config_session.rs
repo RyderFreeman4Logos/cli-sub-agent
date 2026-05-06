@@ -121,6 +121,13 @@ pub struct SessionConfig {
     /// Only effective when `tool_output_compression` is enabled.
     #[serde(default = "default_tool_output_threshold_bytes")]
     pub tool_output_threshold_bytes: u64,
+    /// Byte threshold above which manager-facing report text spills to an artifact.
+    ///
+    /// Applies to `[report].summary`, `[report].what_was_done`, and
+    /// `[report].key_decisions` combined when CSA publishes `output/result.toml`.
+    /// Set to `0` to disable spillover.
+    #[serde(default = "default_result_report_spill_threshold_bytes")]
+    pub result_report_spill_threshold_bytes: u64,
     /// Cooldown period (seconds) between consecutive session launches.
     ///
     /// Prevents rapid-fire session creation that can exhaust API quotas or
@@ -146,6 +153,13 @@ fn default_max_seed_sessions() -> u32 {
 
 fn default_tool_output_threshold_bytes() -> u64 {
     8192
+}
+
+/// Default spillover threshold for manager-facing report text fields.
+pub const DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES: u64 = 10 * 1024;
+
+fn default_result_report_spill_threshold_bytes() -> u64 {
+    DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES
 }
 
 /// Default cooldown between consecutive session launches (seconds).
@@ -184,6 +198,7 @@ impl Default for SessionConfig {
             spool_keep_rotated: None,
             tool_output_compression: false,
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
+            result_report_spill_threshold_bytes: default_result_report_spill_threshold_bytes(),
             cooldown_seconds: default_cooldown_secs(),
             stderr_drain_timeout_secs: default_stderr_drain_timeout_secs(),
         }
@@ -204,6 +219,8 @@ impl SessionConfig {
             && self.spool_keep_rotated.is_none()
             && !self.tool_output_compression
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
+            && self.result_report_spill_threshold_bytes
+                == default_result_report_spill_threshold_bytes()
             && self.cooldown_seconds == default_cooldown_secs()
             && self.stderr_drain_timeout_secs == default_stderr_drain_timeout_secs()
     }
