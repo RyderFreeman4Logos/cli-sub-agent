@@ -31,12 +31,12 @@ const GEMINI_RETRY_CHAIN_FAILOVER_PATTERNS: &[FailoverPattern] = &[
     FailoverPattern {
         pattern: GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS[0],
         reason: "gemini_retry_chain_exhausted",
-        advance_to_next_model: false,
+        advance_to_next_model: true,
     },
     FailoverPattern {
         pattern: GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS[1],
         reason: "gemini_retry_chain_exhausted",
-        advance_to_next_model: false,
+        advance_to_next_model: true,
     },
 ];
 
@@ -647,6 +647,33 @@ mod tests {
             None,
         );
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "retry chain exhausted");
+        let detected = result.unwrap();
+        assert_eq!(detected.matched_pattern, "retry chain exhausted");
+        assert!(
+            detected.advance_to_next_model,
+            "gemini retry chain exhaustion must trigger tier-level failover to next tool"
+        );
+    }
+
+    #[test]
+    fn test_gemini_retry_chain_exhausted_triggers_tier_failover() {
+        let result = detect_rate_limit(
+            "gemini-cli",
+            "gemini acp retry chain exhausted after all fallback phases failed",
+            "",
+            1,
+            Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        );
+        assert!(result.is_some());
+        let detected = result.unwrap();
+        assert!(
+            detected.advance_to_next_model,
+            "tier failover must activate when gemini retry chain is exhausted (#1320)"
+        );
+        assert_eq!(detected.reason, "gemini_retry_chain_exhausted");
+        assert_eq!(
+            detected.model_spec.as_deref(),
+            Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
+        );
     }
 }
