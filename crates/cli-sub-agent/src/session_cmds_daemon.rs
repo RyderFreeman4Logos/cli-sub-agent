@@ -412,13 +412,11 @@ fn reactivate_session_with_prompt(
         );
     }
 
-    // Truncate ACP spool before spawn so resumed output starts clean.
-    // The ACP child opens output.log in append mode; without truncation
-    // attach would replay the entire prior run's transcript.
-    let output_log = session_dir.join("output.log");
-    if output_log.exists() {
-        fs::write(&output_log, b"")?;
-    }
+    // Clean old artifacts BEFORE spawn to avoid racing with the child process.
+    // The user explicitly requested a resume — old data is intentionally superseded.
+    // A spawn failure after cleanup is acceptable (user can retry; old run was
+    // already marked for replacement by their --prompt invocation).
+    clear_attach_reactivation_artifacts(session_dir)?;
 
     let prompt_path = persist_attach_prompt_file(session_dir, prompt)?;
     spawn_attach_resume_daemon(
@@ -427,11 +425,7 @@ fn reactivate_session_with_prompt(
         &actual_project_root,
         &metadata.tool,
         &prompt_path,
-    )?;
-    // Clear old result artifacts only after daemon successfully spawns — prevents
-    // data loss if spawn fails (review finding 01KQXX5M279K1MWZ76EY2JDQJA).
-    clear_attach_reactivation_artifacts(session_dir)?;
-    Ok(())
+    )
 }
 
 fn clear_attach_reactivation_artifacts(session_dir: &Path) -> Result<()> {
@@ -454,14 +448,16 @@ fn clear_attach_reactivation_artifacts(session_dir: &Path) -> Result<()> {
         remove_file_if_exists(&path)?;
     }
 
-    // Only remove prior-run result artifacts. Do NOT remove live log files
-    // (stdout.log, stderr.log, output.log) — the daemon binds these at spawn
-    // and removing them breaks attach visibility.
+    // Cleanup runs BEFORE spawn, so all prior-run files are safe to remove.
+    // The daemon will create fresh stdout.log/stderr.log/output.log at spawn.
     for path in [
         session_dir.join("daemon-completion.toml"),
         session_dir.join("result.toml"),
         csa_session::contract_result_path(session_dir),
         csa_session::legacy_user_result_path(session_dir),
+        session_dir.join("stdout.log"),
+        session_dir.join("stderr.log"),
+        session_dir.join("output.log"),
         session_dir.join("output.log.rotated"),
         output_dir.join("index.toml"),
         output_dir.join("acp-events.jsonl"),
