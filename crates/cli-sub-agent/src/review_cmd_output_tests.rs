@@ -761,3 +761,6 @@ fn persisted_review_artifact_deserializes_optional_overall_risk() {
 
 #[path = "review_cmd_output_verdict_1045_tests.rs"]
 mod verdict_1045_tests;
+
+#[path = "review_cmd_output_verdict_1340_tests.rs"]
+mod verdict_1340_tests;
