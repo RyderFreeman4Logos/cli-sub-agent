@@ -35,6 +35,9 @@ pub struct GlobalConfig {
     /// Memory system configuration.
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Global hook behavior settings.
+    #[serde(default, skip_serializing_if = "GlobalHooksConfig::is_default")]
+    pub hooks: GlobalHooksConfig,
     /// Global MCP servers; merged with project `.csa/mcp.toml` (project wins).
     #[serde(default)]
     pub mcp: GlobalMcpConfig,
@@ -74,6 +77,21 @@ pub struct GlobalConfig {
     /// Experimental feature flags.
     #[serde(default)]
     pub experimental: ExperimentalConfig,
+}
+
+/// Global hook behavior settings (`[hooks]` in `~/.config/cli-sub-agent/config.toml`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GlobalHooksConfig {
+    /// Auto-setup the pre-push review gate on each session start (rate-limited to once per hour).
+    #[serde(default)]
+    pub auto_setup_review_gate: bool,
+}
+
+impl GlobalHooksConfig {
+    /// Returns true when all fields are at their defaults.
+    pub fn is_default(&self) -> bool {
+        !self.auto_setup_review_gate
+    }
 }
 
 pub fn default_max_goal_loops() -> u32 {

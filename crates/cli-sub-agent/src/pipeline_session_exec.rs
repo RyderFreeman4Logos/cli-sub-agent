@@ -206,6 +206,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     }
     // Spawn background lefthook auto-install task (non-blocking, rate-limited).
     super::lefthook_auto_install::spawn_lefthook_setup_if_needed(project_root);
+    // Spawn background review-gate auto-setup if configured (non-blocking, rate-limited).
+    crate::setup_cmds::spawn_review_gate_setup_if_needed(project_root, global_config);
 
     let memory_project_key = resolve_memory_project_key(project_root);
     let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
