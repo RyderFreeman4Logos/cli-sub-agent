@@ -25,10 +25,10 @@ exit 0
     )
 }
 
-/// Child exits (becomes zombie) while grandchild holds stdout open.
-/// `wait_and_capture_with_idle_timeout` must detect the zombie state and
-/// return within a few seconds, NOT wait for the idle_timeout.
-#[cfg(target_os = "linux")]
+/// Child exits while grandchild holds stdout open.
+/// `wait_and_capture_with_idle_timeout` must detect the exit via try_wait()
+/// and return within a few seconds, NOT wait for the idle_timeout.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_compaction_death_detected_before_idle_timeout() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -87,35 +87,32 @@ async fn test_compaction_death_detected_before_idle_timeout() {
     );
 }
 
-/// On Linux, verify pid_has_exited_or_zombie is false for a live process
-/// and true after it has exited.
-#[cfg(target_os = "linux")]
-#[test]
-fn test_pid_has_exited_or_zombie_live_vs_dead() {
-    use crate::tool_liveness::pid_has_exited_or_zombie;
-
-    let mut child = std::process::Command::new("sleep")
+/// Verify that Tokio's try_wait() correctly detects process exit.
+/// This replaces the former pid_has_exited_or_zombie test, which relied on
+/// /proc-based zombie polling and was vulnerable to PID reuse races.
+#[tokio::test]
+async fn test_try_wait_detects_exit() {
+    let mut child = Command::new("sleep")
         .arg("30")
         .spawn()
         .expect("spawn sleep");
-    let pid = child.id();
 
+    // Process is alive: try_wait should return None.
     assert!(
-        !pid_has_exited_or_zombie(pid),
-        "live sleep process should not appear as zombie"
+        child.try_wait().expect("try_wait").is_none(),
+        "live sleep process should not have exited yet"
     );
 
-    child.kill().expect("kill");
-    // Give the kernel a moment to mark it as zombie.
-    std::thread::sleep(Duration::from_millis(50));
+    // Kill the process.
+    child.start_kill().expect("start_kill");
+    // Give the kernel a moment to process the signal.
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // After kill, before wait, the process should be zombie.
+    // After kill, try_wait should return Some (process reaped by Tokio).
     assert!(
-        pid_has_exited_or_zombie(pid),
-        "killed-but-unwaited process should appear as zombie"
+        child.try_wait().expect("try_wait").is_some(),
+        "killed process should be detected as exited by try_wait()"
     );
-
-    child.wait().expect("wait");
 }
 
 /// Regression: a child that exits normally (both stdout and stderr EOF) must

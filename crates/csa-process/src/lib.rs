@@ -286,11 +286,11 @@ pub async fn wait_and_capture_with_idle_timeout(
     // stdout is still open (grandchild inherited the pipe — classic compaction death).
     let mut child_exited_early = false;
     let mut child_exited_early_note = String::new();
-    // Tracks when we first observed the child in zombie state with stdout still
-    // open. We wait one full poll interval before firing: normal processes close
-    // their pipe within microseconds of exit; compaction grandchildren keep it
-    // open for tens of seconds.
+    // Tracks when we first observed the child exited with stdout still open; we
+    // wait one full poll interval before firing (compaction grandchildren keep
+    // the pipe open for 30+ seconds; normal exits close it within microseconds).
     let mut zombie_first_detected_at: Option<Instant> = None;
+    let mut child_wait_consumed = false;
     macro_rules! kill_on_persistent_rate_limit {
         ($appended:expr, $stream:literal) => {
             if let Some(note) = persistent_rate_limit_tracker.observe_appended_output($appended) {
@@ -479,31 +479,21 @@ pub async fn wait_and_capture_with_idle_timeout(
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
-                    // Detect child process death while stdout pipe is still open.
-                    // We only fire after the child has been in zombie state for a
-                    // full poll interval (200ms) with stdout still open.  Normal
-                    // processes close their pipe within microseconds of exit; the
-                    // compaction grandchild keeps it open for 30+ seconds.
-                    if !stdout_done
-                        && let Some(pid) = child_pid
-                        && tool_liveness::pid_has_exited_or_zombie(pid)
-                    {
+                    // Detect child death via try_wait() — cross-platform, race-free.
+                    if !stdout_done && poll_child_exited(&mut child, &mut child_wait_consumed) {
                         let first = zombie_first_detected_at.get_or_insert_with(Instant::now);
                         if first.elapsed() >= IDLE_POLL_INTERVAL {
                             child_exited_early = true;
                             child_exited_early_note = format!(
-                                "child process (pid {pid}) exited while stdout pipe still open; \
+                                "child process (pid {}) exited while stdout pipe still open; \
                                  possible auto-compaction spawned a subprocess that inherited stdout — \
-                                 CSA detected process death and broke out of the read loop early"
+                                 CSA detected process death and broke out of the read loop early",
+                                child_pid.unwrap_or(0)
                             );
-                            warn!(
-                                pid,
-                                "child process exited (zombie) while stdout pipe still open; \
-                                 breaking read loop to avoid indefinite hang"
-                            );
+                            warn!(pid = child_pid.unwrap_or(0), "child process exited while stdout pipe still open; breaking read loop");
                             break;
                         }
-                    } else {
+                    } else if !stdout_done {
                         zombie_first_detected_at = None;
                     }
                 }
@@ -618,22 +608,17 @@ pub async fn wait_and_capture_with_idle_timeout(
                         break;
                     }
                     // Same child-death detection as the with-stderr branch above.
-                    if let Some(pid) = child_pid
-                        && tool_liveness::pid_has_exited_or_zombie(pid)
-                    {
+                    if poll_child_exited(&mut child, &mut child_wait_consumed) {
                         let first = zombie_first_detected_at.get_or_insert_with(Instant::now);
                         if first.elapsed() >= IDLE_POLL_INTERVAL {
                             child_exited_early = true;
                             child_exited_early_note = format!(
-                                "child process (pid {pid}) exited while stdout pipe still open; \
+                                "child process (pid {}) exited while stdout pipe still open; \
                                  possible auto-compaction spawned a subprocess that inherited stdout — \
-                                 CSA detected process death and broke out of the read loop early"
+                                 CSA detected process death and broke out of the read loop early",
+                                child_pid.unwrap_or(0)
                             );
-                            warn!(
-                                pid,
-                                "child process exited (zombie) while stdout pipe still open; \
-                                 breaking read loop to avoid indefinite hang"
-                            );
+                            warn!(pid = child_pid.unwrap_or(0), "child process exited while stdout pipe still open; breaking read loop");
                             break;
                         }
                     } else {
@@ -780,6 +765,20 @@ pub async fn run_and_capture_with_stdin(
         None,
     )
     .await
+}
+
+/// Poll whether a child process has exited using Tokio's built-in try_wait().
+///
+/// Sets `*consumed = true` on first success so callers never call try_wait()
+/// again on an already-reaped child (which would return an ECHILD error).
+fn poll_child_exited(child: &mut tokio::process::Child, consumed: &mut bool) -> bool {
+    if *consumed {
+        return true;
+    }
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        *consumed = true;
+    }
+    *consumed
 }
 
 #[cfg(test)]

@@ -161,42 +161,6 @@ impl ToolLiveness {
     }
 }
 
-/// Whether the given PID has exited (is a zombie or is fully gone).
-///
-/// Uses `/proc/{pid}/stat` on Linux: 'Z' (zombie) or 'X' (dead) means exited
-/// but not yet reaped. On other platforms falls back to `kill(pid, 0)` — this
-/// only detects fully-gone processes; zombies appear alive on macOS.
-///
-/// Use this to detect "child exited but pipe still open from grandchild":
-/// - Linux: reliable — zombie state is visible before the parent calls waitpid
-/// - macOS: conservative — only fires after full reap (rare edge case skipped)
-pub(crate) fn pid_has_exited_or_zombie(pid: u32) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let stat_path = format!("/proc/{pid}/stat");
-        let Ok(content) = std::fs::read_to_string(stat_path) else {
-            // /proc entry gone → process fully reaped (unexpected while we hold Child)
-            return true;
-        };
-        let Some(close_paren) = content.rfind(')') else {
-            return false;
-        };
-        let state = content[close_paren + 2..].chars().next().unwrap_or('S');
-        matches!(state, 'Z' | 'X')
-    }
-    #[cfg(all(unix, not(target_os = "linux")))]
-    {
-        // On macOS/other Unix: can't see zombie state via /proc.
-        // Fall back to kill(0): ESRCH → fully gone; 0/EPERM → still around.
-        !is_process_alive(pid)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
-    }
-}
-
 pub(crate) fn record_spool_bytes_written(session_dir: &Path, bytes_written: u64) {
     let mut snapshot = load_snapshot(session_dir);
     snapshot.spool_bytes_written = Some(bytes_written);
