@@ -45,6 +45,9 @@ mod session_exec_failover;
 #[path = "pipeline_session_hooks.rs"]
 mod session_hooks;
 
+#[path = "lefthook_auto_install.rs"]
+pub(crate) mod lefthook_auto_install;
+
 // Re-export session execution API so callers keep using `crate::pipeline::*`.
 pub(crate) use session_exec::{
     execute_with_session, execute_with_session_and_meta,
