@@ -9,7 +9,8 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use csa_config::ProjectConfig;
-use csa_core::types::ToolName;
+use csa_core::types::{FallbackAttempt, ToolName};
+use csa_scheduler::FallbackChain;
 use csa_session::{PhaseEvent, SessionPhase};
 
 use crate::run_cmd_fork::{ForkResolution, load_child_return_packet};
@@ -157,6 +158,7 @@ enum TransportErrorFailoverKind {
 struct TransportErrorFailoverSignal {
     kind: TransportErrorFailoverKind,
     matched_pattern: String,
+    quota_exhausted: bool,
 }
 
 fn detect_transport_error_failover_signal(
@@ -177,6 +179,7 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::AcpCrashRetryExhausted,
             matched_pattern: matched_pattern.to_string(),
+            quota_exhausted: false,
         });
     }
 
@@ -191,6 +194,7 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::GeminiRetryChainExhausted,
             matched_pattern: matched_pattern.to_string(),
+            quota_exhausted: true,
         });
     }
 
@@ -204,12 +208,14 @@ fn detect_transport_error_failover_signal(
     .map(|rate_limit| TransportErrorFailoverSignal {
         kind: TransportErrorFailoverKind::RateLimit,
         matched_pattern: rate_limit.matched_pattern,
+        quota_exhausted: rate_limit.quota_exhausted,
     })
 }
 
 /// Check for 429 rate-limit signals and decide whether to failover.
 ///
 /// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
+/// Appends a `FallbackAttempt` to `fallback_chain` when a retry is triggered.
 ///
 /// `resolved_tier_name` and `tried_specs` enable intra-tier failover: when the
 /// caller is running under a named tier, we pass spec-level exclusion so that
@@ -232,6 +238,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     config: Option<&ProjectConfig>,
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
+    fallback_chain: &mut FallbackChain,
 ) -> Result<RateLimitAction> {
     if !tier_auto_select {
         return Ok(RateLimitAction::NoRateLimit);
@@ -251,6 +258,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     info!(
         tool = %tool_name_str,
         pattern = %rate_limit.matched_pattern,
+        quota_exhausted = rate_limit.quota_exhausted,
         attempt = attempts,
         max = max_failover_attempts,
         "Rate limit detected, attempting failover"
@@ -320,8 +328,16 @@ pub(crate) fn evaluate_rate_limit_failover(
                 from_spec = %current_model_spec.unwrap_or("none"),
                 to_tool = %new_tool,
                 to_spec = %new_model_spec,
+                quota_exhausted = rate_limit.quota_exhausted,
                 "[csa-failover] intra-tier failover"
             );
+            fallback_chain.push(FallbackAttempt {
+                tool: tool_name_str.to_string(),
+                model_spec: current_model_spec.map(String::from),
+                skip_reason: rate_limit.matched_pattern.clone(),
+                quota_exhausted: rate_limit.quota_exhausted,
+                timestamp: chrono::Utc::now(),
+            });
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
                 new_tool: tool,
@@ -341,6 +357,7 @@ pub(crate) fn evaluate_rate_limit_failover(
 /// `PromptFailed` with `usage_limit_exceeded`) instead of a non-zero
 /// `ExecutionResult`. The error text is tested against the same rate-limit
 /// patterns used for normal exit-code-based detection.
+/// Appends a `FallbackAttempt` to `fallback_chain` when a retry is triggered.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_error_rate_limit_failover(
     tool_name_str: &str,
@@ -360,6 +377,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     config: Option<&ProjectConfig>,
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
+    fallback_chain: &mut FallbackChain,
 ) -> Result<RateLimitAction> {
     let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
@@ -470,8 +488,16 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 from_spec = %current_model_spec.unwrap_or("none"),
                 to_tool = %new_tool,
                 to_spec = %new_model_spec,
+                quota_exhausted = failover_signal.quota_exhausted,
                 "[csa-failover] intra-tier failover (transport error)"
             );
+            fallback_chain.push(FallbackAttempt {
+                tool: tool_name_str.to_string(),
+                model_spec: current_model_spec.map(String::from),
+                skip_reason: failover_signal.matched_pattern.clone(),
+                quota_exhausted: failover_signal.quota_exhausted,
+                timestamp: chrono::Utc::now(),
+            });
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
                 new_tool: tool,
@@ -527,5 +553,86 @@ pub(crate) fn mark_seed_and_evict(
             debug!(error = %e, "Seed eviction check failed");
         }
         _ => {}
+    }
+}
+
+/// Append `[[fallback_chain]]` entries to an existing `result.toml` for a session.
+///
+/// Reads the current result.toml, inserts the array-of-tables section, and
+/// writes it back atomically. No-ops silently if the file is missing or
+/// `chain` is empty — this is always best-effort metadata.
+pub(crate) fn write_fallback_chain_to_result_toml(
+    project_root: &Path,
+    session_id: &str,
+    chain: &FallbackChain,
+) {
+    if chain.is_empty() {
+        return;
+    }
+    let session_dir = match csa_session::get_session_dir(project_root, session_id) {
+        Ok(d) => d,
+        Err(e) => {
+            debug!(session = %session_id, error = %e, "Could not resolve session dir for fallback_chain write");
+            return;
+        }
+    };
+    let result_path = session_dir.join("result.toml");
+    let raw = match std::fs::read_to_string(&result_path) {
+        Ok(s) => s,
+        Err(e) => {
+            debug!(path = %result_path.display(), error = %e, "Could not read result.toml for fallback_chain injection");
+            return;
+        }
+    };
+    let mut table: toml::Table = match toml::from_str(&raw) {
+        Ok(t) => t,
+        Err(e) => {
+            debug!(error = %e, "Could not parse result.toml for fallback_chain injection");
+            return;
+        }
+    };
+    // Build [[fallback_chain]] array of inline tables.
+    let chain_array: Vec<toml::Value> = chain
+        .iter()
+        .map(|a| {
+            let mut m = toml::map::Map::new();
+            m.insert("tool".to_string(), toml::Value::String(a.tool.clone()));
+            if let Some(ref spec) = a.model_spec {
+                m.insert("model_spec".to_string(), toml::Value::String(spec.clone()));
+            }
+            m.insert(
+                "skip_reason".to_string(),
+                toml::Value::String(a.skip_reason.clone()),
+            );
+            m.insert(
+                "quota_exhausted".to_string(),
+                toml::Value::Boolean(a.quota_exhausted),
+            );
+            m.insert(
+                "timestamp".to_string(),
+                toml::Value::String(a.timestamp.to_rfc3339()),
+            );
+            toml::Value::Table(m)
+        })
+        .collect();
+    table.insert(
+        "fallback_chain".to_string(),
+        toml::Value::Array(chain_array),
+    );
+    let updated = match toml::to_string_pretty(&table) {
+        Ok(s) => s,
+        Err(e) => {
+            debug!(error = %e, "Could not serialize updated result.toml with fallback_chain");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&result_path, updated) {
+        debug!(path = %result_path.display(), error = %e, "Could not write result.toml with fallback_chain");
+    } else {
+        info!(
+            session = %session_id,
+            entries = chain.len(),
+            "Wrote fallback_chain to result.toml"
+        );
     }
 }

@@ -20,7 +20,10 @@ use csa_lock::SessionLock;
 use crate::cli::ReturnTarget;
 use crate::pipeline;
 use crate::run_cmd_fork::try_auto_seed_fork;
-use crate::run_cmd_post::{handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy};
+use crate::run_cmd_post::{
+    handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy,
+    write_fallback_chain_to_result_toml,
+};
 use crate::run_cmd_tool_selection::{
     resolve_last_session_selection, resolve_return_target_session_id, resolve_skill_and_prompt,
     resolve_tool_by_strategy,
@@ -736,6 +739,12 @@ pub(crate) async fn handle_run(
         && let Some(ref sid) = executed_session_id
     {
         mark_seed_and_evict(&project_root, sid, &current_tool, config.as_ref());
+    }
+
+    if !loop_outcome.fallback_chain.is_empty()
+        && let Some(ref sid) = executed_session_id
+    {
+        write_fallback_chain_to_result_toml(&project_root, sid, &loop_outcome.fallback_chain);
     }
 
     match output_format {
