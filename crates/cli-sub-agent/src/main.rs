@@ -55,6 +55,7 @@ mod preflight_state_dir;
 mod preflight_symlink;
 mod process_tree;
 mod push_cmd;
+mod recall_cmd;
 mod review_cmd;
 mod review_consensus;
 mod review_context;
@@ -769,12 +770,8 @@ async fn run() -> Result<()> {
             dev2merge_cmd::handle_dev2merge(args, current_depth, sa_mode_active, text_output)
                 .await?
         }
-        Commands::Migrate { dry_run, status } => {
-            migrate_cmd::handle_migrate(dry_run, status)?;
-        }
-        Commands::SelfUpdate { check } => {
-            self_update::handle_self_update(check)?;
-        }
+        Commands::Migrate { dry_run, status } => migrate_cmd::handle_migrate(dry_run, status)?,
+        Commands::SelfUpdate { check } => self_update::handle_self_update(check)?,
         Commands::ClaudeSubAgent(args) => {
             let exit_code =
                 claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth).await?;
@@ -785,15 +782,10 @@ async fn run() -> Result<()> {
             );
             exit_current_process(exit_code);
         }
-        Commands::Tokuin { cmd } => {
-            handle_tokuin(cmd)?;
-        }
-        Commands::Xurl { cmd } => {
-            handle_xurl(cmd)?;
-        }
-        Commands::Hooks { cmd } => {
-            hooks_cmd::handle_hooks(cmd)?;
-        }
+        Commands::Tokuin { cmd } => handle_tokuin(cmd)?,
+        Commands::Xurl { cmd } => handle_xurl(cmd)?,
+        Commands::Recall(args) => recall_cmd::handle_recall(args.cmd)?,
+        Commands::Hooks { cmd } => hooks_cmd::handle_hooks(cmd)?,
     }
 
     Ok(())

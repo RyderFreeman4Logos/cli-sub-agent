@@ -250,6 +250,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 Some(tool.as_str()),
             )?,
         };
+        crate::recall_cmd::spawn_recall_record_if_needed(project_root);
         new_session.task_context = csa_session::TaskContext {
             task_type: task_type.map(|s| s.to_string()),
             tier_name: tier_name.map(|s| s.to_string()),
