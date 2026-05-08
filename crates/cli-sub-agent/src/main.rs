@@ -648,6 +648,10 @@ async fn run() -> Result<()> {
             SetupCommands::OpenCode => {
                 setup_cmds::handle_setup_opencode()?;
             }
+            SetupCommands::ReviewGate { check } => {
+                let project_root = std::env::current_dir()?;
+                setup_cmds::handle_setup_review_gate(&project_root, check)?;
+            }
         },
         Commands::Tiers { cmd } => match cmd {
             TiersCommands::List { cd } => {

@@ -703,6 +703,13 @@ pub enum SetupCommands {
 
     /// Setup MCP integration for OpenCode
     OpenCode,
+
+    /// Install the pre-push review gate (lefthook + review-check.sh) in this repository
+    ReviewGate {
+        /// Report status of each component without modifying anything
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)]
