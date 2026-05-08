@@ -70,6 +70,7 @@ fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
         events_count: 1,
         artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     save_result(project_root, &session.meta_session_id, &existing).expect("write existing result");
@@ -363,6 +364,7 @@ fn codex_exec_initial_stall_summary_forces_failure_status_in_result_toml() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
 

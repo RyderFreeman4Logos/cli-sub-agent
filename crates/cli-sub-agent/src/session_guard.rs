@@ -94,6 +94,7 @@ pub(crate) fn write_pre_exec_error_result(
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     if let Err(e) = save_result_with_options(

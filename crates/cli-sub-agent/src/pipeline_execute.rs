@@ -178,6 +178,7 @@ pub(crate) async fn execute_transport_with_signal(
                 events_count: 0,
                 artifacts: Vec::new(),
                 peak_memory_mb,
+                fallback_chain: None,
                 manager_fields: Default::default(),
             };
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
@@ -225,6 +226,7 @@ fn record_session_termination(
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     if let Err(e) = save_result(project_root, &session.meta_session_id, &updated_result) {

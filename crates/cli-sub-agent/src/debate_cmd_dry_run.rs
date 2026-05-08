@@ -51,6 +51,7 @@ pub(crate) fn create_debate_dry_run_session(
         events_count: 0,
         artifacts: vec![SessionArtifact::new("dry-run")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     csa_session::save_result(project_root, &session.meta_session_id, &result)?;

@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 use csa_config::ProjectConfig;
 use csa_core::types::{FallbackAttempt, ToolName};
 use csa_scheduler::FallbackChain;
-use csa_session::{PhaseEvent, SessionPhase};
+use csa_session::{PhaseEvent, SessionPhase, load_result, save_result};
 
 use crate::run_cmd_fork::{ForkResolution, load_child_return_packet};
 use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
@@ -556,11 +556,11 @@ pub(crate) fn mark_seed_and_evict(
     }
 }
 
-/// Append `[[fallback_chain]]` entries to an existing `result.toml` for a session.
+/// Persist `fallback_chain` into the session's `result.toml` using the
+/// typed `SessionResult` path so the field is visible via `csa session result --json`.
 ///
-/// Reads the current result.toml, inserts the array-of-tables section, and
-/// writes it back atomically. No-ops silently if the file is missing or
-/// `chain` is empty — this is always best-effort metadata.
+/// Loads the existing result, sets `fallback_chain`, and writes back atomically
+/// via `save_result`. No-ops silently if the result is missing or `chain` is empty.
 pub(crate) fn write_fallback_chain_to_result_toml(
     project_root: &Path,
     session_id: &str,
@@ -569,65 +569,20 @@ pub(crate) fn write_fallback_chain_to_result_toml(
     if chain.is_empty() {
         return;
     }
-    let session_dir = match csa_session::get_session_dir(project_root, session_id) {
-        Ok(d) => d,
+    let mut result = match load_result(project_root, session_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            debug!(session = %session_id, "result.toml missing; skipping fallback_chain write");
+            return;
+        }
         Err(e) => {
-            debug!(session = %session_id, error = %e, "Could not resolve session dir for fallback_chain write");
+            debug!(session = %session_id, error = %e, "Could not load result.toml for fallback_chain write");
             return;
         }
     };
-    let result_path = session_dir.join("result.toml");
-    let raw = match std::fs::read_to_string(&result_path) {
-        Ok(s) => s,
-        Err(e) => {
-            debug!(path = %result_path.display(), error = %e, "Could not read result.toml for fallback_chain injection");
-            return;
-        }
-    };
-    let mut table: toml::Table = match toml::from_str(&raw) {
-        Ok(t) => t,
-        Err(e) => {
-            debug!(error = %e, "Could not parse result.toml for fallback_chain injection");
-            return;
-        }
-    };
-    // Build [[fallback_chain]] array of inline tables.
-    let chain_array: Vec<toml::Value> = chain
-        .iter()
-        .map(|a| {
-            let mut m = toml::map::Map::new();
-            m.insert("tool".to_string(), toml::Value::String(a.tool.clone()));
-            if let Some(ref spec) = a.model_spec {
-                m.insert("model_spec".to_string(), toml::Value::String(spec.clone()));
-            }
-            m.insert(
-                "skip_reason".to_string(),
-                toml::Value::String(a.skip_reason.clone()),
-            );
-            m.insert(
-                "quota_exhausted".to_string(),
-                toml::Value::Boolean(a.quota_exhausted),
-            );
-            m.insert(
-                "timestamp".to_string(),
-                toml::Value::String(a.timestamp.to_rfc3339()),
-            );
-            toml::Value::Table(m)
-        })
-        .collect();
-    table.insert(
-        "fallback_chain".to_string(),
-        toml::Value::Array(chain_array),
-    );
-    let updated = match toml::to_string_pretty(&table) {
-        Ok(s) => s,
-        Err(e) => {
-            debug!(error = %e, "Could not serialize updated result.toml with fallback_chain");
-            return;
-        }
-    };
-    if let Err(e) = std::fs::write(&result_path, updated) {
-        debug!(path = %result_path.display(), error = %e, "Could not write result.toml with fallback_chain");
+    result.fallback_chain = Some(chain.to_vec());
+    if let Err(e) = save_result(project_root, session_id, &result) {
+        debug!(session = %session_id, error = %e, "Could not write result.toml with fallback_chain");
     } else {
         info!(
             session = %session_id,

@@ -141,6 +141,7 @@ pub(crate) async fn process_execution_result(
         events_count: ctx.events_count,
         artifacts: ctx.transcript_artifacts.clone(),
         peak_memory_mb: result.peak_memory_mb,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
@@ -486,6 +487,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         events_count: 0,
         artifacts,
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
 

@@ -64,6 +64,7 @@ fn setup_unrelated_debate_session(
                 SessionArtifact::new("output/debate-transcript.md"),
             ],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         },
     )

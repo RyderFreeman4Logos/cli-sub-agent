@@ -21,6 +21,7 @@ fn test_save_result_preserves_existing_contract_result_artifact_when_output_resu
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     save_result_in(
@@ -71,6 +72,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         events_count: 1,
         artifacts: vec![],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -98,6 +100,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
 
     let updated_result = crate::result::SessionResult {
         summary: "updated summary".to_string(),
+        fallback_chain: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -151,6 +154,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -176,6 +180,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
     std::fs::set_permissions(&session_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
 
     let clear_result = crate::result::SessionResult {
+        fallback_chain: None,
         manager_fields: Default::default(),
         ..populated_result
     };
@@ -217,6 +222,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -238,6 +244,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
     assert!(sidecar_path.exists(), "initial save must persist the sidecar");
 
     let clear_result = crate::result::SessionResult {
+        fallback_chain: None,
         manager_fields: Default::default(),
         ..populated_result
     };
