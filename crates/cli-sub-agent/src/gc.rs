@@ -215,6 +215,12 @@ pub(crate) fn handle_gc(
 
     let transcript_stats = cleanup_project_transcripts(&session_root, gc_config, dry_run);
 
+    let review_gate_stats = crate::review_gate::gc_review_gate_markers(
+        &project_root,
+        dry_run,
+        crate::review_gate::DEFAULT_RETENTION_DAYS,
+    );
+
     if dry_run {
         eprintln!("[dry-run] Would scan for orphan csa-*.scope units with 0 active PIDs");
     } else {
@@ -288,6 +294,7 @@ pub(crate) fn handle_gc(
                 "transcript_bytes_reclaimed": transcript_stats.bytes_reclaimed,
                 "stale_slots_cleaned": stale_slots_cleaned,
                 "orphan_scopes_cleaned": orphan_scopes_cleaned,
+                "review_gate_markers_removed": review_gate_stats.markers_removed,
             });
             if !reap_runtime && max_age_days.is_some() {
                 summary["expired_sessions_removed"] = serde_json::json!(expired_sessions_removed);
@@ -322,6 +329,12 @@ pub(crate) fn handle_gc(
             );
             eprintln!("{prefix}  Stale slots cleaned: {stale_slots_cleaned}");
             eprintln!("{prefix}  Orphan cgroup scopes cleaned: {orphan_scopes_cleaned}");
+            if review_gate_stats.markers_removed > 0 {
+                eprintln!(
+                    "{prefix}  Review-gate markers removed: {}",
+                    review_gate_stats.markers_removed
+                );
+            }
         }
     }
 

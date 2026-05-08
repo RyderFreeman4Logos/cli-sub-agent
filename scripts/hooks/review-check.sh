@@ -6,6 +6,10 @@
 # This hook prevents pushing code that hasn't been reviewed by csa.
 # It checks for a review session recorded for the current branch and HEAD.
 # Supports both Git-only and colocated jj+git repositories.
+#
+# Fast path: stat .csa/state/review-gate/<branch_safe>-<short_sha>.pass
+#   millisecond check; new commits auto-invalidate (different SHA → different filename).
+# Slow path (fallback): csa review --check-verdict scans session store.
 
 set -euo pipefail
 
@@ -40,11 +44,39 @@ if [ "${CURRENT_BRANCH}" = "main" ] || [ "${CURRENT_BRANCH}" = "dev" ]; then
   exit 0
 fi
 
-if csa review --check-verdict; then
-  echo "pre-push: Full-diff review verified for HEAD ${CURRENT_HEAD:0:11}."
+# ── Fast path: SHA-pinned marker file ────────────────────────────────────────
+# Sanitize branch name the same way review_gate::sanitize_branch does:
+#   '/' → '__', any non-[a-zA-Z0-9._-] → '_'
+_sanitize_branch() {
+  printf '%s' "$1" \
+    | sed 's|/|__|g' \
+    | sed 's|[^a-zA-Z0-9._-]|_|g'
+}
+
+SHORT_SHA="${CURRENT_HEAD:0:11}"
+SAFE_BRANCH="$(_sanitize_branch "${CURRENT_BRANCH}")"
+MARKER=".csa/state/review-gate/${SAFE_BRANCH}-${SHORT_SHA}.pass"
+
+if [ -f "${MARKER}" ]; then
+  echo "pre-push: Review gate passed (marker) for ${CURRENT_BRANCH} at ${SHORT_SHA}."
   exit 0
 fi
 
-echo "ERROR: Push blocked — no PASS/CLEAN full-diff csa review session recorded for ${CURRENT_BRANCH} at HEAD ${CURRENT_HEAD:0:11}." >&2
-echo "Run 'csa review --range main...HEAD' before pushing." >&2
+# ── Slow path: session-store scan ────────────────────────────────────────────
+if csa review --check-verdict; then
+  echo "pre-push: Full-diff review verified for HEAD ${SHORT_SHA}."
+  exit 0
+fi
+
+# ── Blocked — emit reverse prompt injection for agent context ─────────────────
+cat >&2 <<GATE_BLOCKED
+<!-- CSA:REVIEW_GATE_BLOCKED branch="${CURRENT_BRANCH}" head_sha="${CURRENT_HEAD}" -->
+Push blocked: no passing review found for current HEAD.
+Run: csa review --range main...HEAD --sa-mode true
+Wait for PASS verdict, then retry push.
+<!-- /CSA:REVIEW_GATE_BLOCKED -->
+GATE_BLOCKED
+
+echo "" >&2
+echo "ERROR: Push blocked — no PASS/CLEAN full-diff csa review session recorded for ${CURRENT_BRANCH} at ${SHORT_SHA}." >&2
 exit 1

@@ -284,6 +284,14 @@ fn persist_fix_final_artifacts(
         }
     }
     persist_review_verdict(project_root, review_meta, &[], Vec::new());
+    if converged_clean {
+        crate::review_gate::maybe_write_review_gate_marker(
+            project_root,
+            &review_meta.head_sha,
+            &review_meta.session_id,
+            &review_meta.scope,
+        );
+    }
     super::post_review::persist_review_failure_suggestion(project_root, review_meta);
 }
 

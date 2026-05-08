@@ -1,0 +1,410 @@
+//! SHA-pinned review gate markers for fast pre-push verification.
+//!
+//! After a passing `csa review`, a marker file is written to
+//! `.csa/state/review-gate/<branch_safe>-<short_sha>.pass` containing review
+//! metadata.  The pre-push hook stat-checks this file for a millisecond fast
+//! path, avoiding the expensive session-scan normally required by
+//! `csa review --check-verdict`.
+//!
+//! New commits automatically invalidate old markers because the SHA changes.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use chrono::Utc;
+use tracing::{debug, warn};
+
+/// Number of characters from HEAD SHA used in the marker filename.
+const SHORT_SHA_LEN: usize = 11;
+
+/// Default marker retention when GC does not specify a max age.
+pub(crate) const DEFAULT_RETENTION_DAYS: i64 = 7;
+
+/// Gate marker directory relative to project root.
+const GATE_DIR: &str = ".csa/state/review-gate";
+
+/// Statistics returned by [`gc_review_gate_markers`].
+pub(crate) struct GcReviewGateStats {
+    pub markers_removed: u64,
+}
+
+/// Return the review-gate directory for the given project root.
+fn gate_dir(project_root: &Path) -> PathBuf {
+    project_root.join(GATE_DIR)
+}
+
+/// Sanitize a branch name so it is safe as a filename component.
+///
+/// `/` → `__`; any other character outside `[a-zA-Z0-9._-]` → `_`.
+fn sanitize_branch(branch: &str) -> String {
+    branch
+        .chars()
+        .flat_map(|c| {
+            if c == '/' {
+                vec!['_', '_']
+            } else if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                vec![c]
+            } else {
+                vec!['_']
+            }
+        })
+        .collect()
+}
+
+/// Build the full path of a review-gate marker file.
+pub(crate) fn marker_path(project_root: &Path, branch: &str, head_sha: &str) -> PathBuf {
+    let short_sha = &head_sha[..head_sha.len().min(SHORT_SHA_LEN)];
+    let safe_branch = sanitize_branch(branch);
+    gate_dir(project_root).join(format!("{safe_branch}-{short_sha}.pass"))
+}
+
+/// TOML content written to the marker file.
+fn marker_toml(session_id: &str, branch: &str, head_sha: &str, scope: &str) -> String {
+    let ts = Utc::now().to_rfc3339();
+    format!(
+        "session_id = {session_id:?}\ntimestamp = {ts:?}\nbranch = {branch:?}\nhead_sha = {head_sha:?}\nscope = {scope:?}\n"
+    )
+}
+
+/// Write a review-gate marker for a passing review.
+///
+/// Best-effort: failures are logged as warnings and do not abort the review.
+pub(crate) fn write_review_gate_marker(
+    project_root: &Path,
+    branch: &str,
+    head_sha: &str,
+    session_id: &str,
+    scope: &str,
+) {
+    if branch.is_empty() || head_sha.is_empty() {
+        debug!("Skipping review-gate marker: branch or head_sha is empty");
+        return;
+    }
+    let dir = gate_dir(project_root);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        warn!(
+            dir = %dir.display(),
+            error = %e,
+            "Failed to create review-gate directory; skipping marker write"
+        );
+        return;
+    }
+    let path = marker_path(project_root, branch, head_sha);
+    let content = marker_toml(session_id, branch, head_sha, scope);
+    if let Err(e) = fs::write(&path, &content) {
+        warn!(
+            path = %path.display(),
+            error = %e,
+            "Failed to write review-gate marker"
+        );
+    } else {
+        debug!(
+            path = %path.display(),
+            session_id,
+            branch,
+            head_sha = &head_sha[..head_sha.len().min(SHORT_SHA_LEN)],
+            "Wrote review-gate marker"
+        );
+    }
+}
+
+/// Write a gate marker from a [`csa_session::state::ReviewSessionMeta`] when its
+/// decision is Pass.  No-op for non-Pass decisions.
+pub(crate) fn maybe_write_gate_marker_from_meta(
+    project_root: &Path,
+    meta: &csa_session::state::ReviewSessionMeta,
+) {
+    if meta.decision != csa_core::types::ReviewDecision::Pass.as_str() {
+        return;
+    }
+    maybe_write_review_gate_marker(project_root, &meta.head_sha, &meta.session_id, &meta.scope);
+}
+
+/// Write a gate marker when `verdict == "CLEAN"`.  No-op for any other verdict.
+pub(crate) fn maybe_write_gate_marker_for_clean(
+    project_root: &Path,
+    head_sha: &str,
+    verdict: &str,
+    first_session_id: Option<&str>,
+    scope: &str,
+) {
+    if verdict != "CLEAN" {
+        return;
+    }
+    if let Some(sid) = first_session_id {
+        maybe_write_review_gate_marker(project_root, head_sha, sid, scope);
+    }
+}
+
+/// Resolve the current VCS branch and HEAD SHA, then call [`write_review_gate_marker`].
+///
+/// Best-effort: if branch or SHA cannot be determined the call is a no-op.
+pub(crate) fn maybe_write_review_gate_marker(
+    project_root: &Path,
+    head_sha: &str,
+    session_id: &str,
+    scope: &str,
+) {
+    let backend = csa_session::create_vcs_backend(project_root);
+    let branch = match backend.identity(project_root) {
+        Ok(identity) => identity.ref_name.unwrap_or_default(),
+        Err(e) => {
+            debug!(error = %e, "Could not resolve VCS identity for review-gate marker");
+            String::new()
+        }
+    };
+    if branch.is_empty() {
+        debug!("Skipping review-gate marker: no branch resolved");
+        return;
+    }
+    write_review_gate_marker(project_root, &branch, head_sha, session_id, scope);
+}
+
+/// Remove stale review-gate markers.
+///
+/// A marker is stale when:
+/// - Its modification time exceeds `retention_days`, OR
+/// - Its branch no longer exists in the local git repo.
+///
+/// Returns stats about what was (or would be) removed.
+pub(crate) fn gc_review_gate_markers(
+    project_root: &Path,
+    dry_run: bool,
+    retention_days: i64,
+) -> GcReviewGateStats {
+    let mut markers_removed: u64 = 0;
+    let dir = gate_dir(project_root);
+    if !dir.exists() {
+        return GcReviewGateStats { markers_removed };
+    }
+
+    let existing_branches = enumerate_local_branches(project_root);
+    let now = Utc::now();
+
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return GcReviewGateStats { markers_removed };
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "pass") {
+            continue;
+        }
+        let stale = is_marker_stale(&path, &existing_branches, &now, retention_days);
+        if !stale {
+            continue;
+        }
+        if dry_run {
+            eprintln!(
+                "[dry-run] Would remove stale review-gate marker: {}",
+                path.display()
+            );
+            markers_removed += 1;
+        } else if fs::remove_file(&path).is_ok() {
+            debug!(path = %path.display(), "Removed stale review-gate marker");
+            markers_removed += 1;
+        }
+    }
+
+    GcReviewGateStats { markers_removed }
+}
+
+fn is_marker_stale(
+    path: &Path,
+    existing_branches: &[String],
+    now: &chrono::DateTime<Utc>,
+    retention_days: i64,
+) -> bool {
+    // Age-based staleness.
+    if let Ok(meta) = fs::metadata(path)
+        && let Ok(modified) = meta.modified()
+        && let Ok(duration) = now
+            .signed_duration_since(chrono::DateTime::<Utc>::from(modified))
+            .to_std()
+        && duration.as_secs() > (retention_days as u64) * 86_400
+    {
+        return true;
+    }
+
+    // Branch-based staleness: parse branch from marker filename stem.
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        // Stem format: <branch_safe>-<short_sha>
+        // We cannot unsanitize `__` → `/` reliably, so we re-sanitize each
+        // known branch and compare.
+        let branch_gone = !existing_branches
+            .iter()
+            .any(|b| stem.starts_with(&sanitize_branch(b)));
+        if branch_gone {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// List local git branch names by running `git branch --format=%(refname:short)`.
+fn enumerate_local_branches(project_root: &Path) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .args(["branch", "--format=%(refname:short)"])
+        .current_dir(project_root)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn init_git_repo(dir: &Path) {
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .status()
+            .unwrap();
+    }
+
+    #[test]
+    fn sanitize_branch_replaces_slash() {
+        assert_eq!(sanitize_branch("feat/my-feature"), "feat__my-feature");
+    }
+
+    #[test]
+    fn sanitize_branch_replaces_spaces() {
+        assert_eq!(sanitize_branch("fix bad chars!"), "fix_bad_chars_");
+    }
+
+    #[test]
+    fn marker_path_uses_short_sha_and_safe_branch() {
+        let dir = PathBuf::from("/tmp/proj");
+        let path = marker_path(&dir, "feat/1337-thing", "abcdef12345678");
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        assert_eq!(filename, "feat__1337-thing-abcdef12345.pass");
+    }
+
+    #[test]
+    fn write_and_stat_marker() {
+        let td = TempDir::new().unwrap();
+        let project_root = td.path();
+        write_review_gate_marker(
+            project_root,
+            "feat/test",
+            "abc1234567890",
+            "SID001",
+            "range:main...HEAD",
+        );
+        let path = marker_path(project_root, "feat/test", "abc1234567890");
+        assert!(
+            path.exists(),
+            "marker file should exist: {}",
+            path.display()
+        );
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("SID001"));
+        assert!(content.contains("range:main...HEAD"));
+    }
+
+    #[test]
+    fn gc_removes_old_markers() {
+        let td = TempDir::new().unwrap();
+        let project_root = td.path();
+        init_git_repo(project_root);
+
+        // Write a marker for a branch that doesn't exist in git.
+        write_review_gate_marker(
+            project_root,
+            "old-gone-branch",
+            "deadbeef00000",
+            "SID_OLD",
+            "range:main...HEAD",
+        );
+        let marker = marker_path(project_root, "old-gone-branch", "deadbeef00000");
+        assert!(marker.exists());
+
+        let stats = gc_review_gate_markers(project_root, false, DEFAULT_RETENTION_DAYS);
+        assert_eq!(
+            stats.markers_removed, 1,
+            "should remove marker for deleted branch"
+        );
+        assert!(!marker.exists(), "marker should be gone after gc");
+    }
+
+    #[test]
+    fn gc_preserves_live_branch_markers() {
+        let td = TempDir::new().unwrap();
+        let project_root = td.path();
+        init_git_repo(project_root);
+
+        // The HEAD branch after `git init` is "master" or "main" depending on git config.
+        let branch_output = std::process::Command::new("git")
+            .args(["branch", "--format=%(refname:short)"])
+            .current_dir(project_root)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&branch_output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("master")
+            .trim()
+            .to_owned();
+
+        write_review_gate_marker(
+            project_root,
+            &branch,
+            "abc0000000011",
+            "SID_LIVE",
+            "range:main...HEAD",
+        );
+        let marker = marker_path(project_root, &branch, "abc0000000011");
+        assert!(marker.exists());
+
+        let stats = gc_review_gate_markers(project_root, false, DEFAULT_RETENTION_DAYS);
+        // Should NOT remove a marker whose branch still exists (and is recent).
+        assert_eq!(
+            stats.markers_removed, 0,
+            "live branch marker should be kept"
+        );
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn gc_dry_run_does_not_delete() {
+        let td = TempDir::new().unwrap();
+        let project_root = td.path();
+        init_git_repo(project_root);
+
+        write_review_gate_marker(
+            project_root,
+            "phantom-branch",
+            "ffffffff00011",
+            "SID_DRY",
+            "range:main...HEAD",
+        );
+        let marker = marker_path(project_root, "phantom-branch", "ffffffff00011");
+        assert!(marker.exists());
+
+        let stats = gc_review_gate_markers(project_root, true, DEFAULT_RETENTION_DAYS);
+        assert_eq!(
+            stats.markers_removed, 1,
+            "dry-run should count but not delete"
+        );
+        assert!(marker.exists(), "dry-run must not delete the marker");
+    }
+}

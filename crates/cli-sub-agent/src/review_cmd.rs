@@ -465,9 +465,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             result.persistable_session_id.as_deref(),
             result.executed_tool.as_str(),
         );
-
         let is_cumulative_review = review_scope_is_cumulative(&scope);
-
         if !should_run_fix_loop(args.fix, decision) {
             post_review::suggest_review_failure_fix(&project_root, &review_meta, &sanitized);
             // Accumulate only on FINAL result to avoid double-counting when --fix resolves the same issues.
@@ -572,10 +570,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
 
         maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
-
         return fix_exit_code;
     }
-
     if args.fix {
         anyhow::bail!("--fix is not supported when --reviewers > 1");
     }
@@ -747,6 +743,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     );
 
     if let Err(err) = parent_artifacts::write_multi_reviewer_parent_artifacts(
+        &project_root,
         reviewers,
         &outcomes,
         final_verdict,
