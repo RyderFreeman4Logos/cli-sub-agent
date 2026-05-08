@@ -629,7 +629,10 @@ fn persist_review_verdict_concrete_findings_override_uncertain_token() {
 }
 
 #[test]
-fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
+fn persist_review_verdict_empty_structured_findings_uncertain_meta_emits_pass() {
+    // #1349: empty findings + zero counts is conclusive Pass, even for Uncertain meta.
+    // The prior behaviour (preserve Uncertain unless prose says PASS/CLEAN) is superseded:
+    // structured evidence (zero findings, zero counts) is authoritative.
     let session_id = "01TESTEMPTYFINDINGSUNCERTAIN";
     let (_env_lock, project_root, session_dir) = lock_test_session(
         "persist-review-verdict-empty-findings-uncertain",
@@ -660,8 +663,12 @@ fn persist_review_verdict_empty_structured_findings_preserve_uncertain_meta() {
     let artifact: ReviewVerdictArtifact =
         serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
             .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
-    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1349: empty findings + zero counts must yield Pass even for Uncertain meta"
+    );
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
@@ -764,3 +771,6 @@ mod verdict_1045_tests;
 
 #[path = "review_cmd_output_verdict_1340_tests.rs"]
 mod verdict_1340_tests;
+
+#[path = "review_cmd_output_verdict_1349_tests.rs"]
+mod verdict_1349_tests;

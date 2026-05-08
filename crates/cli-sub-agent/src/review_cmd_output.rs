@@ -591,12 +591,16 @@ fn derive_decision_from_severity_counts(
     if let Some(ReviewDecision::Skip) = meta_decision {
         return Ok(ReviewDecision::Skip);
     }
-    // Unavailable NOT propagated: genuine failures are handled via the status_reason
-    // fast-path before this function. Unavailable in meta_decision here means the
-    // raw output contained the UNAVAILABLE token (prompt injection noise). Zero findings
-    // is conclusive — fall through to Pass. (#1340)
+    // Unavailable NOT propagated here: genuine failures use the status_reason fast-path.
+    // Unavailable in meta_decision is prompt-injection noise; zero findings → Pass. (#1340)
 
-    // #1140/#1144: Uncertain/Fail meta with zero structured evidence → prose tiebreak.
+    // #1349: Empty findings + zero counts is conclusive Pass; meta_decision from
+    // text-parse noise or exit-code fallback must not block on zero-evidence records.
+    if findings_empty && severity_counts_are_zero(severity_counts) {
+        return Ok(ReviewDecision::Pass);
+    }
+
+    // #1140/#1144: Uncertain/Fail meta + zero counts (findings non-empty) → prose tiebreak.
     if matches!(
         meta_decision,
         Some(ReviewDecision::Uncertain | ReviewDecision::Fail)
