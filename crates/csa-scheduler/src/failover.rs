@@ -1,9 +1,13 @@
 //! Failover decision logic for 429 / rate-limit situations.
 
 use csa_config::ProjectConfig;
+use csa_core::types::FallbackAttempt;
 use csa_session::MetaSessionState;
 use serde::Serialize;
 use tracing::info;
+
+/// Ordered list of failover attempts recorded during a `csa run` invocation.
+pub type FallbackChain = Vec<FallbackAttempt>;
 
 /// What to do when a tool hits a rate limit.
 #[derive(Debug, Clone, Serialize)]

@@ -9,8 +9,9 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use csa_config::ProjectConfig;
-use csa_core::types::ToolName;
-use csa_session::{PhaseEvent, SessionPhase};
+use csa_core::types::{FallbackAttempt, ToolName};
+use csa_scheduler::FallbackChain;
+use csa_session::{PhaseEvent, SessionPhase, load_result, save_result};
 
 use crate::run_cmd_fork::{ForkResolution, load_child_return_packet};
 use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
@@ -157,6 +158,7 @@ enum TransportErrorFailoverKind {
 struct TransportErrorFailoverSignal {
     kind: TransportErrorFailoverKind,
     matched_pattern: String,
+    quota_exhausted: bool,
 }
 
 fn detect_transport_error_failover_signal(
@@ -177,6 +179,7 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::AcpCrashRetryExhausted,
             matched_pattern: matched_pattern.to_string(),
+            quota_exhausted: false,
         });
     }
 
@@ -191,6 +194,7 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::GeminiRetryChainExhausted,
             matched_pattern: matched_pattern.to_string(),
+            quota_exhausted: true,
         });
     }
 
@@ -204,12 +208,14 @@ fn detect_transport_error_failover_signal(
     .map(|rate_limit| TransportErrorFailoverSignal {
         kind: TransportErrorFailoverKind::RateLimit,
         matched_pattern: rate_limit.matched_pattern,
+        quota_exhausted: rate_limit.quota_exhausted,
     })
 }
 
 /// Check for 429 rate-limit signals and decide whether to failover.
 ///
 /// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
+/// Appends a `FallbackAttempt` to `fallback_chain` when a retry is triggered.
 ///
 /// `resolved_tier_name` and `tried_specs` enable intra-tier failover: when the
 /// caller is running under a named tier, we pass spec-level exclusion so that
@@ -232,6 +238,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     config: Option<&ProjectConfig>,
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
+    fallback_chain: &mut FallbackChain,
 ) -> Result<RateLimitAction> {
     if !tier_auto_select {
         return Ok(RateLimitAction::NoRateLimit);
@@ -251,6 +258,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     info!(
         tool = %tool_name_str,
         pattern = %rate_limit.matched_pattern,
+        quota_exhausted = rate_limit.quota_exhausted,
         attempt = attempts,
         max = max_failover_attempts,
         "Rate limit detected, attempting failover"
@@ -320,8 +328,16 @@ pub(crate) fn evaluate_rate_limit_failover(
                 from_spec = %current_model_spec.unwrap_or("none"),
                 to_tool = %new_tool,
                 to_spec = %new_model_spec,
+                quota_exhausted = rate_limit.quota_exhausted,
                 "[csa-failover] intra-tier failover"
             );
+            fallback_chain.push(FallbackAttempt {
+                tool: tool_name_str.to_string(),
+                model_spec: current_model_spec.map(String::from),
+                skip_reason: rate_limit.matched_pattern.clone(),
+                quota_exhausted: rate_limit.quota_exhausted,
+                timestamp: chrono::Utc::now(),
+            });
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
                 new_tool: tool,
@@ -341,6 +357,7 @@ pub(crate) fn evaluate_rate_limit_failover(
 /// `PromptFailed` with `usage_limit_exceeded`) instead of a non-zero
 /// `ExecutionResult`. The error text is tested against the same rate-limit
 /// patterns used for normal exit-code-based detection.
+/// Appends a `FallbackAttempt` to `fallback_chain` when a retry is triggered.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_error_rate_limit_failover(
     tool_name_str: &str,
@@ -360,6 +377,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     config: Option<&ProjectConfig>,
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
+    fallback_chain: &mut FallbackChain,
 ) -> Result<RateLimitAction> {
     let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
@@ -470,8 +488,16 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 from_spec = %current_model_spec.unwrap_or("none"),
                 to_tool = %new_tool,
                 to_spec = %new_model_spec,
+                quota_exhausted = failover_signal.quota_exhausted,
                 "[csa-failover] intra-tier failover (transport error)"
             );
+            fallback_chain.push(FallbackAttempt {
+                tool: tool_name_str.to_string(),
+                model_spec: current_model_spec.map(String::from),
+                skip_reason: failover_signal.matched_pattern.clone(),
+                quota_exhausted: failover_signal.quota_exhausted,
+                timestamp: chrono::Utc::now(),
+            });
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
                 new_tool: tool,
@@ -527,5 +553,41 @@ pub(crate) fn mark_seed_and_evict(
             debug!(error = %e, "Seed eviction check failed");
         }
         _ => {}
+    }
+}
+
+/// Persist `fallback_chain` into the session's `result.toml` using the
+/// typed `SessionResult` path so the field is visible via `csa session result --json`.
+///
+/// Loads the existing result, sets `fallback_chain`, and writes back atomically
+/// via `save_result`. No-ops silently if the result is missing or `chain` is empty.
+pub(crate) fn write_fallback_chain_to_result_toml(
+    project_root: &Path,
+    session_id: &str,
+    chain: &FallbackChain,
+) {
+    if chain.is_empty() {
+        return;
+    }
+    let mut result = match load_result(project_root, session_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            debug!(session = %session_id, "result.toml missing; skipping fallback_chain write");
+            return;
+        }
+        Err(e) => {
+            debug!(session = %session_id, error = %e, "Could not load result.toml for fallback_chain write");
+            return;
+        }
+    };
+    result.fallback_chain = Some(chain.to_vec());
+    if let Err(e) = save_result(project_root, session_id, &result) {
+        debug!(session = %session_id, error = %e, "Could not write result.toml with fallback_chain");
+    } else {
+        info!(
+            session = %session_id,
+            entries = chain.len(),
+            "Wrote fallback_chain to result.toml"
+        );
     }
 }

@@ -8,7 +8,8 @@ pub mod rotation;
 pub mod seed_session;
 pub mod session_reuse;
 
-pub use failover::{FailoverAction, decide_failover};
+pub use csa_core::types::FallbackAttempt;
+pub use failover::{FailoverAction, FallbackChain, decide_failover};
 pub use rate_limit::{RateLimitDetected, detect_rate_limit};
 pub use rotation::resolve_tier_tool_rotated;
 pub use seed_session::{

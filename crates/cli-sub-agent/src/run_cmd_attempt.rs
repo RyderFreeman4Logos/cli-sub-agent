@@ -97,6 +97,8 @@ pub(crate) struct RunLoopOutcome {
     pub(crate) current_tool: ToolName,
     pub(crate) executed_session_id: Option<String>,
     pub(crate) fork_resolution: Option<ForkResolution>,
+    /// Ordered list of tools skipped due to rate-limit/quota failover before this result.
+    pub(crate) fallback_chain: csa_scheduler::FallbackChain,
 }
 
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
@@ -123,6 +125,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut current_model = request.initial_model;
     let mut tried_tools: Vec<String> = Vec::new();
     let mut tried_specs: Vec<String> = Vec::new();
+    let mut fallback_chain: csa_scheduler::FallbackChain = Vec::new();
     let mut attempts = 0;
     let runtime_fallback_enabled = matches!(
         request.strategy,
@@ -643,6 +646,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.config,
                     request.task_needs_edit,
                     current_model_spec.as_deref(),
+                    &mut fallback_chain,
                 )? {
                     RateLimitAction::Retry {
                         new_tool,
@@ -731,6 +735,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             request.config,
             request.task_needs_edit,
             current_model_spec.as_deref(),
+            &mut fallback_chain,
         )? {
             RateLimitAction::Retry {
                 new_tool,
@@ -762,6 +767,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         current_tool,
         executed_session_id,
         fork_resolution,
+        fallback_chain,
     })))
 }
 

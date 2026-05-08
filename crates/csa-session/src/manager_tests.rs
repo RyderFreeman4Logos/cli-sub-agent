@@ -320,6 +320,7 @@ fn test_create_session_with_tool() {
 }
 
 include!("manager_tests_tail.rs");
+include!("manager_tests_tail_2.rs");
 include!("manager_tests_audit.rs");
 include!("manager_tests_sidecar_preservation.rs");
 include!("manager_tests_result_view.rs");

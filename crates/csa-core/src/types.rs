@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +94,24 @@ impl std::fmt::Display for ModelFamily {
             Self::Other => write!(f, "Other"),
         }
     }
+}
+
+/// One step in a quota/rate-limit failover chain: which tool/spec was tried and why it was skipped.
+///
+/// Written to `result.toml` under `[[fallback_chain]]` when failover occurred during `csa run`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FallbackAttempt {
+    /// Tool name that was attempted (e.g. "gemini-cli").
+    pub tool: String,
+    /// Full model spec that was attempted (e.g. "gemini-cli/google/gemini-3.1-pro-preview/xhigh").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_spec: Option<String>,
+    /// Machine-readable reason the tool was skipped (matched pattern from stderr/stdout).
+    pub skip_reason: String,
+    /// Whether this skip was due to permanent quota exhaustion (vs. transient rate limit).
+    pub quota_exhausted: bool,
+    /// UTC timestamp when the skip was recorded.
+    pub timestamp: DateTime<Utc>,
 }
 
 /// CLI-level tool argument parsed from `--tool`.

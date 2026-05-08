@@ -1,6 +1,7 @@
 //! Structured session execution result.
 
 use chrono::{DateTime, Utc};
+use csa_core::types::FallbackAttempt;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use toml::Value as TomlValue;
@@ -186,6 +187,10 @@ pub struct SessionResult {
     /// `None` when cgroup monitoring is unavailable or the scope was already removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_mb: Option<u64>,
+    /// Ordered list of tools skipped due to quota/rate-limit failover before the final tool ran.
+    /// `None` when no failover occurred; non-empty only when `csa run` cycled through alternatives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_chain: Option<Vec<FallbackAttempt>>,
     /// Manager-facing data loaded from `output/result.toml` sidecars at read time.
     /// This is intentionally read-only metadata and is never serialized back into
     /// the runtime `result.toml` envelope.
@@ -227,6 +232,7 @@ mod tests {
             events_count: 4,
             artifacts: vec![SessionArtifact::new("output/diff.patch")],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         };
 
@@ -258,6 +264,7 @@ mod tests {
             events_count: 0,
             artifacts: vec![],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         };
 
@@ -343,6 +350,7 @@ artifacts = ["output/a.txt", "output/b.txt"]
                 SessionArtifact::with_stats("output/acp-events.jsonl", 10, 256),
             ],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         };
 

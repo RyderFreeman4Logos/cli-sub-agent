@@ -331,6 +331,7 @@ mod tests {
             events_count: 1,
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: crate::result::SessionManagerFields {
                 report: Some(
                     toml::toml! {
@@ -352,6 +353,7 @@ mod tests {
 
         let turn_2_result = SessionResult {
             summary: "turn 2".to_string(),
+            fallback_chain: None,
             manager_fields: Default::default(),
             ..turn_1_result
         };
@@ -470,6 +472,7 @@ mod tests {
             events_count: 1,
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         };
         save_result_in_with_threshold(

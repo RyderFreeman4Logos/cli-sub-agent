@@ -105,6 +105,7 @@ pub(super) fn maybe_synthesize_missing_review_result(
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
 

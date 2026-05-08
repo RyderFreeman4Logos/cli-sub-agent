@@ -64,6 +64,7 @@ fn test_load_result_view_ignores_orphaned_manager_sidecar() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -120,6 +121,7 @@ fn test_load_result_merges_manager_sidecar_sections_into_runtime_result() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     std::fs::write(
@@ -238,6 +240,7 @@ fn test_manager_sidecar_roundtrip_preserves_full_sa_schema() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     let input_sidecar = toml::Value::Table(toml::toml! {
@@ -387,6 +390,7 @@ fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     save_result_in(
@@ -423,6 +427,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -448,6 +453,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
     );
 
     let clean_result = crate::result::SessionResult {
+        fallback_chain: None,
         manager_fields: Default::default(),
         ..populated_result.clone()
     };
@@ -494,6 +500,7 @@ fn test_clear_manager_sidecar_removes_existing_sidecar() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -545,6 +552,7 @@ fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     std::fs::write(
@@ -596,4 +604,76 @@ fn test_redact_result_sidecar_value_masks_secret_fields() {
     assert!(!rendered.contains("hunter2"));
     assert!(!rendered.contains("secret-token"));
     assert!(rendered.contains("[REDACTED]"));
+}
+
+#[test]
+fn test_fallback_chain_not_retained_after_save_without_fallback() {
+    // Regression: fallback_chain was missing from RUNTIME_RESULT_KEYS, so a
+    // second save (with fallback_chain=None) left the previous entry in
+    // result.toml, causing downstream readers to see stale failover history.
+    use csa_core::types::FallbackAttempt;
+
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("gemini-cli")).unwrap();
+    let now = chrono::Utc::now();
+
+    let make_result = |fallback_chain| crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "done".to_string(),
+        tool: "gemini-cli".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: vec![],
+        peak_memory_mb: None,
+        fallback_chain,
+        manager_fields: Default::default(),
+    };
+
+    // First save: with a non-empty fallback_chain.
+    let attempt = FallbackAttempt {
+        tool: "codex".to_string(),
+        model_spec: None,
+        skip_reason: "QUOTA_EXHAUSTED".to_string(),
+        quota_exhausted: true,
+        timestamp: now,
+    };
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &make_result(Some(vec![attempt])),
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
+
+    // Verify first save persisted fallback_chain.
+    let after_first = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        after_first.fallback_chain.is_some(),
+        "first save must write fallback_chain"
+    );
+
+    // Second save: without fallback_chain (normal non-failover run).
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &make_result(None),
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
+
+    // fallback_chain must NOT survive the second save.
+    let after_second = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        after_second.fallback_chain.is_none(),
+        "second save without fallback_chain must clear the stale entry from result.toml"
+    );
 }

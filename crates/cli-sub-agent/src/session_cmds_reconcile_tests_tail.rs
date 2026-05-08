@@ -73,6 +73,7 @@ fn make_result(status: &str, exit_code: i32) -> SessionResult {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     }
 }
@@ -499,6 +500,7 @@ fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     })
     .unwrap();
@@ -557,6 +559,7 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
             events_count: 0,
             artifacts: Vec::new(),
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         },
     )

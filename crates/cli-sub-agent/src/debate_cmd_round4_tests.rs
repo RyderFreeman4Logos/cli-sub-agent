@@ -77,6 +77,7 @@ fn debate_tier_all_fail_does_not_overwrite_unrelated_latest_session() {
                 SessionArtifact::new("output/debate-transcript.md"),
             ],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         },
     )
@@ -209,6 +210,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
                 SessionArtifact::new("output/debate-transcript.md"),
             ],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         },
     )

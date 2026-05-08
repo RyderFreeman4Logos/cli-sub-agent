@@ -372,6 +372,7 @@ where
         events_count: 0,
         artifacts,
         peak_memory_mb: None,
+        fallback_chain: None,
         manager_fields: Default::default(),
     };
     #[rustfmt::skip]

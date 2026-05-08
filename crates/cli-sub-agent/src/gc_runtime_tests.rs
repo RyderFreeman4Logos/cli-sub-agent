@@ -148,6 +148,7 @@ fn seed_runtime_session(
             events_count: 0,
             artifacts: vec![SessionArtifact::new("output/summary.md")],
             peak_memory_mb: None,
+            fallback_chain: None,
             manager_fields: Default::default(),
         },
     )
