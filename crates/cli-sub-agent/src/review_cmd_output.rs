@@ -587,20 +587,21 @@ fn derive_decision_from_severity_counts(
         return Ok(ReviewDecision::Fail);
     }
 
-    // Skip/Unavailable: deliberate infrastructure signals, propagate as-is.
-    if let Some(meta @ (ReviewDecision::Skip | ReviewDecision::Unavailable)) = meta_decision {
-        return Ok(meta);
+    // Skip: deliberate "no diff to review" signal, propagate as-is.
+    if let Some(ReviewDecision::Skip) = meta_decision {
+        return Ok(ReviewDecision::Skip);
     }
-    let needs_prose_tiebreak = matches!(
+    // Unavailable NOT propagated: genuine failures are handled via the status_reason
+    // fast-path before this function. Unavailable in meta_decision here means the
+    // raw output contained the UNAVAILABLE token (prompt injection noise). Zero findings
+    // is conclusive — fall through to Pass. (#1340)
+
+    // #1140/#1144: Uncertain/Fail meta with zero structured evidence → prose tiebreak.
+    if matches!(
         meta_decision,
         Some(ReviewDecision::Uncertain | ReviewDecision::Fail)
-    ) && severity_counts_are_zero(severity_counts);
-
-    // #1140/#1144: when meta.decision is Uncertain or legacy Fail but the
-    // structured findings are empty and severity counts are all zero, trust
-    // explicit PASS/CLEAN prose as the tiebreaker; otherwise preserve the
-    // caller-provided meta decision.
-    if needs_prose_tiebreak {
+    ) && severity_counts_are_zero(severity_counts)
+    {
         return Ok(if prose_clean_check()? {
             ReviewDecision::Pass
         } else {
@@ -608,16 +609,10 @@ fn derive_decision_from_severity_counts(
         });
     }
 
-    // At this point: zero severity counts, empty findings, non-severe overall_risk,
-    // and meta_decision is either Pass, Fail, or None. Prose clean check is a tiebreaker
-    // only when meta_decision is None (no verdict token was parsed from output).
     if meta_decision == Some(ReviewDecision::Pass) || prose_clean_check()? {
         return Ok(ReviewDecision::Pass);
     }
 
-    // No findings, no prose clean marker, meta_decision is Fail or None:
-    // keep the legacy zero-findings fallback as Pass unless the tie-break above
-    // already preserved an explicit Fail/Uncertain meta decision.
     Ok(ReviewDecision::Pass)
 }
 
