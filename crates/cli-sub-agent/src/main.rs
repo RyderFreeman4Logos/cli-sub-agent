@@ -2,7 +2,6 @@ use std::io::Write;
 
 use anyhow::Result;
 use clap::Parser;
-
 mod arch_cmd;
 mod audit;
 mod audit_cmds;
@@ -61,6 +60,7 @@ mod review_consensus;
 mod review_context;
 mod review_design_anchor;
 mod review_findings;
+mod review_gate;
 mod review_prior_rounds;
 mod review_routing;
 mod review_session_findings;

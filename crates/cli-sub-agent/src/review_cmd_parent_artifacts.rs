@@ -82,6 +82,7 @@ fn load_multi_reviewer_artifacts(
 }
 
 pub(super) fn write_multi_reviewer_parent_artifacts(
+    project_root: &std::path::Path,
     reviewers: usize,
     outcomes: &[ReviewerOutcome],
     final_verdict: &str,
@@ -104,6 +105,13 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     )?;
     if let Some(meta) = parent_review_meta {
         write_review_meta(&session_dir, meta).context("failed to write parent review_meta.json")?;
+        crate::review_gate::maybe_write_gate_marker_for_clean(
+            project_root,
+            &meta.head_sha,
+            final_verdict,
+            outcomes.first().map(|o| o.session_id.as_str()),
+            &meta.scope,
+        );
     }
     write_parent_review_summary(&session_dir, outcomes, final_verdict)?;
     write_parent_review_details(&session_dir, outcomes)?;
@@ -342,6 +350,7 @@ mod tests {
         ];
 
         write_multi_reviewer_parent_artifacts(
+            temp.path(),
             2,
             &outcomes,
             crate::review_consensus::HAS_ISSUES,
@@ -422,6 +431,7 @@ mod tests {
         }];
 
         write_multi_reviewer_parent_artifacts(
+            temp.path(),
             1,
             &outcomes,
             crate::review_consensus::HAS_ISSUES,
@@ -459,7 +469,7 @@ mod tests {
             diagnostic: Some("reviewer timed out after 1800s".to_string()),
         }];
 
-        write_multi_reviewer_parent_artifacts(1, &outcomes, UNAVAILABLE, true, None)
+        write_multi_reviewer_parent_artifacts(temp.path(), 1, &outcomes, UNAVAILABLE, true, None)
             .expect("parent artifacts should be produced");
 
         let verdict: ReviewVerdictArtifact = serde_json::from_str(
@@ -514,6 +524,7 @@ mod tests {
         };
 
         write_multi_reviewer_parent_artifacts(
+            temp.path(),
             1,
             &outcomes,
             crate::review_consensus::CLEAN,
