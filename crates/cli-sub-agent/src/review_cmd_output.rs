@@ -625,13 +625,14 @@ fn derive_decision_from_text(
     counts: &std::collections::BTreeMap<Severity, u32>,
     overall_risk: Option<&str>,
 ) -> ReviewDecision {
-    // Only blocking severities (critical/high/medium) cause fail.
-    // Low-only findings are advisory and do not block (#1048 M2).
+    // Only blocking severities (critical/high/medium) cause fail; low-only is advisory (#1048 M2).
     if has_blocking_severity(counts) {
         return ReviewDecision::Fail;
     }
-    if contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES") {
-        return ReviewDecision::Fail;
+    if !severity_counts_are_zero(counts)
+        && (contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES"))
+    {
+        return ReviewDecision::Fail; // #1352: token alone without evidence must not fail
     }
     if contains_verdict_token(text, "UNAVAILABLE") {
         return ReviewDecision::Unavailable;

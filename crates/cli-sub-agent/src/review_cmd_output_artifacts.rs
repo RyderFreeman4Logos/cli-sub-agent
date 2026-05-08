@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use csa_session::{Finding, FindingsFile, Severity, SeveritySummary};
 use serde::Deserialize;
+use tracing::warn;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct PersistedReviewArtifact {
@@ -25,9 +26,27 @@ pub(super) fn load_review_artifact_from_output(
 
     let contents = fs::read_to_string(&findings_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
-    let artifact = serde_json::from_str::<PersistedReviewArtifact>(&contents)
-        .map_err(|error| anyhow::anyhow!("parse {}: {error}", findings_path.display()))?;
-    Ok(Some(artifact))
+    // Gracefully handle parse failures (e.g. LLM emits severity="info" which is not in
+    // the Severity enum). The file EXISTS — the review ran and produced output — so a
+    // parse error must not cascade to Err (which triggers the persist_review_verdict
+    // fallback that blindly copies meta.decision=Fail). Instead, treat the file as
+    // present but containing no parseable findings: return an empty artifact so the
+    // downstream zero-counts guard (added in #1349) can fire correctly. (#1352)
+    match serde_json::from_str::<PersistedReviewArtifact>(&contents) {
+        Ok(artifact) => Ok(Some(artifact)),
+        Err(error) => {
+            warn!(
+                path = %findings_path.display(),
+                error = %error,
+                "Failed to parse review-findings.json; treating as zero-findings"
+            );
+            Ok(Some(PersistedReviewArtifact {
+                findings: Vec::new(),
+                severity_summary: SeveritySummary::default(),
+                overall_risk: None,
+            }))
+        }
+    }
 }
 
 pub(super) fn load_findings_toml_from_output(
@@ -40,9 +59,17 @@ pub(super) fn load_findings_toml_from_output(
 
     let contents = fs::read_to_string(&findings_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
-    let artifact = toml::from_str::<FindingsFile>(&contents)
-        .map_err(|error| anyhow::anyhow!("parse {}: {error}", findings_path.display()))?;
-    Ok(Some(artifact))
+    match toml::from_str::<FindingsFile>(&contents) {
+        Ok(artifact) => Ok(Some(artifact)),
+        Err(error) => {
+            warn!(
+                path = %findings_path.display(),
+                error = %error,
+                "Failed to parse findings.toml; treating as absent"
+            );
+            Ok(None)
+        }
+    }
 }
 
 pub(super) fn severity_counts_for_artifact(

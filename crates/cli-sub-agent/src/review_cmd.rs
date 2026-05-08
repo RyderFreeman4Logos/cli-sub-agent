@@ -709,8 +709,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             diff_fingerprint: diff_fingerprint.clone(),
         };
         persist_review_meta(&project_root, &review_meta);
-        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
         persist_review_findings_toml(&project_root, &review_meta);
+        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
     }
 
     let responses: Vec<AgentResponse> = outcomes
