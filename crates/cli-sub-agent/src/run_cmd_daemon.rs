@@ -248,7 +248,9 @@ pub(crate) fn spawn_and_exit(
         "<!-- CSA:CALLER_HINT action=\"wait\" \
          rule=\"Call 'csa session wait --session {id}{cd}' with run_in_background: true. \
          The task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top. \
-         NEVER batch multiple waits in a for/while loop; use one backgrounded Bash tool call per session.\" -->",
+         NEVER batch multiple waits in a for/while loop; use one backgrounded Bash tool call per session. \
+         FORBIDDEN after backgrounding: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
+         any manual polling wastes caller tokens with zero benefit.\" -->",
         id = result.session_id,
         cd = cd_hint,
     );
