@@ -11,7 +11,7 @@ const USER_RESULT_FILE_NAME: &str = "user-result.toml";
 pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
 pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
 pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
-const RUNTIME_RESULT_KEYS: [&str; 11] = [
+const RUNTIME_RESULT_KEYS: [&str; 13] = [
     "status",
     "exit_code",
     "summary",
@@ -23,6 +23,8 @@ const RUNTIME_RESULT_KEYS: [&str; 11] = [
     "completed_at",
     "events_count",
     "artifacts",
+    "fallback_chain",
+    "peak_memory_mb",
 ];
 
 #[path = "manager_result_spillover.rs"]
