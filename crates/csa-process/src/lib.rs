@@ -1,13 +1,15 @@
 //! Process management: spawning, signal handling, and output capture.
 
 use anyhow::{Context, Result};
-use serde::Serialize;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::MissedTickBehavior;
 use tracing::warn;
+#[path = "lib_execution_result.rs"]
+mod execution_result;
+pub use execution_result::ExecutionResult;
 mod idle_watchdog;
 use idle_watchdog::should_terminate_for_idle;
 mod persistent_rate_limit;
@@ -91,85 +93,6 @@ pub enum SandboxHandle {
     Rlimit,
     /// No sandbox active.
     None,
-}
-
-/// Result of executing a command.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct ExecutionResult {
-    /// Combined stdout output.
-    pub output: String,
-    /// Captured stderr output.
-    ///
-    /// In `StreamMode::TeeToStderr`, stderr is also forwarded to parent stderr
-    /// in real-time. In `StreamMode::BufferOnly`, stderr is captured only.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub stderr_output: String,
-    /// Last non-empty line or truncated output (max 200 chars).
-    pub summary: String,
-    /// Exit code (1 if signal-killed).
-    pub exit_code: i32,
-    /// Peak memory usage in MB from cgroup `memory.peak`.
-    /// `None` when cgroup monitoring is unavailable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peak_memory_mb: Option<u64>,
-}
-
-impl ExecutionResult {
-    /// Consolidate consecutive retry/quota-exhaustion messages in stderr to
-    /// reduce noise for orchestrators.  Replaces N consecutive retry lines with
-    /// a single summary, preserving the last message for context.
-    pub fn consolidate_stderr_retries(&mut self) {
-        if self.stderr_output.is_empty() {
-            return;
-        }
-
-        let lines: Vec<&str> = self.stderr_output.lines().collect();
-        let mut consolidated = String::with_capacity(self.stderr_output.len());
-        let mut retry_count = 0u32;
-        let mut last_retry_line = "";
-
-        for line in &lines {
-            if is_retry_noise(line) {
-                retry_count += 1;
-                last_retry_line = line;
-            } else {
-                flush_retries(&mut consolidated, retry_count, last_retry_line);
-                retry_count = 0;
-                last_retry_line = "";
-                consolidated.push_str(line);
-                consolidated.push('\n');
-            }
-        }
-        flush_retries(&mut consolidated, retry_count, last_retry_line);
-
-        self.stderr_output = consolidated;
-    }
-}
-
-fn flush_retries(buf: &mut String, count: u32, last_line: &str) {
-    match count {
-        0 => {}
-        1 => {
-            buf.push_str(last_line);
-            buf.push('\n');
-        }
-        n => {
-            buf.push_str(&format!("[{n} retry messages consolidated] {last_line}\n"));
-        }
-    }
-}
-
-fn is_retry_noise(line: &str) -> bool {
-    let l = line.to_ascii_lowercase();
-    // gemini-cli specific: "Attempt N failed: You have exhausted your capacity ... Retrying after Xms..."
-    if l.contains("attempt") && l.contains("failed") && l.contains("retrying after") {
-        return true;
-    }
-    // gemini-cli quota: "exhausted your capacity ... quota will reset"
-    if l.contains("exhausted your capacity") && l.contains("quota will reset") {
-        return true;
-    }
-    false
 }
 
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 250;
@@ -281,6 +204,10 @@ pub async fn wait_and_capture_with_idle_timeout(
     spawn_options: SpawnOptions,
     initial_response_timeout: Option<Duration>,
 ) -> Result<ExecutionResult> {
+    // Capture the child PID before taking stdout/stderr handles.
+    // Used by the watchdog tick to detect zombie/exit state (e.g. claude-code
+    // auto-compaction where the tool exits but a grandchild inherits stdout).
+    let child_pid = child.id();
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let stderr = child.stderr.take();
 
@@ -355,6 +282,15 @@ pub async fn wait_and_capture_with_idle_timeout(
     );
     let mut persistent_rate_limit_note: Option<String> = None;
     let mut persistent_rate_limit_tracker = PersistentRateLimitTracker::default();
+    // Set when the watchdog tick detects the child PID has become a zombie while
+    // stdout is still open (grandchild inherited the pipe — classic compaction death).
+    let mut child_exited_early = false;
+    let mut child_exited_early_note = String::new();
+    // Tracks when we first observed the child in zombie state with stdout still
+    // open. We wait one full poll interval before firing: normal processes close
+    // their pipe within microseconds of exit; compaction grandchildren keep it
+    // open for tens of seconds.
+    let mut zombie_first_detected_at: Option<Instant> = None;
     macro_rules! kill_on_persistent_rate_limit {
         ($appended:expr, $stream:literal) => {
             if let Some(note) = persistent_rate_limit_tracker.observe_appended_output($appended) {
@@ -543,6 +479,33 @@ pub async fn wait_and_capture_with_idle_timeout(
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
+                    // Detect child process death while stdout pipe is still open.
+                    // We only fire after the child has been in zombie state for a
+                    // full poll interval (200ms) with stdout still open.  Normal
+                    // processes close their pipe within microseconds of exit; the
+                    // compaction grandchild keeps it open for 30+ seconds.
+                    if !stdout_done
+                        && let Some(pid) = child_pid
+                        && tool_liveness::pid_has_exited_or_zombie(pid)
+                    {
+                        let first = zombie_first_detected_at.get_or_insert_with(Instant::now);
+                        if first.elapsed() >= IDLE_POLL_INTERVAL {
+                            child_exited_early = true;
+                            child_exited_early_note = format!(
+                                "child process (pid {pid}) exited while stdout pipe still open; \
+                                 possible auto-compaction spawned a subprocess that inherited stdout — \
+                                 CSA detected process death and broke out of the read loop early"
+                            );
+                            warn!(
+                                pid,
+                                "child process exited (zombie) while stdout pipe still open; \
+                                 breaking read loop to avoid indefinite hang"
+                            );
+                            break;
+                        }
+                    } else {
+                        zombie_first_detected_at = None;
+                    }
                 }
             }
         }
@@ -654,6 +617,28 @@ pub async fn wait_and_capture_with_idle_timeout(
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
+                    // Same child-death detection as the with-stderr branch above.
+                    if let Some(pid) = child_pid
+                        && tool_liveness::pid_has_exited_or_zombie(pid)
+                    {
+                        let first = zombie_first_detected_at.get_or_insert_with(Instant::now);
+                        if first.elapsed() >= IDLE_POLL_INTERVAL {
+                            child_exited_early = true;
+                            child_exited_early_note = format!(
+                                "child process (pid {pid}) exited while stdout pipe still open; \
+                                 possible auto-compaction spawned a subprocess that inherited stdout — \
+                                 CSA detected process death and broke out of the read loop early"
+                            );
+                            warn!(
+                                pid,
+                                "child process exited (zombie) while stdout pipe still open; \
+                                 breaking read loop to avoid indefinite hang"
+                            );
+                            break;
+                        }
+                    } else {
+                        zombie_first_detected_at = None;
+                    }
                 }
             }
         }
@@ -679,6 +664,17 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
         stderr_output.push_str(&timeout_note);
         stderr_output.push('\n');
+    } else if child_exited_early {
+        // Child exited while stdout pipe was still open (e.g. compaction grandchild).
+        // From CSA's perspective the session is incomplete; ensure non-zero exit code.
+        if exit_code == 0 {
+            exit_code = 1;
+        }
+        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+            stderr_output.push('\n');
+        }
+        stderr_output.push_str(&child_exited_early_note);
+        stderr_output.push('\n');
     } else if workspace_boundary_timed_out {
         // Non-fatal post #981: the boundary-warn annotation goes to stderr as a
         // diagnostic, but we do NOT override exit_code.  The session's real
@@ -694,6 +690,8 @@ pub async fn wait_and_capture_with_idle_timeout(
         note
     } else if idle_timed_out {
         timeout_note
+    } else if child_exited_early {
+        child_exited_early_note.clone()
     } else if exit_code == 0 {
         extract_summary(&output)
     } else if workspace_boundary_timed_out {
@@ -790,6 +788,9 @@ mod tests;
 #[cfg(test)]
 #[path = "lib_tests_boundary.rs"]
 mod tests_boundary;
+#[cfg(test)]
+#[path = "lib_tests_compaction_death.rs"]
+mod tests_compaction_death;
 #[cfg(test)]
 #[path = "lib_tests_heartbeat.rs"]
 mod tests_heartbeat;
