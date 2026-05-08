@@ -27,6 +27,9 @@ pub use cli_tokuin::*;
 #[path = "cli_xurl.rs"]
 mod cli_xurl;
 pub use cli_xurl::*;
+#[path = "cli_recall.rs"]
+mod cli_recall;
+pub use cli_recall::*;
 #[path = "cli_triage.rs"]
 mod cli_triage;
 pub use cli_triage::*;
@@ -427,6 +430,9 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: XurlCommands,
     },
+
+    /// Recover main-agent context from recorded session history
+    Recall(RecallArgs),
 
     /// Manage CSA hooks
     Hooks {
