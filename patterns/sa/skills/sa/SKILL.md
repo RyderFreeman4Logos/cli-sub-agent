@@ -415,30 +415,37 @@ scripts/csa/session-wait-until-done.sh "$SID"
 
 ### Canonical LLM dispatch form
 
-For Layer 0 manager dispatch, prefer an explicit `--model-spec` command over
-assembling `--tool`/`--tier`/`--force-ignore-tier-setting` combinations:
+For Layer 0 manager dispatch, route through the tier config and pin only the
+tool when the manager needs a specific CLI:
 
 ```bash
 SID=$(csa run \
   --sa-mode true \
-  --model-spec codex/openai/gpt-5.4/xhigh \
-  --no-failover \
+  --tier tier-4-critical \
+  --tool codex \
   --timeout 7200 \
   --prompt-file "$PROMPT_FILE")
 ```
 
 Why this is the canonical Layer 0 dispatch form:
 
-- `--model-spec` is a single-string explicit encoding of tool/provider/model/thinking
-- `--no-failover` prevents silent fallback when the manager expects codex specifically
+- `--tier` resolves model and thinking budget from tier config, keeping model
+  versions in one source of truth
+- `--tool` forces the desired tool (for example, codex) while still respecting
+  the tier's model selection
+- tier routing owns fallback, so `--no-failover` is not needed here
 - `--timeout 7200` is the sprint-safe default for long-running employee work
 
-Default to this form unless the user explicitly asks for tier-based routing or a different tool.
+Reserve `--model-spec` for one-off debugging overrides only; never document it
+as a reusable dispatch pattern. Default to this form unless the user explicitly
+asks for a different tool.
 
 ## Model Selection Guidelines
 
 - Tool and thinking budget are determined by the tier system in
-  `~/.config/cli-sub-agent/config.toml`. Do NOT hardcode `--tool` or `--thinking`.
+  `~/.config/cli-sub-agent/config.toml`. Do NOT hardcode model versions or
+  `--thinking`. Use `--tool` only when a workflow explicitly requires a
+  particular CLI.
 - Cross-review should prefer a different model family than the original author
   (configured via `[review] tool = "auto"`).
 
