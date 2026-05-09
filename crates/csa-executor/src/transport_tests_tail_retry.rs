@@ -50,7 +50,7 @@ fn test_should_not_retry_on_success_exit_code() {
 }
 
 #[test]
-fn test_should_not_retry_on_permanent_quota_exhausted_marker() {
+fn test_should_retry_generic_quota_exhausted_marker() {
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,
@@ -65,11 +65,11 @@ fn test_should_not_retry_on_permanent_quota_exhausted_marker() {
     assert!(
         transport
             .should_retry_gemini_rate_limited(&execution, 1, None)
-            .is_none()
+            .is_some()
     );
     assert_eq!(
         detect_gemini_permanent_quota_exhaustion_result(&execution),
-        Some("quota_exhausted")
+        None
     );
 }
 

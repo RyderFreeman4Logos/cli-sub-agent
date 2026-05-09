@@ -27,16 +27,25 @@ pub const RATE_LIMIT_PATTERNS: &[&str] = &[
     "too many requests",
 ];
 
-pub const PERMANENT_QUOTA_EXHAUSTION_PATTERNS: &[&str] = &[
-    "429_quota_exhausted",
-    "quota_exhausted",
-    "quota exhausted",
-    "monthly spending cap",
-    "monthly cap",
-    "spending cap",
-    "daily quota",
-    "quota exceeded",
+pub const PERMANENT_QUOTA_EXHAUSTION_PATTERNS: &[&str] =
+    &["monthly spending cap", "monthly cap", "spending cap"];
+
+const PERMANENT_QUOTA_EXHAUSTION_CONTEXT_PATTERNS: &[&str] = &[
+    "billing cap",
+    "billing hard limit",
+    "billing limit",
+    "billing budget",
+    "billing disabled",
+    "billing is disabled",
+    "billing is not enabled",
+    "billing not enabled",
+    "budget exceeded",
+    "payment required",
+    "spend limit",
+    "spending limit",
 ];
+
+const QUOTA_EXHAUSTED_REASON_PATTERNS: &[&str] = &["quota_exhausted", "quota exhausted"];
 
 pub fn is_gemini_tool(tool: &str) -> bool {
     tool == TOOL_NAME
@@ -52,10 +61,26 @@ pub fn detect_rate_limit_pattern(output: &str) -> Option<&'static str> {
 
 pub fn detect_permanent_quota_exhaustion_pattern(output: &str) -> Option<&'static str> {
     let output_lower = output.to_ascii_lowercase();
-    PERMANENT_QUOTA_EXHAUSTION_PATTERNS
+    if let Some(pattern) = PERMANENT_QUOTA_EXHAUSTION_PATTERNS
         .iter()
         .copied()
         .find(|pattern| output_lower.contains(pattern))
+    {
+        return Some(pattern);
+    }
+
+    let has_quota_exhausted_reason = QUOTA_EXHAUSTED_REASON_PATTERNS
+        .iter()
+        .any(|pattern| output_lower.contains(pattern));
+    if has_quota_exhausted_reason
+        && PERMANENT_QUOTA_EXHAUSTION_CONTEXT_PATTERNS
+            .iter()
+            .any(|pattern| output_lower.contains(pattern))
+    {
+        return Some("quota_exhausted_billing");
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -66,26 +91,40 @@ mod tests {
     fn detects_gemini_permanent_quota_markers() {
         assert_eq!(
             detect_permanent_quota_exhaustion_pattern(
-                "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED"
-            ),
-            Some("quota_exhausted")
-        );
-        assert_eq!(
-            detect_permanent_quota_exhaustion_pattern(
                 "Gemini request failed because the monthly spending cap was reached"
             ),
             Some("monthly spending cap")
         );
+        assert_eq!(
+            detect_permanent_quota_exhaustion_pattern(
+                "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED; billing hard limit reached"
+            ),
+            Some("quota_exhausted_billing")
+        );
     }
 
     #[test]
-    fn does_not_treat_plain_429_as_permanent_quota() {
+    fn does_not_treat_transient_quota_or_rate_limits_as_permanent_quota() {
         assert_eq!(
             detect_permanent_quota_exhaustion_pattern("HTTP 429 Too Many Requests"),
             None
         );
         assert_eq!(
             detect_permanent_quota_exhaustion_pattern("status: RESOURCE_EXHAUSTED"),
+            None
+        );
+        assert_eq!(
+            detect_permanent_quota_exhaustion_pattern(
+                "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED"
+            ),
+            None
+        );
+        assert_eq!(
+            detect_permanent_quota_exhaustion_pattern("quota exceeded for model gemini-2.5-pro"),
+            None
+        );
+        assert_eq!(
+            detect_permanent_quota_exhaustion_pattern("daily quota limit reached"),
             None
         );
     }
