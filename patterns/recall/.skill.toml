@@ -1,0 +1,9 @@
+[skill]
+name = "recall"
+version = "0.1.0"
+
+[agent]
+tier = "tier-1-quick"
+max_turns = 10
+workspace_access = "readonly"
+tools = [{ tool = "auto" }]
