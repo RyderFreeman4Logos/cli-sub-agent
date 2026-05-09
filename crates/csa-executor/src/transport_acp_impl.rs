@@ -108,8 +108,20 @@ impl Transport for AcpTransport {
                 Ok(tr) => is_gemini_rate_limited_result(&tr.execution),
                 Err(e) => is_gemini_rate_limited_error(&format!("{e:#}")),
             };
+            let permanent_quota = match &result {
+                Ok(tr) => detect_gemini_permanent_quota_exhaustion_result(&tr.execution),
+                Err(e) => detect_gemini_permanent_quota_exhaustion_error(&format!("{e:#}")),
+            };
 
             if let Ok(mut transport_result) = result {
+                if let Some(pattern) = permanent_quota {
+                    apply_gemini_permanent_quota_exhaustion_summary(
+                        &mut transport_result.execution,
+                        pattern,
+                    );
+                    append_gemini_retry_report(&mut transport_result.execution, &retry_phases);
+                    return Ok(transport_result);
+                }
                 if is_gemini_oauth_prompt_result(&transport_result.execution) {
                     if attempt == 1
                         && gemini_inject_api_key_fallback(extra_env).is_some()
@@ -149,6 +161,19 @@ impl Transport for AcpTransport {
 
                 append_gemini_retry_report(&mut transport_result.execution, &retry_phases);
                 return Ok(transport_result);
+            }
+
+            if let Some(pattern) = permanent_quota {
+                let summary = format!(
+                    "tool_exhausted: gemini-cli permanent quota exhaustion detected \
+                     (matched '{pattern}'); no retry or tool fallback attempted. \
+                     Inspect Gemini billing/quota or choose another tool explicitly."
+                );
+                return Err(annotate_gemini_retry_error(
+                    result.expect_err("only Err remains after Ok path handled"),
+                    &retry_phases,
+                )
+                .context(summary));
             }
 
             if should_retry && attempt < max_attempts {

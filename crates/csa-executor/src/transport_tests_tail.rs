@@ -562,7 +562,7 @@ STATE_FILE="${CSA_FAKE_GEMINI_STATE_FILE:?}"
 MODEL_LOG_FILE="${CSA_FAKE_GEMINI_MODEL_LOG_FILE:?}"
 AUTH_LOG_FILE="${CSA_FAKE_GEMINI_AUTH_LOG_FILE:?}"
 SUCCESS_ON="${CSA_FAKE_GEMINI_SUCCESS_ON:-999}"
-FAILURE_REASON="${CSA_FAKE_GEMINI_FAILURE_REASON:-QUOTA_EXHAUSTED}"
+FAILURE_REASON="${CSA_FAKE_GEMINI_FAILURE_REASON:-HTTP 429 Too Many Requests}"
 
 count=0
 if [ -f "${STATE_FILE}" ]; then
@@ -725,7 +725,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
 
     assert_ne!(result.execution.exit_code, 0);
     assert!(
-        result.execution.stderr_output.contains("QUOTA_EXHAUSTED"),
+        result.execution.stderr_output.contains("Too Many Requests"),
         "unexpected stderr: {}",
         result.execution.stderr_output
     );

@@ -53,6 +53,15 @@ fn test_active_retired_becomes_retired() {
 }
 
 #[test]
+fn test_active_tool_exhausted_becomes_tool_exhausted() {
+    let phase = SessionPhase::Active;
+    assert_eq!(
+        phase.transition(&PhaseEvent::ToolExhausted),
+        Ok(SessionPhase::ToolExhausted)
+    );
+}
+
+#[test]
 fn test_available_resumed_becomes_active() {
     let phase = SessionPhase::Available;
     assert_eq!(
@@ -109,6 +118,7 @@ fn test_display() {
     assert_eq!(SessionPhase::Active.to_string(), "active");
     assert_eq!(SessionPhase::Available.to_string(), "available");
     assert_eq!(SessionPhase::Retired.to_string(), "retired");
+    assert_eq!(SessionPhase::ToolExhausted.to_string(), "tool_exhausted");
 }
 
 // ── Round-trip: Active → Available → Active ─────────────────────
@@ -169,6 +179,7 @@ fn test_session_phase_serde_roundtrip() {
         SessionPhase::Active,
         SessionPhase::Available,
         SessionPhase::Retired,
+        SessionPhase::ToolExhausted,
     ] {
         let wrapper = PhaseWrapper {
             phase: phase.clone(),
@@ -200,6 +211,12 @@ fn test_session_phase_serde_snake_case() {
     })
     .unwrap();
     assert!(retired_toml.contains("retired"));
+
+    let tool_exhausted_toml = toml::to_string(&PhaseWrapper {
+        phase: SessionPhase::ToolExhausted,
+    })
+    .unwrap();
+    assert!(tool_exhausted_toml.contains("tool_exhausted"));
 }
 
 // ── Error message content ──────────────────────────────────────

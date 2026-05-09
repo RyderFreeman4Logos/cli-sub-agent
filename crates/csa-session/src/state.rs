@@ -431,6 +431,8 @@ pub enum PhaseEvent {
     Resumed,
     /// Session should be retired (by GC aging or explicit request).
     Retired,
+    /// Tool account quota is permanently exhausted for this run.
+    ToolExhausted,
 }
 
 /// Session lifecycle phase.
@@ -444,6 +446,8 @@ pub enum SessionPhase {
     Available,
     /// Lifecycle complete — no longer eligible for reuse.
     Retired,
+    /// Tool account quota is exhausted; caller action is required before reuse.
+    ToolExhausted,
 }
 
 impl SessionPhase {
@@ -457,6 +461,7 @@ impl SessionPhase {
     ///   Active  --Retired-----> Retired
     ///   Available --Resumed---> Active
     ///   Available --Retired---> Retired
+    ///   Active --ToolExhausted--> ToolExhausted
     /// ```
     ///
     /// All other combinations are invalid.
@@ -464,6 +469,7 @@ impl SessionPhase {
         match (self, event) {
             (SessionPhase::Active, PhaseEvent::Compressed) => Ok(SessionPhase::Available),
             (SessionPhase::Active, PhaseEvent::Retired) => Ok(SessionPhase::Retired),
+            (SessionPhase::Active, PhaseEvent::ToolExhausted) => Ok(SessionPhase::ToolExhausted),
             (SessionPhase::Available, PhaseEvent::Resumed) => Ok(SessionPhase::Active),
             (SessionPhase::Available, PhaseEvent::Retired) => Ok(SessionPhase::Retired),
             (current, event) => Err(format!("invalid phase transition: {current:?} + {event:?}")),
@@ -529,6 +535,7 @@ impl std::fmt::Display for SessionPhase {
             SessionPhase::Active => write!(f, "active"),
             SessionPhase::Available => write!(f, "available"),
             SessionPhase::Retired => write!(f, "retired"),
+            SessionPhase::ToolExhausted => write!(f, "tool_exhausted"),
         }
     }
 }

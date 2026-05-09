@@ -7,12 +7,15 @@ use crate::executor::Executor;
 use crate::lefthook_guard::sanitize_args_for_codex;
 #[cfg(feature = "acp")]
 use crate::session_config::SessionConfig;
-#[cfg(feature = "acp")]
-use crate::transport_gemini_retry::is_gemini_rate_limited_error;
 use crate::transport_gemini_retry::{
-    gemini_auth_mode, gemini_inject_api_key_fallback, gemini_max_attempts,
-    gemini_rate_limit_backoff, gemini_retry_model, gemini_should_use_api_key,
-    is_gemini_rate_limited_result,
+    apply_gemini_permanent_quota_exhaustion_summary,
+    detect_gemini_permanent_quota_exhaustion_result, gemini_auth_mode,
+    gemini_inject_api_key_fallback, gemini_max_attempts, gemini_rate_limit_backoff,
+    gemini_retry_model, gemini_should_use_api_key, is_gemini_rate_limited_result,
+};
+#[cfg(feature = "acp")]
+use crate::transport_gemini_retry::{
+    detect_gemini_permanent_quota_exhaustion_error, is_gemini_rate_limited_error,
 };
 use anyhow::Result;
 #[cfg(feature = "acp")]
@@ -199,6 +202,7 @@ impl LegacyTransport {
         let max = gemini_max_attempts(extra_env);
         if !matches!(self.executor, Executor::GeminiCli { .. })
             || attempt >= max
+            || detect_gemini_permanent_quota_exhaustion_result(execution).is_some()
             || !is_gemini_rate_limited_result(execution)
         {
             return None;

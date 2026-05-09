@@ -81,6 +81,12 @@ pub(crate) fn handle_fork_call_resume(
                     "Parent session is retired; skipping auto-resume"
                 );
             }
+            SessionPhase::ToolExhausted => {
+                warn!(
+                    session = %parent_state.meta_session_id,
+                    "Parent session is tool-exhausted; skipping auto-resume"
+                );
+            }
         }
     }
 
@@ -161,6 +167,66 @@ struct TransportErrorFailoverSignal {
     quota_exhausted: bool,
 }
 
+pub(crate) fn format_tool_exhausted_summary(tool_name: &str, matched_pattern: &str) -> String {
+    format!(
+        "tool_exhausted: {tool_name} permanent quota exhaustion detected \
+         (matched '{matched_pattern}'); no retry or tool fallback attempted. \
+         Inspect the tool account billing/quota or choose another tool explicitly."
+    )
+}
+
+pub(crate) fn detect_permanent_tool_exhaustion_result(
+    tool_name_str: &str,
+    exec_result: &csa_process::ExecutionResult,
+    current_model_spec: Option<&str>,
+) -> Option<csa_scheduler::RateLimitDetected> {
+    detect_permanent_tool_exhaustion_text(
+        tool_name_str,
+        &exec_result.summary,
+        &exec_result.stderr_output,
+        &exec_result.output,
+        exec_result.exit_code,
+        current_model_spec,
+    )
+}
+
+pub(crate) fn detect_permanent_tool_exhaustion_text(
+    tool_name_str: &str,
+    summary: &str,
+    stderr: &str,
+    stdout: &str,
+    exit_code: i32,
+    current_model_spec: Option<&str>,
+) -> Option<csa_scheduler::RateLimitDetected> {
+    if exit_code == 0 {
+        return None;
+    }
+    let stdout_with_summary = if summary.trim().is_empty() {
+        stdout.to_string()
+    } else if stdout.trim().is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary}\n{stdout}")
+    };
+    csa_scheduler::detect_rate_limit(
+        tool_name_str,
+        stderr,
+        &stdout_with_summary,
+        exit_code,
+        current_model_spec,
+    )
+    .filter(|detected| detected.quota_exhausted)
+}
+
+pub(crate) fn is_permanent_tool_exhaustion_error(
+    tool_name_str: &str,
+    error_message: &str,
+    current_model_spec: Option<&str>,
+) -> bool {
+    detect_transport_error_failover_signal(tool_name_str, error_message, current_model_spec)
+        .is_some_and(|signal| signal.quota_exhausted)
+}
+
 fn detect_transport_error_failover_signal(
     tool_name_str: &str,
     error_message: &str,
@@ -194,7 +260,10 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::GeminiRetryChainExhausted,
             matched_pattern: matched_pattern.to_string(),
-            quota_exhausted: true,
+            quota_exhausted: csa_core::gemini::detect_permanent_quota_exhaustion_pattern(
+                error_message,
+            )
+            .is_some(),
         });
     }
 
@@ -240,20 +309,29 @@ pub(crate) fn evaluate_rate_limit_failover(
     current_model_spec: Option<&str>,
     fallback_chain: &mut FallbackChain,
 ) -> Result<RateLimitAction> {
-    if !tier_auto_select {
-        return Ok(RateLimitAction::NoRateLimit);
-    }
-
     let rate_limit = match csa_scheduler::detect_rate_limit(
         tool_name_str,
         &exec_result.stderr_output,
-        &exec_result.output,
+        &format!("{}\n{}", exec_result.summary, exec_result.output),
         exec_result.exit_code,
         current_model_spec,
     ) {
         Some(rl) => rl,
         None => return Ok(RateLimitAction::NoRateLimit),
     };
+
+    if rate_limit.quota_exhausted {
+        warn!(
+            tool = %tool_name_str,
+            pattern = %rate_limit.matched_pattern,
+            "Permanent tool quota exhaustion detected; not attempting runtime failover"
+        );
+        return Ok(RateLimitAction::ExhaustedFailovers);
+    }
+
+    if !tier_auto_select {
+        return Ok(RateLimitAction::NoRateLimit);
+    }
 
     info!(
         tool = %tool_name_str,
@@ -387,6 +465,15 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         Some(signal) => signal,
         None => return Ok(RateLimitAction::NoRateLimit),
     };
+
+    if failover_signal.quota_exhausted {
+        warn!(
+            tool = %tool_name_str,
+            pattern = %failover_signal.matched_pattern,
+            "Permanent tool quota exhaustion detected in transport error; not attempting runtime failover"
+        );
+        return Ok(RateLimitAction::ExhaustedFailovers);
+    }
 
     match failover_signal.kind {
         TransportErrorFailoverKind::RateLimit => {

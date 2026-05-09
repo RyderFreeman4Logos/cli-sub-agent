@@ -83,14 +83,14 @@ async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
         .await
         .expect("execute_in should succeed with api key fallback");
 
-    // The fake script always fails with QUOTA_EXHAUSTED; the fallback attempt
+    // The fake script always fails with a transient 429; the fallback attempt
     // also uses the same fake script (which increments the counter). After 3
     // model-retry attempts + 1 fallback attempt = 4 total. The fallback attempt
     // still fails because success_on=99, but we verify the fallback path was taken
     // by checking GEMINI_API_KEY was injected (the env var will be visible to the script).
     // Since the fake script doesn't check GEMINI_API_KEY, just verify the result came back.
     assert_ne!(result.execution.exit_code, 0);
-    assert!(result.execution.stderr_output.contains("QUOTA_EXHAUSTED"));
+    assert!(result.execution.stderr_output.contains("Too Many Requests"));
 }
 
 #[tokio::test]
@@ -131,7 +131,7 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
     // Fallback attempt still fails (success_on=99), but 4 total attempts
     // (3 model retries + 1 fallback) confirms the fallback path was taken.
     assert_ne!(result.execution.exit_code, 0);
-    assert!(result.execution.stderr_output.contains("QUOTA_EXHAUSTED"));
+    assert!(result.execution.stderr_output.contains("Too Many Requests"));
 }
 
 #[tokio::test]
@@ -183,7 +183,7 @@ async fn test_execute_in_new_invocation_restarts_with_oauth_before_fallback() {
             "oauth".to_string(),
             "api_key".to_string(),
         ],
-        "each invocation must restart on the quota-backed path before reusing API key fallback"
+        "each invocation must restart on OAuth before reusing API key fallback"
     );
 }
 

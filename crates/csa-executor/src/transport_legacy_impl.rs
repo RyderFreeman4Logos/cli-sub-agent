@@ -150,6 +150,12 @@ impl Transport for LegacyTransport {
                 );
                 apply_gemini_mcp_warning_summary(&mut result.execution, &warning_summary);
             }
+            if let Some(pattern) =
+                detect_gemini_permanent_quota_exhaustion_result(&result.execution)
+            {
+                apply_gemini_permanent_quota_exhaustion_summary(&mut result.execution, pattern);
+                return Ok(result);
+            }
             if is_gemini_oauth_prompt_result(&result.execution) {
                 if attempt == 1
                     && gemini_inject_api_key_fallback(extra_env).is_some()
@@ -390,6 +396,12 @@ impl LegacyTransport {
                         .is_some_and(|diagnostic| diagnostic.unhealthy_servers.is_empty()),
                 );
                 apply_gemini_mcp_warning_summary(&mut result.execution, &warning_summary);
+            }
+            if let Some(pattern) =
+                detect_gemini_permanent_quota_exhaustion_result(&result.execution)
+            {
+                apply_gemini_permanent_quota_exhaustion_summary(&mut result.execution, pattern);
+                return Ok(result);
             }
             if let Some(backoff) =
                 self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)

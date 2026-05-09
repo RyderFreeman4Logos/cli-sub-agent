@@ -673,8 +673,8 @@ async fn test_gemini_3phase_all_fail_returns_last_error() {
     // Final result is the last (3rd) attempt failure
     assert_ne!(result.execution.exit_code, 0);
     assert!(
-        result.execution.stderr_output.contains("QUOTA_EXHAUSTED"),
-        "expected QUOTA_EXHAUSTED in stderr, got: {}",
+        result.execution.stderr_output.contains("Too Many Requests"),
+        "expected transient rate limit in stderr, got: {}",
         result.execution.stderr_output
     );
 
