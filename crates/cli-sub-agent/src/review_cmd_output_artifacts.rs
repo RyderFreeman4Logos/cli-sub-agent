@@ -1,10 +1,12 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use csa_session::{Finding, FindingsFile, Severity, SeveritySummary};
 use serde::Deserialize;
 use tracing::warn;
+
+use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct PersistedReviewArtifact {
@@ -19,10 +21,9 @@ pub(super) struct PersistedReviewArtifact {
 pub(super) fn load_review_artifact_from_output(
     session_dir: &Path,
 ) -> Result<Option<PersistedReviewArtifact>, anyhow::Error> {
-    let findings_path = session_dir.join("review-findings.json");
-    if !findings_path.exists() {
+    let Some(findings_path) = review_artifact_path(session_dir) else {
         return Ok(None);
-    }
+    };
 
     let contents = fs::read_to_string(&findings_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", findings_path.display()))?;
@@ -38,7 +39,7 @@ pub(super) fn load_review_artifact_from_output(
             warn!(
                 path = %findings_path.display(),
                 error = %error,
-                "Failed to parse review-findings.json; treating as zero-findings"
+                "Failed to parse review artifact JSON; treating as zero-findings"
             );
             Ok(Some(PersistedReviewArtifact {
                 findings: Vec::new(),
@@ -47,6 +48,16 @@ pub(super) fn load_review_artifact_from_output(
             }))
         }
     }
+}
+
+fn review_artifact_path(session_dir: &Path) -> Option<PathBuf> {
+    [
+        CONSOLIDATED_REVIEW_ARTIFACT_FILE,
+        SINGLE_REVIEW_ARTIFACT_FILE,
+    ]
+    .into_iter()
+    .map(|artifact_file| session_dir.join(artifact_file))
+    .find(|artifact_path| artifact_path.is_file())
 }
 
 pub(super) fn load_findings_toml_from_output(
@@ -95,7 +106,7 @@ pub(super) fn severity_counts_for_artifact(
     counts
 }
 
-/// Load severity counts from review-findings.json when present.
+/// Load severity counts from persisted review JSON when present.
 ///
 /// Returns `Some(counts)` if JSON exists and has any non-zero counts (even
 /// low-only). Returns `None` if JSON is absent, unparseable, or all-zero.
