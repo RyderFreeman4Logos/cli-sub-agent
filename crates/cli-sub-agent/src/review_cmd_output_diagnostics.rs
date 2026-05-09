@@ -1,5 +1,33 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(in crate::review_cmd) struct ReviewerOutcome {
+    pub reviewer_index: usize,
+    pub tool: ToolName,
+    pub session_id: String,
+    pub output: String,
+    pub exit_code: i32,
+    pub verdict: &'static str,
+    pub diagnostic: Option<String>,
+}
+
+pub(in crate::review_cmd) fn print_reviewer_outcomes(outcomes: &[ReviewerOutcome]) {
+    for o in outcomes {
+        let r = o.reviewer_index + 1;
+        println!(
+            "===== Reviewer {r} ({}) | verdict={} | exit_code={} =====",
+            o.tool, o.verdict, o.exit_code
+        );
+        if let Some(ref d) = o.diagnostic {
+            eprintln!("[csa-review] Reviewer {r} tool failure: {d}");
+        }
+        print!("{}", o.output);
+        if !o.output.ends_with('\n') {
+            println!();
+        }
+    }
+}
+
 /// Detect known tool-level diagnostic messages that indicate the review tool
 /// failed to actually perform a review (e.g., gemini-cli MCP connectivity issues).
 ///

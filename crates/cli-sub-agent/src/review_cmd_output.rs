@@ -32,6 +32,7 @@ use clean_detection::{
     contains_clean_phrase, review_contains_prose_clean_conclusion, strip_prompt_guards,
 };
 pub(crate) use diagnostics::detect_tool_diagnostic;
+pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
 };
@@ -59,18 +60,6 @@ impl ToolReviewFailureKind {
             }
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(in crate::review_cmd) struct ReviewerOutcome {
-    pub reviewer_index: usize,
-    pub tool: ToolName,
-    pub session_id: String,
-    pub output: String,
-    pub exit_code: i32,
-    pub verdict: &'static str,
-    /// Tool-level diagnostic when the review failed due to tool issues (e.g. MCP).
-    pub diagnostic: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,7 +388,11 @@ fn derive_review_verdict_artifact(
     }
 
     if !full_output_is_effectively_empty(session_dir)? {
-        let decision = ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Fail);
+        let decision = if findings.is_empty() {
+            ReviewDecision::Pass
+        } else {
+            ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Fail)
+        };
         return Ok(ReviewVerdictArtifact::from_parts(
             meta.session_id.clone(),
             decision,
@@ -757,24 +750,6 @@ pub(super) fn detect_tool_review_failure(
         return None;
     }
     Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
-}
-
-/// Print per-reviewer output and diagnostics for multi-reviewer mode.
-pub(super) fn print_reviewer_outcomes(outcomes: &[ReviewerOutcome]) {
-    for o in outcomes {
-        let r = o.reviewer_index + 1;
-        println!(
-            "===== Reviewer {r} ({}) | verdict={} | exit_code={} =====",
-            o.tool, o.verdict, o.exit_code
-        );
-        if let Some(ref d) = o.diagnostic {
-            eprintln!("[csa-review] Reviewer {r} tool failure: {d}");
-        }
-        print!("{}", o.output);
-        if !o.output.ends_with('\n') {
-            println!();
-        }
-    }
 }
 
 pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
