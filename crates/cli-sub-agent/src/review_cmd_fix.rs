@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tracing::{error, info, warn};
 
+use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
 use crate::review_routing::ReviewRoutingMetadata;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
@@ -245,18 +246,23 @@ fn persist_fix_final_artifacts(
                         "Failed to write output/findings.toml after CLEAN convergence"
                     );
                 }
-                // Clear stale review-findings.json so the cross-check in
-                // derive_review_verdict_artifact does not override the
-                // cleanly-converged empty findings.toml (#1045 round 4).
-                let stale_json = session_dir.join("review-findings.json");
-                if stale_json.exists()
-                    && let Err(error) = std::fs::remove_file(&stale_json)
-                {
-                    warn!(
-                        session_id = %review_meta.session_id,
-                        error = %error,
-                        "Failed to remove stale review-findings.json after CLEAN convergence"
-                    );
+                // Clear stale review JSON artifacts so the verdict loader does
+                // not override the cleanly-converged empty findings.toml.
+                for artifact_file in [
+                    SINGLE_REVIEW_ARTIFACT_FILE,
+                    CONSOLIDATED_REVIEW_ARTIFACT_FILE,
+                ] {
+                    let stale_artifact = session_dir.join(artifact_file);
+                    if let Err(error) = std::fs::remove_file(&stale_artifact)
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        warn!(
+                            session_id = %review_meta.session_id,
+                            artifact_file,
+                            error = %error,
+                            "Failed to remove stale review artifact after CLEAN convergence"
+                        );
+                    }
                 }
                 // Clear the synthetic-empty sidecar marker so
                 // derive_review_verdict_artifact does not fall through to
@@ -496,6 +502,59 @@ mod tests {
         );
 
         // Verdict must report pass.
+        let verdict_path = session_dir.join("output").join("review-verdict.json");
+        let artifact: csa_session::ReviewVerdictArtifact =
+            serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+                .expect("parse verdict");
+        assert_eq!(artifact.decision, ReviewDecision::Pass);
+        assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    }
+
+    /// Stale consolidated review artifact with a HIGH finding must be cleared
+    /// on clean convergence, otherwise it takes precedence over the clean
+    /// findings.toml and forces a false fail.
+    #[test]
+    fn persist_fix_final_artifacts_clears_stale_consolidated_findings_json_on_clean() {
+        let project_root = temp_project_root("persist-fix-stale-consolidated-json");
+        let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+        let session_id = unique_session_id("01FIXSTALECONSOLIDATED");
+        let session_dir = create_session_dir(&project_root, &session_id);
+
+        let stale_consolidated_json = serde_json::json!({
+            "findings": [{
+                "severity": "high",
+                "fid": "stale-consolidated-high",
+                "file": "src/lib.rs",
+                "line": 42,
+                "rule_id": "rule.stale-consolidated",
+                "summary": "Stale high finding from consolidated artifact",
+                "engine": "review-consensus"
+            }],
+            "severity_summary": { "critical": 0, "high": 1, "medium": 0, "low": 0 },
+            "overall_risk": "high"
+        });
+        fs::write(
+            session_dir.join(crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE),
+            serde_json::to_vec_pretty(&stale_consolidated_json)
+                .expect("serialize stale consolidated json"),
+        )
+        .expect("write stale consolidated review-findings.json");
+
+        persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+        let findings_path = session_dir.join("output").join("findings.toml");
+        let parsed: FindingsFile =
+            toml::from_str(&fs::read_to_string(&findings_path).expect("read findings.toml"))
+                .expect("parse findings.toml");
+        assert_eq!(parsed, FindingsFile::default());
+
+        assert!(
+            !session_dir
+                .join(crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE)
+                .exists(),
+            "review-findings-consolidated.json should be removed after clean convergence"
+        );
+
         let verdict_path = session_dir.join("output").join("review-verdict.json");
         let artifact: csa_session::ReviewVerdictArtifact =
             serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
