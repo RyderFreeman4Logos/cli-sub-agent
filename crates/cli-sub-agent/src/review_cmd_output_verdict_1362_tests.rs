@@ -57,6 +57,58 @@ fn issue_1362_empty_consolidated_findings_and_pass_summary_emits_pass() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1362 missing-artifact path: when section extraction does not create
+/// summary.md/details.md, the final transcript result in full.md must still be
+/// enough to avoid falling back to stale fail meta for empty findings.
+#[test]
+fn issue_1362_missing_summary_details_with_empty_findings_emits_pass() {
+    let session_id = "01TEST1362MISSINGSUMMARY0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1362-missing-summary-empty-findings", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write synthetic findings.toml");
+    fs::write(
+        session_dir.join("output").join(".findings.toml.synthetic"),
+        "",
+    )
+    .expect("write synthetic marker");
+
+    let transcript = json!({
+        "type": "result",
+        "subtype": "success",
+        "result": "<!-- CSA:SECTION:summary -->\nVerdict: PASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking findings.\n<!-- CSA:SECTION:details:END -->\n\n```findings.toml\nfindings = []\n```\nPASS"
+    });
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        serde_json::to_string(&transcript).expect("serialize transcript"),
+    )
+    .expect("write full.md transcript");
+    assert!(!session_dir.join("output").join("summary.md").exists());
+    assert!(!session_dir.join("output").join("details.md").exists());
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1362: empty findings must yield Pass even when summary.md/details.md are absent"
+    );
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert!(artifact.severity_counts.values().all(|count| *count == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 #[test]
 fn issue_1362_consolidated_blocking_finding_still_fails() {
     let session_id = "01TEST1362HIGHFINDING00000";

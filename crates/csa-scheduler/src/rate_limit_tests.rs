@@ -10,7 +10,12 @@ fn test_gemini_resource_exhausted() {
         None,
     );
     assert!(result.is_some());
-    assert_eq!(result.unwrap().matched_pattern, "resource exhausted");
+    let detected = result.unwrap();
+    assert_eq!(detected.matched_pattern, "resource exhausted");
+    assert!(
+        !detected.quota_exhausted,
+        "plain RESOURCE_EXHAUSTED can be transient and must not imply permanent quota"
+    );
 }
 
 #[test]
@@ -75,7 +80,12 @@ fn test_gemini_resource_exhausted_uppercase() {
         None,
     );
     assert!(result.is_some());
-    assert_eq!(result.unwrap().matched_pattern, "resource_exhausted");
+    let detected = result.unwrap();
+    assert_eq!(detected.matched_pattern, "resource_exhausted");
+    assert!(
+        !detected.quota_exhausted,
+        "RESOURCE_EXHAUSTED status alone is not permanent quota exhaustion"
+    );
 }
 
 #[test]
@@ -353,8 +363,7 @@ fn test_quota_exhausted_true_for_permanent_quota_patterns() {
     let quota_patterns = [
         ("gemini-cli", "quota_exhausted flag is set"),
         ("gemini-cli", "daily quota limit reached"),
-        ("gemini-cli", "resource exhausted: no more capacity"),
-        ("gemini-cli", "capacity_exhausted for model"),
+        ("gemini-cli", "monthly spending cap reached"),
         ("gemini-cli", "quota exceeded for account"),
         ("codex", "usage_limit_exceeded for this period"),
         ("codex", "Error: usage limit exceeded"),
@@ -374,6 +383,8 @@ fn test_quota_exhausted_true_for_permanent_quota_patterns() {
 fn test_quota_exhausted_false_for_transient_rate_limits() {
     let transient_patterns = [
         ("gemini-cli", "HTTP 429 Too Many Requests"),
+        ("gemini-cli", "resource exhausted: no more capacity"),
+        ("gemini-cli", "capacity_exhausted for model"),
         ("gemini-cli", "HTTP 401 Unauthorized"),
         ("gemini-cli", "HTTP 403 Forbidden"),
         ("codex", "rate_limit_exceeded for key"),
@@ -394,7 +405,7 @@ fn test_quota_exhausted_false_for_transient_rate_limits() {
 }
 
 #[test]
-fn test_gemini_retry_chain_exhausted_is_quota_exhausted() {
+fn test_gemini_retry_chain_exhausted_is_not_permanent_quota() {
     let result = detect_rate_limit(
         "gemini-cli",
         "retry chain exhausted after all OAuth and API key fallbacks failed",
@@ -404,8 +415,8 @@ fn test_gemini_retry_chain_exhausted_is_quota_exhausted() {
     );
     let detected = result.expect("retry chain exhausted should be detected");
     assert!(
-        detected.quota_exhausted,
-        "gemini retry chain exhaustion is treated as quota exhaustion (#1346)"
+        !detected.quota_exhausted,
+        "gemini retry chain exhaustion is not permanent quota exhaustion by itself"
     );
 }
 

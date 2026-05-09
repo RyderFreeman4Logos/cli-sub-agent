@@ -113,6 +113,7 @@ pub(super) fn phase_label(phase: &SessionPhase) -> &'static str {
         SessionPhase::Active => "Active",
         SessionPhase::Available => "Available",
         SessionPhase::Retired => "Retired",
+        SessionPhase::ToolExhausted => "ToolExhausted",
     }
 }
 

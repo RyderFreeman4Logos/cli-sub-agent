@@ -13,8 +13,8 @@ use csa_config::{GlobalConfig, MemoryBackend, ProjectConfig};
 use csa_executor::{CODEX_EXEC_INITIAL_STALL_REASON, Executor};
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_session::{
-    MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState, get_session_dir,
-    load_result, load_session, save_result, save_session,
+    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, TokenUsage,
+    ToolState, get_session_dir, load_result, load_session, save_result, save_session,
 };
 
 use crate::memory_capture;
@@ -167,6 +167,41 @@ pub(crate) async fn process_execution_result(
         result.summary = classified_summary.clone();
         if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
             tool_state.last_action_summary = classified_summary;
+        }
+    }
+    if let Some(exhaustion) = crate::run_cmd_post::detect_permanent_tool_exhaustion_result(
+        ctx.executor.tool_name(),
+        result,
+        None,
+    ) {
+        let exhausted_summary = crate::run_cmd_post::format_tool_exhausted_summary(
+            ctx.executor.tool_name(),
+            &exhaustion.matched_pattern,
+        );
+        result.exit_code = 1;
+        result.summary = exhausted_summary.clone();
+        if !result.stderr_output.contains(&exhausted_summary) {
+            if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+                result.stderr_output.push('\n');
+            }
+            result.stderr_output.push_str(&exhausted_summary);
+            result.stderr_output.push('\n');
+        }
+        session_result.exit_code = 1;
+        session_result.status = SessionResult::status_from_exit_code(1);
+        session_result.summary = exhausted_summary.clone();
+        if let Err(err) = session.apply_phase_event(PhaseEvent::ToolExhausted) {
+            warn!(
+                session = %session.meta_session_id,
+                error = %err,
+                "Skipping phase transition on tool exhaustion"
+            );
+            session.phase = SessionPhase::ToolExhausted;
+        }
+        session.termination_reason = Some("tool_exhausted".to_string());
+        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+            tool_state.last_exit_code = 1;
+            tool_state.last_action_summary = exhausted_summary;
         }
     }
     // No-op exit gate: detect sa-mode sessions that reported success but

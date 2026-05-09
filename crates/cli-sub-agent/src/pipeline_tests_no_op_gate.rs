@@ -3,7 +3,7 @@
 use super::*;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_executor::{ClaudeCodeRuntimeMetadata, Executor};
-use csa_session::{create_session, load_result};
+use csa_session::{SessionPhase, create_session, load_result, load_session};
 
 /// Build a minimal `PostExecContext` suitable for no-op gate testing.
 fn build_test_ctx<'a>(
@@ -47,6 +47,64 @@ fn build_test_result(summary: &str) -> csa_process::ExecutionResult {
         exit_code: 0,
         peak_memory_mb: None,
     }
+}
+
+fn build_failed_test_result(summary: &str, stderr: &str) -> csa_process::ExecutionResult {
+    csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: stderr.to_string(),
+        summary: summary.to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    }
+}
+
+#[tokio::test]
+async fn permanent_tool_quota_sets_tool_exhausted_phase() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("gemini-cli")).expect("create");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+
+    let executor = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        false,
+        true,
+    );
+    let mut result = build_failed_test_result(
+        "gemini failed",
+        "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED; monthly spending cap reached",
+    );
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 1);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(1));
+    assert!(persisted.summary.starts_with("tool_exhausted: gemini-cli"));
+    let reloaded = load_session(project_root, &session.meta_session_id).expect("load session");
+    assert_eq!(reloaded.phase, SessionPhase::ToolExhausted);
+    assert_eq!(
+        reloaded.termination_reason.as_deref(),
+        Some("tool_exhausted")
+    );
 }
 
 #[tokio::test]

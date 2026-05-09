@@ -7,7 +7,9 @@ use std::time::Duration;
 use tracing::warn;
 
 use csa_executor::{ExecuteOptions, Executor, PeakMemoryContext, SessionConfig, TransportResult};
-use csa_session::{MetaSessionState, SessionResult, ToolState, save_result, save_session};
+use csa_session::{
+    MetaSessionState, PhaseEvent, SessionPhase, SessionResult, ToolState, save_result, save_session,
+};
 
 use crate::session_guard::SessionCleanupGuard;
 
@@ -165,10 +167,25 @@ pub(crate) async fn execute_transport_with_signal(
                 .chain()
                 .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
                 .and_then(|ctx| ctx.0);
+            let error_summary = format!("transport: {e}");
+            let exhaustion = crate::run_cmd_post::detect_permanent_tool_exhaustion_text(
+                executor.tool_name(),
+                &error_summary,
+                &format!("{e:#}"),
+                "",
+                1,
+                None,
+            );
+            let summary = exhaustion.as_ref().map_or(error_summary, |detected| {
+                crate::run_cmd_post::format_tool_exhausted_summary(
+                    executor.tool_name(),
+                    &detected.matched_pattern,
+                )
+            });
             let result = SessionResult {
                 status: "failure".to_string(),
                 exit_code: 1,
-                summary: format!("transport: {e}"),
+                summary: summary.clone(),
                 tool: executor.tool_name().to_string(),
                 original_tool: None,
                 fallback_tool: None,
@@ -183,6 +200,30 @@ pub(crate) async fn execute_transport_with_signal(
             };
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
                 warn!("Failed to save transport error result: {}", save_err);
+            }
+            if exhaustion.is_some() {
+                let mut updated_session = session.clone();
+                if let Err(err) = updated_session.apply_phase_event(PhaseEvent::ToolExhausted) {
+                    warn!(
+                        session = %updated_session.meta_session_id,
+                        error = %err,
+                        "Skipping phase transition on transport tool exhaustion"
+                    );
+                    updated_session.phase = SessionPhase::ToolExhausted;
+                }
+                updated_session.termination_reason = Some("tool_exhausted".to_string());
+                updated_session.last_accessed = completed_at;
+                if let Some(tool_state) = updated_session.tools.get_mut(executor.tool_name()) {
+                    tool_state.last_exit_code = 1;
+                    tool_state.last_action_summary = summary;
+                    tool_state.updated_at = completed_at;
+                }
+                if let Err(save_err) = save_session(&updated_session) {
+                    warn!(
+                        "Failed to save transport tool exhaustion state: {}",
+                        save_err
+                    );
+                }
             }
             // Best-effort cooldown marker
             csa_session::write_cooldown_marker_for_project(

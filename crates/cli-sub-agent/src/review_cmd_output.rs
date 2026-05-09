@@ -68,6 +68,8 @@ struct TranscriptEvent {
     event_type: String,
     #[serde(default)]
     item: Option<TranscriptItem>,
+    #[serde(default)]
+    result: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,6 +315,7 @@ fn derive_review_verdict_artifact(
     meta: &ReviewSessionMeta,
     findings: &[Finding],
 ) -> Result<ReviewVerdictArtifact, anyhow::Error> {
+    let mut synthetic_empty_findings_counts = None;
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
         let severity_counts =
             severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
@@ -332,6 +335,7 @@ fn derive_review_verdict_artifact(
             if let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)? {
                 return Ok(artifact);
             }
+            synthetic_empty_findings_counts = Some(severity_counts.clone());
             // Synthetic-empty + no blocking JSON → fall through to full.md chain.
             debug!(
                 session_id = %meta.session_id,
@@ -385,6 +389,14 @@ fn derive_review_verdict_artifact(
 
     if let Some(artifact) = infer_review_verdict_from_full_output(session_dir, meta)? {
         return Ok(artifact);
+    }
+
+    if let Some(severity_counts) = synthetic_empty_findings_counts {
+        return Ok(verdict_from_meta(
+            meta,
+            ReviewDecision::Pass,
+            severity_counts,
+        ));
     }
 
     if !full_output_is_effectively_empty(session_dir)? {
@@ -465,6 +477,13 @@ pub(super) fn extract_review_text(raw_output: &str) -> Option<String> {
             Err(_) if !saw_json_line => continue,
             Err(_) => return Some(raw_output.to_string()),
         };
+        if event.event_type == "result" {
+            if let Some(text) = event.result.filter(|text| looks_like_review_message(text)) {
+                transcript_messages.push(text);
+            }
+            continue;
+        }
+
         let Some(item) = event.item else {
             continue;
         };

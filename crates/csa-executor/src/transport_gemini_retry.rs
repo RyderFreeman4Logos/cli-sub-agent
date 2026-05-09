@@ -6,7 +6,7 @@ use csa_core::{
     gemini::{
         API_KEY_ENV as GEMINI_API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY,
         AUTH_MODE_ENV_KEY as GEMINI_AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH, NO_FLASH_FALLBACK_ENV_KEY,
-        detect_rate_limit_pattern,
+        detect_permanent_quota_exhaustion_pattern, detect_rate_limit_pattern,
     },
 };
 use csa_process::ExecutionResult;
@@ -80,6 +80,43 @@ pub(crate) fn is_gemini_rate_limited_result(execution: &ExecutionResult) -> bool
         execution.stderr_output, execution.output
     ))
     .is_some()
+}
+
+pub(crate) fn detect_gemini_permanent_quota_exhaustion_result(
+    execution: &ExecutionResult,
+) -> Option<&'static str> {
+    if execution.exit_code == 0 {
+        return None;
+    }
+    detect_permanent_quota_exhaustion_pattern(&format!(
+        "{}\n{}\n{}",
+        execution.summary, execution.stderr_output, execution.output
+    ))
+}
+
+#[cfg(feature = "acp")]
+pub(crate) fn detect_gemini_permanent_quota_exhaustion_error(
+    error_msg: &str,
+) -> Option<&'static str> {
+    detect_permanent_quota_exhaustion_pattern(error_msg)
+}
+
+pub(crate) fn apply_gemini_permanent_quota_exhaustion_summary(
+    execution: &mut ExecutionResult,
+    matched_pattern: &str,
+) {
+    let summary = format!(
+        "tool_exhausted: gemini-cli permanent quota exhaustion detected \
+         (matched '{matched_pattern}'); no retry or tool fallback attempted. \
+         Inspect Gemini billing/quota or choose another tool explicitly."
+    );
+    execution.summary = summary.clone();
+    execution.exit_code = 1;
+    if !execution.stderr_output.is_empty() && !execution.stderr_output.ends_with('\n') {
+        execution.stderr_output.push('\n');
+    }
+    execution.stderr_output.push_str(&summary);
+    execution.stderr_output.push('\n');
 }
 
 #[cfg(feature = "acp")]

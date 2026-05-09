@@ -32,7 +32,8 @@ use crate::run_cmd_fork::{
     ForkResolution, cleanup_pre_created_fork_session, pre_create_native_fork_session, resolve_fork,
 };
 use crate::run_cmd_post::{
-    RateLimitAction, evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
+    RateLimitAction, detect_permanent_tool_exhaustion_result, evaluate_error_rate_limit_failover,
+    evaluate_rate_limit_failover, is_permanent_tool_exhaustion_error,
 };
 use crate::run_cmd_tool_selection::{
     resolve_slot_wait_timeout_seconds, take_next_runtime_fallback_tool,
@@ -593,8 +594,15 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
 
                     return Ok(RunLoopCompletion::Exit(signal_exit_code));
                 }
+                let full_error_chain = format!("{e:#}");
+                let permanent_tool_exhaustion = is_permanent_tool_exhaustion_error(
+                    tool_name_str,
+                    &full_error_chain,
+                    current_model_spec.as_deref(),
+                );
                 if runtime_fallback_enabled
                     && runtime_fallback_attempts < max_runtime_fallback_attempts
+                    && !permanent_tool_exhaustion
                     && let Some(next_tool) = take_next_runtime_fallback_tool(
                         &mut runtime_fallback_candidates,
                         current_tool,
@@ -627,7 +635,6 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 // ACP transport errors can bury the root cause under anyhow
                 // context layers. Preserve the full chain so quota/crash
                 // markers survive error-path failover detection.
-                let full_error_chain = format!("{e:#}");
                 match evaluate_error_rate_limit_failover(
                     tool_name_str,
                     &full_error_chain,
@@ -680,10 +687,18 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             }
         };
 
+        let permanent_tool_exhaustion = detect_permanent_tool_exhaustion_result(
+            tool_name_str,
+            &exec_result,
+            current_model_spec.as_deref(),
+        )
+        .is_some();
+
         if exec_result.exit_code != 0
             && runtime_fallback_enabled
             && runtime_fallback_attempts < max_runtime_fallback_attempts
             && !is_post_run_commit_policy_block(&exec_result.summary)
+            && !permanent_tool_exhaustion
             && let Some(next_tool) = take_next_runtime_fallback_tool(
                 &mut runtime_fallback_candidates,
                 current_tool,
