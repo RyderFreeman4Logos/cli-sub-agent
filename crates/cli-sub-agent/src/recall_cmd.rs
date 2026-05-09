@@ -38,8 +38,12 @@ pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
     }
 }
 
+fn recall_allowed_at_depth(depth: u32) -> bool {
+    depth == 0
+}
+
 pub(crate) fn spawn_recall_record_if_needed(project_root: &Path) {
-    if crate::pipeline_env::current_csa_depth() != 0 {
+    if !recall_allowed_at_depth(crate::pipeline_env::current_csa_depth()) {
         return;
     }
 
@@ -424,5 +428,21 @@ mod tests {
         let lines = vec!["0", "match one", "2", "match two", "4"];
         let ranges = matching_ranges(&lines, "match", 1);
         assert_eq!(ranges, vec![(0, 4)]);
+    }
+
+    #[test]
+    fn recall_allowed_only_at_main_agent_depth() {
+        assert!(
+            recall_allowed_at_depth(0),
+            "main agent (depth=0) must be recorded"
+        );
+        assert!(
+            !recall_allowed_at_depth(1),
+            "depth=1 child session must not be recorded"
+        );
+        assert!(
+            !recall_allowed_at_depth(5),
+            "deeply nested child (depth=5) must not be recorded"
+        );
     }
 }
