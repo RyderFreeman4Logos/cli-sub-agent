@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
 use csa_core::types::ReviewDecision;
-use csa_session::review_artifact::{Finding, ReviewArtifact};
+use csa_session::review_artifact::{Finding, ReviewArtifact, Severity};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{
     FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact,
@@ -94,26 +94,34 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     };
     let reviewer_artifacts = load_multi_reviewer_artifacts(&session_dir, reviewers)?;
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
+    let parent_decision =
+        parent_review_decision(&consolidated, final_verdict, all_reviewers_unavailable);
+    let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
     write_consolidated_artifact(&consolidated, &session_dir)?;
     write_parent_findings_toml(&session_dir, &consolidated)?;
     write_parent_review_verdict(
         &session_dir,
         &session_id,
         &consolidated,
-        final_verdict,
-        all_reviewers_unavailable,
+        parent_decision,
+        &parent_verdict,
     )?;
     if let Some(meta) = parent_review_meta {
-        write_review_meta(&session_dir, meta).context("failed to write parent review_meta.json")?;
+        let mut meta = meta.clone();
+        meta.decision = parent_decision.as_str().to_string();
+        meta.verdict = parent_verdict.clone();
+        meta.exit_code = if parent_decision.is_clean() { 0 } else { 1 };
+        write_review_meta(&session_dir, &meta)
+            .context("failed to write parent review_meta.json")?;
         crate::review_gate::maybe_write_gate_marker_for_clean(
             project_root,
             &meta.head_sha,
-            final_verdict,
+            &meta.verdict,
             outcomes.first().map(|o| o.session_id.as_str()),
             &meta.scope,
         );
     }
-    write_parent_review_summary(&session_dir, outcomes, final_verdict)?;
+    write_parent_review_summary(&session_dir, outcomes, &parent_verdict)?;
     write_parent_review_details(&session_dir, outcomes)?;
     Ok(())
 }
@@ -208,23 +216,61 @@ fn write_parent_review_verdict(
     session_dir: &Path,
     session_id: &str,
     artifact: &ReviewArtifact,
-    final_verdict: &str,
-    all_reviewers_unavailable: bool,
+    decision: ReviewDecision,
+    verdict_legacy: &str,
 ) -> Result<()> {
-    let decision = if all_reviewers_unavailable {
-        ReviewDecision::Unavailable
-    } else {
-        ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain)
-    };
     let verdict = ReviewVerdictArtifact::from_parts(
         session_id.to_string(),
         decision,
-        final_verdict.to_string(),
+        verdict_legacy.to_string(),
         &artifact.findings,
         Vec::new(),
     );
     write_review_verdict(session_dir, &verdict)
         .context("failed to write parent output/review-verdict.json")
+}
+
+fn parent_review_decision(
+    artifact: &ReviewArtifact,
+    final_verdict: &str,
+    all_reviewers_unavailable: bool,
+) -> ReviewDecision {
+    if all_reviewers_unavailable {
+        return ReviewDecision::Unavailable;
+    }
+    if artifact
+        .findings
+        .iter()
+        .any(|finding| is_blocking_severity(&finding.severity))
+    {
+        return ReviewDecision::Fail;
+    }
+    if artifact.findings.is_empty()
+        || artifact
+            .findings
+            .iter()
+            .all(|finding| finding.severity == Severity::Low)
+    {
+        return ReviewDecision::Pass;
+    }
+    ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain)
+}
+
+fn is_blocking_severity(severity: &Severity) -> bool {
+    matches!(
+        severity,
+        Severity::Critical | Severity::High | Severity::Medium
+    )
+}
+
+fn parent_legacy_verdict(decision: ReviewDecision, fallback: &str) -> String {
+    match decision {
+        ReviewDecision::Pass => CLEAN.to_string(),
+        ReviewDecision::Fail => HAS_ISSUES.to_string(),
+        ReviewDecision::Skip | ReviewDecision::Uncertain | ReviewDecision::Unavailable => {
+            fallback.to_string()
+        }
+    }
 }
 
 fn write_parent_review_summary(
@@ -447,6 +493,100 @@ mod tests {
         .expect("review verdict should parse");
         assert_eq!(verdict.decision, ReviewDecision::Fail);
         assert_eq!(verdict.severity_counts[&Severity::High], 1);
+    }
+
+    #[test]
+    fn write_multi_reviewer_parent_artifacts_empty_findings_override_fail_consensus() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let temp = tempdir().expect("tempdir should be created");
+        let session_dir = temp.path().display().to_string();
+        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+        let _session_id_guard =
+            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+        let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+        let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+        let reviewer_dir = temp.path().join("reviewer-1");
+        fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+        fs::write(
+            reviewer_dir.join("review-findings.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "verdict": "PASS",
+                "summary": "No blocking findings in main...HEAD.",
+                "findings": []
+            }))
+            .expect("artifact should serialize"),
+        )
+        .expect("review artifact should be written");
+
+        let outcomes = vec![super::super::output::ReviewerOutcome {
+            reviewer_index: 0,
+            tool: ToolName::Codex,
+            session_id: "01CHILDSESSION0000000000000".to_string(),
+            output: "Reviewer wrote a clean findings artifact.".to_string(),
+            exit_code: 1,
+            verdict: crate::review_consensus::HAS_ISSUES,
+            diagnostic: None,
+        }];
+        let parent_meta = csa_session::state::ReviewSessionMeta {
+            session_id: "01PARENTSESSION000000000000".to_string(),
+            head_sha: "abcdef1234567890".to_string(),
+            decision: ReviewDecision::Fail.as_str().to_string(),
+            verdict: crate::review_consensus::HAS_ISSUES.to_string(),
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: "consensus".to_string(),
+            scope: "range:main...HEAD".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: Some("sha256:test".to_string()),
+        };
+
+        write_multi_reviewer_parent_artifacts(
+            temp.path(),
+            1,
+            &outcomes,
+            crate::review_consensus::HAS_ISSUES,
+            false,
+            Some(&parent_meta),
+        )
+        .expect("parent artifacts should be produced");
+
+        let output_dir = temp.path().join("output");
+        let verdict: ReviewVerdictArtifact = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("review-verdict.json"))
+                .expect("review-verdict.json should exist"),
+        )
+        .expect("review verdict should parse");
+        assert_eq!(verdict.decision, ReviewDecision::Pass);
+        assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
+        assert!(verdict.severity_counts.values().all(|count| *count == 0));
+
+        let findings_toml: FindingsFile = toml::from_str(
+            &fs::read_to_string(output_dir.join("findings.toml"))
+                .expect("findings.toml should exist"),
+        )
+        .expect("findings.toml should parse");
+        assert!(findings_toml.findings.is_empty());
+        assert!(
+            fs::read_to_string(output_dir.join("summary.md"))
+                .expect("summary should exist")
+                .starts_with("Final verdict: CLEAN")
+        );
+
+        let written_meta: csa_session::state::ReviewSessionMeta = serde_json::from_str(
+            &fs::read_to_string(temp.path().join("review_meta.json"))
+                .expect("review_meta.json should exist"),
+        )
+        .expect("review meta should parse");
+        assert_eq!(written_meta.decision, ReviewDecision::Pass.as_str());
+        assert_eq!(written_meta.verdict, crate::review_consensus::CLEAN);
+        assert_eq!(written_meta.exit_code, 0);
     }
 
     #[test]
