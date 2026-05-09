@@ -42,6 +42,18 @@ fn recall_allowed_at_depth(depth: u32) -> bool {
     depth == 0
 }
 
+fn thread_belongs_to_project(thread_source: &str, project_root: &Path) -> bool {
+    let encoded = project_root.display().to_string().replace('/', "-");
+    let Some(parent) = std::path::Path::new(thread_source).parent() else {
+        return false;
+    };
+    let dir_name = parent
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    dir_name.as_ref() == encoded
+}
+
 pub(crate) fn spawn_recall_record_if_needed(project_root: &Path) {
     if !recall_allowed_at_depth(crate::pipeline_env::current_csa_depth()) {
         return;
@@ -72,6 +84,15 @@ pub(crate) async fn record_main_agent_session(project_root: &Path) -> Result<()>
         debug!("recall: no Claude main thread available");
         return Ok(());
     };
+
+    if !thread_belongs_to_project(&thread.thread_source, project_root) {
+        debug!(
+            thread_source = %thread.thread_source,
+            project = %project_root.display(),
+            "recall: skipping — session belongs to a different project"
+        );
+        return Ok(());
+    }
 
     let entry = RecallHistoryEntry {
         ts: Utc::now().to_rfc3339(),
@@ -444,5 +465,19 @@ mod tests {
             !recall_allowed_at_depth(5),
             "deeply nested child (depth=5) must not be recorded"
         );
+    }
+
+    #[test]
+    fn thread_belongs_to_matching_project() {
+        let source = "/home/obj/.claude/projects/-home-obj-project-github-user-repo/abc.jsonl";
+        let root = Path::new("/home/obj/project/github/user/repo");
+        assert!(thread_belongs_to_project(source, root));
+    }
+
+    #[test]
+    fn thread_rejects_different_project() {
+        let source = "/home/obj/.claude/projects/-home-obj-project-github-user-other/abc.jsonl";
+        let root = Path::new("/home/obj/project/github/user/repo");
+        assert!(!thread_belongs_to_project(source, root));
     }
 }
