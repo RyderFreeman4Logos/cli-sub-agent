@@ -367,12 +367,12 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_high_in_full_md_emits_fail() 
 }
 
 /// Case 9 (#1045 round 3): synthetic-empty findings.toml + NO review-findings.json
-/// + non-empty unstructured full.md → decision=fail.
+/// + non-empty unstructured full.md → decision=pass (#1357 override).
 ///
-/// full.md has content but no severity markers — fail-closed via the
-/// `!full_output_is_effectively_empty` fallback.
+/// full.md has content but no severity markers and no parseable findings.
+/// Zero-evidence records yield Pass per #1349/#1357.
 #[test]
-fn issue_1045_r3_synthetic_empty_toml_missing_json_nonempty_unstructured_full_md_emits_fail() {
+fn issue_1045_r3_synthetic_empty_toml_missing_json_nonempty_unstructured_full_md_emits_pass() {
     let session_id = "01TEST1045R3SYNTHNOJSUNSTR0";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1045-r3-synth-no-json-unstructured-full", session_id);
@@ -409,10 +409,10 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_nonempty_unstructured_full_md
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Fail,
-        "#1045 round 3: synthetic-empty TOML + missing JSON + non-empty unstructured full.md must fail-closed"
+        ReviewDecision::Pass,
+        "#1357: synthetic-empty TOML + missing JSON + unstructured full.md + zero findings must yield Pass"
     );
-    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

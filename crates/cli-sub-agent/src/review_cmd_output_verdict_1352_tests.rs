@@ -191,3 +191,46 @@ fn issue_1352_corrupt_json_treated_as_absent_emits_pass() {
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+/// #1357 regression: synthetic-empty findings + no JSON + unstructured full.md
+/// with meta.decision=fail must yield Pass when findings vec is empty.
+#[test]
+fn issue_1357_synthetic_no_json_unstructured_full_md_emits_pass() {
+    let session_id = "01TEST1357SYNTHNOSTRUC00000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1357-synthetic-unstructured", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(".findings.toml.synthetic"),
+        "",
+    )
+    .expect("write synthetic marker");
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        "Review process description in Chinese without structured findings markers.\n",
+    )
+    .expect("write full.md");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1357: synthetic-empty + no JSON + unstructured full.md + zero findings must yield Pass"
+    );
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert!(artifact.severity_counts.values().all(|v| *v == 0));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
