@@ -107,9 +107,10 @@ fn build_forwarded_plan_args(plan_args: &PlanRunArgs, sa_mode: Option<bool>) -> 
 
 async fn fetch_issue_body(issue: u64) -> Result<String> {
     let cwd = std::env::current_dir().context("Failed to determine current directory")?;
-    let merged_config = csa_config::ProjectConfig::load(&cwd).ok().flatten();
+    let merged_config = csa_config::ProjectConfig::load(&cwd)
+        .context("Failed to load project config while resolving GitHub auth")?;
     let configured_env = merged_config.as_ref().and_then(resolve_gh_env).or_else(|| {
-        csa_config::ProjectConfig::resolve_github_config_dir(&cwd)
+        csa_config::ProjectConfig::default_github_config_dir()
             .map(|dir| ("GH_CONFIG_DIR".to_string(), dir))
     });
     fetch_issue_body_with_retry(issue, configured_env.as_ref()).await
@@ -141,7 +142,9 @@ async fn fetch_issue_body_with_retry(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if configured_env.is_some() && is_auth_error(&stderr) {
-            let retry_output = Command::new("gh")
+            let mut retry_command = Command::new("gh");
+            let retry_output = retry_command
+                .env_remove("GH_CONFIG_DIR")
                 .args([
                     "issue",
                     "view",

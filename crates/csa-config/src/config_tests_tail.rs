@@ -219,7 +219,7 @@ fn test_resolve_github_config_dir_falls_back_to_home_gh_aider() {
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", dir.path().join("xdg-config"));
 
     assert_eq!(
-        ProjectConfig::resolve_github_config_dir_with_paths(None, &project_path),
+        ProjectConfig::resolve_github_config_dir_with_paths(None, &project_path).unwrap(),
         Some(home.join(".config/gh-aider").to_string_lossy().into_owned())
     );
 }

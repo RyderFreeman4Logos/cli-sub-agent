@@ -779,6 +779,9 @@ mod preflight_tests;
 #[path = "config_tests.rs"]
 mod tests;
 #[cfg(test)]
+#[path = "config_tests_github.rs"]
+mod tests_github;
+#[cfg(test)]
 #[path = "config_tests_tail.rs"]
 mod tests_tail;
 #[cfg(test)]

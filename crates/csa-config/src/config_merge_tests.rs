@@ -201,9 +201,9 @@ config_dir = "/tmp/project-gh"
 "#,
     )
     .unwrap();
-
     assert_eq!(
-        ProjectConfig::resolve_github_config_dir_with_paths(Some(&user_path), &project_path),
+        ProjectConfig::resolve_github_config_dir_with_paths(Some(&user_path), &project_path)
+            .unwrap(),
         Some("/tmp/project-gh".to_string())
     );
 }
@@ -221,9 +221,9 @@ config_dir = "/tmp/user-gh"
 "#,
     )
     .unwrap();
-
     assert_eq!(
-        ProjectConfig::resolve_github_config_dir_with_paths(Some(&user_path), &project_path),
+        ProjectConfig::resolve_github_config_dir_with_paths(Some(&user_path), &project_path)
+            .unwrap(),
         Some("/tmp/user-gh".to_string())
     );
 }
