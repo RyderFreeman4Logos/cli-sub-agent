@@ -63,6 +63,8 @@ impl Default for CodexTransport {
 pub struct CodexRuntimeMetadata {
     #[serde(default = "CodexTransport::default_for_build")]
     transport: CodexTransport,
+    #[serde(default)]
+    fast_mode: bool,
 }
 
 impl CodexRuntimeMetadata {
@@ -73,12 +75,36 @@ impl CodexRuntimeMetadata {
 
     #[must_use]
     pub const fn from_transport(transport: CodexTransport) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            fast_mode: false,
+        }
     }
 
     #[must_use]
     pub const fn transport_mode(self) -> CodexTransport {
         self.transport
+    }
+
+    #[must_use]
+    pub const fn with_transport(self, transport: CodexTransport) -> Self {
+        Self {
+            transport,
+            fast_mode: self.fast_mode,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_fast_mode(self, fast_mode: bool) -> Self {
+        Self {
+            transport: self.transport,
+            fast_mode,
+        }
+    }
+
+    #[must_use]
+    pub const fn fast_mode_enabled(self) -> bool {
+        self.fast_mode
     }
 
     #[must_use]
@@ -117,6 +143,7 @@ mod tests {
         let meta = CodexRuntimeMetadata::from_transport(CodexTransport::Cli);
 
         assert_eq!(meta.transport_mode(), CodexTransport::Cli);
+        assert!(!meta.fast_mode_enabled());
         assert_eq!(meta.runtime_binary_name(), "codex");
         assert_eq!(meta.install_hint(), "Install: npm install -g @openai/codex");
     }
@@ -126,6 +153,7 @@ mod tests {
         let meta = CodexRuntimeMetadata::from_transport(CodexTransport::Acp);
 
         assert_eq!(meta.transport_mode(), CodexTransport::Acp);
+        assert!(!meta.fast_mode_enabled());
         assert_eq!(meta.runtime_binary_name(), "codex-acp");
         assert_eq!(
             meta.install_hint(),
@@ -142,5 +170,23 @@ mod tests {
 
         assert_eq!(meta.transport_mode(), CodexTransport::Acp);
         assert_eq!(meta.runtime_binary_name(), "codex-acp");
+    }
+
+    #[test]
+    fn fast_mode_preserves_transport() {
+        let meta = CodexRuntimeMetadata::from_transport(CodexTransport::Cli).with_fast_mode(true);
+
+        assert_eq!(meta.transport_mode(), CodexTransport::Cli);
+        assert!(meta.fast_mode_enabled());
+    }
+
+    #[test]
+    fn transport_override_preserves_fast_mode() {
+        let meta = CodexRuntimeMetadata::from_transport(CodexTransport::Cli)
+            .with_fast_mode(true)
+            .with_transport(CodexTransport::Acp);
+
+        assert_eq!(meta.transport_mode(), CodexTransport::Acp);
+        assert!(meta.fast_mode_enabled());
     }
 }

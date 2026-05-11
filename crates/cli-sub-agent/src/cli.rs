@@ -160,6 +160,10 @@ pub enum Commands {
         #[arg(long)]
         no_failover: bool,
 
+        /// Enable Codex fast_mode for faster responses at higher cost. Only affects codex.
+        #[arg(long)]
+        fast_but_more_cost: bool,
+
         /// Block-wait for a free slot instead of failing when all slots are occupied
         #[arg(long)]
         wait: bool,

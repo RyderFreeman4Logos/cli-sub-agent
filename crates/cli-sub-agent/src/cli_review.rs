@@ -80,6 +80,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub no_failover: bool,
 
+    /// Enable Codex fast_mode for faster responses at higher cost. Only affects codex.
+    #[arg(long)]
+    pub fast_but_more_cost: bool,
+
     /// Review uncommitted changes (git diff HEAD)
     #[arg(long)]
     pub diff: bool,
@@ -393,6 +397,10 @@ pub struct DebateArgs {
     /// retry loop). Useful with --model-spec to pin an exact selection and fail fast.
     #[arg(long)]
     pub no_failover: bool,
+
+    /// Enable Codex fast_mode for faster responses at higher cost. Only affects codex.
+    #[arg(long)]
+    pub fast_but_more_cost: bool,
 
     /// Number of debate rounds (default: 3)
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]

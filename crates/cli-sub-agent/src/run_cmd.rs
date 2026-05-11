@@ -126,6 +126,7 @@ impl SubagentRunConfig {
             false,
             false,
             false,
+            false,
             None,
             None,
             self.timeout,

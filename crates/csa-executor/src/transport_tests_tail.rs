@@ -227,6 +227,16 @@ fn test_acp_command_for_tool_mappings() {
     );
 }
 
+#[test]
+fn test_codex_acp_fast_mode_uses_config_arg() {
+    let transport = AcpTransport::new_with_codex_fast_mode("codex", None, true);
+
+    assert_eq!(
+        transport.acp_args,
+        vec!["-c".to_string(), "features.fast_mode=true".to_string()]
+    );
+}
+
 // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not transport)
 // based on per-tool config via extra_env. See pipeline.rs suppress_notify logic.
 #[test]

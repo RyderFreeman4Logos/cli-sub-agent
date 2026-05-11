@@ -100,20 +100,6 @@ fn parse_or_validate_review_error(argv: &[&str]) -> clap::Error {
     }
 }
 
-#[test]
-fn review_cli_parses_hint_difficulty_flag() {
-    let args = parse_review_args(&[
-        "csa",
-        "review",
-        "--tool",
-        "claude-code",
-        "--hint-difficulty",
-        "code_review",
-        "--diff",
-    ]);
-    assert_eq!(args.hint_difficulty.as_deref(), Some("code_review"));
-}
-
 fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
     SpecDocument {
         schema_version: 1,
@@ -417,6 +403,7 @@ fn default_review_args() -> ReviewArgs {
         hint_difficulty: None,
         thinking: None,
         no_failover: false,
+        fast_but_more_cost: false,
         diff: false,
         full_consistency: false,
         branch: None,
@@ -786,6 +773,8 @@ fn has_structured_review_content_requires_non_empty_sections() {
 
 #[path = "review_cmd_bug_class_tests.rs"]
 mod bug_class_tests;
+#[path = "review_cmd_tests_cli_flags.rs"]
+mod cli_flags_tests;
 #[path = "review_cmd_tests_explicit_tool_tier_fallback.rs"]
 mod explicit_tool_tier_fallback_tests;
 #[path = "review_cmd_tests/model_spec_tests.rs"]

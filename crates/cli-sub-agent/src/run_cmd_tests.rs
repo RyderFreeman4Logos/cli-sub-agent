@@ -83,6 +83,18 @@ fn run_accepts_valid_codex_model_at_clap_parse() {
 }
 
 #[test]
+fn run_cli_parses_fast_but_more_cost_flag() {
+    let cli = try_parse_cli(&["csa", "run", "--fast-but-more-cost", "x"]).unwrap();
+
+    match cli.command {
+        crate::cli::Commands::Run {
+            fast_but_more_cost, ..
+        } => assert!(fast_but_more_cost),
+        _ => panic!("expected run command"),
+    }
+}
+
+#[test]
 fn run_rejects_unknown_tool_at_clap_parse() {
     let result = try_parse_cli(&["csa", "run", "--model-spec", "unknown-tool/x/y/medium", "x"]);
     let err = match result {

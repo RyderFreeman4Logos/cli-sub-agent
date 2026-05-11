@@ -3,6 +3,7 @@ use csa_config::{
     ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy, ToolConfig,
 };
 use csa_core::types::ToolName;
+use csa_executor::Executor;
 use std::collections::HashMap;
 
 fn project_config_with_tier_tools(tools: &[&str]) -> ProjectConfig {
@@ -110,4 +111,31 @@ fn resolve_tool_and_model_preserves_explicit_model_override_with_model_spec() {
     assert_eq!(tool, ToolName::Codex);
     assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/medium"));
     assert_eq!(model.as_deref(), Some("override-model"));
+}
+
+#[test]
+fn codex_fast_mode_survives_model_spec_executor_build() {
+    let mut executor = super::build_executor(
+        &ToolName::Codex,
+        Some("codex/openai/gpt-5.4/xhigh"),
+        None,
+        None,
+        None,
+        false,
+    )
+    .expect("codex model spec should build an executor");
+
+    executor.enable_codex_fast_mode();
+
+    match executor {
+        Executor::Codex {
+            model_override,
+            runtime_metadata,
+            ..
+        } => {
+            assert_eq!(model_override.as_deref(), Some("gpt-5.4"));
+            assert!(runtime_metadata.fast_mode_enabled());
+        }
+        other => panic!("expected codex executor, got {}", other.tool_name()),
+    }
 }

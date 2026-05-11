@@ -40,6 +40,11 @@ fn make_test_session() -> MetaSessionState {
     }
 }
 
+fn args_contain_pair(args: &[String], flag: &str, value: &str) -> bool {
+    args.windows(2)
+        .any(|pair| pair[0] == flag && pair[1] == value)
+}
+
 // ── build_command: CSA env vars ─────────────────────────────────
 
 #[test]
@@ -677,6 +682,32 @@ fn test_build_command_codex_args_structure() {
         "Low budget = low effort via -c model_reasoning_effort=low"
     );
     assert!(args.contains(&"fix bug".to_string()), "Should have prompt");
+}
+
+#[test]
+fn test_build_command_codex_fast_mode_adds_enable_flag() {
+    let mut exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    };
+    exec.enable_codex_fast_mode();
+    let session = make_test_session();
+
+    let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None);
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        args_contain_pair(&args, "--enable", "fast_mode"),
+        "codex fast mode should be enabled via --enable fast_mode; args={args:?}"
+    );
 }
 
 #[test]

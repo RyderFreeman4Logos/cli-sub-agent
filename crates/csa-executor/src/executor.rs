@@ -595,9 +595,6 @@ impl Executor {
     }
 
     /// Append tool-specific arguments for full execution.
-    ///
-    /// Delegates to `append_yolo_args`, `append_model_args`, `append_prompt_args`,
-    /// and adds session-resume and tool-specific structural args.
     #[cfg(test)]
     fn append_tool_args(&self, cmd: &mut Command, prompt: &str, tool_state: Option<&ToolState>) {
         self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv, &[]);
@@ -742,7 +739,7 @@ impl Executor {
             Self::Codex {
                 model_override,
                 thinking_budget,
-                ..
+                runtime_metadata,
             } => {
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);
@@ -750,6 +747,9 @@ impl Executor {
                 if let Some(budget) = thinking_budget {
                     cmd.arg("-c")
                         .arg(format!("model_reasoning_effort={}", budget.codex_effort()));
+                }
+                if runtime_metadata.fast_mode_enabled() {
+                    cmd.arg("--enable").arg("fast_mode");
                 }
             }
             Self::ClaudeCode {

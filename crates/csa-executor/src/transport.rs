@@ -435,7 +435,22 @@ pub struct AcpTransport {
 #[cfg(feature = "acp")]
 impl AcpTransport {
     pub fn new(tool_name: &str, session_config: Option<SessionConfig>) -> Self {
+        Self::new_with_codex_fast_mode(tool_name, session_config, false)
+    }
+
+    pub(crate) fn new_with_codex_fast_mode(
+        tool_name: &str,
+        session_config: Option<SessionConfig>,
+        codex_fast_mode: bool,
+    ) -> Self {
         let (cmd, args) = Self::acp_command_for_tool(tool_name);
+        let args = if tool_name == "codex" && codex_fast_mode {
+            let mut args = args;
+            args.extend(["-c".to_string(), "features.fast_mode=true".to_string()]);
+            args
+        } else {
+            args
+        };
         Self {
             tool_name: tool_name.to_string(),
             acp_command: cmd,

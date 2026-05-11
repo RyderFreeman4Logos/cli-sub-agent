@@ -13,7 +13,6 @@ use crate::debate_cmd_resolve::{
 };
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
-use csa_config::ExecutionEnvOptions;
 use csa_core::types::OutputFormat;
 
 use crate::debate_cmd_output::{
@@ -31,6 +30,10 @@ pub(crate) use finalize::{DebateFinalizeContext, finalize_debate_outcome};
 mod dry_run;
 use dry_run::{DebateDryRunSummary, create_debate_dry_run_session, render_debate_dry_run_summary};
 
+#[path = "debate_cmd_fast_mode.rs"]
+mod fast_mode;
+use fast_mode::{debate_execution_env_options, warn_if_fast_mode_has_no_codex_debate_candidate};
+
 #[path = "debate_cmd_readonly.rs"]
 mod readonly;
 pub(crate) use readonly::{ANTI_RECURSION_PREAMBLE, with_readonly_session_env};
@@ -43,15 +46,6 @@ pub(crate) enum DebateMode {
     Heterogeneous,
     /// Same tool used for both Proposer and Critic — degraded diversity.
     SameModelAdversarial,
-}
-
-fn debate_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
-    let options = ExecutionEnvOptions::with_no_flash_fallback();
-    if no_failover {
-        options.with_no_failover()
-    } else {
-        options
-    }
 }
 
 pub(crate) async fn handle_debate(
@@ -346,12 +340,13 @@ pub(crate) async fn handle_debate(
         tier_active,
         tier_filter.as_ref(),
     );
+    warn_if_fast_mode_has_no_codex_debate_candidate(args.fast_but_more_cost, &candidates);
 
     if args.dry_run {
         let Some((attempt_tool, attempt_model_spec)) = candidates.first() else {
             anyhow::bail!("Debate dry-run failed: no debate tier candidates were resolved");
         };
-        let executor = crate::pipeline::build_and_validate_executor(
+        let mut executor = crate::pipeline::build_and_validate_executor(
             attempt_tool,
             attempt_model_spec.as_deref(),
             debate_model.as_deref(),
@@ -365,6 +360,9 @@ pub(crate) async fn handle_debate(
             false,
         )
         .await?;
+        if args.fast_but_more_cost {
+            executor.enable_codex_fast_mode();
+        }
         let summary = DebateDryRunSummary {
             session_id: create_debate_dry_run_session(
                 &project_root,
@@ -397,7 +395,7 @@ pub(crate) async fn handle_debate(
     'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
         candidates.iter().enumerate()
     {
-        let executor = crate::pipeline::build_and_validate_executor(
+        let mut executor = crate::pipeline::build_and_validate_executor(
             attempt_tool,
             attempt_model_spec.as_deref(),
             debate_model.as_deref(),
@@ -411,6 +409,9 @@ pub(crate) async fn handle_debate(
             false,
         )
         .await?;
+        if args.fast_but_more_cost {
+            executor.enable_codex_fast_mode();
+        }
         let base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             debate_execution_env_options(args.no_failover),
