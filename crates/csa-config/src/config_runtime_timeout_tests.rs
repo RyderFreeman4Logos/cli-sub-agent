@@ -13,6 +13,7 @@ fn empty_config() -> ProjectConfig {
         project: ProjectMeta::default(),
         resources: ResourcesConfig::default(),
         acp: AcpConfig::default(),
+        github: None,
         session: SessionConfig::default(),
         memory: MemoryConfig::default(),
         tools: HashMap::new(),

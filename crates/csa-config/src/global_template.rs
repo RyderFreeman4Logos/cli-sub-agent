@@ -41,6 +41,11 @@ max_concurrent = 3  # Default max parallel instances per tool
 # primary_writer_spec = "codex/openai/gpt-5.4/high"
 # tool_priority = ["claude-code", "codex", "gemini-cli", "opencode"]
 
+# Optional GitHub CLI auth override for issue workflows.
+# When unset, CSA falls back to ~/.config/gh-aider for issue reads/comments.
+# [github]
+# config_dir = "/home/you/.config/gh-aider"
+
 # Review workflow: which tool to use for code review.
 # "auto" selects the heterogeneous counterpart of the parent tool:
 #   claude-code parent -> codex, codex parent -> claude-code.

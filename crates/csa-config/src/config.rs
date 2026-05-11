@@ -11,7 +11,9 @@ use crate::config_merge::{
     warn_deprecated_keys,
 };
 pub use crate::config_resources::ResourcesConfig;
-use crate::global::{PreferencesConfig, PreflightConfig, ReviewConfig, SessionWaitConfig};
+use crate::global::{
+    GithubConfig, PreferencesConfig, PreflightConfig, ReviewConfig, SessionWaitConfig,
+};
 use crate::memory::MemoryConfig;
 use crate::paths;
 
@@ -141,6 +143,9 @@ pub struct ProjectConfig {
     /// When set, overrides the global `[preferences].tool_priority`.
     #[serde(default)]
     pub preferences: Option<PreferencesConfig>,
+    /// Optional per-project GitHub auth override for issue workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<GithubConfig>,
     /// Project-level hook overrides for pre/post run commands.
     ///
     /// When set, `.csa/config.toml` hooks take PRIORITY over `hooks.toml`
@@ -721,7 +726,7 @@ init_timeout_seconds = 120
     }
 }
 
-fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Value> {
+pub(crate) fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Value> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
@@ -730,7 +735,7 @@ fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Value> {
                 path = %path.display(),
                 source,
                 error = %err,
-                "Failed to read config while resolving session wait memory warning threshold"
+                "Failed to read config while resolving layered project settings"
             );
             return None;
         }
@@ -743,7 +748,7 @@ fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Value> {
                 path = %path.display(),
                 source,
                 error = %err,
-                "Failed to parse config while resolving session wait memory warning threshold"
+                "Failed to parse config while resolving layered project settings"
             );
             None
         }
@@ -773,6 +778,9 @@ mod preflight_tests;
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "config_tests_github.rs"]
+mod tests_github;
 #[cfg(test)]
 #[path = "config_tests_tail.rs"]
 mod tests_tail;

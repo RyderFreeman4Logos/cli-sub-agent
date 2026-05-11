@@ -65,6 +65,7 @@ mod tests {
             project: ProjectMeta::default(),
             resources: ResourcesConfig::default(),
             acp: Default::default(),
+            github: None,
             session: SessionConfig {
                 transcript_enabled: enabled,
                 transcript_redaction: true,

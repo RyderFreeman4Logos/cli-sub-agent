@@ -22,6 +22,8 @@ pub struct GlobalConfig {
     pub defaults: DefaultsConfig,
     #[serde(default)]
     pub preferences: PreferencesConfig,
+    #[serde(default, skip_serializing_if = "GithubConfig::is_default")]
+    pub github: GithubConfig,
     #[serde(default)]
     pub tools: HashMap<String, GlobalToolConfig>,
     #[serde(default)]
@@ -77,6 +79,20 @@ pub struct GlobalConfig {
     /// Experimental feature flags.
     #[serde(default)]
     pub experimental: ExperimentalConfig,
+}
+
+/// GitHub CLI authentication settings shared across workflows.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GithubConfig {
+    /// Optional `GH_CONFIG_DIR` override for GitHub issue workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
+}
+
+impl GithubConfig {
+    pub fn is_default(&self) -> bool {
+        self.config_dir.is_none()
+    }
 }
 
 /// Global hook behavior settings (`[hooks]` in `~/.config/cli-sub-agent/config.toml`).
@@ -731,6 +747,10 @@ mod tests_priority;
 #[cfg(test)]
 #[path = "global_tests_review_batch.rs"]
 mod tests_review_batch;
+
+#[cfg(test)]
+#[path = "global_tests_github.rs"]
+mod tests_github;
 
 #[cfg(test)]
 #[path = "global_tests_state_dir.rs"]

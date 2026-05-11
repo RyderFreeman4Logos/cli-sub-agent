@@ -7,6 +7,32 @@ use tracing_subscriber::fmt::MakeWriter;
 
 static TEST_TRACING_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct SharedLogBuffer {
     inner: Arc<Mutex<Vec<u8>>>,
@@ -80,6 +106,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
@@ -127,6 +154,28 @@ memory_warn_mb = 8192
 }
 
 #[test]
+fn test_project_config_deserializes_github_override() {
+    let config: ProjectConfig = toml::from_str(
+        r#"
+[project]
+name = "test-project"
+
+[github]
+config_dir = "/tmp/project-gh"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config
+            .github
+            .as_ref()
+            .and_then(|cfg| cfg.config_dir.as_deref()),
+        Some("/tmp/project-gh")
+    );
+}
+
+#[test]
 fn test_resolve_session_wait_memory_warn_logs_parse_failures_at_error_level() {
     let _tracing_guard = TEST_TRACING_LOCK.lock().expect("tracing lock poisoned");
     let dir = tempdir().unwrap();
@@ -150,9 +199,7 @@ fn test_resolve_session_wait_memory_warn_logs_parse_failures_at_error_level() {
 
     let logs = buffer.contents();
     assert!(
-        logs.contains(
-            "Failed to parse config while resolving session wait memory warning threshold"
-        ),
+        logs.contains("Failed to parse config while resolving layered project settings"),
         "unexpected logs: {logs}"
     );
     assert!(
@@ -160,6 +207,21 @@ fn test_resolve_session_wait_memory_warn_logs_parse_failures_at_error_level() {
         "unexpected logs: {logs}"
     );
     assert!(logs.contains("unclosed table"), "unexpected logs: {logs}");
+}
+
+#[test]
+fn test_resolve_github_config_dir_falls_back_to_home_gh_aider() {
+    let dir = tempdir().unwrap();
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", &home);
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", dir.path().join("xdg-config"));
+
+    assert_eq!(
+        ProjectConfig::resolve_github_config_dir_with_paths(None, &project_path).unwrap(),
+        Some(home.join(".config/gh-aider").to_string_lossy().into_owned())
+    );
 }
 
 #[test]
@@ -180,6 +242,7 @@ fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
@@ -209,6 +272,7 @@ fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
@@ -247,6 +311,7 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
@@ -458,6 +523,7 @@ fn test_enforce_tool_enabled_includes_alternatives_when_others_enabled() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
@@ -522,6 +588,7 @@ fn test_enforce_tool_enabled_omits_hint_when_no_alternatives() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

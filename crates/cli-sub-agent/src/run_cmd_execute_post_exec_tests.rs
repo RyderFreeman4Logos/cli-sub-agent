@@ -17,6 +17,7 @@ fn project_config_with_gate(gate: PostExecGateConfig) -> ProjectConfig {
         },
         resources: ResourcesConfig::default(),
         acp: Default::default(),
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         tools: HashMap::new(),

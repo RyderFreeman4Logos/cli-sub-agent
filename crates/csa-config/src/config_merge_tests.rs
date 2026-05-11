@@ -27,7 +27,6 @@ impl Drop for EnvVarGuard {
         }
     }
 }
-
 #[test]
 fn test_merge_tiers_deep_merge() {
     let user_toml: toml::Value = toml::from_str(
@@ -178,6 +177,55 @@ fn test_merged_schema_version_uses_max_when_explicit() {
         .unwrap()
         .unwrap();
     assert_eq!(config.schema_version, 1);
+}
+
+#[test]
+fn test_resolve_github_config_dir_prefers_project_over_user() {
+    let dir = tempdir().unwrap();
+    let user_path = dir.path().join("user.toml");
+    let project_path = dir.path().join("project").join(".csa").join("config.toml");
+    std::fs::create_dir_all(project_path.parent().expect("project config parent")).unwrap();
+    std::fs::write(
+        &user_path,
+        r#"
+[github]
+config_dir = "/tmp/user-gh"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &project_path,
+        r#"
+[github]
+config_dir = "/tmp/project-gh"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        ProjectConfig::resolve_github_config_dir_with_paths(Some(&user_path), &project_path)
+            .unwrap(),
+        Some("/tmp/project-gh".to_string())
+    );
+}
+
+#[test]
+fn test_resolve_github_config_dir_uses_user_when_project_missing() {
+    let dir = tempdir().unwrap();
+    let user_path = dir.path().join("user.toml");
+    let project_path = dir.path().join("project").join(".csa").join("config.toml");
+    std::fs::write(
+        &user_path,
+        r#"
+[github]
+config_dir = "/tmp/user-gh"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        ProjectConfig::resolve_github_config_dir_with_paths(Some(&user_path), &project_path)
+            .unwrap(),
+        Some("/tmp/user-gh".to_string())
+    );
 }
 
 /// Uses gemini-cli + acp as the still-invalid combination after #1128 flipped
