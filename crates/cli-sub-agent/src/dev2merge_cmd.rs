@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 
 use crate::cli::Dev2mergeArgs;
+use crate::gh_env::{is_auth_error, resolve_gh_env};
 use crate::plan_cmd::{PlanRunArgs, PlanRunPipelineSource};
 use crate::plan_cmd_daemon::{PlanRunDispatchInput, dispatch_plan_run};
 
@@ -105,15 +106,25 @@ fn build_forwarded_plan_args(plan_args: &PlanRunArgs, sa_mode: Option<bool>) -> 
 }
 
 async fn fetch_issue_body(issue: u64) -> Result<String> {
+    let cwd = std::env::current_dir().context("Failed to determine current directory")?;
+    let merged_config = csa_config::ProjectConfig::load(&cwd).ok().flatten();
+    let configured_env = merged_config.as_ref().and_then(resolve_gh_env).or_else(|| {
+        csa_config::ProjectConfig::resolve_github_config_dir(&cwd)
+            .map(|dir| ("GH_CONFIG_DIR".to_string(), dir))
+    });
+    fetch_issue_body_with_retry(issue, configured_env.as_ref()).await
+}
+
+async fn fetch_issue_body_with_retry(
+    issue: u64,
+    configured_env: Option<&(String, String)>,
+) -> Result<String> {
     let issue_arg = issue.to_string();
-    let output = Command::new("gh")
-        .env(
-            "GH_CONFIG_DIR",
-            format!(
-                "{}/.config/gh-aider",
-                std::env::var("HOME").unwrap_or_default()
-            ),
-        )
+    let mut command = Command::new("gh");
+    if let Some((key, value)) = configured_env {
+        command.env(key, value);
+    }
+    let output = command
         .args([
             "issue",
             "view",
@@ -129,6 +140,34 @@ async fn fetch_issue_body(issue: u64) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if configured_env.is_some() && is_auth_error(&stderr) {
+            let retry_output = Command::new("gh")
+                .args([
+                    "issue",
+                    "view",
+                    issue_arg.as_str(),
+                    "--json",
+                    "body",
+                    "-q",
+                    ".body",
+                ])
+                .output()
+                .await
+                .with_context(|| {
+                    format!("Failed to retry gh issue view {issue} with default auth")
+                })?;
+            if retry_output.status.success() {
+                return Ok(String::from_utf8_lossy(&retry_output.stdout)
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string());
+            }
+            let retry_stderr = String::from_utf8_lossy(&retry_output.stderr);
+            bail!(
+                "gh issue view {issue} failed with configured auth: {}; retry with default auth also failed: {}",
+                stderr.trim(),
+                retry_stderr.trim()
+            );
+        }
         bail!("gh issue view {issue} failed: {}", stderr.trim());
     }
 

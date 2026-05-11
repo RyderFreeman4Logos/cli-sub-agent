@@ -232,6 +232,7 @@ pub fn init_project(
             },
             resources: ResourcesConfig::default(),
             acp: Default::default(),
+            github: None,
             session: Default::default(),
             memory: Default::default(),
             tools: HashMap::new(),
@@ -264,6 +265,7 @@ pub fn init_project(
                 ..Default::default()
             },
             acp: Default::default(),
+            github: None,
             session: Default::default(),
             memory: Default::default(),
             tools,

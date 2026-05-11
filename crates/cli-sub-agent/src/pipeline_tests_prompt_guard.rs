@@ -157,6 +157,7 @@ fn anti_recursion_guard_honors_custom_max_recursion_depth() {
             aliases: HashMap::new(),
             tool_aliases: HashMap::new(),
             preferences: None,
+            github: None,
             session: Default::default(),
             memory: Default::default(),
             hooks: Default::default(),

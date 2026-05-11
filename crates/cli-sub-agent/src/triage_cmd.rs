@@ -34,13 +34,13 @@ PHASE 1 - GATHER CONTEXT
   needed.
 - Identify current labels, assignees, linked PRs/issues, and whether the report is
   stale or already fixed.
-- For GitHub issue metadata/comment reads or issue comment writes, use:
-  GH_CONFIG_DIR=~/.config/gh-aider gh issue ...
+- For GitHub issue metadata/comment reads or issue comment writes, use the
+  repo's configured GitHub issue auth when one is configured.
 - For label operations, use default gh auth with no GH_CONFIG_DIR override, including:
   gh issue edit ... --add-label ...
   gh label list/create/edit ...
-- Do not mix auth modes: gh issue commands use GH_CONFIG_DIR=~/.config/gh-aider;
-  label ops use default auth.
+- Do not hardcode auth paths. If configured issue auth lacks repo access for a read,
+  fall back to default gh auth. Label ops stay on default auth.
 
 PHASE 2 - RECOMMEND CATEGORY AND STATE
 - Choose exactly one category role: bug or enhancement.
@@ -150,8 +150,9 @@ mod tests {
         assert!(prompt.contains("Files to touch:"));
         assert!(prompt.contains("Acceptance criteria:"));
         assert!(prompt.contains("Test strategy:"));
-        assert!(prompt.contains("GH_CONFIG_DIR=~/.config/gh-aider gh issue"));
-        assert!(prompt.contains("label ops use default auth"));
+        assert!(prompt.contains("configured GitHub issue auth"));
+        assert!(prompt.contains("Do not hardcode auth paths"));
+        assert!(prompt.contains("Label ops stay on default auth"));
         assert!(prompt.contains("established so far:"));
         assert!(prompt.contains("what we still need:"));
         assert!(prompt.ends_with("Issue #1284 should get a triage command"));

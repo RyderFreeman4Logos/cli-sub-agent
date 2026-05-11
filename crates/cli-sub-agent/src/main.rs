@@ -24,6 +24,7 @@ mod error_hints;
 mod error_report;
 mod eval_cmd;
 mod gc;
+mod gh_env;
 mod goal_loop;
 mod hooks_cmd;
 mod hunt_cmd;

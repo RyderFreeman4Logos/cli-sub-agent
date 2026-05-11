@@ -4,6 +4,7 @@ use super::output::{
 use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use crate::review_consensus::build_reviewer_tools;
+pub(crate) use crate::test_env_lock::ScopedEnvVarRestore;
 use crate::test_env_lock::TEST_ENV_LOCK;
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
@@ -11,8 +12,6 @@ use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, Todo
 use std::{collections::HashMap, process::Command};
 use tempfile::TempDir;
 use tokio::sync::OwnedMutexGuard;
-
-pub(crate) use crate::test_env_lock::ScopedEnvVarRestore;
 
 fn assume_review_tools_available() -> (OwnedMutexGuard<()>, ScopedEnvVarRestore) {
     (
@@ -58,6 +57,7 @@ pub(super) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

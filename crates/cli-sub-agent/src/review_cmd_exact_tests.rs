@@ -79,6 +79,7 @@ fn exact_test_project_config_with_enabled_tools(tools: &[&str]) -> csa_config::P
         aliases: std::collections::HashMap::new(),
         tool_aliases: std::collections::HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

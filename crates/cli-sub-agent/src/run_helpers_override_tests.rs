@@ -18,6 +18,7 @@ fn resolve_tool_and_model_model_spec_preserves_explicit_model_override() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

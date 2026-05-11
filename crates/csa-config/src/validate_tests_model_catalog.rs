@@ -37,6 +37,7 @@ fn tier_validate_rejects_cross_provider_opencode_spec() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

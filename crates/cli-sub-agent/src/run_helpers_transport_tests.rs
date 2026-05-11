@@ -21,6 +21,7 @@ fn project_config_with_tool(tool_name: &str, tool_config: ToolConfig) -> Project
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

@@ -48,6 +48,7 @@ fn make_named_failover_config(tier_name: &str, models: &[&str]) -> ProjectConfig
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

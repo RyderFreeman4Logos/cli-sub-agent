@@ -29,6 +29,7 @@ fn project_config_with_tool_transport(tool_name: &str, transport: TransportKind)
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

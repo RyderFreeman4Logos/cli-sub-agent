@@ -154,6 +154,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: prefs,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

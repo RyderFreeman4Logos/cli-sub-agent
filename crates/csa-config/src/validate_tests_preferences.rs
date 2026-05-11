@@ -25,6 +25,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
             tool_priority: vec!["codexx".into(), "codex".into()],
             ..Default::default()
         }),
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

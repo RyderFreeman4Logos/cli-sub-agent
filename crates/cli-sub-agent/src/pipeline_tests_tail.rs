@@ -24,6 +24,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),

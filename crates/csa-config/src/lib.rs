@@ -3,6 +3,7 @@
 pub mod acp;
 pub mod config;
 pub mod config_filesystem_sandbox;
+mod config_github;
 mod config_merge;
 pub mod config_resources;
 mod config_runtime;
@@ -32,6 +33,7 @@ pub use config::{
     SessionConfig, SnapshotTrigger, TierConfig, TierStrategy, ToolConfig,
     ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions, VcsConfig,
 };
+pub type MergedConfig = ProjectConfig;
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
@@ -40,9 +42,9 @@ pub use gc::GcConfig;
 pub use global::{
     AiConfigSymlinkCheckConfig, DEFAULT_KV_CACHE_FREQUENT_POLL_SECS,
     DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions, ExperimentalConfig, GateMode, GateStep,
-    GlobalConfig, GlobalHooksConfig, GlobalMcpConfig, KvCacheConfig, KvCacheValueSource,
-    LEGACY_SESSION_WAIT_FALLBACK_SECS, PreflightConfig, ResolvedKvCacheValue, ReviewConfig,
-    SessionWaitConfig, StateDirConfig, StateDirOnExceed, ToolSelection,
+    GithubConfig, GlobalConfig, GlobalHooksConfig, GlobalMcpConfig, KvCacheConfig,
+    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, PreflightConfig, ResolvedKvCacheValue,
+    ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed, ToolSelection,
 };
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};

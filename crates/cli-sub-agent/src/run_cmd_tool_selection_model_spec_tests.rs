@@ -47,6 +47,7 @@ fn resolve_tool_by_strategy_model_spec_disables_default_tier_and_runtime_fallbac
         aliases: HashMap::new(),
         tool_aliases: HashMap::new(),
         preferences: None,
+        github: None,
         session: Default::default(),
         memory: Default::default(),
         hooks: Default::default(),
