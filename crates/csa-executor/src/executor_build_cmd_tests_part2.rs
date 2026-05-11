@@ -629,6 +629,32 @@ fn test_build_execute_in_command_codex_notify_not_suppressed() {
 }
 
 #[test]
+fn test_build_execute_in_command_codex_fast_mode_adds_enable_flag() {
+    let mut exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    };
+    exec.enable_codex_fast_mode();
+    let work_dir = std::path::Path::new("/tmp/test-project");
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--enable" && pair[1] == "fast_mode"),
+        "codex execute_in fast mode should be enabled via --enable fast_mode; args={args:?}"
+    );
+}
+
+#[test]
 fn test_codex_dual_c_flags_coexist() {
     let exec = Executor::Codex {
         model_override: None,

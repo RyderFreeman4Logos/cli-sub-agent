@@ -33,6 +33,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub force_override_user_config: bool,
     pub force_ignore_tier_setting: bool,
     pub no_failover: bool,
+    pub fast_but_more_cost: bool,
     pub no_fs_sandbox: bool,
     pub extra_writable: &'a [PathBuf],
     pub extra_readable: &'a [PathBuf],
@@ -66,7 +67,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.max_rounds,
         );
 
-        let fix_future = super::execute_review(
+        let fix_future = super::execute_review_with_tier_filter(
             ctx.effective_tool,
             fix_prompt,
             Some(session_id.clone()),
@@ -74,6 +75,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.effective_tier_model_spec.clone(),
             None,
             false,
+            None,
             ctx.review_thinking.clone(),
             format!("fix round {round}/{}", ctx.max_rounds),
             ctx.project_root,
@@ -87,6 +89,8 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.force_override_user_config,
             ctx.force_ignore_tier_setting,
             ctx.no_failover,
+            ctx.fast_but_more_cost,
+            false,
             ctx.no_fs_sandbox,
             false, // fix pass must write — override readonly_project_root
             ctx.extra_writable,

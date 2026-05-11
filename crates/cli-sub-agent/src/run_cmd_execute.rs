@@ -2,19 +2,13 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::process::Stdio;
-use std::time::Duration;
+use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
-use tokio::process::Command;
+use anyhow::Result;
 use tracing::{info, warn};
 
-use csa_config::ProjectConfig;
-use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
+use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
 use csa_lock::SessionLock;
 
 use crate::cli::ReturnTarget;
@@ -28,15 +22,18 @@ use crate::run_cmd_tool_selection::{
     resolve_last_session_selection, resolve_return_target_session_id, resolve_skill_and_prompt,
     resolve_tool_by_strategy,
 };
+#[path = "run_cmd_execute_post_exec_gate.rs"]
+mod post_exec_gate;
 #[path = "run_cmd_execute_routing.rs"]
 mod routing;
 #[path = "run_cmd_execute_context.rs"]
 mod run_context;
+use post_exec_gate::{execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner};
 use routing::{
     RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
     resolve_run_tier_context,
 };
-use run_context::{current_branch_name, finalize_prompt_text};
+use run_context::finalize_prompt_text;
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
@@ -44,169 +41,18 @@ use super::resume::{
     skill_session_description,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PostExecGateCommandOutcome {
-    Exited(Option<i32>),
-    TimedOut,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PostExecGateOutcome {
-    Passed,
-    Skipped,
-}
-
-type PostExecGateFuture = Pin<Box<dyn Future<Output = Result<PostExecGateCommandOutcome>> + Send>>;
-
-fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
-    let prompt = prompt_text.trim_start();
-    prompt.starts_with("# REVIEW:") || prompt.starts_with("# DEBATE:")
-}
-
-fn post_exec_gate_requires_changes(project_root: &Path, skip_on_no_changes: bool) -> Result<bool> {
-    if !skip_on_no_changes || !crate::run_cmd::is_git_worktree(project_root) {
-        return Ok(true);
-    }
-
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["status", "--porcelain"])
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to inspect git status for post-exec gate in {}",
-                project_root.display()
-            )
-        })?;
-
-    if !output.status.success() {
-        return Ok(true);
-    }
-
-    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
-}
-
-fn execute_post_exec_gate_command(
-    command: &str,
-    project_root: &Path,
-    timeout_seconds: u64,
-) -> PostExecGateFuture {
-    let command = command.to_string();
-    let project_root = project_root.to_path_buf();
-
-    Box::pin(async move {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(&command)
-            .current_dir(&project_root)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-
-        #[cfg(unix)]
-        {
-            cmd.process_group(0);
-        }
-
-        let mut child = cmd.spawn().with_context(|| {
-            format!(
-                "failed to spawn post-exec gate command `{command}` in {}",
-                project_root.display()
-            )
-        })?;
-        let child_pid = child.id();
-
-        match tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await {
-            Ok(wait_result) => {
-                let status = wait_result.with_context(|| {
-                    format!(
-                        "failed while waiting for post-exec gate command `{command}` in {}",
-                        project_root.display()
-                    )
-                })?;
-                Ok(PostExecGateCommandOutcome::Exited(status.code()))
-            }
-            Err(_) => {
-                #[cfg(unix)]
-                {
-                    if let Some(pid) = child_pid {
-                        // SAFETY: kill() is async-signal-safe. Negative PID targets the process group.
-                        unsafe {
-                            libc::kill(-(pid as i32), libc::SIGKILL);
-                        }
-                    } else {
-                        let _ = child.start_kill();
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = child.start_kill();
-                }
-
-                let _ = child.wait().await;
-                Ok(PostExecGateCommandOutcome::TimedOut)
-            }
-        }
-    })
-}
-
-async fn maybe_run_post_exec_gate_with_runner<F>(
-    project_root: &Path,
-    prompt_text: &str,
-    session_id: Option<&str>,
-    config: Option<&ProjectConfig>,
-    runner: F,
-) -> Result<PostExecGateOutcome>
-where
-    F: FnOnce(&str, &Path, u64) -> PostExecGateFuture,
-{
-    let gate_config = config
-        .map(|cfg| cfg.run.post_exec_gate.clone())
-        .unwrap_or_default();
-
-    if !gate_config.enabled || is_post_exec_gate_exempt_prompt(prompt_text) {
-        return Ok(PostExecGateOutcome::Skipped);
-    }
-
-    if !post_exec_gate_requires_changes(project_root, gate_config.skip_on_no_changes)? {
-        return Ok(PostExecGateOutcome::Skipped);
-    }
-
-    let branch = current_branch_name(project_root);
-    match runner(
-        &gate_config.command,
-        project_root,
-        gate_config.timeout_seconds,
-    )
-    .await?
+fn warn_if_fast_mode_has_no_codex_run_candidate(
+    fast_but_more_cost: bool,
+    initial_tool: ToolName,
+    runtime_fallback_candidates: &[ToolName],
+) {
+    if fast_but_more_cost
+        && initial_tool != ToolName::Codex
+        && !runtime_fallback_candidates.contains(&ToolName::Codex)
     {
-        PostExecGateCommandOutcome::Exited(Some(0)) => Ok(PostExecGateOutcome::Passed),
-        PostExecGateCommandOutcome::Exited(code) => anyhow::bail!(
-            "csa: post-exec gate failed (exit={}).\n\
-             gate command: {}\n\
-             cwd: {}\n\
-             employee session: {}\n\
-             branch: {}\n\
-             next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
-            code.map_or_else(|| "signal".to_string(), |value| value.to_string()),
-            gate_config.command,
-            project_root.display(),
-            session_id.unwrap_or("(ephemeral)"),
-            branch,
-        ),
-        PostExecGateCommandOutcome::TimedOut => anyhow::bail!(
-            "csa: post-exec gate timed out after {} seconds.\n\
-             gate command: {}\n\
-             cwd: {}\n\
-             employee session: {}\n\
-             branch: {}\n\
-             next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
-            gate_config.timeout_seconds,
-            gate_config.command,
-            project_root.display(),
-            session_id.unwrap_or("(ephemeral)"),
-            branch,
-        ),
+        eprintln!(
+            "warning: --fast-but-more-cost only affects codex; no codex run attempt is in the resolved candidate set."
+        );
     }
 }
 
@@ -237,6 +83,7 @@ pub(crate) async fn handle_run(
     force: bool,
     force_override_user_config: bool,
     no_failover: bool,
+    fast_but_more_cost: bool,
     wait: bool,
     idle_timeout: Option<u64>,
     initial_response_timeout: Option<u64>,
@@ -525,6 +372,11 @@ pub(crate) async fn handle_run(
     let resolved_model = strategy_result.model;
     let strategy_resolved_tier_name = strategy_result.resolved_tier_name;
     let resolved_tool = strategy_result.tool;
+    warn_if_fast_mode_has_no_codex_run_candidate(
+        fast_but_more_cost,
+        resolved_tool,
+        &heterogeneous_runtime_fallback_candidates,
+    );
     if session_arg.is_none()
         && !is_fork
         && !fork_call
@@ -665,6 +517,7 @@ pub(crate) async fn handle_run(
         force_override_user_config,
         force_ignore_tier_setting,
         no_failover,
+        fast_but_more_cost,
         wait,
         idle_timeout_seconds,
         cli_idle_timeout: idle_timeout,
@@ -794,7 +647,3 @@ mod pre_exec_tests;
 #[cfg(test)]
 #[path = "run_cmd_execute_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "run_cmd_execute_post_exec_tests.rs"]
-mod post_exec_tests;

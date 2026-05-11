@@ -62,6 +62,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) force_override_user_config: bool,
     pub(crate) force_ignore_tier_setting: bool,
     pub(crate) no_failover: bool,
+    pub(crate) fast_but_more_cost: bool,
     pub(crate) wait: bool,
     pub(crate) idle_timeout_seconds: u64,
     pub(crate) cli_idle_timeout: Option<u64>,
@@ -156,7 +157,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         attempts += 1;
         let mut fresh_spawn_preflight_override = false;
 
-        let executor = pipeline::build_and_validate_executor(
+        let mut executor = pipeline::build_and_validate_executor(
             &current_tool,
             current_model_spec.as_deref(),
             current_model.as_deref(),
@@ -170,6 +171,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             matches!(request.strategy, ToolSelectionStrategy::Explicit(_)),
         )
         .await?;
+        if request.fast_but_more_cost {
+            executor.enable_codex_fast_mode();
+        }
 
         let tool_name_str = executor.tool_name();
         let initial_response_timeout_seconds = resolve_attempt_initial_response_timeout_seconds(

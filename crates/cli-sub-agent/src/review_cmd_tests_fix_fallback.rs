@@ -111,6 +111,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         force_override_user_config: false,
         force_ignore_tier_setting: false,
         no_failover: false,
+        fast_but_more_cost: false,
         no_fs_sandbox: false,
         extra_writable: &[],
         extra_readable: &[],

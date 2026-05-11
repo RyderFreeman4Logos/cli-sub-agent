@@ -5,7 +5,7 @@ impl Executor {
             runtime_metadata, ..
         } = self
         {
-            *runtime_metadata = CodexRuntimeMetadata::from_transport(transport);
+            *runtime_metadata = runtime_metadata.with_transport(transport);
         }
     }
 
@@ -16,6 +16,25 @@ impl Executor {
                 runtime_metadata, ..
             } => Some(runtime_metadata.transport_mode()),
             _ => None,
+        }
+    }
+
+    pub fn enable_codex_fast_mode(&mut self) {
+        if let Self::Codex {
+            runtime_metadata, ..
+        } = self
+        {
+            *runtime_metadata = runtime_metadata.with_fast_mode(true);
+        }
+    }
+
+    #[must_use]
+    pub fn codex_fast_mode_enabled(&self) -> bool {
+        match self {
+            Self::Codex {
+                runtime_metadata, ..
+            } => runtime_metadata.fast_mode_enabled(),
+            _ => false,
         }
     }
 

@@ -641,6 +641,13 @@ fn debate_cli_parses_model_spec_and_no_failover_flags() {
 }
 
 #[test]
+fn debate_cli_parses_fast_but_more_cost_flag() {
+    let args = parse_debate_args(&["csa", "debate", "--fast-but-more-cost", "question"]);
+
+    assert!(args.fast_but_more_cost);
+}
+
+#[test]
 fn debate_rejects_unknown_codex_model_at_clap_parse() {
     use clap::Parser;
 

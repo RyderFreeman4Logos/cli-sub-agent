@@ -4,7 +4,29 @@ use tokio::task::JoinSet;
 use tracing::error;
 
 use super::output::ReviewerOutcome;
+use super::output::{
+    GEMINI_AUTH_PROMPT_STATUS_REASON, persist_review_meta, persist_review_verdict,
+};
 use super::result_handling::build_unavailable_reviewer_outcome;
+use csa_session::state::ReviewSessionMeta;
+use std::path::Path;
+
+pub(super) fn warn_if_fast_mode_has_no_codex_reviewer(
+    fast_but_more_cost: bool,
+    reviewer_tools: &[ToolName],
+    tier_reviewer_specs: &[crate::run_helpers::TierToolResolution],
+) {
+    if fast_but_more_cost
+        && !reviewer_tools.contains(&ToolName::Codex)
+        && !tier_reviewer_specs
+            .iter()
+            .any(|resolution| resolution.tool == ToolName::Codex)
+    {
+        eprintln!(
+            "warning: --fast-but-more-cost only affects codex; no codex review attempt is in the resolved candidate set."
+        );
+    }
+}
 
 pub(super) async fn collect_reviewer_outcomes(
     join_set: &mut JoinSet<Result<ReviewerOutcome>>,
@@ -42,6 +64,48 @@ pub(super) async fn collect_reviewer_outcomes(
     }
     outcomes.sort_by_key(|o| o.reviewer_index);
     Ok(outcomes)
+}
+
+pub(super) fn persist_multi_review_sidecars(
+    project_root: &Path,
+    scope: &str,
+    outcomes: &[ReviewerOutcome],
+    head_sha: &str,
+    review_iterations: u32,
+    diff_fingerprint: Option<String>,
+) {
+    let review_meta_timestamp = chrono::Utc::now();
+
+    for outcome in outcomes {
+        let review_meta = ReviewSessionMeta {
+            session_id: outcome.session_id.clone(),
+            head_sha: head_sha.to_string(),
+            decision: super::flow::review_decision_from_verdict(outcome.verdict)
+                .as_str()
+                .to_string(),
+            verdict: outcome.verdict.to_string(),
+            status_reason: (outcome.verdict == "UNCERTAIN"
+                && outcome
+                    .diagnostic
+                    .as_deref()
+                    .is_some_and(|d| d.contains("OAuth browser prompt")))
+            .then(|| GEMINI_AUTH_PROMPT_STATUS_REASON.to_string()),
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: outcome.tool.as_str().to_string(),
+            scope: scope.to_string(),
+            exit_code: outcome.exit_code,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations,
+            timestamp: review_meta_timestamp,
+            diff_fingerprint: diff_fingerprint.clone(),
+        };
+        persist_review_meta(project_root, &review_meta);
+        super::findings_toml::persist_review_findings_toml(project_root, &review_meta);
+        persist_review_verdict(project_root, &review_meta, &[], Vec::new());
+    }
 }
 
 fn synthesize_unavailable_outcomes(

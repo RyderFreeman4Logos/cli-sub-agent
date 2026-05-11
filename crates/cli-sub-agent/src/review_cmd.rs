@@ -25,10 +25,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
 mod output;
-use output::{
-    GEMINI_AUTH_PROMPT_STATUS_REASON, is_worktree_submodule, persist_review_meta,
-    persist_review_verdict, print_reviewer_outcomes,
-};
+use output::{is_worktree_submodule, print_reviewer_outcomes};
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]
@@ -62,9 +59,9 @@ pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
 #[cfg(test)]
 use bug_class_pipeline::try_resolve_review_iterations;
 use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
-use execute::{compute_diff_fingerprint, execute_review, execute_review_with_tier_filter};
-use findings_toml::persist_review_findings_toml;
-use flow::review_decision_from_verdict;
+#[cfg(test)]
+use execute::execute_review;
+use execute::{compute_diff_fingerprint, execute_review_with_tier_filter};
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use flow::{ execute_review_for_tests, persist_review_sidecars_if_session_exists, should_run_fix_loop };
@@ -385,6 +382,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             args.force_override_user_config,
             args.force_ignore_tier_setting,
             args.no_failover,
+            args.fast_but_more_cost,
+            true,
             args.no_fs_sandbox,
             readonly_project_root,
             &args.extra_writable,
@@ -527,6 +526,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             force_override_user_config: args.force_override_user_config,
             force_ignore_tier_setting: args.force_ignore_tier_setting,
             no_failover: args.no_failover,
+            fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,
             extra_writable: &args.extra_writable,
             extra_readable: &args.extra_readable,
@@ -591,6 +591,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let reviewer_tools = reviewer_pool.reviewer_tools;
     let reviewer_tool_plan = reviewer_tools.clone();
     let tier_reviewer_specs = reviewer_pool.tier_reviewer_specs;
+    multi::warn_if_fast_mode_has_no_codex_reviewer(
+        args.fast_but_more_cost,
+        &reviewer_tool_plan,
+        &tier_reviewer_specs,
+    );
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
@@ -614,6 +619,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let reviewer_routing = review_routing.clone();
 
         let reviewer_force_override = args.force_override_user_config;
+        let reviewer_force_ignore_tier = args.force_ignore_tier_setting;
+        let reviewer_no_failover = args.no_failover;
+        let reviewer_fast_but_more_cost = args.fast_but_more_cost;
         let reviewer_no_fs_sandbox = args.no_fs_sandbox;
         let reviewer_extra_writable = args.extra_writable.clone();
         let reviewer_extra_readable = args.extra_readable.clone();
@@ -640,7 +648,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             reviewer_tool.as_str(),
         );
         join_set.spawn(async move {
-            let session_result = execute_review(
+            let session_result = execute_review_with_tier_filter(
                 reviewer_tool,
                 reviewer_prompt,
                 None,
@@ -648,6 +656,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_model_spec,
                 reviewer_tier_name,
                 false,
+                None,
                 reviewer_thinking,
                 reviewer_description,
                 &reviewer_project_root,
@@ -659,8 +668,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 idle_timeout_seconds,
                 reviewer_initial_response_timeout_seconds,
                 reviewer_force_override,
-                args.force_ignore_tier_setting,
-                args.no_failover,
+                reviewer_force_ignore_tier,
+                reviewer_no_failover,
+                reviewer_fast_but_more_cost,
+                false,
                 reviewer_no_fs_sandbox,
                 readonly_project_root,
                 &reviewer_extra_writable,
@@ -678,40 +689,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .first()
         .map(|outcome| resolve_review_iterations(&project_root, &outcome.session_id))
         .unwrap_or(1);
-    let review_meta_timestamp = chrono::Utc::now();
     let head_sha = csa_session::detect_git_head(&project_root).unwrap_or_default();
     let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
-
-    for outcome in &outcomes {
-        let review_meta = ReviewSessionMeta {
-            session_id: outcome.session_id.clone(),
-            head_sha: head_sha.clone(),
-            decision: review_decision_from_verdict(outcome.verdict)
-                .as_str()
-                .to_string(),
-            verdict: outcome.verdict.to_string(),
-            status_reason: (outcome.verdict == "UNCERTAIN"
-                && outcome
-                    .diagnostic
-                    .as_deref()
-                    .is_some_and(|d| d.contains("OAuth browser prompt")))
-            .then(|| GEMINI_AUTH_PROMPT_STATUS_REASON.to_string()),
-            routed_to: None,
-            primary_failure: None,
-            failure_reason: None,
-            tool: outcome.tool.as_str().to_string(),
-            scope: scope.clone(),
-            exit_code: outcome.exit_code,
-            fix_attempted: false,
-            fix_rounds: 0,
-            review_iterations,
-            timestamp: review_meta_timestamp,
-            diff_fingerprint: diff_fingerprint.clone(),
-        };
-        persist_review_meta(&project_root, &review_meta);
-        persist_review_findings_toml(&project_root, &review_meta);
-        persist_review_verdict(&project_root, &review_meta, &[], Vec::new());
-    }
+    multi::persist_multi_review_sidecars(
+        &project_root,
+        &scope,
+        &outcomes,
+        &head_sha,
+        review_iterations,
+        diff_fingerprint.clone(),
+    );
 
     let responses: Vec<AgentResponse> = outcomes
         .iter()

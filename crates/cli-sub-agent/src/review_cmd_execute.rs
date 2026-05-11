@@ -85,7 +85,23 @@ fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
     }
 }
 
+fn warn_if_fast_mode_has_no_codex_review_candidate(
+    fast_but_more_cost: bool,
+    warn_no_codex_fast_mode: bool,
+    candidates: &[(ToolName, Option<String>)],
+) {
+    if fast_but_more_cost
+        && warn_no_codex_fast_mode
+        && !candidates.iter().any(|(tool, _)| *tool == ToolName::Codex)
+    {
+        eprintln!(
+            "warning: --fast-but-more-cost only affects codex; no codex review attempt is in the resolved candidate set."
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) async fn execute_review(
     tool: ToolName,
     prompt: String,
@@ -134,6 +150,8 @@ pub(crate) async fn execute_review(
         force_override_user_config,
         force_ignore_tier_setting,
         no_failover,
+        false,
+        false,
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
@@ -165,6 +183,8 @@ pub(crate) async fn execute_review_with_tier_filter(
     force_override_user_config: bool,
     force_ignore_tier_setting: bool,
     no_failover: bool,
+    fast_but_more_cost: bool,
+    warn_no_codex_fast_mode: bool,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
@@ -188,12 +208,17 @@ pub(crate) async fn execute_review_with_tier_filter(
         tier_fallback_enabled,
         tier_filter.as_ref(),
     );
+    warn_if_fast_mode_has_no_codex_review_candidate(
+        fast_but_more_cost,
+        warn_no_codex_fast_mode,
+        &candidates,
+    );
     let mut failures = Vec::new();
 
     for (attempt_index, (attempt_tool, attempt_model_spec)) in candidates.iter().enumerate() {
         let enforce_tier =
             tier_name.is_some() && attempt_model_spec.is_some() && !force_ignore_tier_setting;
-        let executor = crate::pipeline::build_and_validate_executor(
+        let mut executor = crate::pipeline::build_and_validate_executor(
             attempt_tool,
             attempt_model_spec.as_deref(),
             model.as_deref(),
@@ -207,6 +232,9 @@ pub(crate) async fn execute_review_with_tier_filter(
             false,
         )
         .await?;
+        if fast_but_more_cost {
+            executor.enable_codex_fast_mode();
+        }
 
         let can_edit =
             project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));

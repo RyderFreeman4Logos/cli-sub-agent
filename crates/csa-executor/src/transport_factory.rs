@@ -287,9 +287,10 @@ impl TransportFactory {
                          transport for investigation."
                         );
                     }
-                    Ok(Box::new(AcpTransport::new(
+                    Ok(Box::new(AcpTransport::new_with_codex_fast_mode(
                         executor.tool_name(),
                         session_config,
+                        executor.codex_fast_mode_enabled(),
                     )))
                 }
             }
