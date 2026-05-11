@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 use std::os::fd::AsRawFd;
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
@@ -251,7 +252,7 @@ where
                 )?;
                 synthetic = reconciled.synthetic;
                 if reconciled.result_became_available {
-                    loaded_result = load_completed_daemon_result_adaptive(
+                    loaded_result = load_completed_daemon_result_with_fallback(
                         effective_root,
                         &resolved.session_id,
                         &session_dir,
@@ -274,7 +275,7 @@ where
             return Ok(exit_code);
         }
 
-        if let Some(result) = load_completed_daemon_result_adaptive(
+        if let Some(result) = load_completed_daemon_result_with_fallback(
             effective_root,
             &resolved.session_id,
             &session_dir,
@@ -299,7 +300,7 @@ where
         let reconciled =
             reconcile_dead_active_session(effective_root, &resolved.session_id, "session wait")?;
         if reconciled.result_became_available
-            && let Some(result) = load_completed_daemon_result_adaptive(
+            && let Some(result) = load_completed_daemon_result_with_fallback(
                 effective_root,
                 &resolved.session_id,
                 &session_dir,
@@ -328,7 +329,7 @@ where
         }
 
         if !session_has_terminal_process(&session_dir) {
-            if let Some(result) = load_completed_daemon_result_adaptive(
+            if let Some(result) = load_completed_daemon_result_with_fallback(
                 effective_root,
                 &resolved.session_id,
                 &session_dir,
@@ -594,6 +595,61 @@ fn load_completed_daemon_result_adaptive(
     } else {
         load_completed_daemon_result(project_root, session_id, session_dir)
     }
+}
+
+/// Check for result.toml in the output/ subdirectory as fallback completion detection.
+/// This handles cases where the session completed and wrote output/result.toml but
+/// the main result.toml wasn't created (e.g., when state.toml turn_count stays 0).
+fn load_output_result_fallback(
+    session_dir: &std::path::Path,
+) -> Result<Option<csa_session::SessionResult>> {
+    let output_result_path = session_dir
+        .join("output")
+        .join(csa_session::result::RESULT_FILE_NAME);
+    if !output_result_path.is_file() {
+        return Ok(None);
+    }
+
+    tracing::debug!(
+        path = %output_result_path.display(),
+        "Found output/result.toml as fallback completion signal"
+    );
+
+    let contents = fs::read_to_string(&output_result_path)?;
+    let result: csa_session::SessionResult = toml::from_str(&contents)?;
+    Ok(Some(result))
+}
+
+/// Enhanced version of load_completed_daemon_result_with_fallback that includes
+/// fallback check for output/result.toml when main result.toml doesn't exist.
+fn load_completed_daemon_result_with_fallback(
+    project_root: &std::path::Path,
+    session_id: &str,
+    session_dir: &std::path::Path,
+    is_cross_project: bool,
+) -> Result<Option<csa_session::SessionResult>> {
+    // First try the normal result loading path
+    if let Some(result) = load_completed_daemon_result_adaptive(
+        project_root,
+        session_id,
+        session_dir,
+        is_cross_project,
+    )? {
+        return Ok(Some(result));
+    }
+
+    // If no main result found and daemon is not alive, check output/result.toml as fallback
+    if !session_has_terminal_process(session_dir)
+        && let Some(output_result) = load_output_result_fallback(session_dir)?
+    {
+        tracing::info!(
+            session_id,
+            "Session completion detected via output/result.toml fallback"
+        );
+        return Ok(Some(output_result));
+    }
+
+    Ok(None)
 }
 
 fn emit_wait_completion_signal(
