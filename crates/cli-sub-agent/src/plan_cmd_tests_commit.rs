@@ -142,7 +142,7 @@ async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
     };
 
     let vars = HashMap::new();
-    let result = execute_step(&step, &vars, project_root, None, None).await;
+    let result = execute_step(&step, &vars, project_root, None, None, None).await;
 
     assert_eq!(
         result.exit_code, 0,

@@ -30,7 +30,7 @@ fn resolve_step_tool_all_explicit_tools() {
             loop_var: None,
             session: None,
         };
-        let target = resolve_step_tool(&step, None).unwrap();
+        let target = resolve_step_tool(&step, None, None, None).unwrap();
         if expect_direct_bash {
             assert!(
                 matches!(target, StepTarget::DirectBash),
@@ -92,6 +92,7 @@ async fn execute_step_tool_override_replaces_csa_tool() {
         tmp.path(),
         None,
         Some(&ToolName::ClaudeCode),
+        None,
     )
     .await;
     assert_eq!(
@@ -118,7 +119,7 @@ async fn execute_step_note_skips_without_dispatch() {
     };
     let vars = HashMap::new();
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_eq!(result.exit_code, 0);
     assert!(result.skipped, "note steps must not dispatch to AI tools");
@@ -142,7 +143,7 @@ async fn execute_step_manual_returns_resumable_handoff() {
     };
     let vars = HashMap::new();
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_eq!(result.exit_code, 0);
     assert!(!result.skipped);
@@ -179,7 +180,7 @@ async fn execute_step_await_user_returns_instructions() {
     };
     let vars = HashMap::new();
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_eq!(result.exit_code, 0);
     assert!(!result.skipped);
@@ -215,7 +216,7 @@ fn tool_override_clears_model_spec() {
         loop_var: None,
         session: None,
     };
-    let target = resolve_step_tool(&step, None).unwrap();
+    let target = resolve_step_tool(&step, None, None, None).unwrap();
     // Without override: should be CsaTool with codex
     assert!(matches!(
         target,
@@ -263,7 +264,7 @@ fn tool_override_does_not_affect_weave_include() {
         loop_var: None,
         session: None,
     };
-    let target = resolve_step_tool(&step, None).unwrap();
+    let target = resolve_step_tool(&step, None, None, None).unwrap();
     // Simulate override: WeaveInclude must pass through unchanged
     let override_tool = ToolName::ClaudeCode;
     let overridden = match target {
@@ -339,7 +340,7 @@ async fn execute_step_bash_captures_stdout_in_output() {
         session: None,
     };
     let vars = HashMap::new();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert_eq!(result.exit_code, 0);
     assert!(
         result.output.is_some(),
@@ -470,7 +471,7 @@ async fn execute_step_csa_empty_prompt_warns_without_panic() {
         session: None,
     };
     let vars = HashMap::new();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     // Step must attempt execution (not silently skipped).
     assert!(!result.skipped, "empty-prompt CSA step must not be skipped");
     // The warning code path is exercised (visible in test stdout as
@@ -480,4 +481,74 @@ async fn execute_step_csa_empty_prompt_warns_without_panic() {
         result.exit_code == 0 || result.error.is_some(),
         "CSA step must either succeed or report an error"
     );
+}
+
+#[test]
+fn resolve_step_tool_respects_tool_override() {
+    use super::plan_cmd_steps::resolve_step_tool;
+
+    let step = PlanStep {
+        id: 1,
+        title: "test step".to_string(),
+        tool: Some("gemini-cli".to_string()), // Step explicitly asks for gemini-cli
+        tier: None,
+        prompt: "test prompt".to_string(),
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+
+    // Without override: should resolve to gemini-cli as specified in step.tool
+    let target_no_override = resolve_step_tool(&step, None, None, None).unwrap();
+    assert!(matches!(
+        target_no_override,
+        StepTarget::CsaTool { tool_name: ToolName::GeminiCli, .. }
+    ));
+
+    // With tool override: should use codex instead of gemini-cli
+    let tool_override = ToolName::Codex;
+    let target_with_override = resolve_step_tool(&step, None, Some(&tool_override), None).unwrap();
+    assert!(matches!(
+        target_with_override,
+        StepTarget::CsaTool { tool_name: ToolName::Codex, .. }
+    ));
+}
+
+#[test]
+fn resolve_step_tool_respects_model_spec_override() {
+    use super::plan_cmd_steps::resolve_step_tool;
+
+    let step = PlanStep {
+        id: 1,
+        title: "test step".to_string(),
+        tool: Some("gemini-cli".to_string()),
+        tier: None,
+        prompt: "test prompt".to_string(),
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+
+    let tool_override = ToolName::Codex;
+    let model_spec_override = "codex/openai/gpt-5.4/high".to_string();
+
+    let target = resolve_step_tool(
+        &step,
+        None,
+        Some(&tool_override),
+        Some(&model_spec_override)
+    ).unwrap();
+
+    assert!(matches!(
+        target,
+        StepTarget::CsaTool { tool_name: ToolName::Codex, .. }
+    ));
+
+    if let StepTarget::CsaTool { model_spec, .. } = target {
+        assert_eq!(model_spec, Some(model_spec_override));
+    }
 }

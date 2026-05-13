@@ -9,6 +9,7 @@ fn make_args() -> PlanRunArgs {
         pattern: None,
         vars: vec![],
         tool_override: None,
+        model_spec_override: None,
         dry_run: false,
         chunked: false,
         resume: None,

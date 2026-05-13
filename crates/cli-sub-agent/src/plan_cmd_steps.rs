@@ -75,6 +75,7 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) workflow_path: &'a Path,
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) tool_override: Option<&'a ToolName>,
+    pub(super) model_spec_override: Option<&'a String>,
     pub(super) journal: &'a mut PlanRunJournal,
     pub(super) journal_path: Option<&'a Path>,
     pub(super) resume_completed_steps: &'a HashSet<usize>,
@@ -83,11 +84,18 @@ pub(super) struct PlanRunContext<'a> {
 }
 
 /// Resolve a step target from its annotations and config.
-/// Order: explicit `step.tool`, then `step.tier`, then configured default or codex fallback.
+/// Order: CLI overrides, explicit `step.tool`, then `step.tier`, then configured default or codex fallback.
 pub(crate) fn resolve_step_tool(
     step: &PlanStep,
     config: Option<&ProjectConfig>,
+    tool_override: Option<&ToolName>,
+    model_spec_override: Option<&String>,
 ) -> Result<StepTarget> {
+    // 0. CLI overrides take precedence over everything
+    if let Some(tool) = tool_override {
+        return Ok(StepTarget::csa(*tool, model_spec_override.cloned()));
+    }
+
     // 1. Explicit tool annotation
     if let Some(ref tool_str) = step.tool {
         let tool_lower = tool_str.to_lowercase();
@@ -199,6 +207,7 @@ pub(crate) async fn execute_plan(
         workflow_path: &workflow_path,
         config,
         tool_override,
+        model_spec_override: None,
         journal: &mut journal,
         journal_path: None,
         resume_completed_steps: &completed,
@@ -250,6 +259,7 @@ pub(super) async fn execute_plan_with_journal(
             run_ctx.workflow_path,
             run_ctx.config,
             run_ctx.tool_override,
+            run_ctx.model_spec_override,
             run_ctx.no_fs_sandbox,
         )
         .await;
@@ -400,6 +410,7 @@ pub(crate) async fn execute_step(
     project_root: &Path,
     config: Option<&ProjectConfig>,
     tool_override: Option<&ToolName>,
+    model_spec_override: Option<&String>,
 ) -> StepResult {
     let workflow_path_buf = project_root.join("workflow.toml");
     execute_step_with_workflow(
@@ -409,6 +420,7 @@ pub(crate) async fn execute_step(
         &workflow_path_buf,
         config,
         tool_override,
+        model_spec_override,
         false,
     )
     .await
@@ -421,6 +433,7 @@ pub(crate) async fn execute_step_with_workflow(
     workflow_path: &Path,
     config: Option<&ProjectConfig>,
     tool_override: Option<&ToolName>,
+    model_spec_override: Option<&String>,
     no_fs_sandbox: bool,
 ) -> StepResult {
     let start = Instant::now();
@@ -465,7 +478,7 @@ pub(crate) async fn execute_step_with_workflow(
     }
 
     // Resolve execution target (needed for weave-include check)
-    let target = match resolve_step_tool(step, config) {
+    let target = match resolve_step_tool(step, config, tool_override, model_spec_override) {
         Ok(t) => t,
         Err(e) => {
             error!("{} - Failed to resolve tool: {}", label, e);

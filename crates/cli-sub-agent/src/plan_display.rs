@@ -29,7 +29,7 @@ pub(crate) fn print_plan(
 
     println!("Steps ({}):", plan.steps.len());
     for step in &plan.steps {
-        let tool_info = match resolve_step_tool(step, config) {
+        let tool_info = match resolve_step_tool(step, config, None, None) {
             Ok(StepTarget::DirectBash) => "bash (direct)".into(),
             Ok(StepTarget::WeaveInclude) => "weave (include)".into(),
             Ok(StepTarget::Note) => "note (non-executable)".into(),

@@ -33,6 +33,7 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
         &workflow_path,
         None,
         None,
+        None,
         false,
     )
     .await;
