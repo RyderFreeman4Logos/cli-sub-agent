@@ -406,6 +406,7 @@ pub(crate) struct PlanRunArgs {
     pub chunked: bool,
     pub resume: Option<String>,
     pub cd: Option<String>,
+    pub no_fs_sandbox: bool,
     pub current_depth: u32,
     pub pipeline_source: PlanRunPipelineSource,
 }
@@ -427,6 +428,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         chunked,
         resume,
         cd,
+        no_fs_sandbox,
         current_depth,
         pipeline_source,
     } = args;
@@ -579,6 +581,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         journal_path: Some(&journal_path),
         resume_completed_steps: &resume_context.completed_steps,
         chunked,
+        no_fs_sandbox,
     };
 
     let results =

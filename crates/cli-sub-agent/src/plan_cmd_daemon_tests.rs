@@ -13,6 +13,7 @@ fn make_args() -> PlanRunArgs {
         chunked: false,
         resume: None,
         cd: None,
+        no_fs_sandbox: false,
         current_depth: 0,
         pipeline_source: crate::plan_cmd::PlanRunPipelineSource::DirectPlanRun,
     }
@@ -85,6 +86,19 @@ fn forwarded_args_drop_foreground_flag() {
     // forwarded to the daemon child (which IS the worker, not a re-spawn).
     let forwarded = build_forwarded_plan_args(&argv);
     assert_eq!(forwarded, vec!["workflow.toml"]);
+}
+
+#[test]
+fn forwarded_args_preserve_no_fs_sandbox_flag() {
+    let argv = vec![
+        "csa".to_string(),
+        "plan".to_string(),
+        "run".to_string(),
+        "--no-fs-sandbox".to_string(),
+        "workflow.toml".to_string(),
+    ];
+    let forwarded = build_forwarded_plan_args(&argv);
+    assert_eq!(forwarded, vec!["--no-fs-sandbox", "workflow.toml"]);
 }
 
 #[test]

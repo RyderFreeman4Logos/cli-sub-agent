@@ -13,7 +13,8 @@ use csa_hooks::format_next_step_directive;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
 
 use super::plan_cmd_exec::{
-    StepExecutionOutcome, execute_bash_step, execute_csa_step, run_with_heartbeat,
+    CsaStepExecutionOptions, StepExecutionOutcome, execute_bash_step, execute_csa_step,
+    run_with_heartbeat,
 };
 use super::plan_cmd_flow::{
     OrchestratorHandoff, find_next_step, format_orchestrator_message, format_plan_resume_command,
@@ -25,12 +26,8 @@ use super::{
 };
 
 const OUTPUT_ASSIGNMENT_MARKER_PREFIX: &str = "CSA_VAR:";
-
 /// Resolved execution target for a plan step.
-///
-/// Separates direct shell execution from AI tool dispatch so the routing
-/// is type-safe — `tool = "bash"` can never accidentally fall through to
-/// an AI tool's interactive confirmation flow.
+/// Keeps direct shell execution separate from AI dispatch so `tool = "bash"` never falls through.
 pub(crate) enum StepTarget {
     /// Execute bash code block directly via `tokio::process::Command`.
     DirectBash,
@@ -67,11 +64,9 @@ pub(crate) struct StepResult {
     pub(crate) duration_secs: f64,
     pub(crate) skipped: bool,
     pub(crate) error: Option<String>,
-    /// Captured output from step execution (stdout for bash, output/summary for CSA).
-    /// Available to subsequent steps as `${STEP_<id>_OUTPUT}`.
+    /// Captured step output, exposed to later steps as `${STEP_<id>_OUTPUT}`.
     pub(crate) output: Option<String>,
-    /// CSA meta session ID produced by this step.
-    /// Available to subsequent steps as `${STEP_<id>_SESSION}`.
+    /// CSA meta session ID, exposed to later steps as `${STEP_<id>_SESSION}`.
     pub(crate) session_id: Option<String>,
 }
 
@@ -84,14 +79,11 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) journal_path: Option<&'a Path>,
     pub(super) resume_completed_steps: &'a HashSet<usize>,
     pub(super) chunked: bool,
+    pub(super) no_fs_sandbox: bool,
 }
 
-/// Resolve a step's execution target from its annotations and config.
-///
-/// Resolution order:
-/// 1. `step.tool` — explicit tool name (e.g. "bash", "claude-code", "codex")
-/// 2. `step.tier` — tier name looked up in config's `tiers` map
-/// 3. Fallback: default configured AI tool, or codex if no config is present
+/// Resolve a step target from its annotations and config.
+/// Order: explicit `step.tool`, then `step.tier`, then configured default or codex fallback.
 pub(crate) fn resolve_step_tool(
     step: &PlanStep,
     config: Option<&ProjectConfig>,
@@ -211,6 +203,7 @@ pub(crate) async fn execute_plan(
         journal_path: None,
         resume_completed_steps: &completed,
         chunked: false,
+        no_fs_sandbox: false,
     };
     execute_plan_with_journal(plan, variables, &mut run_ctx).await
 }
@@ -257,6 +250,7 @@ pub(super) async fn execute_plan_with_journal(
             run_ctx.workflow_path,
             run_ctx.config,
             run_ctx.tool_override,
+            run_ctx.no_fs_sandbox,
         )
         .await;
         let orchestrator_handoff = orchestrator_handoff_mode(step);
@@ -413,6 +407,7 @@ pub(crate) async fn execute_step(
         &workflow_path_buf,
         config,
         tool_override,
+        false,
     )
     .await
 }
@@ -424,6 +419,7 @@ pub(crate) async fn execute_step_with_workflow(
     workflow_path: &Path,
     config: Option<&ProjectConfig>,
     tool_override: Option<&ToolName>,
+    no_fs_sandbox: bool,
 ) -> StepResult {
     let start = Instant::now();
     let label = format!("[{}/{}]", step.id, step.title);
@@ -643,10 +639,13 @@ pub(crate) async fn execute_step_with_workflow(
                         &label,
                         prompt,
                         tool_name,
-                        model_spec.as_deref(),
-                        csa_session.as_deref(),
                         project_root,
                         config,
+                        CsaStepExecutionOptions {
+                            model_spec: model_spec.as_deref(),
+                            forwarded_session: csa_session.as_deref(),
+                            no_fs_sandbox,
+                        },
                     ),
                     start,
                 )
@@ -755,8 +754,7 @@ pub(crate) async fn execute_step_with_workflow(
     }
 }
 
-/// Remove `CSA_VAR:` lines from step output so that `STEP_<id>_OUTPUT`
-/// contains only the step's logical output, not assignment-marker metadata.
+/// Remove `CSA_VAR:` lines from step output so `STEP_<id>_OUTPUT` keeps only logical output.
 pub(crate) fn strip_assignment_marker_lines(output: &str) -> String {
     output
         .lines()

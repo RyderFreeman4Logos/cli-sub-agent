@@ -54,6 +54,7 @@ pub(crate) async fn dispatch(
         chunked,
         resume,
         cd,
+        no_fs_sandbox,
         foreground,
         daemon_child,
         session_id,
@@ -75,6 +76,7 @@ pub(crate) async fn dispatch(
         chunked,
         resume,
         cd,
+        no_fs_sandbox,
         current_depth,
         pipeline_source,
     };

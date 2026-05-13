@@ -23,6 +23,7 @@ fn make_chunked_run_ctx<'a>(
         journal_path,
         resume_completed_steps,
         chunked,
+        no_fs_sandbox: false,
     }
 }
 

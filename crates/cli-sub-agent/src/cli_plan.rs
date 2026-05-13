@@ -45,6 +45,10 @@ pub enum PlanCommands {
         #[arg(long)]
         cd: Option<String>,
 
+        /// Disable filesystem sandbox isolation (bwrap/landlock)
+        #[arg(long)]
+        no_fs_sandbox: bool,
+
         /// Block instead of daemonizing (auto for --dry-run/--chunked/--resume).
         #[arg(long)]
         foreground: bool,
