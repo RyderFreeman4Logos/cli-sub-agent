@@ -58,6 +58,7 @@ fn build_plan_run_args(
         pattern: Some(DEV2MERGE_PATTERN.to_string()),
         vars,
         tool_override: None,
+        model_spec_override: None,
         dry_run: false,
         chunked: false,
         resume: None,

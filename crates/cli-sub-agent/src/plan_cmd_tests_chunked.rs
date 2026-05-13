@@ -19,6 +19,7 @@ fn make_chunked_run_ctx<'a>(
         workflow_path,
         config: None,
         tool_override: None,
+        model_spec_override: None,
         journal,
         journal_path,
         resume_completed_steps,

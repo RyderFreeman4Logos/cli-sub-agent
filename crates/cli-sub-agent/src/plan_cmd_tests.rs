@@ -560,7 +560,7 @@ fn resolve_step_tool_explicit_bash_returns_direct_bash() {
         loop_var: None,
         session: None,
     };
-    let target = resolve_step_tool(&step, None).unwrap();
+    let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(
         matches!(target, StepTarget::DirectBash),
         "tool=bash must resolve to DirectBash, not a CSA tool"
@@ -581,7 +581,7 @@ fn resolve_step_tool_explicit_codex() {
         loop_var: None,
         session: None,
     };
-    let target = resolve_step_tool(&step, None).unwrap();
+    let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(
         target,
         StepTarget::CsaTool {
@@ -605,7 +605,7 @@ fn resolve_step_tool_fallback_no_config() {
         loop_var: None,
         session: None,
     };
-    let target = resolve_step_tool(&step, None).unwrap();
+    let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(
         target,
         StepTarget::CsaTool {
@@ -629,7 +629,7 @@ fn resolve_step_tool_weave_returns_include_marker() {
         loop_var: None,
         session: None,
     };
-    let target = resolve_step_tool(&step, None).unwrap();
+    let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(target, StepTarget::WeaveInclude));
 }
 
@@ -647,5 +647,5 @@ fn resolve_step_tool_unknown_tool_errors() {
         loop_var: None,
         session: None,
     };
-    assert!(resolve_step_tool(&step, None).is_err());
+    assert!(resolve_step_tool(&step, None, None, None).is_err());
 }

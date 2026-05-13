@@ -21,7 +21,7 @@ async fn execute_step_skips_when_condition_is_false() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert!(result.skipped, "unset condition var must skip");
     assert_eq!(
         result.exit_code, 0,
@@ -46,7 +46,7 @@ async fn execute_step_runs_when_condition_is_true() {
     let mut vars = HashMap::new();
     vars.insert("FLAG".into(), "yes".into());
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert!(!result.skipped, "true condition must execute step");
     assert_eq!(result.exit_code, 0, "bash echo should succeed");
 }
@@ -71,7 +71,7 @@ async fn execute_step_skips_loop_with_nonzero_exit() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert!(result.skipped);
     assert_ne!(result.exit_code, 0);
 }
@@ -92,7 +92,7 @@ async fn execute_step_skips_weave_include() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert!(result.skipped);
     assert_eq!(
         result.exit_code, 0,
@@ -118,7 +118,7 @@ async fn execute_step_bash_runs_code_block() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert_eq!(
         result.exit_code, 0,
         "error={:?} output={:?}",
@@ -203,6 +203,7 @@ async fn execute_plan_stops_for_await_user() {
         workflow_path: &workflow_path,
         config: None,
         tool_override: None,
+        model_spec_override: None,
         journal: &mut journal,
         journal_path: Some(&journal_path),
         resume_completed_steps: &completed,
@@ -321,7 +322,7 @@ async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
     let capture_path = install_fake_gh(tmp.path());
     let vars = step_15_env(tmp.path(), &capture_path, dismissed_debate_output());
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_eq!(
         result.exit_code, 0,
@@ -351,7 +352,7 @@ async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() 
     let capture_path = install_fake_gh(tmp.path());
     let vars = step_15_env(tmp.path(), &capture_path, confirmed_debate_output());
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_eq!(
         result.exit_code, 0,
@@ -407,7 +408,7 @@ CSA session ID: 01TESTDEBATESESSIONID
 "#;
     let vars = step_15_env(tmp.path(), &capture_path, malformed_output);
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_ne!(result.exit_code, 0);
     assert!(
@@ -448,7 +449,7 @@ PR_COMMENT_END
 "#;
     let vars = step_15_env(tmp.path(), &capture_path, duplicate_verdict_output);
 
-    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
 
     assert_ne!(result.exit_code, 0);
     assert!(

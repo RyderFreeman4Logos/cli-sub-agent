@@ -3,6 +3,8 @@
 use clap::Subcommand;
 use csa_core::types::ToolName;
 
+use super::parse_model_spec_arg;
+
 #[path = "cli_dev2merge.rs"]
 mod cli_dev2merge;
 pub use cli_dev2merge::*;
@@ -28,6 +30,10 @@ pub enum PlanCommands {
         /// Override tool for all CSA steps (ignores tier routing)
         #[arg(long)]
         tool: Option<ToolName>,
+
+        /// Override model spec for all CSA steps (tool/provider/model/thinking format)
+        #[arg(long, value_parser = parse_model_spec_arg)]
+        model_spec: Option<String>,
 
         /// Show execution plan without running
         #[arg(long)]
