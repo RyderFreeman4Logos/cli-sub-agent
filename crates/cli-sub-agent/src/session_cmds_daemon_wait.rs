@@ -4,6 +4,9 @@ use std::os::fd::AsRawFd;
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
+const SESSION_WAIT_SUCCESS_EXIT_CODE: i32 = 0;
+const SESSION_WAIT_FAILURE_EXIT_CODE: i32 = 1;
+const SESSION_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
 const SESSION_WAIT_MEMORY_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy)]
@@ -85,7 +88,8 @@ pub(crate) fn try_acquire_session_wait_lock(session_dir: &Path) -> Result<Option
 }
 
 /// Wait for a daemon session to reach a terminal result and daemon exit.
-/// Exits 0 on completion, 124 on timeout, and 1 if the daemon dies without a result.
+/// Exits 0 on session success, 1 on terminal session failure, 124 when the
+/// wait times out while the session is still active, and 33 for memory warnings.
 #[cfg(test)]
 pub(crate) fn handle_session_wait(
     session: String,
@@ -180,7 +184,7 @@ where
                 "ERROR: another csa session wait is already running for session {} (lock held). The existing wait will notify you on completion. Do NOT re-issue.",
                 resolved.session_id
             );
-            return Ok(1);
+            return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
         }
     };
 
@@ -357,7 +361,7 @@ where
                 "Run `csa session result --session {}` for diagnostics.",
                 resolved.session_id
             );
-            return Ok(1);
+            return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
         }
 
         if let (Some(limit_mb), Some(sample_at)) = (memory_warn_mb, next_memory_sample_at)
@@ -422,7 +426,7 @@ where
                     .map(|p| format!(" --cd '{p}'"))
                     .unwrap_or_default(),
             );
-            return Ok(124);
+            return Ok(SESSION_WAIT_TIMEOUT_EXIT_CODE);
         }
 
         std::thread::sleep(wait_behavior.timing.poll_interval);
@@ -515,12 +519,30 @@ fn resolve_wait_completion_status_and_exit<'a>(
     real_result: Option<&'a csa_session::SessionResult>,
 ) -> (Cow<'a, str>, i32) {
     if synthetic {
-        return (Cow::Borrowed("failure"), 1);
+        return (Cow::Borrowed("failure"), SESSION_WAIT_FAILURE_EXIT_CODE);
     }
     real_result.map_or_else(
-        || (Cow::Borrowed(fallback_status), fallback_exit_code),
-        |result| (Cow::Borrowed(result.status.as_str()), result.exit_code),
+        || {
+            (
+                Cow::Borrowed(fallback_status),
+                terminal_result_wait_exit_code(fallback_status, fallback_exit_code),
+            )
+        },
+        |result| {
+            (
+                Cow::Borrowed(result.status.as_str()),
+                terminal_result_wait_exit_code(result.status.as_str(), result.exit_code),
+            )
+        },
     )
+}
+
+fn terminal_result_wait_exit_code(status: &str, exit_code: i32) -> i32 {
+    if matches!(status, "success" | "retired") && exit_code == 0 {
+        SESSION_WAIT_SUCCESS_EXIT_CODE
+    } else {
+        SESSION_WAIT_FAILURE_EXIT_CODE
+    }
 }
 
 fn load_completed_daemon_result(
