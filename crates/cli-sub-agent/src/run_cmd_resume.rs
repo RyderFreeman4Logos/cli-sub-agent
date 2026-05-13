@@ -26,6 +26,20 @@ pub(crate) fn resolve_run_timeout_seconds(
     None
 }
 
+pub(crate) fn promote_idle_timeout_for_explicit_wall_timeout(
+    resolved_idle_timeout_seconds: u64,
+    cli_idle_timeout: Option<u64>,
+    cli_timeout: Option<u64>,
+) -> u64 {
+    if cli_idle_timeout.is_some() {
+        return resolved_idle_timeout_seconds;
+    }
+
+    cli_timeout.map_or(resolved_idle_timeout_seconds, |timeout| {
+        resolved_idle_timeout_seconds.max(timeout)
+    })
+}
+
 pub(crate) fn resolve_remaining_run_timeout(
     run_timeout_seconds: Option<u64>,
     run_started_at: Instant,

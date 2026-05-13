@@ -36,6 +36,30 @@ fn resolve_run_timeout_seconds_prefers_cli_override() {
 }
 
 #[test]
+fn explicit_wall_timeout_promotes_default_idle_timeout() {
+    assert_eq!(
+        promote_idle_timeout_for_explicit_wall_timeout(250, None, Some(7200)),
+        7200
+    );
+}
+
+#[test]
+fn explicit_idle_timeout_is_not_overridden_by_wall_timeout() {
+    assert_eq!(
+        promote_idle_timeout_for_explicit_wall_timeout(60, Some(60), Some(7200)),
+        60
+    );
+}
+
+#[test]
+fn absent_wall_timeout_keeps_resolved_idle_timeout() {
+    assert_eq!(
+        promote_idle_timeout_for_explicit_wall_timeout(250, None, None),
+        250
+    );
+}
+
+#[test]
 fn wall_timeout_seconds_from_error_parses_marker() {
     let err = anyhow::anyhow!("Execution interrupted by WALL_TIMEOUT timeout_secs=1234");
     assert_eq!(wall_timeout_seconds_from_error(&err), Some(1234));

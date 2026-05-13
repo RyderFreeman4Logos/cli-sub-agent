@@ -44,9 +44,9 @@ pub(crate) use policy::{format_post_run_commit_guard_message, is_post_run_commit
 #[cfg(test)]
 pub(crate) use resume::{
     build_resume_hint_command, extract_meta_session_id_from_error,
-    interrupted_skill_session_matches_current_vcs, resolve_run_timeout_seconds,
-    run_error_timeout_seconds, session_matches_interrupted_skill, signal_interruption_exit_code,
-    skill_session_description, wall_timeout_seconds_from_error,
+    interrupted_skill_session_matches_current_vcs, promote_idle_timeout_for_explicit_wall_timeout,
+    resolve_run_timeout_seconds, run_error_timeout_seconds, session_matches_interrupted_skill,
+    signal_interruption_exit_code, skill_session_description, wall_timeout_seconds_from_error,
 };
 
 #[derive(Debug)]
