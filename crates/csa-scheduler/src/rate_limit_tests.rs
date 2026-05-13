@@ -273,12 +273,50 @@ fn test_persistent_429_quota_exhausted_advances_to_next_model() {
     )
     .expect("persistent 429 summary should classify");
     assert_eq!(detected.matched_pattern, "429_quota_exhausted");
-    assert_eq!(detected.reason, "429_quota_exhausted");
+    assert_eq!(detected.reason, "HTTP 429");
     assert!(detected.advance_to_next_model);
+    assert!(
+        !detected.quota_exhausted,
+        "codex 429_quota_exhausted is a transient retry signal until executor retries are exhausted"
+    );
     assert_eq!(
         detected.model_spec.as_deref(),
         Some("codex/openai/gpt-5.4/high")
     );
+}
+
+#[test]
+fn test_codex_429_retry_exhausted_is_permanent_after_backoff_retries() {
+    let detected = detect_rate_limit(
+        "codex",
+        "codex_429_retry_exhausted: temporary codex 429 rate limit persisted after 3 retries",
+        "",
+        1,
+        Some("codex/openai/gpt-5.4/high"),
+    )
+    .expect("codex retry exhaustion should classify");
+    assert_eq!(detected.matched_pattern, "codex_429_retry_exhausted");
+    assert_eq!(detected.reason, "codex_429_retry_exhausted");
+    assert!(detected.advance_to_next_model);
+    assert!(detected.quota_exhausted);
+    assert_eq!(
+        detected.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.4/high")
+    );
+}
+
+#[test]
+fn test_codex_429_with_billing_quota_is_permanent_without_retry_budget() {
+    let detected = detect_rate_limit(
+        "codex",
+        "429_quota_exhausted: monthly spending cap reached for billing account",
+        "",
+        1,
+        None,
+    )
+    .expect("billing quota 429 should classify");
+    assert_eq!(detected.matched_pattern, "monthly spending cap");
+    assert!(detected.quota_exhausted);
 }
 
 #[test]
@@ -390,6 +428,7 @@ fn test_quota_exhausted_false_for_transient_rate_limits() {
         ("codex", "rate_limit_exceeded for key"),
         ("codex", "RateLimitError: please wait"),
         ("codex", "HTTP 429"),
+        ("codex", "429_quota_exhausted: repeated transient 429"),
         ("claude-code", "rate limit hit, retry in 60s"),
         ("claude-code", "HTTP 529 Service Overloaded"),
         ("claude-code", "API overloaded, please retry"),

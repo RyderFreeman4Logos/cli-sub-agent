@@ -181,7 +181,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
     )
     .unwrap();
     let codex_stub = format!(
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\ncount=0\nif [ -f \"{codex_invocation_log_str}\" ]; then\n  count=$(wc -l < \"{codex_invocation_log_str}\")\nfi\nnext=$((count + 1))\nprintf 'attempt-%s\\n' \"$next\" >> \"{codex_invocation_log_str}\"\nif [ \"$next\" -eq 1 ]; then\n  printf 'HTTP 429 rate limit\\n' >&2\n  exit 1\nfi\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS via fallback codex variant' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'No blocking issues found after falling back to the second codex tier candidate.' '<!-- CSA:SECTION:details:END -->'\n"
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\ncount=0\nif [ -f \"{codex_invocation_log_str}\" ]; then\n  count=$(wc -l < \"{codex_invocation_log_str}\")\nfi\nnext=$((count + 1))\nprintf 'attempt-%s\\n' \"$next\" >> \"{codex_invocation_log_str}\"\nif [ \"$next\" -eq 1 ]; then\n  printf 'codex_429_retry_exhausted: temporary codex 429 rate limit persisted after 3 retries\\n' >&2\n  exit 1\nfi\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS via fallback codex variant' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'No blocking issues found after falling back to the second codex tier candidate.' '<!-- CSA:SECTION:details:END -->'\n"
     );
     for binary in ["codex", "codex-acp"] {
         std::fs::write(bin_dir.join(binary), &codex_stub).unwrap();
@@ -242,7 +242,10 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
     assert_ne!(result.forced_decision, Some(ReviewDecision::Unavailable));
     assert_eq!(result.executed_tool, ToolName::Codex);
     assert_eq!(result.routed_to.as_deref(), Some("codex/openai/gpt-5/high"));
-    assert_eq!(result.primary_failure.as_deref(), Some("HTTP 429"));
+    assert_eq!(
+        result.primary_failure.as_deref(),
+        Some("codex_429_retry_exhausted")
+    );
 
     let codex_invocations = std::fs::read_to_string(&codex_invocation_log).unwrap();
     assert_eq!(codex_invocations.lines().count(), 2);
@@ -284,7 +287,10 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         artifact.routed_to.as_deref(),
         Some("codex/openai/gpt-5/high")
     );
-    assert_eq!(artifact.primary_failure.as_deref(), Some("HTTP 429"));
+    assert_eq!(
+        artifact.primary_failure.as_deref(),
+        Some("codex_429_retry_exhausted")
+    );
 
     let result_toml = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
     assert!(result_toml.contains("tool = \"codex\""));

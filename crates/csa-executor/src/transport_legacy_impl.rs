@@ -26,6 +26,7 @@ impl Transport for LegacyTransport {
     ) -> Result<TransportResult> {
         // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let mut attempt = 1u8;
+        let mut codex_rate_limit_retries = 0u8;
         loop {
             let executor = self.executor_for_attempt(attempt);
             let mut retried_degraded_mcp = false;
@@ -189,6 +190,32 @@ impl Transport for LegacyTransport {
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
+            }
+            if let Some(backoff) = self.should_retry_codex_rate_limited(
+                &result.execution,
+                codex_rate_limit_retries,
+                extra_env,
+            ) {
+                tracing::warn!(
+                    retry = codex_rate_limit_retries + 1,
+                    max_retries = CODEX_RATE_LIMIT_MAX_RETRIES,
+                    delay_secs = backoff.as_secs(),
+                    "codex transient 429 rate limit detected; retrying with backoff"
+                );
+                tokio::time::sleep(backoff).await;
+                codex_rate_limit_retries = codex_rate_limit_retries.saturating_add(1);
+                continue;
+            }
+            if self.executor.tool_name() == "codex"
+                && codex_rate_limit_retries >= CODEX_RATE_LIMIT_MAX_RETRIES
+                && is_codex_transient_rate_limit_result(&result.execution)
+            {
+                let mut result = result;
+                apply_codex_rate_limit_retry_exhausted_summary(
+                    &mut result.execution,
+                    codex_rate_limit_retries,
+                );
+                return Ok(result);
             }
             let codex_timeout = Self::consume_resolved_transport_initial_response_timeout_seconds(
                 options.initial_response_timeout,
