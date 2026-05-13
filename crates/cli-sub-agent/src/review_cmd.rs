@@ -1,4 +1,6 @@
 use crate::cli::ReviewArgs;
+use crate::pipeline::resolve_effective_initial_response_timeout_for_tool;
+#[cfg(test)]
 use crate::pipeline::resolve_initial_response_timeout_for_tool;
 use crate::review_consensus::{
     CLEAN, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
@@ -332,12 +334,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     // Resolve stream mode from CLI flags (default: BufferOnly for review)
     let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
-    let idle_timeout_seconds =
-        crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
-    let initial_response_timeout_seconds = resolve_initial_response_timeout_for_tool(
+    let idle_timeout_seconds = crate::pipeline::resolve_effective_idle_timeout_seconds(
+        config.as_ref(),
+        args.idle_timeout,
+        args.timeout,
+    );
+    let initial_response_timeout_seconds = resolve_effective_initial_response_timeout_for_tool(
         config.as_ref(),
         args.initial_response_timeout,
         args.idle_timeout,
+        args.timeout,
         tool.as_str(),
     );
 
@@ -641,12 +647,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             });
         let reviewer_tier_name = resolved_tier_name.clone();
         let reviewer_thinking = review_thinking.clone();
-        let reviewer_initial_response_timeout_seconds = resolve_initial_response_timeout_for_tool(
-            reviewer_config.as_ref(),
-            args.initial_response_timeout,
-            args.idle_timeout,
-            reviewer_tool.as_str(),
-        );
+        let reviewer_initial_response_timeout_seconds =
+            resolve_effective_initial_response_timeout_for_tool(
+                reviewer_config.as_ref(),
+                args.initial_response_timeout,
+                args.idle_timeout,
+                args.timeout,
+                reviewer_tool.as_str(),
+            );
         join_set.spawn(async move {
             let session_result = execute_review_with_tier_filter(
                 reviewer_tool,

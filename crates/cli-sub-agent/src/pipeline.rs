@@ -87,6 +87,29 @@ pub(crate) fn resolve_idle_timeout_seconds(
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECONDS)
 }
 
+pub(crate) fn promote_idle_timeout_for_explicit_wall_timeout(
+    resolved_idle_timeout_seconds: u64,
+    cli_idle_timeout: Option<u64>,
+    wall_timeout: Option<u64>,
+) -> u64 {
+    if cli_idle_timeout.is_some() {
+        return resolved_idle_timeout_seconds;
+    }
+
+    wall_timeout.map_or(resolved_idle_timeout_seconds, |timeout| {
+        resolved_idle_timeout_seconds.max(timeout)
+    })
+}
+
+pub(crate) fn resolve_effective_idle_timeout_seconds(
+    config: Option<&ProjectConfig>,
+    cli_idle_timeout: Option<u64>,
+    wall_timeout: Option<u64>,
+) -> u64 {
+    let resolved_idle = resolve_idle_timeout_seconds(config, cli_idle_timeout);
+    promote_idle_timeout_for_explicit_wall_timeout(resolved_idle, cli_idle_timeout, wall_timeout)
+}
+
 /// Resolve the initial-response timeout (seconds).
 ///
 /// Priority: CLI override > project config > default (120s).
@@ -143,6 +166,30 @@ pub(crate) fn resolve_initial_response_timeout_for_tool(
         .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
 
     resolve_initial_response_timeout_with_default(config, configured, per_tool_default(tool_name))
+}
+
+pub(crate) fn resolve_effective_initial_response_timeout_for_tool(
+    config: Option<&ProjectConfig>,
+    cli_initial_response_timeout: Option<u64>,
+    cli_idle_timeout: Option<u64>,
+    wall_timeout: Option<u64>,
+    tool_name: &str,
+) -> Option<u64> {
+    let resolved = resolve_initial_response_timeout_for_tool(
+        config,
+        cli_initial_response_timeout,
+        cli_idle_timeout,
+        tool_name,
+    );
+
+    if cli_initial_response_timeout.is_some() {
+        return resolved;
+    }
+
+    match (resolved, wall_timeout) {
+        (Some(response_timeout), Some(timeout)) => Some(response_timeout.max(timeout)),
+        _ => resolved,
+    }
 }
 
 pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {

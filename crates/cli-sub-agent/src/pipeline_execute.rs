@@ -48,6 +48,13 @@ pub(crate) async fn execute_transport_with_signal(
             tokio::pin!(timeout_future);
             tokio::select! {
                 _ = sigterm.recv() => {
+                    warn!(
+                        session_id = %session.meta_session_id,
+                        task_type = session.task_context.task_type.as_deref().unwrap_or("unknown"),
+                        tool = %executor.tool_name(),
+                        wall_timeout_secs = ?wall_timeout.map(|timeout| timeout.as_secs()),
+                        "Session received SIGTERM; classifying as external signal, not CSA idle or wall-clock timeout"
+                    );
                     record_session_termination(
                         project_root,
                         session,
@@ -78,6 +85,13 @@ pub(crate) async fn execute_transport_with_signal(
                 _ = &mut timeout_future => {
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     let summary = format!("Execution timed out after {timeout_secs}s");
+                    warn!(
+                        session_id = %session.meta_session_id,
+                        task_type = session.task_context.task_type.as_deref().unwrap_or("unknown"),
+                        tool = %executor.tool_name(),
+                        timeout_secs,
+                        "Session wall-clock timeout fired"
+                    );
                     record_session_termination(
                         project_root,
                         session,
@@ -155,7 +169,10 @@ pub(crate) async fn execute_transport_with_signal(
     };
 
     match exec_result {
-        Ok(result) => Ok(result),
+        Ok(result) => {
+            log_signal_exit_diagnostic(session, &result.execution);
+            Ok(result)
+        }
         Err(e) => {
             // Record a failure result with accurate timing: started_at is when
             // execution began (before ACP init), not "now", fixing the
@@ -237,6 +254,59 @@ pub(crate) async fn execute_transport_with_signal(
             Err(e).context("Failed to execute tool via transport")
         }
     }
+}
+
+fn log_signal_exit_diagnostic(
+    session: &MetaSessionState,
+    execution: &csa_process::ExecutionResult,
+) {
+    let task_type = session.task_context.task_type.as_deref();
+    if !matches!(task_type, Some("review" | "debate")) {
+        return;
+    }
+    if !matches!(execution.exit_code, 124 | 137 | 143) {
+        return;
+    }
+
+    let diagnosis = diagnose_signal_exit(session, execution);
+    warn!(
+        session_id = %session.meta_session_id,
+        task_type = task_type.unwrap_or("unknown"),
+        exit_code = execution.exit_code,
+        termination_reason = ?session.termination_reason,
+        diagnosis,
+        summary = %execution.summary,
+        "Review/debate tool process ended with signal-like status"
+    );
+}
+
+fn diagnose_signal_exit(
+    session: &MetaSessionState,
+    execution: &csa_process::ExecutionResult,
+) -> &'static str {
+    let summary = execution.summary.to_ascii_lowercase();
+    let stderr = execution.stderr_output.to_ascii_lowercase();
+    let haystack = format!("{summary}\n{stderr}");
+
+    if session.termination_reason.as_deref() == Some("timeout") || execution.exit_code == 124 {
+        return "wall_clock_timeout";
+    }
+    if haystack.contains("initial_response_timeout") {
+        return "initial_response_timeout";
+    }
+    if haystack.contains("idle timeout") {
+        return "idle_timeout";
+    }
+    if haystack.contains("oom") || haystack.contains("memory") {
+        return "oom_or_memory_limit";
+    }
+    if execution.exit_code == 143 || session.termination_reason.as_deref() == Some("sigterm") {
+        return "external_sigterm";
+    }
+    if execution.exit_code == 137 {
+        return "sigkill_or_oom";
+    }
+    "external_signal"
 }
 
 #[allow(clippy::too_many_arguments)]
