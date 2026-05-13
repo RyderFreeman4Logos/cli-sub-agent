@@ -97,6 +97,93 @@ fn test_should_retry_transient_429_too_many_requests() {
     );
 }
 
+#[test]
+fn test_should_retry_codex_transient_429_until_retry_budget_exhausted() {
+    let transport = LegacyTransport::new(Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    });
+    let execution = ExecutionResult {
+        summary: "429_quota_exhausted: repeated 3 identical 429/quota errors: HTTP 429 Too Many Requests; Retry-After: 30".to_string(),
+        output: String::new(),
+        stderr_output: String::new(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+
+    assert_eq!(
+        transport
+            .should_retry_codex_rate_limited(&execution, 0, None)
+            .map(|duration| duration.as_secs()),
+        Some(30)
+    );
+    assert_eq!(
+        transport
+            .should_retry_codex_rate_limited(&execution, 1, None)
+            .map(|duration| duration.as_secs()),
+        Some(60)
+    );
+    assert_eq!(
+        transport
+            .should_retry_codex_rate_limited(&execution, 2, None)
+            .map(|duration| duration.as_secs()),
+        Some(120)
+    );
+    assert!(
+        transport
+            .should_retry_codex_rate_limited(&execution, 3, None)
+            .is_none()
+    );
+}
+
+#[test]
+fn test_should_not_retry_codex_explicit_usage_limit() {
+    let transport = LegacyTransport::new(Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::codex_runtime::CodexRuntimeMetadata::from_transport(
+            crate::codex_runtime::CodexTransport::Cli,
+        ),
+    });
+    let execution = ExecutionResult {
+        summary: r#"Internal error: {"codex_error_info":"usage_limit_exceeded"}"#.to_string(),
+        output: String::new(),
+        stderr_output: String::new(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+
+    assert!(
+        transport
+            .should_retry_codex_rate_limited(&execution, 0, None)
+            .is_none()
+    );
+    assert!(is_codex_permanent_quota_result(&execution));
+}
+
+#[test]
+fn test_codex_retry_exhausted_summary_marks_permanent_after_backoff_budget() {
+    let mut execution = ExecutionResult {
+        summary: "HTTP 429 Too Many Requests".to_string(),
+        output: String::new(),
+        stderr_output: String::new(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+
+    apply_codex_rate_limit_retry_exhausted_summary(&mut execution, CODEX_RATE_LIMIT_MAX_RETRIES);
+
+    assert!(execution.summary.starts_with("codex_429_retry_exhausted"));
+    assert!(is_codex_permanent_quota_result(&execution));
+    assert!(
+        !is_codex_transient_rate_limit_result(&execution),
+        "retry-exhausted marker must stop another same-tool retry loop"
+    );
+}
+
 #[tokio::test]
 async fn test_execute_in_permanent_quota_exhaustion_does_not_api_key_fallback() {
     let (_temp, mut env, model_log_path) = setup_fake_gemini_environment(99);

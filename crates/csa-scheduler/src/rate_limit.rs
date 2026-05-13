@@ -271,16 +271,10 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         ],
         "codex" => &[
             FailoverPattern {
-                pattern: "429_quota_exhausted",
-                reason: "429_quota_exhausted",
+                pattern: "codex_429_retry_exhausted",
+                reason: "codex_429_retry_exhausted",
                 advance_to_next_model: true,
                 quota_exhausted: true,
-            },
-            FailoverPattern {
-                pattern: "rate_limit_exceeded",
-                reason: "HTTP 429",
-                advance_to_next_model: true,
-                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "usage_limit_exceeded",
@@ -295,10 +289,58 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: true,
             },
             FailoverPattern {
+                pattern: "monthly spending cap",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "monthly cap",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "spending cap",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "insufficient_quota",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "hard limit",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
                 pattern: "daily quota",
                 reason: "QUOTA_EXHAUSTED",
                 advance_to_next_model: true,
                 quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
+                pattern: "rate_limit_exceeded",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "ratelimiterror",

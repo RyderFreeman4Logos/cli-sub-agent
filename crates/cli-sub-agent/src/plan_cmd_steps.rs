@@ -12,6 +12,10 @@ use csa_executor::ModelSpec;
 use csa_hooks::format_next_step_directive;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
 
+use super::plan_cmd_assignment::{
+    extract_output_assignment_markers, should_inject_assignment_markers,
+    strip_assignment_marker_lines,
+};
 use super::plan_cmd_exec::{
     CsaStepExecutionOptions, StepExecutionOutcome, execute_bash_step, execute_csa_step,
     run_with_heartbeat,
@@ -22,10 +26,9 @@ use super::plan_cmd_flow::{
 };
 use super::{
     PlanRunJournal, apply_repo_fingerprint, detect_repo_fingerprint, persist_plan_journal,
-    substitute_vars, validate_variable_name,
+    substitute_vars,
 };
 
-const OUTPUT_ASSIGNMENT_MARKER_PREFIX: &str = "CSA_VAR:";
 /// Resolved execution target for a plan step.
 /// Keeps direct shell execution separate from AI dispatch so `tool = "bash"` never falls through.
 pub(crate) enum StepTarget {
@@ -83,6 +86,15 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) no_fs_sandbox: bool,
 }
 
+pub(crate) struct StepExecutionContext<'a> {
+    pub(crate) project_root: &'a Path,
+    pub(crate) workflow_path: &'a Path,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) tool_override: Option<&'a ToolName>,
+    pub(crate) model_spec_override: Option<&'a String>,
+    pub(crate) no_fs_sandbox: bool,
+}
+
 /// Resolve a step target from its annotations and config.
 /// Order: CLI overrides, explicit `step.tool`, then `step.tier`, then configured default or codex fallback.
 pub(crate) fn resolve_step_tool(
@@ -91,14 +103,20 @@ pub(crate) fn resolve_step_tool(
     tool_override: Option<&ToolName>,
     model_spec_override: Option<&String>,
 ) -> Result<StepTarget> {
-    // 0. CLI overrides take precedence over everything
-    if let Some(tool) = tool_override {
+    // 0. CLI overrides only apply to CSA-dispatched steps. Deterministic
+    // workflow directives must remain deterministic even when --tool is set.
+    let explicit_tool = step.tool.as_deref().map(str::to_ascii_lowercase);
+    if let Some(tool) = tool_override
+        && !matches!(
+            explicit_tool.as_deref(),
+            Some("bash" | "note" | "manual" | "await-user" | "weave")
+        )
+    {
         return Ok(StepTarget::csa(*tool, model_spec_override.cloned()));
     }
 
     // 1. Explicit tool annotation
-    if let Some(ref tool_str) = step.tool {
-        let tool_lower = tool_str.to_lowercase();
+    if let Some(tool_lower) = explicit_tool {
         match tool_lower.as_str() {
             "bash" => return Ok(StepTarget::DirectBash),
             "note" => return Ok(StepTarget::Note),
@@ -255,12 +273,14 @@ pub(super) async fn execute_plan_with_journal(
         let result = execute_step_with_workflow(
             step,
             &vars,
-            run_ctx.project_root,
-            run_ctx.workflow_path,
-            run_ctx.config,
-            run_ctx.tool_override,
-            run_ctx.model_spec_override,
-            run_ctx.no_fs_sandbox,
+            &StepExecutionContext {
+                project_root: run_ctx.project_root,
+                workflow_path: run_ctx.workflow_path,
+                config: run_ctx.config,
+                tool_override: run_ctx.tool_override,
+                model_spec_override: run_ctx.model_spec_override,
+                no_fs_sandbox: run_ctx.no_fs_sandbox,
+            },
         )
         .await;
         let orchestrator_handoff = orchestrator_handoff_mode(step);
@@ -416,12 +436,14 @@ pub(crate) async fn execute_step(
     execute_step_with_workflow(
         step,
         variables,
-        project_root,
-        &workflow_path_buf,
-        config,
-        tool_override,
-        model_spec_override,
-        false,
+        &StepExecutionContext {
+            project_root,
+            workflow_path: &workflow_path_buf,
+            config,
+            tool_override,
+            model_spec_override,
+            no_fs_sandbox: false,
+        },
     )
     .await
 }
@@ -429,12 +451,7 @@ pub(crate) async fn execute_step(
 pub(crate) async fn execute_step_with_workflow(
     step: &PlanStep,
     variables: &HashMap<String, String>,
-    project_root: &Path,
-    workflow_path: &Path,
-    config: Option<&ProjectConfig>,
-    tool_override: Option<&ToolName>,
-    model_spec_override: Option<&String>,
-    no_fs_sandbox: bool,
+    step_ctx: &StepExecutionContext<'_>,
 ) -> StepResult {
     let start = Instant::now();
     let label = format!("[{}/{}]", step.id, step.title);
@@ -478,7 +495,12 @@ pub(crate) async fn execute_step_with_workflow(
     }
 
     // Resolve execution target (needed for weave-include check)
-    let target = match resolve_step_tool(step, config, tool_override, model_spec_override) {
+    let target = match resolve_step_tool(
+        step,
+        step_ctx.config,
+        step_ctx.tool_override,
+        step_ctx.model_spec_override,
+    ) {
         Ok(t) => t,
         Err(e) => {
             error!("{} - Failed to resolve tool: {}", label, e);
@@ -497,7 +519,7 @@ pub(crate) async fn execute_step_with_workflow(
 
     // Apply --tool override: replace tool for all CSA steps (bash/weave unaffected).
     // Clear model_spec since the tier-resolved spec may reference a different tool.
-    let target = if let Some(override_tool) = tool_override {
+    let target = if let Some(override_tool) = step_ctx.tool_override {
         match target {
             StepTarget::CsaTool { .. } => {
                 info!(
@@ -638,7 +660,13 @@ pub(crate) async fn execute_step_with_workflow(
             StepTarget::DirectBash => {
                 run_with_heartbeat(
                     &label,
-                    execute_bash_step(&label, &step.prompt, variables, project_root, workflow_path),
+                    execute_bash_step(
+                        &label,
+                        &step.prompt,
+                        variables,
+                        step_ctx.project_root,
+                        step_ctx.workflow_path,
+                    ),
                     start,
                 )
                 .await
@@ -654,12 +682,12 @@ pub(crate) async fn execute_step_with_workflow(
                         &label,
                         prompt,
                         tool_name,
-                        project_root,
-                        config,
+                        step_ctx.project_root,
+                        step_ctx.config,
                         CsaStepExecutionOptions {
                             model_spec: model_spec.as_deref(),
                             forwarded_session: csa_session.as_deref(),
-                            no_fs_sandbox,
+                            no_fs_sandbox: step_ctx.no_fs_sandbox,
                         },
                     ),
                     start,
@@ -767,47 +795,4 @@ pub(crate) async fn execute_step_with_workflow(
             }
         }
     }
-}
-
-/// Remove `CSA_VAR:` lines from step output so `STEP_<id>_OUTPUT` keeps only logical output.
-pub(crate) fn strip_assignment_marker_lines(output: &str) -> String {
-    output
-        .lines()
-        .filter(|line| !line.trim().starts_with(OUTPUT_ASSIGNMENT_MARKER_PREFIX))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub(crate) fn extract_output_assignment_markers(
-    output: &str,
-    allowlist: &HashSet<String>,
-) -> Vec<(String, String)> {
-    let mut markers = Vec::new();
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let marker_payload = match trimmed.strip_prefix(OUTPUT_ASSIGNMENT_MARKER_PREFIX) {
-            Some(payload) => payload.trim(),
-            None => continue,
-        };
-        if let Some((raw_key, raw_value)) = marker_payload.split_once('=') {
-            let key = raw_key.trim();
-            if is_assignment_marker_key(key) && allowlist.contains(key) {
-                markers.push((key.to_string(), raw_value.trim().to_string()));
-            }
-        }
-    }
-    markers
-}
-
-pub(crate) fn should_inject_assignment_markers(step: &PlanStep) -> bool {
-    step.tool
-        .as_deref()
-        .is_some_and(|tool| tool.eq_ignore_ascii_case("bash"))
-}
-
-pub(crate) fn is_assignment_marker_key(key: &str) -> bool {
-    validate_variable_name(key).is_ok()
 }

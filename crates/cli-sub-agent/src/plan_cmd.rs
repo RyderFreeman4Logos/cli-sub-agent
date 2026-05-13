@@ -38,16 +38,20 @@ use plan_cmd_exec::{extract_bash_code_block, truncate};
 #[path = "plan_cmd_flow.rs"]
 mod plan_cmd_flow;
 
+#[path = "plan_cmd_assignment.rs"]
+mod plan_cmd_assignment;
+
 #[path = "plan_cmd_steps.rs"]
 mod plan_cmd_steps;
+#[cfg(test)]
+pub(crate) use plan_cmd_assignment::{
+    extract_output_assignment_markers, is_assignment_marker_key, should_inject_assignment_markers,
+};
 pub(crate) use plan_cmd_flow::shell_escape_for_command;
 use plan_cmd_steps::{PlanRunContext, execute_plan_with_journal};
 pub(crate) use plan_cmd_steps::{StepResult, StepTarget, resolve_step_tool};
 #[cfg(test)]
-pub(crate) use plan_cmd_steps::{
-    execute_plan, execute_step, extract_output_assignment_markers, is_assignment_marker_key,
-    should_inject_assignment_markers,
-};
+pub(crate) use plan_cmd_steps::{execute_plan, execute_step};
 
 const PLAN_JOURNAL_SCHEMA_VERSION: u8 = 1;
 const PLAN_PIPELINE_SOURCE_DIRECT: &str = "direct-plan-run";

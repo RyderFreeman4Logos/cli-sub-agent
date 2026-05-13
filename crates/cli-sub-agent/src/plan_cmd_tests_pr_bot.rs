@@ -1,4 +1,4 @@
-use super::plan_cmd_steps::execute_step_with_workflow;
+use super::plan_cmd_steps::{StepExecutionContext, execute_step_with_workflow};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,12 +29,14 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
     let result = execute_step_with_workflow(
         &step,
         &vars,
-        project_root.path(),
-        &workflow_path,
-        None,
-        None,
-        None,
-        false,
+        &StepExecutionContext {
+            project_root: project_root.path(),
+            workflow_path: &workflow_path,
+            config: None,
+            tool_override: None,
+            model_spec_override: None,
+            no_fs_sandbox: false,
+        },
     )
     .await;
     assert_eq!(result.exit_code, 0, "bash step should succeed");

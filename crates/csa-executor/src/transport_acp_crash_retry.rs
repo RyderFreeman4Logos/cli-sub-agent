@@ -17,9 +17,11 @@ use crate::model_spec::ThinkingBudget;
 use csa_core::env::NO_FAILOVER_ENV_KEY;
 
 use super::{
-    AcpTransport, DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, TransportOptions,
-    TransportResult, consume_resolved_initial_response_timeout_seconds,
-    transport_gemini_helpers::strip_acp_timeout_footer,
+    AcpTransport, CODEX_RATE_LIMIT_MAX_RETRIES, CODEX_RATE_LIMIT_RETRY_EXHAUSTED_REASON,
+    DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, TransportOptions, TransportResult,
+    apply_codex_rate_limit_retry_exhausted_summary, codex_rate_limit_backoff,
+    consume_resolved_initial_response_timeout_seconds, is_codex_transient_rate_limit_result,
+    is_codex_transient_rate_limit_text, transport_gemini_helpers::strip_acp_timeout_footer,
 };
 
 /// Delay between crash retry attempts in seconds.
@@ -501,9 +503,10 @@ pub(super) async fn execute_with_crash_retry(
         .flatten();
     let no_failover = extra_env.is_some_and(|env| env.contains_key(NO_FAILOVER_ENV_KEY));
     let mut idle_downshift_attempted = false;
+    let mut codex_rate_limit_retries = 0u8;
     loop {
         // Only resume provider session on the first attempt; retries start fresh.
-        let resume_id = if attempt == 1 {
+        let resume_id = if attempt == 1 && codex_rate_limit_retries == 0 {
             tool_state.and_then(|s| s.provider_session_id.clone())
         } else {
             None
@@ -525,6 +528,29 @@ pub(super) async fn execute_with_crash_retry(
 
         match result {
             Ok(mut tr) => {
+                if transport.tool_name == "codex"
+                    && is_codex_transient_rate_limit_result(&tr.execution)
+                {
+                    if !no_failover && codex_rate_limit_retries < CODEX_RATE_LIMIT_MAX_RETRIES {
+                        let backoff = codex_rate_limit_backoff(codex_rate_limit_retries);
+                        tracing::warn!(
+                            retry = codex_rate_limit_retries + 1,
+                            max_retries = CODEX_RATE_LIMIT_MAX_RETRIES,
+                            delay_secs = backoff.as_secs(),
+                            "codex ACP transient 429 rate limit detected; retrying with backoff"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        codex_rate_limit_retries = codex_rate_limit_retries.saturating_add(1);
+                        continue;
+                    }
+                    if codex_rate_limit_retries >= CODEX_RATE_LIMIT_MAX_RETRIES {
+                        apply_codex_rate_limit_retry_exhausted_summary(
+                            &mut tr.execution,
+                            codex_rate_limit_retries,
+                        );
+                    }
+                }
+
                 // --- Issue #766: idle disconnect auto-downshift ---
                 // On first idle disconnect, if a downshift target exists and
                 // --no-failover is not set, retry once with reduced reasoning effort.
@@ -640,6 +666,29 @@ pub(super) async fn execute_with_crash_retry(
                 let memory_max_mb = options
                     .sandbox
                     .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
+
+                if transport.tool_name == "codex"
+                    && is_codex_transient_rate_limit_text(&error_display)
+                {
+                    if !no_failover && codex_rate_limit_retries < CODEX_RATE_LIMIT_MAX_RETRIES {
+                        let backoff = codex_rate_limit_backoff(codex_rate_limit_retries);
+                        tracing::warn!(
+                            retry = codex_rate_limit_retries + 1,
+                            max_retries = CODEX_RATE_LIMIT_MAX_RETRIES,
+                            delay_secs = backoff.as_secs(),
+                            "codex ACP transient 429 transport error detected; retrying with backoff"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        codex_rate_limit_retries = codex_rate_limit_retries.saturating_add(1);
+                        continue;
+                    }
+                    if codex_rate_limit_retries >= CODEX_RATE_LIMIT_MAX_RETRIES {
+                        return Err(anyhow!(
+                            "{CODEX_RATE_LIMIT_RETRY_EXHAUSTED_REASON}: temporary codex 429 rate limit persisted after {} retries. Last error: {error:#}",
+                            codex_rate_limit_retries
+                        ));
+                    }
+                }
 
                 if is_retryable_acp_crash(&error_display) && attempt < max_attempts {
                     tracing::warn!(

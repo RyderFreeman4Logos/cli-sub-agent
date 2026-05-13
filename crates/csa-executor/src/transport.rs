@@ -31,6 +31,18 @@ use csa_session::{
     state::{ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext, ToolState},
 };
 
+#[path = "transport_codex_rate_limit.rs"]
+mod transport_codex_rate_limit;
+pub(crate) use transport_codex_rate_limit::{
+    CODEX_RATE_LIMIT_MAX_RETRIES, apply_codex_rate_limit_retry_exhausted_summary,
+    codex_rate_limit_backoff, is_codex_permanent_quota_result,
+    is_codex_transient_rate_limit_result,
+};
+#[cfg(feature = "acp")]
+pub(crate) use transport_codex_rate_limit::{
+    CODEX_RATE_LIMIT_RETRY_EXHAUSTED_REASON, is_codex_transient_rate_limit_text,
+};
+
 #[path = "transport_meta.rs"]
 mod transport_meta;
 pub use transport_meta::PeakMemoryContext;
@@ -208,6 +220,23 @@ impl LegacyTransport {
             return None;
         }
         Some(gemini_rate_limit_backoff(attempt))
+    }
+
+    fn should_retry_codex_rate_limited(
+        &self,
+        execution: &ExecutionResult,
+        retry_count: u8,
+        extra_env: Option<&HashMap<String, String>>,
+    ) -> Option<Duration> {
+        if !matches!(self.executor, Executor::Codex { .. })
+            || retry_count >= CODEX_RATE_LIMIT_MAX_RETRIES
+            || extra_env.is_some_and(|env| env.contains_key(csa_core::env::NO_FAILOVER_ENV_KEY))
+            || is_codex_permanent_quota_result(execution)
+            || !is_codex_transient_rate_limit_result(execution)
+        {
+            return None;
+        }
+        Some(codex_rate_limit_backoff(retry_count))
     }
 
     fn executor_for_attempt(&self, attempt: u8) -> Executor {
