@@ -5,12 +5,15 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
+
+const DAEMON_INDEPENDENT_SCOPE_ENV: &str = "CSA_DAEMON_INDEPENDENT_SCOPE";
 
 /// Configuration for spawning a daemonized child process.
 pub struct DaemonSpawnConfig {
@@ -32,6 +35,12 @@ pub struct DaemonSpawnResult {
     pub session_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DaemonSpawnMode {
+    Direct,
+    IndependentScope { unit: String },
+}
+
 fn open_log_file(dir: &std::path::Path, name: &str) -> Result<File> {
     OpenOptions::new()
         .create(true)
@@ -46,6 +55,64 @@ fn daemon_pid_record(pid: u32) -> String {
     match read_process_start_time_ticks(pid) {
         Some(start_time_ticks) => format!("{pid} {start_time_ticks}\n"),
         None => format!("{pid}\n"),
+    }
+}
+
+fn daemon_spawn_mode(session_id: &str) -> DaemonSpawnMode {
+    match std::env::var(DAEMON_INDEPENDENT_SCOPE_ENV).as_deref() {
+        Ok("0" | "false" | "off" | "no") => return DaemonSpawnMode::Direct,
+        Ok("1" | "true" | "on" | "yes") => {
+            return DaemonSpawnMode::IndependentScope {
+                unit: csa_resource::cgroup::scope_unit_name("daemon", session_id),
+            };
+        }
+        _ => {}
+    }
+
+    if inherited_csa_scope_detected() {
+        DaemonSpawnMode::IndependentScope {
+            unit: csa_resource::cgroup::scope_unit_name("daemon", session_id),
+        }
+    } else {
+        DaemonSpawnMode::Direct
+    }
+}
+
+fn inherited_csa_scope_detected() -> bool {
+    std::fs::read_to_string("/proc/self/cgroup").is_ok_and(|content| {
+        content
+            .lines()
+            .any(|line| line.contains("csa-") && line.contains(".scope"))
+    })
+}
+
+fn append_daemon_child_args(cmd: &mut Command, config: &DaemonSpawnConfig) {
+    for verb in config.subcommand.split_whitespace() {
+        cmd.arg(verb);
+    }
+    cmd.args(["--daemon-child", "--session-id", &config.session_id]);
+    cmd.args(&config.args);
+
+    for (k, v) in &config.env {
+        cmd.env(k, v);
+    }
+}
+
+fn build_daemon_command(config: &DaemonSpawnConfig, mode: &DaemonSpawnMode) -> Command {
+    match mode {
+        DaemonSpawnMode::Direct => {
+            let mut cmd = Command::new(&config.csa_binary);
+            append_daemon_child_args(&mut cmd, config);
+            cmd
+        }
+        DaemonSpawnMode::IndependentScope { unit } => {
+            let mut cmd = Command::new("systemd-run");
+            cmd.args(["--user", "--scope", "--quiet", "--collect", "--unit", unit]);
+            cmd.arg("--");
+            cmd.arg(&config.csa_binary);
+            append_daemon_child_args(&mut cmd, config);
+            cmd
+        }
     }
 }
 
@@ -81,18 +148,27 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
     })?;
 
     let stdout_file = open_log_file(&config.session_dir, "stdout.log")?;
-    let stderr_file = open_log_file(&config.session_dir, "stderr.log")?;
+    let mut stderr_file = open_log_file(&config.session_dir, "stderr.log")?;
 
-    let mut cmd = Command::new(&config.csa_binary);
-    for verb in config.subcommand.split_whitespace() {
-        cmd.arg(verb);
+    let spawn_mode = daemon_spawn_mode(&config.session_id);
+    match &spawn_mode {
+        DaemonSpawnMode::Direct => {
+            let _ = std::fs::remove_file(config.session_dir.join("daemon.scope"));
+            writeln!(
+                stderr_file,
+                "CSA daemon spawn: direct detached process; no inherited CSA systemd scope detected"
+            )?;
+        }
+        DaemonSpawnMode::IndependentScope { unit } => {
+            std::fs::write(config.session_dir.join("daemon.scope"), unit)?;
+            writeln!(
+                stderr_file,
+                "CSA daemon spawn: independent systemd scope {unit}; inherited CSA scope detected"
+            )?;
+        }
     }
-    cmd.args(["--daemon-child", "--session-id", &config.session_id]);
-    cmd.args(&config.args);
 
-    for (k, v) in &config.env {
-        cmd.env(k, v);
-    }
+    let mut cmd = build_daemon_command(&config, &spawn_mode);
 
     cmd.stdin(Stdio::null());
     cmd.stdout(stdout_file);
@@ -138,6 +214,35 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::sync::{Mutex, MutexGuard};
+
+    static DAEMON_SCOPE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct DaemonScopeEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for DaemonScopeEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: daemon spawn tests serialize environment mutation through
+            // DAEMON_SCOPE_ENV_LOCK and restore the variable before releasing it.
+            unsafe {
+                std::env::remove_var(DAEMON_INDEPENDENT_SCOPE_ENV);
+            }
+        }
+    }
+
+    fn force_direct_daemon_spawn_for_test() -> DaemonScopeEnvGuard {
+        let lock = DAEMON_SCOPE_ENV_LOCK
+            .lock()
+            .expect("daemon env lock poisoned");
+        // SAFETY: daemon spawn tests serialize environment mutation through
+        // DAEMON_SCOPE_ENV_LOCK and restore the variable in DaemonScopeEnvGuard.
+        unsafe {
+            std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "0");
+        }
+        DaemonScopeEnvGuard { _lock: lock }
+    }
 
     /// Write a wrapper that LOGS every received arg on its own line, then
     /// skips daemon-child prefix args until `--` and evals the rest.
@@ -174,8 +279,83 @@ mod tests {
         script
     }
 
+    fn test_spawn_config(session_id: &str, csa_binary: PathBuf) -> DaemonSpawnConfig {
+        DaemonSpawnConfig {
+            session_id: session_id.to_string(),
+            session_dir: PathBuf::from("/tmp/session-unused"),
+            csa_binary,
+            subcommand: "plan run".to_string(),
+            args: vec!["--flag".to_string(), "value".to_string()],
+            env: HashMap::from([("CSA_TEST_ENV".to_string(), "1".to_string())]),
+        }
+    }
+
+    #[test]
+    fn test_build_daemon_command_direct_preserves_child_args() {
+        let config = test_spawn_config("TESTDIRECT", PathBuf::from("/bin/csa-test"));
+        let cmd = build_daemon_command(&config, &DaemonSpawnMode::Direct);
+
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(cmd.get_program().to_string_lossy(), "/bin/csa-test");
+        assert_eq!(
+            args,
+            vec![
+                "plan",
+                "run",
+                "--daemon-child",
+                "--session-id",
+                "TESTDIRECT",
+                "--flag",
+                "value",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_daemon_command_independent_scope_wraps_systemd_run() {
+        let config = test_spawn_config("TESTSCOPE", PathBuf::from("/bin/csa-test"));
+        let cmd = build_daemon_command(
+            &config,
+            &DaemonSpawnMode::IndependentScope {
+                unit: "csa-daemon-TESTSCOPE.scope".to_string(),
+            },
+        );
+
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(cmd.get_program().to_string_lossy(), "systemd-run");
+        assert_eq!(
+            args,
+            vec![
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                "--unit",
+                "csa-daemon-TESTSCOPE.scope",
+                "--",
+                "/bin/csa-test",
+                "plan",
+                "run",
+                "--daemon-child",
+                "--session-id",
+                "TESTSCOPE",
+                "--flag",
+                "value",
+            ]
+        );
+    }
+
     #[test]
     fn test_daemon_spawn_creates_spool_files() {
+        let _guard = force_direct_daemon_spawn_for_test();
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_dir = tmp.path().join("session-test");
         let wrapper = write_wrapper_script(tmp.path(), "wrapper1.sh");
@@ -215,6 +395,7 @@ mod tests {
 
     #[test]
     fn test_daemon_spawn_supports_multi_word_subcommand() {
+        let _guard = force_direct_daemon_spawn_for_test();
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_dir = tmp.path().join("session-multi");
         let wrapper = write_wrapper_script(tmp.path(), "wrapper-multi.sh");
@@ -272,6 +453,7 @@ mod tests {
 
     #[test]
     fn test_daemon_spawn_child_detached() {
+        let _guard = force_direct_daemon_spawn_for_test();
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_dir = tmp.path().join("session-detach");
         let wrapper = write_wrapper_script(tmp.path(), "wrapper2.sh");

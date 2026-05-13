@@ -37,7 +37,8 @@ use run_context::finalize_prompt_text;
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
-    detect_effective_repo, find_recent_interrupted_skill_session, resolve_run_timeout_seconds,
+    detect_effective_repo, find_recent_interrupted_skill_session,
+    promote_idle_timeout_for_explicit_wall_timeout, resolve_run_timeout_seconds,
     skill_session_description,
 };
 
@@ -322,13 +323,14 @@ pub(crate) async fn handle_run(
         .resolve_alias(&merged_aliases)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .into_strategy();
+    let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let idle_timeout_seconds = if no_idle_timeout {
         info!("Idle timeout disabled via --no-idle-timeout");
         u64::MAX
     } else {
-        pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout)
+        let resolved_idle = pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout);
+        promote_idle_timeout_for_explicit_wall_timeout(resolved_idle, idle_timeout, timeout)
     };
-    let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
     let needs_edit = task_needs_edit.unwrap_or(false);
     let strategy_result = resolve_tool_by_strategy(
