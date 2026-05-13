@@ -161,7 +161,7 @@ fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
         pipeline_source: default_plan_pipeline_source(),
         status: "running".into(),
         vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
-        completed_steps: vec![1],
+        completed_steps: vec![],
         last_error: None,
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
