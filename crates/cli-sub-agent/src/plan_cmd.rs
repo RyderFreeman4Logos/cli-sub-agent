@@ -732,6 +732,10 @@ mod tests;
 mod tests_tail;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_manual_handoff.rs"]
+mod tests_manual_handoff;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_workflows.rs"]
 mod tests_workflows;
 

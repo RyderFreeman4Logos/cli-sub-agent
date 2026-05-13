@@ -264,8 +264,7 @@ pub(super) async fn execute_plan_with_journal(
         } else {
             Vec::new()
         };
-        // Strip CSA_VAR: lines from the step output so downstream
-        // variable references (e.g. ${STEP_2_OUTPUT}) get clean values.
+        // Strip CSA_VAR: lines so downstream variable references keep clean step output.
         let var_value = strip_assignment_marker_lines(&raw_output);
         vars.insert(var_key, var_value);
         let session_var_key = format!("STEP_{}_SESSION", result.step_id);
@@ -274,10 +273,13 @@ pub(super) async fn execute_plan_with_journal(
         for (key, value) in assignment_markers {
             vars.insert(key, value);
         }
-        if !is_failure {
-            // Record both successfully executed and skipped steps as completed
-            // so that --resume does not re-evaluate them (avoiding infinite loops
-            // when a condition-false step is skipped in chunked mode).
+        let is_manual_handoff = matches!(
+            orchestrator_handoff,
+            Some(OrchestratorHandoff::ManualResume)
+        );
+        if !is_failure && !is_manual_handoff {
+            // Record executed/skipped steps as completed so --resume does not re-evaluate them.
+            // Manual handoff only prints instructions, so explicit resume must replay it.
             completed_steps.insert(step.id);
         }
         run_ctx.journal.vars = vars.clone();
