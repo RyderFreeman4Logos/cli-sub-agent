@@ -504,7 +504,10 @@ fn resolve_step_tool_respects_tool_override() {
     let target_no_override = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(
         target_no_override,
-        StepTarget::CsaTool { tool_name: ToolName::GeminiCli, .. }
+        StepTarget::CsaTool {
+            tool_name: ToolName::GeminiCli,
+            ..
+        }
     ));
 
     // With tool override: should use codex instead of gemini-cli
@@ -512,7 +515,10 @@ fn resolve_step_tool_respects_tool_override() {
     let target_with_override = resolve_step_tool(&step, None, Some(&tool_override), None).unwrap();
     assert!(matches!(
         target_with_override,
-        StepTarget::CsaTool { tool_name: ToolName::Codex, .. }
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            ..
+        }
     ));
 }
 
@@ -540,12 +546,16 @@ fn resolve_step_tool_respects_model_spec_override() {
         &step,
         None,
         Some(&tool_override),
-        Some(&model_spec_override)
-    ).unwrap();
+        Some(&model_spec_override),
+    )
+    .unwrap();
 
     assert!(matches!(
         target,
-        StepTarget::CsaTool { tool_name: ToolName::Codex, .. }
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            ..
+        }
     ));
 
     if let StepTarget::CsaTool { model_spec, .. } = target {
