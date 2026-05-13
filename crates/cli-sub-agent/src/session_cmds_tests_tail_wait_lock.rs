@@ -4,6 +4,8 @@ use crate::session_cmds_daemon::{
     try_acquire_session_wait_lock,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
+use std::io::Write;
+use std::os::fd::AsRawFd;
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -49,6 +51,71 @@ fn session_wait_lock_creates_dot_wait_lock_file_and_rejects_duplicates() {
         second_lock.is_none(),
         "second concurrent wait lock attempt should be rejected"
     );
+}
+
+#[test]
+fn session_wait_lock_reuses_unheld_stale_lock_file() {
+    let td = tempdir().expect("tempdir");
+    std::fs::write(td.path().join(".wait.lock"), r#"{"pid":1}"#).expect("write stale lock file");
+
+    let lock = try_acquire_session_wait_lock(td.path())
+        .expect("wait lock acquisition should not error")
+        .expect("unheld stale lock file should not block acquisition");
+
+    assert!(
+        td.path().join(".wait.lock").is_file(),
+        "wait lock file should remain present after acquisition"
+    );
+
+    drop(lock);
+}
+
+#[test]
+fn session_wait_lock_recovers_when_flock_holder_pid_is_dead() {
+    let td = tempdir().expect("tempdir");
+    let lock_path = td.path().join(".wait.lock");
+    let stale_pid = exited_child_pid();
+    let mut stale_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .expect("open stale lock file");
+    writeln!(stale_file, "{{\"pid\":{stale_pid}}}").expect("write stale wait pid");
+    stale_file.flush().expect("flush stale wait pid");
+
+    // SAFETY: `stale_file` owns a valid fd; the test intentionally simulates a
+    // stale inherited flock whose diagnostic PID no longer exists.
+    let rc = unsafe { libc::flock(stale_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(rc, 0, "test setup should acquire stale flock");
+
+    let recovered = try_acquire_session_wait_lock(td.path())
+        .expect("stale wait lock recovery should not error")
+        .expect("dead wait pid should allow lock recovery");
+    let duplicate = try_acquire_session_wait_lock(td.path())
+        .expect("duplicate wait lock check should not error");
+    assert!(
+        duplicate.is_none(),
+        "recovered live wait lock should still reject duplicates"
+    );
+
+    drop(recovered);
+    // SAFETY: `stale_file` still owns the fd for the old unlinked inode.
+    unsafe {
+        libc::flock(stale_file.as_raw_fd(), libc::LOCK_UN);
+    }
+}
+
+fn exited_child_pid() -> u32 {
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("exit 0")
+        .spawn()
+        .expect("spawn short-lived child");
+    let pid = child.id();
+    child.wait().expect("wait for short-lived child");
+    pid
 }
 
 #[test]

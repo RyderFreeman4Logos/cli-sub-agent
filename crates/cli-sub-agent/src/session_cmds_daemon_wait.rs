@@ -1,5 +1,6 @@
 use super::*;
 use std::fs;
+use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
@@ -51,6 +52,11 @@ pub(crate) struct SessionWaitLock {
     file: std::fs::File,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+struct SessionWaitLockDiagnostic {
+    pid: u32,
+}
+
 impl Drop for SessionWaitLock {
     fn drop(&mut self) {
         // SAFETY: `self.file` owns a valid fd for the lock file.
@@ -62,18 +68,33 @@ impl Drop for SessionWaitLock {
 
 pub(crate) fn try_acquire_session_wait_lock(session_dir: &Path) -> Result<Option<SessionWaitLock>> {
     let lock_path = session_dir.join(".wait.lock");
-    let file = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
         .open(&lock_path)?;
 
+    if try_flock_session_wait_file(&file)? {
+        write_session_wait_lock_diagnostic(&mut file)?;
+        return Ok(Some(SessionWaitLock { file }));
+    }
+
+    if lock_file_has_dead_wait_pid(&lock_path)?
+        && let Some(lock) = recover_stale_session_wait_lock(&lock_path)?
+    {
+        return Ok(Some(lock));
+    }
+
+    Ok(None)
+}
+
+fn try_flock_session_wait_file(file: &std::fs::File) -> Result<bool> {
     // SAFETY: `file` owns a valid fd and `LOCK_EX | LOCK_NB` is a standard
     // non-blocking advisory exclusive lock request.
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if rc == 0 {
-        return Ok(Some(SessionWaitLock { file }));
+        return Ok(true);
     }
 
     let err = std::io::Error::last_os_error();
@@ -81,10 +102,77 @@ pub(crate) fn try_acquire_session_wait_lock(session_dir: &Path) -> Result<Option
         err.raw_os_error(),
         Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
     ) {
-        return Ok(None);
+        return Ok(false);
     }
 
     Err(err.into())
+}
+
+fn write_session_wait_lock_diagnostic(file: &mut std::fs::File) -> Result<()> {
+    let diagnostic = SessionWaitLockDiagnostic {
+        pid: std::process::id(),
+    };
+    let json = serde_json::to_string(&diagnostic)?;
+
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(json.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    Ok(())
+}
+
+fn lock_file_has_dead_wait_pid(lock_path: &Path) -> Result<bool> {
+    let contents = match fs::read_to_string(lock_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    let Ok(diagnostic) = serde_json::from_str::<SessionWaitLockDiagnostic>(&contents) else {
+        return Ok(false);
+    };
+
+    Ok(!is_session_wait_lock_pid_alive(diagnostic.pid))
+}
+
+fn is_session_wait_lock_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    // SAFETY: kill(pid, 0) is a standard POSIX liveness probe and does not send
+    // a signal. EPERM still means a process exists but is not signalable by us.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+
+    !matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(code) if code == libc::ESRCH
+    )
+}
+
+fn recover_stale_session_wait_lock(lock_path: &Path) -> Result<Option<SessionWaitLock>> {
+    match fs::remove_file(lock_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+
+    if !try_flock_session_wait_file(&file)? {
+        return Ok(None);
+    }
+
+    write_session_wait_lock_diagnostic(&mut file)?;
+    Ok(Some(SessionWaitLock { file }))
 }
 
 /// Wait for a daemon session to reach a terminal result and daemon exit.
