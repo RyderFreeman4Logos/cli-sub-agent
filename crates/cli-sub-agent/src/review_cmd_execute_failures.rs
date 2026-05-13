@@ -5,17 +5,19 @@ pub(super) fn classify_review_failover_reason(
     model_spec: Option<&str>,
     execution: &crate::pipeline::SessionExecutionResult,
     status_reason: Option<&str>,
+    attempt_elapsed: Option<std::time::Duration>,
 ) -> Option<String> {
     if status_reason == Some("gemini_auth_prompt") {
         return Some("gemini_auth_prompt".to_string());
     }
 
-    classify_next_model_failure(
+    classify_next_model_failure_with_elapsed(
         tool.as_str(),
         &execution.execution.stderr_output,
         &execution.execution.output,
         execution.execution.exit_code,
         model_spec,
+        attempt_elapsed,
     )
     .map(|detected| detected.reason)
 }

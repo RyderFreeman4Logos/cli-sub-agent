@@ -2,6 +2,7 @@ use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_scheduler::RateLimitDetected;
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TierFilter {
@@ -125,15 +126,23 @@ fn ordered_global_candidates(
     ordered
 }
 
-pub(crate) fn classify_next_model_failure(
+pub(crate) fn classify_next_model_failure_with_elapsed(
     tool_name: &str,
     stderr: &str,
     stdout: &str,
     exit_code: i32,
     model_spec: Option<&str>,
+    attempt_elapsed: Option<Duration>,
 ) -> Option<RateLimitDetected> {
-    csa_scheduler::detect_rate_limit(tool_name, stderr, stdout, exit_code, model_spec)
-        .filter(|detected| detected.advance_to_next_model)
+    csa_scheduler::detect_rate_limit(tool_name, stderr, stdout, exit_code, model_spec).filter(
+        |detected| {
+            detected.advance_to_next_model
+                && (!csa_scheduler::requires_init_failure_window(detected)
+                    || attempt_elapsed
+                        .map(csa_scheduler::within_init_failure_window)
+                        .unwrap_or(true))
+        },
+    )
 }
 
 pub(crate) fn chain_failure_reasons(failures: &[TierAttemptFailure]) -> Option<String> {

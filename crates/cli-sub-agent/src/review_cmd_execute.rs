@@ -28,9 +28,9 @@ use tracing::{info, warn};
 
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
 use crate::tier_model_fallback::{
-    TierAttemptFailure, TierFilter, chain_failure_reasons, classify_next_model_failure,
-    fallback_reason_for_result, format_all_models_failed_reason, ordered_tier_candidates,
-    persist_fallback_result_fields,
+    TierAttemptFailure, TierFilter, chain_failure_reasons,
+    classify_next_model_failure_with_elapsed, fallback_reason_for_result,
+    format_all_models_failed_reason, ordered_tier_candidates, persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -216,6 +216,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     let mut failures = Vec::new();
 
     for (attempt_index, (attempt_tool, attempt_model_spec)) in candidates.iter().enumerate() {
+        let attempt_started_at = std::time::Instant::now();
         let enforce_tier =
             tier_name.is_some() && attempt_model_spec.is_some() && !force_ignore_tier_setting;
         let mut executor = crate::pipeline::build_and_validate_executor(
@@ -290,12 +291,13 @@ pub(crate) async fn execute_review_with_tier_filter(
                 let error_text = format!("{err:#}");
                 if tier_fallback_enabled
                     && candidates.len() > 1
-                    && let Some(detected) = classify_next_model_failure(
+                    && let Some(detected) = classify_next_model_failure_with_elapsed(
                         attempt_tool.as_str(),
                         &error_text,
                         "",
                         1,
                         attempt_model_spec.as_deref(),
+                        Some(attempt_started_at.elapsed()),
                     )
                 {
                     let model_label = attempt_model_spec
@@ -456,6 +458,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             attempt_model_spec.as_deref(),
             &execution,
             status_reason.as_deref(),
+            Some(attempt_started_at.elapsed()),
         );
 
         if tier_fallback_enabled
