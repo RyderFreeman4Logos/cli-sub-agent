@@ -13,7 +13,7 @@ pre-commit:
     branch-protection:
       run: scripts/hooks/branch-protection.sh
     quality-gates:
-      run: just pre-commit
+      run: just pre-commit-fast
 
 pre-push:
   commands:
@@ -21,6 +21,8 @@ pre-push:
       run: scripts/hooks/version-check.sh
     review-check:
       run: scripts/hooks/review-check.sh
+    full-test-suite:
+      run: just test && just test-e2e
 
 post-merge:
   commands:

@@ -184,8 +184,9 @@ check-version-bumped:
         exit 1
     fi
 
-# Run all checks: monolith guard, env-dependent test lint, Chinese character detection, formatting, linting, and tests.
-pre-commit:
+# Fast pre-commit: formatting, linting, static analysis only (no tests).
+# Tests run in pre-push hook instead, avoiding ~58min commit wait (#1383).
+pre-commit-fast:
     just find-monolith-files
     just check-generated-artifacts
     just check-version-bumped
@@ -194,6 +195,10 @@ pre-commit:
     ./scripts/hooks/check-env-dependent-tests.sh
     just deny
     just clippy
+
+# Run all checks: monolith guard, env-dependent test lint, Chinese character detection, formatting, linting, and tests.
+pre-commit:
+    just pre-commit-fast
     just test
     just test-e2e
 
