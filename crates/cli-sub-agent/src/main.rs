@@ -23,6 +23,7 @@ mod edit_restriction_guard;
 mod error_hints;
 mod error_report;
 mod eval_cmd;
+mod executor_csa_guard;
 mod gc;
 mod gh_env;
 mod goal_loop;
@@ -119,7 +120,6 @@ use sa_mode::apply_sa_mode_prompt_guard;
 mod migrate_cmd;
 mod sa_mode;
 
-// Re-export for tests that reference `crate::validate_sa_mode`.
 #[cfg(test)]
 pub(crate) use sa_mode::validate_sa_mode;
 
@@ -196,6 +196,7 @@ async fn run() -> Result<()> {
     if let Err(err) = validate_command_args(&command, min_timeout) {
         err.exit();
     }
+    executor_csa_guard::enforce(&command)?;
 
     let sa_mode_active = apply_sa_mode_prompt_guard(&command, current_depth, output_format)?;
 

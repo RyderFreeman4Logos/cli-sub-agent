@@ -1,4 +1,3 @@
-//! Execution loop for `csa run`, extracted from `run_cmd.rs` to keep module sizes manageable.
 use anyhow::Result;
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName, ToolSelectionStrategy};
@@ -44,7 +43,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) strategy: ToolSelectionStrategy,
     pub(crate) initial_tool: ToolName,
     pub(crate) initial_model_spec: Option<String>,
-    pub(crate) user_model_spec_explicit: bool, // CLI `--model-spec`: exact selection, disables tier enforcement.
+    pub(crate) user_model_spec_explicit: bool,
     pub(crate) initial_model: Option<String>,
     pub(crate) runtime_fallback_candidates: Vec<ToolName>,
     pub(crate) project_root: &'a Path,
@@ -349,10 +348,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             effective_session_arg = new_eff;
         }
 
-        let extra_env = request.global_config.build_execution_env(
+        let mut extra_env = request.global_config.build_execution_env(
             tool_name_str,
             ExecutionEnvOptions::from_no_failover(request.no_failover),
         );
+        crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
         let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(
