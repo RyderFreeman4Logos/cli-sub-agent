@@ -314,21 +314,22 @@ pub(crate) async fn handle_debate(
         resolved_model_spec.is_some(),
     );
 
-    let idle_timeout_seconds =
-        crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
+    let stream_mode = resolve_debate_stream_mode(args.stream_stdout, args.no_stream_stdout);
+    let timeout_seconds =
+        resolve_debate_timeout_seconds(args.timeout, Some(global_config.debate.timeout_seconds));
+    let idle_timeout_seconds = crate::pipeline::resolve_effective_idle_timeout_seconds(
+        config.as_ref(),
+        args.idle_timeout,
+        timeout_seconds,
+    );
     let initial_response_timeout_seconds =
-        crate::pipeline::resolve_initial_response_timeout_for_tool(
+        crate::pipeline::resolve_effective_initial_response_timeout_for_tool(
             config.as_ref(),
             args.initial_response_timeout,
             args.idle_timeout,
+            timeout_seconds,
             tool.as_str(),
         );
-
-    // Resolve stream mode from CLI flags (default: BufferOnly for debate)
-    let stream_mode = resolve_debate_stream_mode(args.stream_stdout, args.no_stream_stdout);
-
-    let timeout_seconds =
-        resolve_debate_timeout_seconds(args.timeout, Some(global_config.debate.timeout_seconds));
     let wall_clock_start = Instant::now();
     let readonly_project_root = global_config.debate.readonly_sandbox.unwrap_or(false);
     let candidates = tier_model_fallback::ordered_tier_candidates(

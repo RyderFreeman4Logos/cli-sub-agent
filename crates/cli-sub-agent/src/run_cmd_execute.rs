@@ -37,8 +37,7 @@ use run_context::finalize_prompt_text;
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
-    detect_effective_repo, find_recent_interrupted_skill_session,
-    promote_idle_timeout_for_explicit_wall_timeout, resolve_run_timeout_seconds,
+    detect_effective_repo, find_recent_interrupted_skill_session, resolve_run_timeout_seconds,
     skill_session_description,
 };
 
@@ -328,8 +327,7 @@ pub(crate) async fn handle_run(
         info!("Idle timeout disabled via --no-idle-timeout");
         u64::MAX
     } else {
-        let resolved_idle = pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout);
-        promote_idle_timeout_for_explicit_wall_timeout(resolved_idle, idle_timeout, timeout)
+        pipeline::resolve_effective_idle_timeout_seconds(config.as_ref(), idle_timeout, timeout)
     };
     let run_started_at = Instant::now();
     let needs_edit = task_needs_edit.unwrap_or(false);

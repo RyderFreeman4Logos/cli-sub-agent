@@ -282,6 +282,22 @@ fn resolve_idle_timeout_uses_config_then_default() {
 }
 
 #[test]
+fn explicit_wall_timeout_promotes_effective_idle_timeout() {
+    assert_eq!(
+        resolve_effective_idle_timeout_seconds(None, None, Some(1800)),
+        1800
+    );
+}
+
+#[test]
+fn explicit_idle_timeout_is_not_promoted_by_wall_timeout() {
+    assert_eq!(
+        resolve_effective_idle_timeout_seconds(None, Some(60), Some(1800)),
+        60
+    );
+}
+
+#[test]
 fn resolve_liveness_dead_seconds_uses_config_then_default() {
     let cfg = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -688,6 +704,8 @@ fn enforce_result_toml_contract_now(
 
 #[path = "pipeline_tests_contract.rs"]
 mod contract_tests;
+#[path = "pipeline_tests_effective_timeout.rs"]
+mod effective_timeout_tests;
 #[path = "pipeline_tests_initial_response.rs"]
 mod initial_response_tests;
 #[path = "pipeline_tests_locking.rs"]
