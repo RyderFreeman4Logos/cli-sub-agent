@@ -81,6 +81,18 @@ mod tests {
     }
 
     #[test]
+    fn plan_run_parses_no_fs_sandbox_flag() {
+        let plan_cli = Cli::try_parse_from(["csa", "plan", "run", "--no-fs-sandbox", "flow.toml"])
+            .expect("plan run cli should parse");
+        match plan_cli.command {
+            Commands::Plan { cmd } => match cmd {
+                PlanCommands::Run { no_fs_sandbox, .. } => assert!(no_fs_sandbox),
+            },
+            _ => panic!("expected plan command"),
+        }
+    }
+
+    #[test]
     fn top_level_help_lists_dev2merge_subcommand() {
         let help = Cli::command().render_long_help().to_string();
         assert!(

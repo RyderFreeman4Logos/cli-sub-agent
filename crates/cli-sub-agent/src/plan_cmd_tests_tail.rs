@@ -207,6 +207,7 @@ async fn execute_plan_stops_after_manual_handoff() {
         journal_path: Some(&journal_path),
         resume_completed_steps: &completed,
         chunked: false,
+        no_fs_sandbox: false,
     };
 
     let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
@@ -268,6 +269,7 @@ async fn execute_plan_stops_for_await_user() {
         journal_path: Some(&journal_path),
         resume_completed_steps: &completed,
         chunked: false,
+        no_fs_sandbox: false,
     };
 
     let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)

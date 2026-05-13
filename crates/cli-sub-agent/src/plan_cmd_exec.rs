@@ -56,6 +56,12 @@ pub(super) struct StepExecutionOutcome {
     pub(super) session_id: Option<String>,
 }
 
+pub(super) struct CsaStepExecutionOptions<'a> {
+    pub(super) model_spec: Option<&'a str>,
+    pub(super) forwarded_session: Option<&'a str>,
+    pub(super) no_fs_sandbox: bool,
+}
+
 pub(super) async fn run_with_heartbeat<F, T>(
     label: &str,
     execution: F,
@@ -205,14 +211,13 @@ pub(super) async fn execute_csa_step(
     label: &str,
     prompt: &str,
     tool_name: &ToolName,
-    model_spec: Option<&str>,
-    forwarded_session: Option<&str>,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    options: CsaStepExecutionOptions<'_>,
 ) -> Result<StepExecutionOutcome> {
     info!("{} - Dispatching to {} ...", label, tool_name.as_str());
 
-    let executor = build_executor(tool_name, model_spec, None, None, config, false)?;
+    let executor = build_executor(tool_name, options.model_spec, None, None, config, false)?;
     check_tool_installed(executor.runtime_binary_name()).await?;
 
     let global_config = csa_config::GlobalConfig::load()?;
@@ -254,7 +259,8 @@ pub(super) async fn execute_csa_step(
         ),
     };
 
-    let session_arg = forwarded_session
+    let session_arg = options
+        .forwarded_session
         .map(str::trim)
         .filter(|session| !session.is_empty())
         .map(str::to_string);
@@ -284,7 +290,7 @@ pub(super) async fn execute_csa_step(
             None,
             ParentSessionSource::ExplicitOnly,
             SessionCreationMode::FreshChild,
-            false, // no_fs_sandbox
+            options.no_fs_sandbox,
             false, // readonly_project_root
             &[],   // extra_writable
             &[],   // extra_readable

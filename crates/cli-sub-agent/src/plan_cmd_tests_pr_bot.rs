@@ -33,6 +33,7 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
         &workflow_path,
         None,
         None,
+        false,
     )
     .await;
     assert_eq!(result.exit_code, 0, "bash step should succeed");

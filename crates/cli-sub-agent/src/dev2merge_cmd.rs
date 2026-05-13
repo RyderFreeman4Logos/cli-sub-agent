@@ -62,6 +62,7 @@ fn build_plan_run_args(
         chunked: false,
         resume: None,
         cd: None,
+        no_fs_sandbox: false,
         current_depth,
         pipeline_source: PlanRunPipelineSource::CliAlias,
     }
@@ -101,6 +102,9 @@ fn build_forwarded_plan_args(plan_args: &PlanRunArgs, sa_mode: Option<bool>) -> 
     if let Some(cd) = &plan_args.cd {
         forwarded.push("--cd".to_string());
         forwarded.push(cd.clone());
+    }
+    if plan_args.no_fs_sandbox {
+        forwarded.push("--no-fs-sandbox".to_string());
     }
     forwarded
 }
@@ -251,6 +255,34 @@ mod tests {
                 "MKTD_TIMEOUT_SECONDS=1800",
                 "--var",
                 "OTHER=value",
+            ]
+        );
+    }
+
+    #[test]
+    fn forwarded_args_include_no_fs_sandbox_when_requested() {
+        let mut plan_args = build_plan_run_args(
+            Dev2mergeArgs {
+                issue: None,
+                vars: vec![],
+                sa_mode: Some(true),
+                timeout: None,
+            },
+            0,
+            None,
+        );
+        plan_args.no_fs_sandbox = true;
+
+        let forwarded = build_forwarded_plan_args(&plan_args, Some(true));
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--pattern",
+                "dev2merge",
+                "--sa-mode",
+                "true",
+                "--no-fs-sandbox",
             ]
         );
     }
