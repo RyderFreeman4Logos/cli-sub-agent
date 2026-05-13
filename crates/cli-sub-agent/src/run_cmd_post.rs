@@ -3,7 +3,7 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use tracing::{debug, info, warn};
@@ -164,7 +164,9 @@ enum TransportErrorFailoverKind {
 struct TransportErrorFailoverSignal {
     kind: TransportErrorFailoverKind,
     matched_pattern: String,
+    reason: String,
     quota_exhausted: bool,
+    requires_init_failure_window: bool,
 }
 
 pub(crate) fn format_tool_exhausted_summary(tool_name: &str, matched_pattern: &str) -> String {
@@ -245,7 +247,9 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::AcpCrashRetryExhausted,
             matched_pattern: matched_pattern.to_string(),
+            reason: "acp_crash_retry_exhausted".to_string(),
             quota_exhausted: false,
+            requires_init_failure_window: false,
         });
     }
 
@@ -260,10 +264,12 @@ fn detect_transport_error_failover_signal(
         return Some(TransportErrorFailoverSignal {
             kind: TransportErrorFailoverKind::GeminiRetryChainExhausted,
             matched_pattern: matched_pattern.to_string(),
+            reason: "gemini_retry_chain_exhausted".to_string(),
             quota_exhausted: csa_core::gemini::detect_permanent_quota_exhaustion_pattern(
                 error_message,
             )
             .is_some(),
+            requires_init_failure_window: false,
         });
     }
 
@@ -274,11 +280,46 @@ fn detect_transport_error_failover_signal(
         1, // synthetic non-zero exit code
         current_model_spec,
     )
-    .map(|rate_limit| TransportErrorFailoverSignal {
-        kind: TransportErrorFailoverKind::RateLimit,
-        matched_pattern: rate_limit.matched_pattern,
-        quota_exhausted: rate_limit.quota_exhausted,
+    .map(|rate_limit| {
+        let requires_init_failure_window = csa_scheduler::requires_init_failure_window(&rate_limit);
+        TransportErrorFailoverSignal {
+            kind: TransportErrorFailoverKind::RateLimit,
+            matched_pattern: rate_limit.matched_pattern,
+            reason: rate_limit.reason,
+            quota_exhausted: rate_limit.quota_exhausted,
+            requires_init_failure_window,
+        }
     })
+}
+
+fn allows_init_failure_failover(
+    tool_name: &str,
+    reason: &str,
+    requires_init_failure_window: bool,
+    attempt_elapsed: Option<Duration>,
+) -> bool {
+    if !requires_init_failure_window {
+        return true;
+    }
+    let Some(elapsed) = attempt_elapsed else {
+        return true;
+    };
+    if csa_scheduler::within_init_failure_window(elapsed) {
+        warn!(
+            tool = %tool_name,
+            reason = %reason,
+            elapsed_ms = elapsed.as_millis(),
+            "[csa-failover] {tool_name} failed with {reason}, falling back to next tier model"
+        );
+        return true;
+    }
+    warn!(
+        tool = %tool_name,
+        reason = %reason,
+        elapsed_ms = elapsed.as_millis(),
+        "[csa-failover] HTTP failure occurred after initialization window; not attempting automatic tier fallback"
+    );
+    false
 }
 
 /// Check for 429 rate-limit signals and decide whether to failover.
@@ -308,6 +349,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
     fallback_chain: &mut FallbackChain,
+    attempt_elapsed: Option<Duration>,
 ) -> Result<RateLimitAction> {
     let rate_limit = match csa_scheduler::detect_rate_limit(
         tool_name_str,
@@ -327,6 +369,15 @@ pub(crate) fn evaluate_rate_limit_failover(
             "Permanent tool quota exhaustion detected; not attempting runtime failover"
         );
         return Ok(RateLimitAction::ExhaustedFailovers);
+    }
+
+    if !allows_init_failure_failover(
+        tool_name_str,
+        &rate_limit.reason,
+        csa_scheduler::requires_init_failure_window(&rate_limit),
+        attempt_elapsed,
+    ) {
+        return Ok(RateLimitAction::NoRateLimit);
     }
 
     if !tier_auto_select {
@@ -407,6 +458,7 @@ pub(crate) fn evaluate_rate_limit_failover(
                 to_tool = %new_tool,
                 to_spec = %new_model_spec,
                 quota_exhausted = rate_limit.quota_exhausted,
+                reason = %rate_limit.reason,
                 "[csa-failover] intra-tier failover"
             );
             fallback_chain.push(FallbackAttempt {
@@ -456,6 +508,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
     fallback_chain: &mut FallbackChain,
+    attempt_elapsed: Option<Duration>,
 ) -> Result<RateLimitAction> {
     let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
@@ -473,6 +526,15 @@ pub(crate) fn evaluate_error_rate_limit_failover(
             "Permanent tool quota exhaustion detected in transport error; not attempting runtime failover"
         );
         return Ok(RateLimitAction::ExhaustedFailovers);
+    }
+
+    if !allows_init_failure_failover(
+        tool_name_str,
+        &failover_signal.reason,
+        failover_signal.requires_init_failure_window,
+        attempt_elapsed,
+    ) {
+        return Ok(RateLimitAction::NoRateLimit);
     }
 
     match failover_signal.kind {
@@ -576,6 +638,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 to_tool = %new_tool,
                 to_spec = %new_model_spec,
                 quota_exhausted = failover_signal.quota_exhausted,
+                reason = %failover_signal.reason,
                 "[csa-failover] intra-tier failover (transport error)"
             );
             fallback_chain.push(FallbackAttempt {

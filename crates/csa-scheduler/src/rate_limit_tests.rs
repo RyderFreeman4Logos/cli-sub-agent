@@ -342,6 +342,41 @@ fn test_http_403_advances_to_next_model() {
 }
 
 #[test]
+fn test_gemini_http_400_advances_to_next_model() {
+    let detected = detect_rate_limit(
+        "gemini-cli",
+        "Error: request failed with status: 400 Bad Request",
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    )
+    .expect("HTTP 400 should classify");
+    assert_eq!(detected.reason, "HTTP 400");
+    assert!(detected.advance_to_next_model);
+    assert!(requires_init_failure_window(&detected));
+    assert_eq!(
+        detected.model_spec.as_deref(),
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
+    );
+}
+
+#[test]
+fn test_http_5xx_status_patterns_advance_to_next_model() {
+    for (message, expected_reason) in [
+        ("HTTP 500 Internal Server Error", "HTTP 500"),
+        ("upstream returned status 502", "HTTP 502"),
+        ("server unavailable; status: 503", "HTTP 503"),
+        ("provider returned status: 5xx", "HTTP 5xx"),
+    ] {
+        let detected = detect_rate_limit("gemini-cli", message, "", 1, None)
+            .unwrap_or_else(|| panic!("{message} should classify"));
+        assert_eq!(detected.reason, expected_reason);
+        assert!(detected.advance_to_next_model);
+        assert!(requires_init_failure_window(&detected));
+    }
+}
+
+#[test]
 fn test_claude_crash_retry_exhausted() {
     let result = detect_rate_limit(
         "claude-code",

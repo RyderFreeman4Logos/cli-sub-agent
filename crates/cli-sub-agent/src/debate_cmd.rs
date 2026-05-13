@@ -426,6 +426,7 @@ pub(crate) async fn handle_debate(
         loop {
             ensure_debate_wall_clock_within_timeout(wall_clock_start, timeout_seconds)?;
 
+            let attempt_started_at = Instant::now();
             let execute_future = crate::pipeline::execute_with_session_and_meta(
                 &executor,
                 attempt_tool,
@@ -474,13 +475,16 @@ pub(crate) async fn handle_debate(
             let executed = match execute_result {
                 Ok(execution) => execution,
                 Err(err) => {
-                    if let Some(detected) = tier_model_fallback::classify_next_model_failure(
-                        attempt_tool.as_str(),
-                        &err.to_string(),
-                        "",
-                        1,
-                        attempt_model_spec.as_deref(),
-                    ) {
+                    if let Some(detected) =
+                        tier_model_fallback::classify_next_model_failure_with_elapsed(
+                            attempt_tool.as_str(),
+                            &err.to_string(),
+                            "",
+                            1,
+                            attempt_model_spec.as_deref(),
+                            Some(attempt_started_at.elapsed()),
+                        )
+                    {
                         let model_label = attempt_model_spec
                             .clone()
                             .unwrap_or_else(|| attempt_tool.as_str().to_string());
@@ -536,12 +540,13 @@ pub(crate) async fn handle_debate(
                 break 'tier_attempts;
             }
 
-            if let Some(detected) = tier_model_fallback::classify_next_model_failure(
+            if let Some(detected) = tier_model_fallback::classify_next_model_failure_with_elapsed(
                 attempt_tool.as_str(),
                 &executed.execution.stderr_output,
                 &executed.execution.output,
                 executed.execution.exit_code,
                 attempt_model_spec.as_deref(),
+                Some(attempt_started_at.elapsed()),
             ) {
                 let model_label = attempt_model_spec
                     .clone()

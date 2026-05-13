@@ -1,11 +1,13 @@
 //! Classify stderr/stdout conditions that may require tier failover.
 
 use serde::Serialize;
+use std::time::Duration;
 
 const ACP_CRASH_EXHAUSTION_PATTERNS: &[&str] =
     &["acp crash retry exhausted", "crash retry exhausted"];
 const GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS: &[&str] =
     &["gemini acp retry chain exhausted", "retry chain exhausted"];
+pub const INIT_FAILURE_FALLBACK_WINDOW: Duration = Duration::from_secs(30);
 
 /// Information about a detected rate-limit event.
 #[derive(Debug, Clone, Serialize)]
@@ -96,7 +98,73 @@ pub fn detect_rate_limit(
         }
     }
 
+    if let Some(http_status) = detect_http_status_failover(&combined_lower) {
+        return Some(RateLimitDetected {
+            tool: tool_name.to_string(),
+            matched_pattern: http_status.matched_pattern.clone(),
+            reason: http_status.reason,
+            advance_to_next_model: true,
+            quota_exhausted: false,
+            model_spec: model_spec.map(String::from),
+        });
+    }
+
     None
+}
+
+pub fn requires_init_failure_window(detected: &RateLimitDetected) -> bool {
+    http_status_reason_requires_init_window(&detected.reason)
+}
+
+pub fn within_init_failure_window(elapsed: Duration) -> bool {
+    elapsed <= INIT_FAILURE_FALLBACK_WINDOW
+}
+
+struct HttpStatusFailover {
+    matched_pattern: String,
+    reason: String,
+}
+
+fn detect_http_status_failover(text: &str) -> Option<HttpStatusFailover> {
+    let mut previous_token: Option<&str> = None;
+    for token in text.split(|ch: char| !ch.is_ascii_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        if let Some(marker @ ("http" | "status" | "statuscode")) = previous_token
+            && let Some(reason) = http_failover_reason(token)
+        {
+            return Some(HttpStatusFailover {
+                matched_pattern: format!("{marker} {token}"),
+                reason,
+            });
+        }
+        previous_token = Some(token);
+    }
+    None
+}
+
+fn http_failover_reason(token: &str) -> Option<String> {
+    if matches!(token, "4xx" | "5xx") {
+        return Some(format!("HTTP {token}"));
+    }
+
+    let code = token.parse::<u16>().ok()?;
+    (400..=599).contains(&code).then(|| format!("HTTP {code}"))
+}
+
+fn http_status_reason_requires_init_window(reason: &str) -> bool {
+    let Some(status) = reason.strip_prefix("HTTP ") else {
+        return false;
+    };
+    if status == "4xx" || status == "5xx" {
+        return true;
+    }
+    match status.parse::<u16>() {
+        Ok(429 | 529) => false,
+        Ok(code) => (400..=599).contains(&code),
+        Err(_) => false,
+    }
 }
 
 fn failover_patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {

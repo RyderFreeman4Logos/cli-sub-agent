@@ -208,6 +208,7 @@ fn evaluate_error_rate_limit_failover_retries_on_acp_crash_retry_exhaustion() {
         None,
         Some("claude-code/anthropic/claude-sonnet/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -242,6 +243,7 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -286,6 +288,7 @@ fn full_anyhow_chain_preserves_quota_markers_and_stops_failover() {
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -320,6 +323,7 @@ fn evaluate_error_rate_limit_failover_skips_retry_exhaustion_without_active_tier
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -368,6 +372,7 @@ fn evaluate_rate_limit_failover_skips_rate_limit_without_active_tier_routing() {
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -417,6 +422,7 @@ fn evaluate_rate_limit_failover_stops_on_permanent_quota_result() {
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut fallback_chain,
+        None,
     )
     .expect("evaluate failover");
 
@@ -466,6 +472,7 @@ fn explicit_tool_in_tier_crash_triggers_failover() {
         None,
         Some("codex/openai/o4-mini/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -507,6 +514,7 @@ fn explicit_tool_no_tier_crash_no_failover() {
         None,
         Some("codex/openai/o4-mini/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -552,6 +560,7 @@ fn explicit_tool_in_tier_permanent_quota_no_failover() {
         None,
         Some("codex/openai/o4-mini/high"),
         &mut vec![],
+        None,
     )
     .expect("evaluate failover");
 
@@ -670,6 +679,7 @@ fn evaluate_error_rate_limit_failover_populates_fallback_chain_on_transient_retr
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut fallback_chain,
+        None,
     )
     .expect("evaluate failover");
 
@@ -719,6 +729,7 @@ fn evaluate_error_rate_limit_failover_stops_on_permanent_gemini_quota() {
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut fallback_chain,
+        None,
     )
     .expect("evaluate failover");
 
@@ -771,6 +782,7 @@ fn evaluate_error_rate_limit_failover_no_failover_flag_prevents_fallback_chain_e
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
         &mut fallback_chain,
+        None,
     )
     .expect("evaluate failover");
 

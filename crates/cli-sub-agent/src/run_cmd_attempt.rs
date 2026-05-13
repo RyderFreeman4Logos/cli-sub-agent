@@ -409,6 +409,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             return Ok(RunLoopCompletion::Exit(exit_code));
         }
 
+        let attempt_started_at = Instant::now();
         let attempt_execution = if let Some(timeout_duration) = remaining_run_timeout {
             if request.ephemeral {
                 run_ephemeral_with_timeout(
@@ -658,6 +659,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.task_needs_edit,
                     current_model_spec.as_deref(),
                     &mut fallback_chain,
+                    Some(attempt_started_at.elapsed()),
                 )? {
                     RateLimitAction::Retry {
                         new_tool,
@@ -755,6 +757,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             request.task_needs_edit,
             current_model_spec.as_deref(),
             &mut fallback_chain,
+            Some(attempt_started_at.elapsed()),
         )? {
             RateLimitAction::Retry {
                 new_tool,
@@ -780,7 +783,6 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             _ => break exec_result,
         }
     };
-
     Ok(RunLoopCompletion::Completed(Box::new(RunLoopOutcome {
         result,
         current_tool,
@@ -790,6 +792,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     })))
 }
 
+#[cfg(test)]
+#[path = "run_cmd_attempt_http_failover_tests.rs"]
+mod http_failover_tests;
 #[cfg(test)]
 #[path = "run_cmd_attempt_tests.rs"]
 mod tests;
