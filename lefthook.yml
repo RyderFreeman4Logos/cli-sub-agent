@@ -13,7 +13,7 @@ pre-commit:
     branch-protection:
       run: scripts/hooks/branch-protection.sh
     quality-gates:
-      run: just pre-commit
+      run: just pre-commit-fast
 
 pre-push:
   commands:

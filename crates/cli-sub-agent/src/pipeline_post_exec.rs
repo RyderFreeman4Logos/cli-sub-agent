@@ -29,6 +29,8 @@ const OUTPUT_LOG_TAIL_READ_BYTES: u64 = 8 * 1024;
 /// tool calls in sa-mode are classified as no-op exits.  Hardcoded — not
 /// a config key — to keep the gate simple and predictable.
 const NO_OP_ELAPSED_THRESHOLD_SECS: i64 = 60;
+#[path = "pipeline_post_exec_progress.rs"]
+mod progress;
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
     pub executor: &'a Executor,
@@ -237,6 +239,21 @@ pub(crate) async fn process_execution_result(
             tool_state.last_exit_code = 1;
             tool_state.last_action_summary = no_op_summary;
         }
+    }
+    if result.exit_code == 0
+        && ctx.task_type == Some("run")
+        && let Err(err) = progress::maybe_mark_no_progress_session(
+            ctx.project_root,
+            session,
+            result,
+            &mut session_result,
+        )
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Skipping post-session no-progress detection; preserving success status"
+        );
     }
     crate::pipeline_jj_journal::maybe_record_post_run_snapshot(
         ctx.config.map(|config| &config.vcs),
@@ -725,3 +742,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pipeline_tests_no_op_gate.rs"]
 mod no_op_gate_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_no_progress.rs"]
+mod no_progress_tests;
