@@ -205,10 +205,10 @@ fn handle_session_wait_prefers_late_real_result_status_and_exit_code_over_comple
     )
     .expect("wait should succeed");
 
-    assert_eq!(exit_code, 7);
+    assert_eq!(exit_code, 1);
     assert_eq!(
         emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 7, false))
+        Some((session_id.clone(), "failure".to_string(), 1, false))
     );
 
     let persisted = load_result(project, &session_id)
@@ -269,10 +269,10 @@ fn handle_session_wait_prefers_refreshed_real_result_status_and_exit_code_over_c
     )
     .expect("wait should succeed");
 
-    assert_eq!(exit_code, 7);
+    assert_eq!(exit_code, 1);
     assert_eq!(
         emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 7, false))
+        Some((session_id.clone(), "failure".to_string(), 1, false))
     );
 
     let persisted = load_result(project, &session_id)
@@ -354,10 +354,10 @@ fn handle_session_wait_prefers_refreshed_real_result_on_equal_mtime_with_complet
     )
     .expect("wait should succeed");
 
-    assert_eq!(exit_code, 7);
+    assert_eq!(exit_code, 1);
     assert_eq!(
         emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 7, false))
+        Some((session_id.clone(), "failure".to_string(), 1, false))
     );
 
     let persisted = load_result(project, &session_id)
@@ -365,6 +365,70 @@ fn handle_session_wait_prefers_refreshed_real_result_on_equal_mtime_with_complet
         .expect("refreshed real result should persist");
     assert_eq!(persisted.status, "failure");
     assert_eq!(persisted.exit_code, 7);
+}
+
+#[test]
+fn handle_session_wait_maps_output_result_timeout_to_terminal_failure() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-output-result-timeout"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    let output_result = SessionResult {
+        summary: "tool execution timed out".to_string(),
+        ..make_result("timeout", 124)
+    };
+    let output_result_toml =
+        toml::to_string_pretty(&output_result).expect("serialize output result");
+    std::fs::write(
+        output_dir.join(csa_session::result::RESULT_FILE_NAME),
+        output_result_toml,
+    )
+    .expect("write output result");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should detect output/result.toml fallback");
+
+    assert_eq!(
+        exit_code, 1,
+        "completed session timeout is a terminal failure, not a wait timeout"
+    );
+    assert_eq!(
+        emitted_completion,
+        Some((session_id, "timeout".to_string(), 1, false))
+    );
 }
 
 #[cfg(unix)]
