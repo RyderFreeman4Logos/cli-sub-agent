@@ -119,10 +119,67 @@ pub(crate) fn check_daemon_flags(
 
         // Install stderr rotation so daemon stderr.log is bounded.
         stderr_rotation = install_daemon_stderr_rotation(sid, cd);
+
+        // Install panic hook so daemon-completion.toml is written even on panic.
+        install_daemon_panic_hook();
+
+        // Spawn a background task that writes daemon-completion.toml on SIGTERM/SIGINT.
+        // This runs inside the tokio runtime (we are inside `#[tokio::main]`).
+        spawn_daemon_signal_handler();
     }
     Ok(DaemonChildGuard {
         _stderr_rotation: stderr_rotation,
     })
+}
+
+/// Install a custom panic hook that writes `daemon-completion.toml` before
+/// chaining to the default hook (preserving backtrace output).
+///
+/// Exit code 101 is Rust's conventional panic exit code.
+fn install_daemon_panic_hook() {
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        crate::session_cmds_daemon::persist_daemon_completion_from_env(101);
+        prev_hook(info);
+    }));
+}
+
+/// Spawn a tokio task that listens for SIGTERM and SIGINT, writes
+/// `daemon-completion.toml` with the conventional signal exit code
+/// (128 + signal number), then exits.
+fn spawn_daemon_signal_handler() {
+    tokio::spawn(async {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("failed to register daemon SIGTERM handler: {e}");
+                    return;
+                }
+            };
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("failed to register daemon SIGINT handler: {e}");
+                    return;
+                }
+            };
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    // 128 + 15 (SIGTERM) = 143
+                    crate::session_cmds_daemon::persist_daemon_completion_from_env(143);
+                    std::process::exit(143);
+                }
+                _ = sigint.recv() => {
+                    // 128 + 2 (SIGINT) = 130
+                    crate::session_cmds_daemon::persist_daemon_completion_from_env(130);
+                    std::process::exit(130);
+                }
+            }
+        }
+    });
 }
 
 /// Best-effort stderr rotation install for daemon child processes.
