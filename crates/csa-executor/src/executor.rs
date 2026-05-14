@@ -83,7 +83,6 @@ pub enum Executor {
 const fn default_codex_runtime_metadata() -> CodexRuntimeMetadata {
     CodexRuntimeMetadata::current()
 }
-
 const fn default_claude_runtime_metadata() -> ClaudeCodeRuntimeMetadata {
     ClaudeCodeRuntimeMetadata::current()
 }
@@ -292,6 +291,16 @@ impl Executor {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
     ) -> (Command, Option<Vec<u8>>) {
+        // Prepend CSA identity preamble for claude-code (#1397).
+        let preamble_buf;
+        let prompt = match self {
+            Self::ClaudeCode { .. } => {
+                preamble_buf =
+                    format!("{}{prompt}", Self::csa_sub_agent_identity_preamble(session));
+                preamble_buf.as_str()
+            }
+            _ => prompt,
+        };
         let mut cmd = self.build_base_command(session);
         if matches!(self, Self::GeminiCli { .. }) {
             Self::strip_gemini_inherited_env(&mut cmd);
@@ -389,9 +398,7 @@ impl Executor {
         Ok(result)
     }
 
-    /// Execute in a specific directory (for ephemeral sessions).
-    ///
-    /// `extra_env`: optional environment variables to inject (e.g., API keys from GlobalConfig).
+    /// Execute in a specific directory (ephemeral sessions, `extra_env` for API keys etc.).
     pub async fn execute_in(
         &self,
         prompt: &str,
@@ -707,9 +714,7 @@ impl Executor {
                 if thinking_budget.is_some() {
                     // gemini-cli (0.31+) no longer accepts thinking-budget flags.
                     // Ignore CSA thinking hints and let gemini-cli decide routing.
-                    tracing::debug!(
-                        "Ignoring thinking budget for gemini-cli because runtime no longer supports a thinking flag"
-                    );
+                    tracing::debug!("Ignoring thinking budget for gemini-cli: no flag support");
                 }
             }
             Self::Opencode {
@@ -760,12 +765,8 @@ impl Executor {
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);
                 }
-                // claude-code 2.x exposes thinking control via `--effort
-                // <level>` (low/medium/high/xhigh/max); the legacy
-                // `--thinking-budget <tokens>` flag was removed and any
-                // emission of it makes the binary exit with `unknown option`
-                // (#1124). `DefaultBudget` deliberately omits the flag so the
-                // tool applies its built-in default.
+                // claude-code 2.x: `--effort <level>`, not `--thinking-budget`
+                // (removed, #1124). DefaultBudget omits the flag entirely.
                 if let Some(budget) = thinking_budget
                     && let Some(level) = budget.claude_effort()
                 {

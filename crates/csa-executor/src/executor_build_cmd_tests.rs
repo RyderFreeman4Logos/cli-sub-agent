@@ -642,7 +642,19 @@ fn test_build_command_claude_args_structure() {
         "ThinkingBudget::Medium maps to --effort medium"
     );
     assert!(args.contains(&"-p".to_string()), "Should have -p flag");
-    assert!(args.contains(&"do stuff".to_string()), "Should have prompt");
+    // claude-code prompts are wrapped with a CSA sub-agent identity preamble
+    let prompt_arg = args
+        .iter()
+        .find(|a| a.contains("do stuff"))
+        .expect("Should have prompt containing 'do stuff'");
+    assert!(
+        prompt_arg.contains("<csa-sub-agent-context>"),
+        "claude-code prompt should include CSA identity preamble"
+    );
+    assert!(
+        prompt_arg.ends_with("do stuff"),
+        "Original prompt should be at the end"
+    );
 }
 
 #[test]
@@ -763,5 +775,6 @@ fn test_build_command_opencode_args_structure() {
     );
 }
 
+include!("executor_build_cmd_preamble_tests.rs");
 include!("executor_build_cmd_resume_tests.rs");
 include!("executor_build_cmd_tests_part2.rs");

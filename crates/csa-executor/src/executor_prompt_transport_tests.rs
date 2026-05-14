@@ -148,10 +148,17 @@ fn test_build_command_long_prompt_uses_stdin_for_claude_code() {
         args.contains(&"-p".to_string()),
         "claude-code must retain -p flag in stdin mode for pipe/non-interactive operation"
     );
-    assert_eq!(
-        stdin_data,
-        Some(prompt.as_bytes().to_vec()),
-        "claude-code should transport long prompts via stdin"
+    // claude-code prompt gets the identity preamble prepended, so stdin_data
+    // includes both the preamble and the original prompt.
+    let stdin_bytes = stdin_data.expect("claude-code should transport long prompts via stdin");
+    let stdin_str = String::from_utf8(stdin_bytes).expect("valid UTF-8");
+    assert!(
+        stdin_str.starts_with("<csa-sub-agent-context>"),
+        "stdin should start with CSA identity preamble"
+    );
+    assert!(
+        stdin_str.ends_with(&prompt),
+        "stdin should end with the original prompt"
     );
 }
 
