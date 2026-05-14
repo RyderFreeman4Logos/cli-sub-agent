@@ -90,10 +90,11 @@ fn test_build_command_with_empty_prompt() {
         .map(|a| a.to_string_lossy().to_string())
         .collect();
 
-    // Empty prompt should still be passed as an argument
+    // Empty prompt for claude-code still gets the identity preamble prepended
+    let has_preamble_arg = args.iter().any(|a| a.contains("<csa-sub-agent-context>"));
     assert!(
-        args.contains(&"".to_string()),
-        "Empty prompt should be present as an arg: {args:?}"
+        has_preamble_arg,
+        "Even empty claude-code prompt should get identity preamble: {args:?}"
     );
 }
 
