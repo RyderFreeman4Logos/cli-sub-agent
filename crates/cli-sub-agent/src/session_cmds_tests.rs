@@ -752,5 +752,7 @@ mod tail_tests;
 mod tail_tests_recovery;
 #[path = "session_cmds_tests_tail_wait.rs"]
 mod tail_tests_wait;
+#[path = "session_cmds_tests_tail_wait_liveness.rs"]
+mod tail_tests_wait_liveness;
 #[path = "session_cmds_tests_tail_wait_lock.rs"]
 mod tail_tests_wait_lock;
