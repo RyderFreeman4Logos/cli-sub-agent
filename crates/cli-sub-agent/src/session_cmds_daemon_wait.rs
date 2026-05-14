@@ -441,15 +441,21 @@ where
                 );
                 return Ok(exit_code);
             }
-            eprintln!(
-                "Session {} has no live daemon process and no terminal result packet.",
-                resolved.session_id,
-            );
-            eprintln!(
-                "Run `csa session result --session {}` for diagnostics.",
-                resolved.session_id
-            );
-            return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+            if csa_process::ToolLiveness::is_alive(&session_dir) {
+                // PID detection missed but filesystem liveness signals say alive;
+                // continue polling so the timeout (exit 124) fires instead of exit 1.
+                tracing::debug!(session_id = %resolved.session_id, "alive; no terminal PID");
+            } else {
+                eprintln!(
+                    "Session {} has no live daemon process and no terminal result packet.",
+                    resolved.session_id,
+                );
+                eprintln!(
+                    "Run `csa session result --session {}` for diagnostics.",
+                    resolved.session_id
+                );
+                return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+            }
         }
 
         if let (Some(limit_mb), Some(sample_at)) = (memory_warn_mb, next_memory_sample_at)
