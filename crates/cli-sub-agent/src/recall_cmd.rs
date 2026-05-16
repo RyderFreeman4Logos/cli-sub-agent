@@ -1,7 +1,7 @@
 //! recall_cmd — main-agent session history tracking and xurl-based recovery.
 
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -148,7 +148,9 @@ fn handle_recall_read(session: &str) -> Result<()> {
     let session_ref = resolve_session_ref(session)?;
     let content = render_session_markdown(&session_ref)?;
 
-    if let Some(message) = output_guard_message(&session_ref.sid, &content) {
+    if std::io::stdout().is_terminal()
+        && let Some(message) = output_guard_message(&session_ref.sid, &content)
+    {
         println!("{message}");
         return Ok(());
     }
