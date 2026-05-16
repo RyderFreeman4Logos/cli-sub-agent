@@ -85,6 +85,97 @@ fn test_extract_pid_from_lock_overflow_rejected() {
 }
 
 #[test]
+fn test_extract_slot_lock_info_null_session_id() {
+    let json = r#"{"pid":12345,"tool_name":"claude-code","slot_index":0,"acquired_at":"2024-01-01T00:00:00Z","session_id":null}"#;
+    let (pid, session_id_is_null, acquired_at) = extract_slot_lock_info(json).unwrap();
+    assert_eq!(pid, 12345);
+    assert!(session_id_is_null);
+    assert!(acquired_at.is_some());
+}
+
+#[test]
+fn test_extract_slot_lock_info_with_session_id() {
+    let json = r#"{"pid":12345,"tool_name":"claude-code","slot_index":0,"acquired_at":"2024-01-01T00:00:00Z","session_id":"01ABC123DEF456GHJ789KLMNOP"}"#;
+    let (pid, session_id_is_null, _) = extract_slot_lock_info(json).unwrap();
+    assert_eq!(pid, 12345);
+    assert!(!session_id_is_null);
+}
+
+#[test]
+fn test_extract_slot_lock_info_missing_session_id_treated_as_null() {
+    // Absent session_id field is treated the same as JSON null.
+    let json =
+        r#"{"pid":99,"tool_name":"codex","slot_index":1,"acquired_at":"2024-01-01T00:00:00Z"}"#;
+    let (pid, session_id_is_null, _) = extract_slot_lock_info(json).unwrap();
+    assert_eq!(pid, 99);
+    assert!(session_id_is_null);
+}
+
+#[test]
+fn test_extract_slot_lock_info_missing_pid_returns_none() {
+    let json = r#"{"tool_name":"codex","slot_index":0,"acquired_at":"2024-01-01T00:00:00Z","session_id":null}"#;
+    assert!(extract_slot_lock_info(json).is_none());
+}
+
+#[test]
+fn test_extract_slot_lock_info_invalid_json_returns_none() {
+    assert!(extract_slot_lock_info("not json").is_none());
+    assert!(extract_slot_lock_info("").is_none());
+}
+
+#[test]
+fn test_extract_slot_lock_info_missing_acquired_at_is_ok() {
+    // acquired_at absence is tolerated — returns None for the timestamp.
+    let json = r#"{"pid":7,"tool_name":"opencode","slot_index":2,"session_id":null}"#;
+    let (pid, session_id_is_null, acquired_at) = extract_slot_lock_info(json).unwrap();
+    assert_eq!(pid, 7);
+    assert!(session_id_is_null);
+    assert!(acquired_at.is_none());
+}
+
+#[test]
+fn test_orphan_slot_grace_period_within_window() {
+    // A slot acquired 5 seconds ago is inside the 30s grace window and should be skipped.
+    let now = chrono::Utc::now();
+    let recent = (now - chrono::Duration::seconds(5)).to_rfc3339();
+    let json = format!(
+        r#"{{"pid":{},"tool_name":"claude-code","slot_index":0,"acquired_at":"{}","session_id":null}}"#,
+        std::process::id(),
+        recent
+    );
+    let (_, session_id_is_null, acquired_at) = extract_slot_lock_info(&json).unwrap();
+    assert!(session_id_is_null);
+    let age_secs = now
+        .signed_duration_since(acquired_at.unwrap())
+        .num_seconds();
+    assert!(
+        age_secs < ORPHAN_SLOT_GRACE_SECS,
+        "slot acquired {age_secs}s ago is within {ORPHAN_SLOT_GRACE_SECS}s grace window"
+    );
+}
+
+#[test]
+fn test_orphan_slot_grace_period_outside_window() {
+    // A slot acquired 60 seconds ago is outside the grace window and eligible for eviction.
+    let now = chrono::Utc::now();
+    let old = (now - chrono::Duration::seconds(60)).to_rfc3339();
+    let json = format!(
+        r#"{{"pid":{},"tool_name":"claude-code","slot_index":0,"acquired_at":"{}","session_id":null}}"#,
+        std::process::id(),
+        old
+    );
+    let (_, session_id_is_null, acquired_at) = extract_slot_lock_info(&json).unwrap();
+    assert!(session_id_is_null);
+    let age_secs = now
+        .signed_duration_since(acquired_at.unwrap())
+        .num_seconds();
+    assert!(
+        age_secs >= ORPHAN_SLOT_GRACE_SECS,
+        "slot acquired {age_secs}s ago is outside {ORPHAN_SLOT_GRACE_SECS}s grace window"
+    );
+}
+
+#[test]
 fn test_discover_finds_ancestor_and_descendant_roots() {
     let tmp = tempdir().unwrap();
     make_project_root(tmp.path(), &["home", "user"]);
