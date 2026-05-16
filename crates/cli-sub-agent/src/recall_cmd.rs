@@ -417,6 +417,11 @@ fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef
 /// This bypasses the history file entirely, probing each provider for
 /// the most recent main thread that belongs to `project_root`. Returns
 /// `None` when no provider has a matching session.
+/// How many threads to fetch per provider when searching for a
+/// project-matching session.  The most-recent thread may belong to a
+/// different project, so we scan a small window.
+const LIVE_QUERY_SCAN_LIMIT: usize = 20;
+
 fn live_query_main_session(project_root: &Path) -> Option<SessionRef> {
     let roots = provider_roots().ok()?;
     for &provider in RECALL_PROVIDERS {
@@ -425,22 +430,20 @@ fn live_query_main_session(project_root: &Path) -> Option<SessionRef> {
             provider,
             role: Some("main".to_string()),
             q: None,
-            limit: 1,
+            limit: LIVE_QUERY_SCAN_LIMIT,
             ignored_params: Vec::new(),
         };
         let Ok(result) = xurl_core::query_threads(&query, &roots) else {
             continue;
         };
-        let Some(thread) = result.items.first() else {
-            continue;
-        };
-        if !thread_belongs_to_project(&thread.thread_source, project_root, provider) {
-            continue;
+        for thread in &result.items {
+            if thread_belongs_to_project(&thread.thread_source, project_root, provider) {
+                return Some(SessionRef {
+                    sid: thread.thread_id.clone(),
+                    provider: provider.to_string(),
+                });
+            }
         }
-        return Some(SessionRef {
-            sid: thread.thread_id.clone(),
-            provider: provider.to_string(),
-        });
     }
     None
 }
