@@ -25,4 +25,4 @@ pub use guard::{ResourceGuard, ResourceLimits};
 pub use isolation_plan::{EnforcementMode, IsolationPlan, IsolationPlanBuilder};
 pub use landlock::apply_landlock_rules;
 pub use rlimit::apply_rlimits;
-pub use sandbox::{ResourceCapability, detect_resource_capability};
+pub use sandbox::{ResourceCapability, detect_resource_capability, has_systemd_user_scope};
