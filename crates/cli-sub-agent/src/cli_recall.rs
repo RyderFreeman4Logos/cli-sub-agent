@@ -15,6 +15,10 @@ pub enum RecallCommands {
         /// Show only the N most recent sessions
         #[arg(long, default_value = "10")]
         limit: usize,
+
+        /// Show sessions from all projects instead of filtering to current project
+        #[arg(long)]
+        all: bool,
     },
 
     /// Render a recorded session as markdown

@@ -19,6 +19,13 @@ const OUTPUT_GUARD_BYTES: usize = 50 * 1024;
 const RECENT_DEDUP_WINDOW: usize = 10;
 const SEARCH_CONTEXT_LINES: usize = 2;
 
+const RECALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
+    xurl_core::ProviderKind::Claude,
+    xurl_core::ProviderKind::Codex,
+    xurl_core::ProviderKind::Gemini,
+    xurl_core::ProviderKind::Opencode,
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct RecallHistoryEntry {
     ts: String,
@@ -35,7 +42,7 @@ struct SessionRef {
 
 pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
     match cmd {
-        RecallCommands::List { limit } => handle_recall_list(limit),
+        RecallCommands::List { limit, all } => handle_recall_list(limit, all),
         RecallCommands::Read { session, page } => handle_recall_read(&session, page),
         RecallCommands::Search { query } => handle_recall_search(&query),
         RecallCommands::Pages { session } => handle_recall_pages(&session),
@@ -73,56 +80,87 @@ pub(crate) fn spawn_recall_record_if_needed(project_root: &Path) {
 
 pub(crate) async fn record_main_agent_session(project_root: &Path) -> Result<()> {
     let roots = provider_roots()?;
-    let query = xurl_core::ThreadQuery {
-        uri: format!("{}://", xurl_core::ProviderKind::Claude),
-        provider: xurl_core::ProviderKind::Claude,
-        role: Some("main".to_string()),
-        q: None,
-        limit: 1,
-        ignored_params: Vec::new(),
-    };
+    let history_path = history_path()?;
+    let mut recorded_any = false;
 
-    let result =
-        xurl_core::query_threads(&query, &roots).context("Failed to query Claude main threads")?;
-    let Some(thread) = result.items.first() else {
-        debug!("recall: no Claude main thread available");
-        return Ok(());
-    };
+    for &provider in RECALL_PROVIDERS {
+        let query = xurl_core::ThreadQuery {
+            uri: format!("{}://", provider),
+            provider,
+            role: Some("main".to_string()),
+            q: None,
+            limit: 1,
+            ignored_params: Vec::new(),
+        };
 
-    if !thread_belongs_to_project(&thread.thread_source, project_root) {
+        let result = match xurl_core::query_threads(&query, &roots) {
+            Ok(result) => result,
+            Err(err) => {
+                // Provider directory may not exist — skip
+                debug!(
+                    provider = %provider,
+                    error = %err,
+                    "recall: skipping provider during main-agent session recording"
+                );
+                continue;
+            }
+        };
+
+        let Some(thread) = result.items.first() else {
+            debug!(provider = %provider, "recall: no main thread available");
+            continue;
+        };
+
+        if !thread_belongs_to_project(&thread.thread_source, project_root) {
+            debug!(
+                provider = %provider,
+                thread_source = %thread.thread_source,
+                project = %project_root.display(),
+                "recall: skipping — session belongs to a different project"
+            );
+            continue;
+        }
+
+        let entry = RecallHistoryEntry {
+            ts: Utc::now().to_rfc3339(),
+            sid: thread.thread_id.clone(),
+            project: project_root.display().to_string(),
+            provider: provider.to_string(),
+        };
+
+        let appended = append_history_entry(&history_path, &entry)?;
         debug!(
-            thread_source = %thread.thread_source,
-            project = %project_root.display(),
-            "recall: skipping — session belongs to a different project"
+            sid = %entry.sid,
+            provider = %entry.provider,
+            appended,
+            "recall: main-agent session tracked"
         );
-        return Ok(());
+        recorded_any = true;
     }
 
-    let entry = RecallHistoryEntry {
-        ts: Utc::now().to_rfc3339(),
-        sid: thread.thread_id.clone(),
-        project: project_root.display().to_string(),
-        provider: xurl_core::ProviderKind::Claude.to_string(),
-    };
-
-    let history_path = history_path()?;
-    let appended = append_history_entry(&history_path, &entry)?;
-    debug!(
-        sid = %entry.sid,
-        provider = %entry.provider,
-        appended,
-        "recall: main-agent session tracked"
-    );
+    if !recorded_any {
+        debug!("recall: no main-agent sessions found across any provider");
+    }
     Ok(())
 }
 
-fn handle_recall_list(limit: usize) -> Result<()> {
+fn handle_recall_list(limit: usize, all: bool) -> Result<()> {
     if limit == 0 {
         anyhow::bail!("--limit must be greater than 0");
     }
 
-    let entries = load_history_entries(&history_path()?)?;
-    if entries.is_empty() {
+    let mut entries = load_history_entries(&history_path()?)?;
+
+    if !all {
+        let project_root = crate::pipeline::determine_project_root(None)?;
+        let current_project = project_root.display().to_string();
+        entries.retain(|entry| entry.project == current_project);
+
+        if entries.is_empty() {
+            println!("No recall history for project {}.", current_project);
+            return Ok(());
+        }
+    } else if entries.is_empty() {
         println!("No recall history found.");
         return Ok(());
     }
@@ -149,7 +187,8 @@ fn handle_recall_list(limit: usize) -> Result<()> {
 }
 
 fn handle_recall_read(session: &str, page: Option<u32>) -> Result<()> {
-    let session_ref = resolve_session_ref(session)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
+    let session_ref = resolve_session_ref(session, &project_root)?;
     let content = render_session_markdown(&session_ref)?;
 
     let Some(page_n) = page else {
@@ -177,7 +216,8 @@ fn handle_recall_read(session: &str, page: Option<u32>) -> Result<()> {
 }
 
 fn handle_recall_pages(session: &str) -> Result<()> {
-    let session_ref = resolve_session_ref(session)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
+    let session_ref = resolve_session_ref(session, &project_root)?;
     let (resolved, content) = resolve_session_thread(&session_ref)?;
 
     let page_list = pages::split_markdown_pages(&content);
@@ -246,7 +286,8 @@ fn handle_recall_search(query: &str) -> Result<()> {
         anyhow::bail!("Search query must not be empty");
     }
 
-    let session_ref = latest_session_ref()?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
+    let session_ref = latest_session_ref(&project_root)?;
     let content = render_session_markdown(&session_ref)?;
     let lines: Vec<&str> = content.lines().collect();
     let ranges = matching_ranges(&lines, trimmed, SEARCH_CONTEXT_LINES);
@@ -271,43 +312,89 @@ fn handle_recall_search(query: &str) -> Result<()> {
     Ok(())
 }
 
-fn latest_session_ref() -> Result<SessionRef> {
-    resolve_session_ref("latest")
+fn latest_session_ref(project_root: &Path) -> Result<SessionRef> {
+    resolve_session_ref("latest", project_root)
 }
 
-fn resolve_session_ref(selector: &str) -> Result<SessionRef> {
+fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef> {
     let trimmed = selector.trim();
     if trimmed.is_empty() {
         anyhow::bail!("Session selector must not be empty");
     }
 
     let entries = load_history_entries(&history_path()?)?;
+    let current_project = project_root.display().to_string();
+
     if trimmed.eq_ignore_ascii_case("latest") {
-        return latest_history_entry(&entries)
+        let filtered_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.project == current_project)
+            .collect();
+        return latest_history_entry(&filtered_entries)
             .map(entry_to_session_ref)
-            .context("No recall history found");
+            .with_context(|| {
+                format!(
+                    "No recall history for project {}. Use `csa recall list --all` to see all projects.",
+                    current_project
+                )
+            });
     }
 
     if let Ok(index) = trimmed.parse::<usize>() {
         if index == 0 {
             anyhow::bail!("History index is 1-based; use 1 for the most recent session");
         }
-        let entry = entries
+        let filtered_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.project == current_project)
+            .collect();
+        let entry = filtered_entries
             .iter()
             .rev()
             .nth(index - 1)
-            .with_context(|| format!("History index {index} is out of range"))?;
+            .with_context(|| {
+                if filtered_entries.is_empty() {
+                    format!(
+                        "No recall history for project {}. Use `csa recall list --all` to see all projects.",
+                        current_project
+                    )
+                } else {
+                    format!("History index {index} is out of range for this project")
+                }
+            })?;
         return Ok(entry_to_session_ref(entry));
     }
 
+    // Raw session ID: try to find in history first for provider info
+    if let Some(entry) = entries.iter().find(|entry| entry.sid == trimmed) {
+        return Ok(entry_to_session_ref(entry));
+    }
+
+    // Not found in history: try all providers via xurl
+    let roots = provider_roots()?;
+    for &provider in RECALL_PROVIDERS {
+        let uri_str = format!("agents://{}/{}", provider, trimmed);
+        if let Ok(uri) = uri_str.parse::<xurl_core::AgentsUri>() {
+            if let Ok(_) = xurl_core::resolve_thread(&uri, &roots) {
+                return Ok(SessionRef {
+                    sid: trimmed.to_string(),
+                    provider: provider.to_string(),
+                });
+            }
+        }
+    }
+
+    // Fallback to Claude for backward compatibility
     Ok(SessionRef {
         sid: trimmed.to_string(),
         provider: xurl_core::ProviderKind::Claude.to_string(),
     })
 }
 
-fn latest_history_entry(entries: &[RecallHistoryEntry]) -> Option<&RecallHistoryEntry> {
-    entries.iter().next_back()
+fn latest_history_entry<'a>(
+    entries: &'a [&'a RecallHistoryEntry],
+) -> Option<&'a RecallHistoryEntry> {
+    entries.iter().next_back().copied()
 }
 
 fn entry_to_session_ref(entry: &RecallHistoryEntry) -> SessionRef {
@@ -467,6 +554,19 @@ mod tests {
         }
     }
 
+    fn make_entry_with_project_and_provider(
+        sid: &str,
+        project: &str,
+        provider: &str,
+    ) -> RecallHistoryEntry {
+        RecallHistoryEntry {
+            ts: "2026-05-08T17:48:14Z".to_string(),
+            sid: sid.to_string(),
+            project: project.to_string(),
+            provider: provider.to_string(),
+        }
+    }
+
     #[test]
     fn append_history_entry_writes_jsonl_line() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -565,5 +665,26 @@ mod tests {
         let source = "/home/obj/.claude/projects/-home-obj-project-github-user-other/abc.jsonl";
         let root = Path::new("/home/obj/project/github/user/repo");
         assert!(!thread_belongs_to_project(source, root));
+    }
+
+    #[test]
+    fn latest_history_entry_returns_last_from_filtered_list() {
+        let entry1 = make_entry_with_project_and_provider("sid-1", "/project/a", "claude");
+        let entry2 = make_entry_with_project_and_provider("sid-2", "/project/b", "codex");
+        let entry3 = make_entry_with_project_and_provider("sid-3", "/project/a", "gemini");
+
+        let entries = vec![&entry1, &entry2, &entry3];
+
+        let result = latest_history_entry(&entries).expect("latest");
+        assert_eq!(result.sid, "sid-3", "latest should be the last entry");
+    }
+
+    #[test]
+    fn latest_history_entry_returns_none_for_empty_list() {
+        let entries: Vec<&RecallHistoryEntry> = vec![];
+        assert!(
+            latest_history_entry(&entries).is_none(),
+            "empty list should return None"
+        );
     }
 }
