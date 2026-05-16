@@ -9,7 +9,6 @@ use csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR;
 use csa_resource::isolation_plan::canonicalize_through_existing_ancestors;
 use serde_json::{Map, Value};
 use tracing::{debug, warn};
-
 #[path = "transport_gemini_mise_trust.rs"]
 mod transport_gemini_mise_trust;
 #[cfg(test)]
@@ -148,7 +147,12 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .map(OsStr::new)
         .map(std::ffi::OsString::from)
         .or_else(|| std::env::var_os("PATH"));
-    if let Some(path) = pin_non_shim_runtime_path(inherited_path.as_deref(), env, project_dir)? {
+    let direct_launch_disabled = env
+        .get("CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH")
+        .is_some_and(|value| value == "1");
+    if !direct_launch_disabled
+        && let Some(path) = pin_non_shim_runtime_path(inherited_path.as_deref(), env, project_dir)?
+    {
         env.insert("PATH".to_string(), path);
     }
     for key in GEMINI_RUNTIME_SHIM_ENV_VARS {
@@ -161,8 +165,9 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .map(std::ffi::OsString::from)
         .or(inherited_path);
 
-    if let Some(launch) =
-        resolve_non_shim_gemini_launch(path_env.as_deref(), env, project_dir, base_args)?
+    if !direct_launch_disabled
+        && let Some(launch) =
+            resolve_non_shim_gemini_launch(path_env.as_deref(), env, project_dir, base_args)?
     {
         debug!(
             command = %launch.command,

@@ -623,6 +623,10 @@ printf 'ok attempt=%s model=%s\n' "${count}" "${model}"
         format!("{}:{old_path}", temp.path().display()),
     );
     env.insert(
+        "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+        "1".to_string(),
+    );
+    env.insert(
         "CSA_FAKE_GEMINI_STATE_FILE".to_string(),
         state_file.display().to_string(),
     );

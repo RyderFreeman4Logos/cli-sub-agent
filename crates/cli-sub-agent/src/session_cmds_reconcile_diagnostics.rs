@@ -156,6 +156,11 @@ fn classify_diagnostic_hint(stderr_tail: &str) -> Option<&'static str> {
     if lowered.contains("empty prompt from stdin") {
         return Some("empty_stdin_before_session_execution");
     }
+    if lowered.contains("csa: low memory")
+        || (lowered.contains("actual_available_mb") && lowered.contains("required_mb"))
+    {
+        return Some("low_memory_pre_spawn");
+    }
     if lowered.contains("out of memory")
         || lowered
             .split_whitespace()
@@ -224,6 +229,17 @@ mod tests {
         assert_eq!(
             classify_diagnostic_hint("kernel killed process: OOM."),
             Some("possible_oom_or_sigkill")
+        );
+    }
+
+    #[test]
+    fn diagnostic_hint_matches_resource_guard_low_memory() {
+        assert_eq!(
+            classify_diagnostic_hint(
+                "CSA: low memory — available=3900MB < required=4096MB. \
+                 Refusing to spawn tool scopes. actual_available_mb=3900 required_mb=4096",
+            ),
+            Some("low_memory_pre_spawn")
         );
     }
 

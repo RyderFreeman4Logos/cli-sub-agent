@@ -10,7 +10,7 @@ use super::{
 };
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
-use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+use crate::session_guard::SessionCleanupGuard;
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
@@ -21,7 +21,6 @@ use csa_hooks::{
 };
 use csa_lock::acquire_lock;
 use csa_process::ExecutionResult;
-use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{compute_cooldown_wait, create_session, create_session_fresh, get_session_dir};
 use std::{
     path::{Path, PathBuf},
@@ -34,8 +33,13 @@ mod session_exec_audit;
 mod session_exec_memory;
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
+#[path = "pipeline_session_exec_pre_exec.rs"]
+mod session_exec_pre_exec;
 #[path = "pipeline_session_exec_tool_state.rs"]
 mod session_exec_tool_state;
+use self::session_exec_pre_exec::{
+    check_resources_before_spawn, persist_pipeline_pre_exec_failure,
+};
 use self::session_exec_tool_state::ensure_tool_state_initialized;
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
@@ -288,23 +292,18 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-    let mut persist_pre_exec_failure = |err: anyhow::Error| {
-        write_pre_exec_error_result(
-            project_root,
-            &session.meta_session_id,
-            executor.tool_name(),
-            &err,
-        );
-        if let Some(ref mut cg) = cleanup_guard {
-            cg.defuse();
-        }
-        err
-    };
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {
             let err = anyhow::anyhow!(e).context("Failed to create session log writer");
-            return Err(persist_pre_exec_failure(err));
+            return Err(persist_pipeline_pre_exec_failure(
+                project_root,
+                &mut session,
+                executor.tool_name(),
+                err,
+                &mut cleanup_guard,
+                None,
+            ));
         }
     };
     let lock_reason = truncate_prompt(prompt, 80);
@@ -315,26 +314,23 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 "Failed to acquire lock for session {}",
                 session.meta_session_id
             ));
-            return Err(persist_pre_exec_failure(err));
+            return Err(persist_pipeline_pre_exec_failure(
+                project_root,
+                &mut session,
+                executor.tool_name(),
+                err,
+                &mut cleanup_guard,
+                None,
+            ));
         }
     };
-    let mut resource_guard = config.map(|cfg| {
-        ResourceGuard::new(ResourceLimits {
-            min_free_memory_mb: cfg.resources.min_free_memory_mb,
-        })
-    });
-    if let Some(ref mut guard) = resource_guard
-        && let Err(e) = guard.check_availability(executor.tool_name())
-    {
-        return Err(persist_pre_exec_failure(e));
-    }
-    if let (Some(guard), Some(cfg)) = (&mut resource_guard, config) {
-        guard.check_health(
-            cfg.sandbox_memory_max_mb(executor.tool_name()),
-            cfg.sandbox_memory_swap_max_mb(executor.tool_name()),
-            60,
-        );
-    }
+    check_resources_before_spawn(
+        config,
+        executor,
+        project_root,
+        &mut session,
+        &mut cleanup_guard,
+    )?;
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {
             warn!(
@@ -372,7 +368,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         global_config.is_some_and(|cfg| cfg.experimental.enable_prompt_caching);
     let mut prompt_assembly = PromptAssembly::new(raw_prompt.clone(), prompt_caching_enabled);
     if let Err(err) = crate::preflight_state_dir::enforce_state_dir_cap(global_config) {
-        return Err(persist_pre_exec_failure(err));
+        return Err(persist_pipeline_pre_exec_failure(
+            project_root,
+            &mut session,
+            executor.tool_name(),
+            err,
+            &mut cleanup_guard,
+            None,
+        ));
     }
     if (session_arg.is_none() || fresh_spawn_preflight_override)
         && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)
@@ -553,16 +556,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
             let err = anyhow::anyhow!(msg);
-            write_pre_exec_error_result(
+            return Err(persist_pipeline_pre_exec_failure(
                 project_root,
-                &session.meta_session_id,
+                &mut session,
                 executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
+                err,
+                &mut cleanup_guard,
+                None,
+            ));
         }
     };
     let spool_max_mb = config

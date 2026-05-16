@@ -16,18 +16,17 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
     std::fs::create_dir_all(&bin_dir).unwrap();
     let opencode_count_path = project_dir.path().join("opencode-count.txt");
 
-    std::fs::write(
-        bin_dir.join("gemini"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
-    )
-    .unwrap();
+    let codex_stub = "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'codex_429_retry_exhausted: temporary codex 429 rate limit persisted after 3 retries\\n' >&2\nexit 1\n";
+    for binary in ["codex", "codex-acp"] {
+        std::fs::write(bin_dir.join(binary), codex_stub).unwrap();
+    }
     let opencode_stub = format!(
         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'opencode 1.0.0\\n'\n  exit 0\nfi\ncount=$(cat \"{}\" 2>/dev/null || printf '0')\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"{}\"\nif [ \"$count\" -eq 1 ]; then\n  printf '%s\\n' '<!-- CSA:SECTION:summary -->' 'FAIL' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'Found issue in tracked.txt.' '<!-- CSA:SECTION:details:END -->'\nelse\n  printf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'Issue fixed.' '<!-- CSA:SECTION:details:END -->'\nfi\n",
         opencode_count_path.display(),
         opencode_count_path.display()
     );
     std::fs::write(bin_dir.join("opencode"), &opencode_stub).unwrap();
-    for binary in ["gemini", "opencode"] {
+    for binary in ["codex", "codex-acp", "opencode"] {
         let path = bin_dir.join(binary);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
@@ -38,21 +37,22 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
 
-    let mut config = project_config_with_enabled_tools(&["gemini-cli", "opencode"]);
+    let mut config = project_config_with_enabled_tools(&["codex", "opencode"]);
     config.review = Some(csa_config::ReviewConfig {
         gate_command: Some("true".to_string()),
         ..Default::default()
     });
-    config.tools.get_mut("gemini-cli").unwrap().restrictions = Some(ToolRestrictions {
+    config.tools.get_mut("codex").unwrap().restrictions = Some(ToolRestrictions {
         allow_edit_existing_files: false,
         allow_write_new_files: false,
     });
+    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     config.tiers.insert(
         "quality".to_string(),
         csa_config::config::TierConfig {
             description: "quality".to_string(),
             models: vec![
-                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "codex/openai/gpt-5.4/high".to_string(),
                 "opencode/anthropic/claude-sonnet-4-5-20250929/default".to_string(),
             ],
             strategy: csa_config::TierStrategy::default(),
@@ -63,11 +63,11 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
 
     let global = GlobalConfig::default();
     let initial = execute_review_for_tests(
-        ToolName::GeminiCli,
+        ToolName::Codex,
         "scope=files:tracked.txt mode=review-and-fix security=auto".to_string(),
         None,
         None,
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+        Some("codex/openai/gpt-5.4/high".to_string()),
         Some("quality".to_string()),
         true,
         None,
@@ -85,7 +85,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         false,
         false,
         false,
-        false,
+        true,
         false,
         &[],
         &[],
@@ -112,7 +112,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         force_ignore_tier_setting: false,
         no_failover: false,
         fast_but_more_cost: false,
-        no_fs_sandbox: false,
+        no_fs_sandbox: true,
         extra_writable: &[],
         extra_readable: &[],
         timeout: None,

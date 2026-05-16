@@ -2,9 +2,11 @@ use super::*;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use chrono::Utc;
-use csa_config::GlobalConfig;
+use csa_config::config::CURRENT_SCHEMA_VERSION;
+use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig};
 use csa_core::types::OutputFormat;
 use csa_executor::Executor;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -20,6 +22,36 @@ fn state_dir_error_global_config() -> GlobalConfig {
         "#,
     )
     .expect("parse global config")
+}
+
+fn project_config_with_min_free_memory(min_free_memory_mb: u64) -> ProjectConfig {
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig {
+            min_free_memory_mb,
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    }
 }
 
 fn seed_state_dir_over_cap() {
@@ -235,6 +267,82 @@ async fn state_dir_cap_failure_persists_result_for_fresh_spawn() {
         "fresh-spawn pre-exec failure must preserve the new session"
     );
     assert_state_dir_cap_failure_result(project_root, &sessions[0].meta_session_id);
+}
+
+#[tokio::test]
+async fn low_memory_pre_spawn_failure_sets_termination_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sandbox = ScopedSessionSandbox::new(&tmp).await;
+    sandbox.track_env("CSA_SESSION_ID");
+    // SAFETY: test-scoped env mutation while ScopedSessionSandbox holds TEST_ENV_LOCK.
+    unsafe { std::env::remove_var("CSA_SESSION_ID") };
+    let project_root = tmp.path();
+    let config = project_config_with_min_free_memory(u64::MAX / 2);
+    let executor = Executor::Opencode {
+        model_override: None,
+        agent: None,
+        thinking_budget: None,
+    };
+
+    let err = match execute_with_session_and_meta(
+        &executor,
+        &ToolName::Opencode,
+        "should fail before spawning opencode",
+        OutputFormat::Json,
+        None,
+        false,
+        Some("low-memory-pre-spawn".to_string()),
+        None,
+        project_root,
+        Some(&config),
+        None,
+        Some("run"),
+        None,
+        None,
+        csa_process::StreamMode::BufferOnly,
+        DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        &[],
+        &[],
+    )
+    .await
+    {
+        Ok(_) => panic!("low memory pre-spawn check must reject execution"),
+        Err(err) => err,
+    };
+
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("CSA: low memory"),
+        "error should include low-memory diagnostic: {err:#}"
+    );
+    assert!(
+        err_text.contains("actual_available_mb=") && err_text.contains("required_mb="),
+        "error should include actual and required memory values: {err:#}"
+    );
+
+    let sessions = csa_session::list_sessions(project_root, None).expect("list sessions");
+    assert_eq!(
+        sessions.len(),
+        1,
+        "pre-spawn low-memory failure must preserve the new session"
+    );
+    let session_id = &sessions[0].meta_session_id;
+    let session = csa_session::load_session(project_root, session_id).expect("load session");
+    assert_eq!(session.termination_reason.as_deref(), Some("low_memory"));
+
+    let result = csa_session::load_result(project_root, session_id)
+        .expect("load result")
+        .expect("result exists");
+    assert_eq!(result.status, "failure");
+    assert!(result.summary.starts_with("pre-exec:"));
+    assert!(result.summary.contains("CSA: low memory"));
 }
 
 #[tokio::test]

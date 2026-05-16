@@ -5,7 +5,7 @@ pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
     {
         eprintln!(
             "warning: config '{source}': 'resources.min_free_swap_mb' is deprecated and ignored. \
-                 Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead."
+                 Use 'resources.min_free_memory_mb' (physical MemAvailable threshold) instead."
         );
     }
     if let Some(session) = raw.get("session")

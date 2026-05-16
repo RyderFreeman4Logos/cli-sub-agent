@@ -80,7 +80,7 @@ Successful `csa run` employee sessions now pass through a configurable post-exec
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `min_free_memory_mb` | Integer | 4096 | Minimum combined free memory (physical + swap) |
+| `min_free_memory_mb` | Integer | 4096 | Minimum physical MemAvailable before spawning a tool |
 
 ```toml
 [resources]
@@ -349,7 +349,7 @@ default = "primary"
 
 | Problem | Solution |
 |---------|----------|
-| "Insufficient system memory" error | Reduce `min_free_memory_mb` or wait for agents to finish |
+| "CSA: low memory" error | Reduce `min_free_memory_mb` or wait for agents to finish |
 | "Tool 'codex' is not enabled" | Set `tools.codex.enabled = true` or remove section |
 | "No enabled tools found in tier" | Ensure at least one tool in the tier's models is enabled |
 | Tier resolution always falls back | Check that `tier_mapping.default` exists |

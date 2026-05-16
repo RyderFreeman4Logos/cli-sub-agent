@@ -107,8 +107,8 @@ The **P95 (95th percentile)** is used instead of the average because it:
 ### Pre-flight Check
 
 ```
-required = min_free_memory_mb + P95_estimate(tool)
-available = physical_free + swap_free
+required = min_free_memory_mb
+available = physical MemAvailable
 
 if available < required:
     abort with OOM risk message

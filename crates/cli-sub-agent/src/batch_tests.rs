@@ -205,6 +205,28 @@ fn build_plan_empty_tasks_empty_plan() {
     assert!(plan.is_empty());
 }
 
+#[test]
+fn level_resource_check_errors_before_spawning_tasks_on_low_memory() {
+    let tasks = vec![make_task("review-a", "codex", vec![])];
+    let task_map: HashMap<&str, &BatchTask> = tasks.iter().map(|t| (t.name.as_str(), t)).collect();
+    let level = vec!["review-a".to_string()];
+    let mut resource_guard = Some(ResourceGuard::new(ResourceLimits {
+        min_free_memory_mb: u64::MAX / 2,
+    }));
+
+    let err = check_level_resource_availability(&level, &task_map, &mut resource_guard)
+        .expect_err("impossible memory reserve must reject the batch level");
+    let err_text = format!("{err:#}");
+    assert!(
+        err_text.contains("CSA: low memory"),
+        "error should include low-memory diagnostic: {err:#}"
+    );
+    assert!(
+        err_text.contains("actual_available_mb=") && err_text.contains("required_mb="),
+        "error should include actual and required memory values: {err:#}"
+    );
+}
+
 // --- detect_cycle tests ---
 
 #[test]

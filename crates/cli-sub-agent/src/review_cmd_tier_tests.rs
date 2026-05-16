@@ -45,7 +45,10 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
             created_at: chrono::Utc::now(),
             max_recursion_depth: 5,
         },
-        resources: csa_config::ResourcesConfig::default(),
+        resources: csa_config::ResourcesConfig {
+            min_free_memory_mb: 1,
+            ..Default::default()
+        },
         acp: Default::default(),
         tools: tool_map,
         review: None,
