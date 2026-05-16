@@ -32,6 +32,8 @@ use output::{is_worktree_submodule, print_reviewer_outcomes};
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]
 mod check_verdict;
+#[path = "review_cmd_dirty_tree.rs"]
+mod dirty_tree;
 #[path = "review_cmd_execute.rs"]
 mod execute;
 #[path = "review_cmd_findings_toml.rs"]
@@ -463,6 +465,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &review_meta,
             result.persistable_session_id.as_deref(),
         );
+        if verdict != CLEAN {
+            dirty_tree::maybe_emit_dirty_tree_hint(
+                &project_root,
+                result.persistable_session_id.as_deref(),
+            );
+        }
         mempal::maybe_capture_review_mempal(
             config.as_ref(),
             &global_config,
