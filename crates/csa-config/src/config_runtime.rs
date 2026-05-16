@@ -311,6 +311,15 @@ impl ProjectConfig {
         !self.can_tool_edit_existing(tool) && !self.can_tool_write_new(tool)
     }
 
+    /// Returns true when the tool has no write restrictions at all.
+    ///
+    /// A tool is write-capable only if both `allow_edit_existing_files` and
+    /// `allow_write_new_files` are true (or absent, which defaults to true).
+    /// Tools that fail either check are excluded from `csa run` tier races.
+    pub fn is_tool_write_capable(&self, tool: &str) -> bool {
+        self.can_tool_edit_existing(tool) && self.can_tool_write_new(tool)
+    }
+
     /// Returns the writable paths for a tool's filesystem sandbox.
     ///
     /// Priority chain (REPLACE semantics):

@@ -592,10 +592,10 @@ impl ProjectConfig {
         self.resolve_tier_tool_filtered(task_type, false)
     }
 
-    /// Resolve tier-based tool selection with edit restriction filtering.
+    /// Resolve tier-based tool selection with write restriction filtering.
     ///
-    /// When `needs_edit` is true, skips tools whose
-    /// `restrictions.allow_edit_existing_files` is `false`.
+    /// When `needs_edit` is true, skips tools that are not fully write-capable
+    /// (i.e., tools where `allow_edit_existing_files` or `allow_write_new_files` is false).
     pub fn resolve_tier_tool_filtered(
         &self,
         task_type: &str,
@@ -627,7 +627,7 @@ impl ProjectConfig {
             if !self.is_tool_enabled(tool_name) {
                 continue;
             }
-            if needs_edit && !self.can_tool_edit_existing(tool_name) {
+            if needs_edit && !self.is_tool_write_capable(tool_name) {
                 continue;
             }
             return Some((tool_name.to_string(), model_spec_str.clone()));

@@ -36,8 +36,10 @@ pub struct RotationState {
 /// tier are disabled or filtered out.
 ///
 /// `task_type` is used to look up the tier via `tier_mapping` (falls back
-/// to tier3).  `needs_edit` filters out tools whose `allow_edit_existing_files`
-/// restriction is false.
+/// to tier3).  `needs_edit` filters out tools that are not fully write-capable
+/// (either `allow_edit_existing_files = false` or `allow_write_new_files = false`).
+/// Returns `Err` when `needs_edit` is true and all enabled tools in the tier have
+/// write restrictions — the caller should surface this as a hard error.
 pub fn resolve_tier_tool_rotated(
     config: &ProjectConfig,
     task_type: &str,
@@ -71,8 +73,10 @@ pub fn resolve_tier_tool_rotated(
             if !config.is_tool_enabled(tool_name) {
                 return None;
             }
-            // Skip tools that can't edit when editing is needed
-            if needs_edit && !config.can_tool_edit_existing(tool_name) {
+            // Skip tools that are not fully write-capable when writing is needed.
+            // A tool must have both allow_edit_existing_files and allow_write_new_files
+            // set to true (or absent) to qualify for csa run races.
+            if needs_edit && !config.is_tool_write_capable(tool_name) {
                 return None;
             }
             Some((i, tool_name.to_string(), spec.clone()))
@@ -80,6 +84,25 @@ pub fn resolve_tier_tool_rotated(
         .collect();
 
     if eligible.is_empty() {
+        // When needs_edit is true and there are enabled tools that were filtered
+        // out due to write restrictions, return a clear error instead of silently
+        // falling through — the caller cannot fix this by trying a fallback.
+        if needs_edit {
+            let has_enabled_write_restricted = tier.models.iter().any(|spec| {
+                let t = spec.split('/').next().unwrap_or("");
+                config.is_tool_enabled(t) && !config.is_tool_write_capable(t)
+            });
+            if has_enabled_write_restricted {
+                return Err(anyhow::anyhow!(
+                    "No writable tool available in tier '{}': all enabled tools have write \
+                     restrictions (allow_edit_existing_files = false or \
+                     allow_write_new_files = false). \
+                     Check [tools.<name>.restrictions] in your config, or use \
+                     --force to bypass tier routing.",
+                    tier_name
+                ));
+            }
+        }
         return Ok(None);
     }
 
@@ -138,6 +161,14 @@ pub fn resolve_tier_tool_rotated(
     })?;
 
     Ok(result)
+}
+
+/// Returns true when the error was produced because all enabled tier tools have write restrictions.
+///
+/// Callers that need to distinguish this hard error from "no tier configured" (which is
+/// `Ok(None)`) should use this predicate rather than matching on error message strings.
+pub fn is_no_writable_tier_tool_error(e: &anyhow::Error) -> bool {
+    e.to_string().contains("No writable tool available in tier")
 }
 
 /// Resolve tier name from task_type via config tier_mapping, with fallback.

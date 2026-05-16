@@ -330,7 +330,9 @@ pub(crate) async fn handle_run(
         pipeline::resolve_effective_idle_timeout_seconds(config.as_ref(), idle_timeout, timeout)
     };
     let run_started_at = Instant::now();
-    let needs_edit = task_needs_edit.unwrap_or(false);
+    // csa run is a write operation by default: exclude read-only tools from tier races
+    // unless the prompt explicitly indicates a read-only task.
+    let needs_edit = task_needs_edit.unwrap_or(true);
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
         model_spec.as_deref(),

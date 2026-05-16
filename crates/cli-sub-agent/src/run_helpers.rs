@@ -88,7 +88,7 @@ pub(crate) fn validate_model_spec_tier_conflict(
 /// - model: optional model string (from CLI, with alias resolution applied)
 ///
 /// When tool is None, uses tier-based round-robin selection.
-/// `needs_edit`: when true, filters out tools with `allow_edit_existing_files = false`.
+/// `needs_edit`: when true, excludes tools with any write restriction (allow_edit_existing_files or allow_write_new_files false).
 /// `tool_is_auto_resolved`: when true, the `tool` param was auto-selected (not user CLI),
 ///   so it should not trigger tier enforcement blocking.
 pub(crate) fn resolve_tool_and_model(
@@ -317,14 +317,13 @@ pub(crate) fn resolve_tool_and_model(
                 .map(|c| c.resolve_alias(m))
                 .unwrap_or_else(|| m.to_string())
         });
-        // Try round-robin rotation first (needs project root to persist state)
-        if let Ok(Some((tool_name_str, tier_model_spec))) =
-            csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, needs_edit)
-        {
-            let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), resolved_model));
+        // Round-robin rotation; write-restriction errors propagate, I/O errors fall through.
+        match csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, needs_edit) {
+            Ok(Some((s, spec))) => return Ok((parse_tool_name(&s)?, Some(spec), resolved_model)),
+            Err(e) if csa_scheduler::is_no_writable_tier_tool_error(&e) => return Err(e),
+            _ => {}
         }
-        // Fallback: original non-rotating selection (also respects edit restrictions)
+        // Fallback: original non-rotating selection (also respects write restrictions)
         if let Some((tool_name_str, tier_model_spec)) =
             cfg.resolve_tier_tool_filtered("default", needs_edit)
         {

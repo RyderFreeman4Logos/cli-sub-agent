@@ -13,7 +13,7 @@ pub use failover::{FailoverAction, FallbackChain, decide_failover};
 pub use rate_limit::{
     RateLimitDetected, detect_rate_limit, requires_init_failure_window, within_init_failure_window,
 };
-pub use rotation::resolve_tier_tool_rotated;
+pub use rotation::{is_no_writable_tier_tool_error, resolve_tier_tool_rotated};
 pub use seed_session::{
     SeedCandidate, evict_excess_seeds, find_seed_session, find_seed_session_for_native_fork,
     is_seed_valid,
