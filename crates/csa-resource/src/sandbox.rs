@@ -62,7 +62,10 @@ fn has_cgroup_v2() -> bool {
 /// that the systemd user instance is available and scope creation works.
 /// Previously used `--dry-run` which requires systemd >= 253 (not 236 as
 /// documented) and silently fails on older versions like Debian 12 (systemd 252).
-fn has_systemd_user_scope() -> bool {
+///
+/// Returns `false` when dbus is unavailable (e.g., nested CSA subprocesses
+/// running inside a bwrap/Landlock sandbox without a user bus socket).
+pub fn has_systemd_user_scope() -> bool {
     Command::new("systemd-run")
         .args(["--user", "--scope", "--quiet", "/bin/true"])
         .stdin(std::process::Stdio::null())

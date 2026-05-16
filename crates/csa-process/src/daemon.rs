@@ -51,6 +51,15 @@ fn open_log_file(dir: &std::path::Path, name: &str) -> Result<File> {
         .with_context(|| format!("failed to create {name} in {}", dir.display()))
 }
 
+fn open_log_file_append(dir: &std::path::Path, name: &str) -> Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(dir.join(name))
+        .with_context(|| format!("failed to open {name} for append in {}", dir.display()))
+}
+
 fn daemon_pid_record(pid: u32) -> String {
     match read_process_start_time_ticks(pid) {
         Some(start_time_ticks) => format!("{pid} {start_time_ticks}\n"),
@@ -70,8 +79,17 @@ fn daemon_spawn_mode(session_id: &str) -> DaemonSpawnMode {
     }
 
     if inherited_csa_scope_detected() {
-        DaemonSpawnMode::IndependentScope {
-            unit: csa_resource::cgroup::scope_unit_name("daemon", session_id),
+        if csa_resource::sandbox::has_systemd_user_scope() {
+            DaemonSpawnMode::IndependentScope {
+                unit: csa_resource::cgroup::scope_unit_name("daemon", session_id),
+            }
+        } else {
+            tracing::warn!(
+                "inherited CSA systemd scope detected but `systemd-run --user --scope` probe \
+                 failed (dbus likely unavailable in nested CSA subprocess); \
+                 daemon will spawn as direct detached process"
+            );
+            DaemonSpawnMode::Direct
         }
     } else {
         DaemonSpawnMode::Direct
@@ -185,9 +203,39 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
         });
     }
 
-    let mut child = cmd
-        .spawn()
-        .context("failed to spawn daemon child process")?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(scope_err) if matches!(spawn_mode, DaemonSpawnMode::IndependentScope { .. }) => {
+            // systemd-run binary not found or exec failed; fall back to direct detach.
+            tracing::warn!(
+                error = %scope_err,
+                "daemon spawn via systemd scope failed; retrying as direct detached process"
+            );
+            let stdout2 = open_log_file_append(&config.session_dir, "stdout.log")?;
+            let mut stderr2 = open_log_file_append(&config.session_dir, "stderr.log")?;
+            writeln!(
+                stderr2,
+                "CSA daemon spawn: scope spawn failed ({scope_err}), retrying as direct detached process"
+            )?;
+            let _ = std::fs::remove_file(config.session_dir.join("daemon.scope"));
+            let mut cmd2 = build_daemon_command(&config, &DaemonSpawnMode::Direct);
+            cmd2.stdin(Stdio::null());
+            cmd2.stdout(stdout2);
+            cmd2.stderr(stderr2);
+            // SAFETY: same as above.
+            unsafe {
+                cmd2.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            cmd2.spawn()
+                .context("daemon spawn retry (direct mode) also failed")?
+        }
+        Err(e) => return Err(e).context("failed to spawn daemon child process"),
+    };
 
     let pid = child.id();
 
@@ -240,6 +288,18 @@ mod tests {
         // DAEMON_SCOPE_ENV_LOCK and restore the variable in DaemonScopeEnvGuard.
         unsafe {
             std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "0");
+        }
+        DaemonScopeEnvGuard { _lock: lock }
+    }
+
+    fn force_independent_scope_for_test() -> DaemonScopeEnvGuard {
+        let lock = DAEMON_SCOPE_ENV_LOCK
+            .lock()
+            .expect("daemon env lock poisoned");
+        // SAFETY: daemon spawn tests serialize environment mutation through
+        // DAEMON_SCOPE_ENV_LOCK and restore the variable in DaemonScopeEnvGuard.
+        unsafe {
+            std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "1");
         }
         DaemonScopeEnvGuard { _lock: lock }
     }
@@ -448,6 +508,59 @@ mod tests {
         assert!(
             contents.contains("got="),
             "stdout should still contain 'got=' (exec ran), got: {contents:?}"
+        );
+    }
+
+    /// Verify that when IndependentScope is forced but systemd-run cannot be found
+    /// in PATH, spawn_daemon retries with Direct mode and still succeeds.
+    ///
+    /// Simulates the nested-CSA-subprocess scenario where the env override forces
+    /// IndependentScope but dbus / systemd-run is absent (ENOENT at exec time).
+    #[test]
+    fn test_daemon_spawn_falls_back_to_direct_when_scope_spawn_fails() {
+        let _env_guard = force_independent_scope_for_test();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_dir = tmp.path().join("session-fallback");
+        let wrapper = write_wrapper_script(tmp.path(), "wrapper-fallback.sh");
+
+        // Replace PATH with the (empty) tmp dir so that `systemd-run` cannot be
+        // resolved, causing cmd.spawn() to return Err(NotFound) and triggering
+        // the retry path.  The csa_binary uses an absolute path so no PATH
+        // lookup is needed for the Direct-mode retry.
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        // SAFETY: test serialises env mutation via DAEMON_SCOPE_ENV_LOCK.
+        unsafe {
+            std::env::set_var("PATH", tmp.path().as_os_str());
+        }
+
+        let config = DaemonSpawnConfig {
+            session_id: "TEST_FALLBACK".to_string(),
+            session_dir: session_dir.clone(),
+            csa_binary: wrapper,
+            subcommand: "run".to_string(),
+            args: vec!["--".to_string(), "echo scope-fallback-ok".to_string()],
+            env: HashMap::new(),
+        };
+
+        let result = spawn_daemon(config);
+
+        // Restore PATH before asserting so it is always restored even on failure.
+        // SAFETY: restoring the saved value.
+        unsafe {
+            std::env::set_var("PATH", original_path);
+        }
+
+        let result = result.expect("spawn_daemon should succeed via direct fallback");
+        assert!(result.pid > 0);
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let contents = std::fs::read_to_string(session_dir.join("stdout.log"))
+            .expect("stdout.log must exist after daemon spawn");
+        assert!(
+            contents.contains("scope-fallback-ok"),
+            "expected 'scope-fallback-ok' in stdout (direct fallback output), got: {contents:?}"
         );
     }
 
