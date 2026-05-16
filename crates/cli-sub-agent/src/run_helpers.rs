@@ -5,7 +5,6 @@ use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{Executor, ModelSpec, ThinkingBudget};
-use csa_session::TokenUsage;
 
 #[path = "run_helpers_atomic_commit.rs"]
 mod atomic_commit;
@@ -13,12 +12,16 @@ mod atomic_commit;
 mod edit_requirement;
 #[path = "run_helpers_inline_review_context.rs"]
 mod inline_review_context;
+#[path = "run_helpers_model_compat.rs"]
+pub(crate) mod model_compat;
 #[path = "run_helpers_prompt.rs"]
 mod prompt;
 #[path = "run_helpers_routing_conflict.rs"]
 mod routing_conflict;
 #[path = "run_helpers_routing_request.rs"]
 mod routing_request;
+#[path = "run_helpers_token_parse.rs"]
+mod token_parse;
 #[path = "run_helpers_tool_availability.rs"]
 mod tool_availability;
 #[cfg(test)]
@@ -34,6 +37,9 @@ pub(crate) use prompt::{
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
+pub(crate) use token_parse::parse_token_usage;
+#[cfg(test)]
+pub(crate) use token_parse::{extract_cost, extract_number};
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_claude_code_transport,
     resolved_codex_transport, resolved_tool_binary_name, tool_binary_availability,
@@ -291,6 +297,14 @@ pub(crate) fn resolve_tool_and_model(
                 model_name_for_tier_validation(resolved_model.as_deref()),
             )?;
         }
+        // Pre-spawn compatibility check: catch known-incompatible model/tool combinations
+        // before a session is spawned (e.g. o4-mini with codex ChatGPT accounts).
+        // Skipped when the model matches the tool's configured default_model.
+        if let Some(ref m) = resolved_model {
+            let configured_default =
+                config.and_then(|cfg| cfg.tool_default_model(tool_name.as_str()));
+            model_compat::validate_tool_model_compat(tool_name, m, configured_default)?;
+        }
         return Ok((tool_name, None, resolved_model));
     }
 
@@ -483,104 +497,6 @@ pub(crate) fn truncate_prompt(s: &str, max_len: usize) -> String {
 
         format!("{substring}...")
     }
-}
-
-/// Parse token usage from tool output (best-effort, returns None on failure).
-///
-/// Looks for common patterns in stdout/stderr:
-/// - "tokens: N" or "Tokens: N" or "total_tokens: N"
-/// - "input_tokens: N" / "output_tokens: N"
-/// - "cost: $N.NN" or "estimated_cost: $N.NN"
-pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
-    let mut usage = TokenUsage::default();
-    let mut found_any = false;
-
-    // Simple pattern matching without regex
-    for line in output.lines() {
-        let line_lower = line.to_lowercase();
-
-        // Parse input_tokens
-        if let Some(pos) = line_lower.find("input_tokens")
-            && let Some(val) = extract_number(&line[pos..])
-        {
-            usage.input_tokens = Some(val);
-            found_any = true;
-        }
-
-        // Parse output_tokens
-        if let Some(pos) = line_lower.find("output_tokens")
-            && let Some(val) = extract_number(&line[pos..])
-        {
-            usage.output_tokens = Some(val);
-            found_any = true;
-        }
-
-        // Parse total_tokens
-        if let Some(pos) = line_lower.find("total_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.total_tokens = Some(val);
-                found_any = true;
-            }
-        } else if let Some(pos) = line_lower.find("tokens:") {
-            // Only match standalone "tokens:" — skip if preceded by a letter or
-            // underscore (e.g. "input_tokens:" or "output_tokens:" already
-            // handled above).
-            let prev = line_lower.as_bytes().get(pos.wrapping_sub(1)).copied();
-            let is_standalone = pos == 0 || !matches!(prev, Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'));
-            if is_standalone && let Some(val) = extract_number(&line[pos..]) {
-                usage.total_tokens = Some(val);
-                found_any = true;
-            }
-        }
-
-        // Parse cost (look for "$N.NN" pattern)
-        if line_lower.contains("cost")
-            && let Some(val) = extract_cost(line)
-        {
-            usage.estimated_cost_usd = Some(val);
-            found_any = true;
-        }
-    }
-
-    // Calculate total_tokens if not found but input/output are available
-    if usage.total_tokens.is_none()
-        && let (Some(input), Some(output)) = (usage.input_tokens, usage.output_tokens)
-    {
-        usage.total_tokens = Some(input + output);
-        found_any = true;
-    }
-
-    if found_any { Some(usage) } else { None }
-}
-
-/// Extract a number after colon or equals sign.
-fn extract_number(text: &str) -> Option<u64> {
-    // Find colon or equals
-    let start = text.find(':')?;
-    let after_colon = &text[start + 1..];
-
-    // Take first word after colon
-    let num_str: String = after_colon
-        .chars()
-        .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-
-    num_str.parse().ok()
-}
-
-/// Extract cost value after $ sign.
-fn extract_cost(text: &str) -> Option<f64> {
-    let start = text.find('$')?;
-    let after_dollar = &text[start + 1..];
-
-    // Take digits and decimal point
-    let num_str: String = after_dollar
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-
-    num_str.parse().ok()
 }
 
 /// Result of resolving a tool from a tier's models list.
@@ -784,6 +700,10 @@ mod transport_tests;
 #[cfg(test)]
 #[path = "run_helpers_model_spec_tests.rs"]
 mod model_spec_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_compat_tests.rs"]
+mod compat_tests;
 
 #[cfg(test)]
 #[path = "run_helpers_override_tests.rs"]
