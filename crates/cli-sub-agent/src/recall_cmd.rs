@@ -341,18 +341,24 @@ fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef
     let current_project = project_root.display().to_string();
 
     if trimmed.eq_ignore_ascii_case("latest") {
+        // Prefer live xurl query — it always resolves the provider's
+        // most-recent main-agent session for this project, regardless of
+        // whether CSA was ever invoked here.  Fall back to history only
+        // when no provider has a matching live session.
+        if let Some(session_ref) = live_query_main_session(project_root) {
+            return Ok(session_ref);
+        }
         let filtered_entries: Vec<_> = entries
             .iter()
             .filter(|entry| entry.project == current_project)
             .collect();
-        return latest_history_entry(&filtered_entries)
-            .map(entry_to_session_ref)
-            .with_context(|| {
-                format!(
-                    "No recall history for project {}. Use `csa recall list --all` to see all projects.",
-                    current_project
-                )
-            });
+        if let Some(entry) = latest_history_entry(&filtered_entries) {
+            return Ok(entry_to_session_ref(entry));
+        }
+        anyhow::bail!(
+            "No recall history for project {}. Use `csa recall list --all` to see all projects.",
+            current_project
+        );
     }
 
     if let Ok(index) = trimmed.parse::<usize>() {
@@ -404,6 +410,39 @@ fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef
         sid: trimmed.to_string(),
         provider: xurl_core::ProviderKind::Claude.to_string(),
     })
+}
+
+/// Live-query xurl for the current project's main-agent session.
+///
+/// This bypasses the history file entirely, probing each provider for
+/// the most recent main thread that belongs to `project_root`. Returns
+/// `None` when no provider has a matching session.
+fn live_query_main_session(project_root: &Path) -> Option<SessionRef> {
+    let roots = provider_roots().ok()?;
+    for &provider in RECALL_PROVIDERS {
+        let query = xurl_core::ThreadQuery {
+            uri: format!("{}://", provider),
+            provider,
+            role: Some("main".to_string()),
+            q: None,
+            limit: 1,
+            ignored_params: Vec::new(),
+        };
+        let Ok(result) = xurl_core::query_threads(&query, &roots) else {
+            continue;
+        };
+        let Some(thread) = result.items.first() else {
+            continue;
+        };
+        if !thread_belongs_to_project(&thread.thread_source, project_root, provider) {
+            continue;
+        }
+        return Some(SessionRef {
+            sid: thread.thread_id.clone(),
+            provider: provider.to_string(),
+        });
+    }
+    None
 }
 
 fn latest_history_entry<'a>(
