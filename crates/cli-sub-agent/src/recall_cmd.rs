@@ -53,16 +53,31 @@ fn recall_allowed_at_depth(depth: u32) -> bool {
     depth == 0
 }
 
-fn thread_belongs_to_project(thread_source: &str, project_root: &Path) -> bool {
-    let encoded = project_root.display().to_string().replace('/', "-");
-    let Some(parent) = std::path::Path::new(thread_source).parent() else {
-        return false;
-    };
-    let dir_name = parent
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_default();
-    dir_name.as_ref() == encoded
+fn thread_belongs_to_project(
+    thread_source: &str,
+    project_root: &Path,
+    provider: xurl_core::ProviderKind,
+) -> bool {
+    match provider {
+        xurl_core::ProviderKind::Claude => {
+            // Claude stores sessions in ~/.claude/projects/<encoded-project-root>/
+            let encoded = project_root.display().to_string().replace('/', "-");
+            let Some(parent) = std::path::Path::new(thread_source).parent() else {
+                return false;
+            };
+            let dir_name = parent
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            dir_name.as_ref() == encoded
+        }
+        // Codex, Gemini, Opencode: session paths don't encode project root
+        // (e.g. codex uses ~/.codex/sessions/YYYY/MM/DD/...).
+        // The project field in RecallHistoryEntry is set from the CSA
+        // invocation context, so project ownership is tracked correctly
+        // regardless of the provider's path layout.
+        _ => true,
+    }
 }
 
 pub(crate) fn spawn_recall_record_if_needed(project_root: &Path) {
@@ -111,7 +126,7 @@ pub(crate) async fn record_main_agent_session(project_root: &Path) -> Result<()>
             continue;
         };
 
-        if !thread_belongs_to_project(&thread.thread_source, project_root) {
+        if !thread_belongs_to_project(&thread.thread_source, project_root, provider) {
             debug!(
                 provider = %provider,
                 thread_source = %thread.thread_source,
@@ -654,17 +669,45 @@ mod tests {
     }
 
     #[test]
-    fn thread_belongs_to_matching_project() {
+    fn thread_belongs_to_matching_project_claude() {
         let source = "/home/obj/.claude/projects/-home-obj-project-github-user-repo/abc.jsonl";
         let root = Path::new("/home/obj/project/github/user/repo");
-        assert!(thread_belongs_to_project(source, root));
+        assert!(thread_belongs_to_project(
+            source,
+            root,
+            xurl_core::ProviderKind::Claude
+        ));
     }
 
     #[test]
-    fn thread_rejects_different_project() {
+    fn thread_rejects_different_project_claude() {
         let source = "/home/obj/.claude/projects/-home-obj-project-github-user-other/abc.jsonl";
         let root = Path::new("/home/obj/project/github/user/repo");
-        assert!(!thread_belongs_to_project(source, root));
+        assert!(!thread_belongs_to_project(
+            source,
+            root,
+            xurl_core::ProviderKind::Claude
+        ));
+    }
+
+    #[test]
+    fn thread_belongs_to_project_codex_always_true() {
+        let source = "/home/obj/.codex/sessions/2026/05/16/rollout-abc.jsonl";
+        let root = Path::new("/home/obj/project/github/user/repo");
+        assert!(
+            thread_belongs_to_project(source, root, xurl_core::ProviderKind::Codex),
+            "codex sessions don't encode project; always pass ownership check"
+        );
+    }
+
+    #[test]
+    fn thread_belongs_to_project_gemini_always_true() {
+        let source = "/home/obj/.gemini/history/session-abc.jsonl";
+        let root = Path::new("/home/obj/project/github/user/repo");
+        assert!(
+            thread_belongs_to_project(source, root, xurl_core::ProviderKind::Gemini),
+            "gemini sessions don't encode project; always pass ownership check"
+        );
     }
 
     #[test]
