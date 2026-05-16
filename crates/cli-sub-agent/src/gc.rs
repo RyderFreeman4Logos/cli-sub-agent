@@ -32,6 +32,12 @@ const RETIRE_AFTER_DAYS: i64 = 7;
 const STATE_DIR_SIZE_CACHE_FILENAME: &str = ".size-cache.toml";
 const RUNTIME_DIR_NAME: &str = "runtime";
 
+/// Grace period in seconds for newly-acquired slot locks with no session_id.
+///
+/// A lock is considered an orphan only after this window has passed; within it
+/// the process may still be mid-initialization and hasn't associated a session yet.
+const ORPHAN_SLOT_GRACE_SECS: i64 = 30;
+
 pub(crate) type RuntimeReapStats = reaper::RuntimeReapStats;
 
 pub(crate) fn handle_gc(
@@ -242,6 +248,7 @@ pub(crate) fn handle_gc(
     }
 
     let mut stale_slots_cleaned = 0;
+    let mut orphan_slots_cleaned = 0;
     if let Ok(slots_dir) = GlobalConfig::slots_dir()
         && slots_dir.exists()
         && let Ok(entries) = fs::read_dir(&slots_dir)
@@ -252,11 +259,20 @@ pub(crate) fn handle_gc(
                 if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
                     for slot_entry in slot_entries.flatten() {
                         let path = slot_entry.path();
-                        if path.extension().is_some_and(|ext| ext == "lock")
-                            && let Ok(content) = fs::read_to_string(&path)
-                            && let Some(pid) = extract_pid_from_lock(&content)
-                            && !is_process_alive(pid)
-                        {
+                        if path.extension().is_none_or(|ext| ext != "lock") {
+                            continue;
+                        }
+                        let Ok(content) = fs::read_to_string(&path) else {
+                            continue;
+                        };
+                        let Some((pid, session_id_is_null, acquired_at)) =
+                            extract_slot_lock_info(&content)
+                        else {
+                            continue;
+                        };
+
+                        if !is_process_alive(pid) {
+                            // Dead PID — remove the stale slot file.
                             if dry_run {
                                 eprintln!(
                                     "[dry-run] Would clean stale slot: {:?} (dead PID {})",
@@ -271,6 +287,59 @@ pub(crate) fn handle_gc(
                                     pid
                                 );
                                 stale_slots_cleaned += 1;
+                            }
+                        } else if session_id_is_null {
+                            // PID is alive but slot has no session_id — orphan daemon from
+                            // a failed session launch that permanently occupies the slot.
+                            // Respect grace period: skip very recent locks that may be
+                            // mid-initialization and haven't associated a session yet.
+                            let age_secs = acquired_at
+                                .map(|at| {
+                                    chrono::Utc::now().signed_duration_since(at).num_seconds()
+                                })
+                                .unwrap_or(i64::MAX);
+                            if age_secs < ORPHAN_SLOT_GRACE_SECS {
+                                continue;
+                            }
+                            if dry_run {
+                                eprintln!(
+                                    "[dry-run] Would evict orphan slot: {:?} \
+                                     (alive PID {} with no session_id, age {}s)",
+                                    path.file_name(),
+                                    pid,
+                                    age_secs
+                                );
+                                orphan_slots_cleaned += 1;
+                            } else {
+                                // SIGTERM the orphan process so it can clean up, then remove
+                                // its slot file. flock(2) is per-open-file-description, not
+                                // per-path, so deleting the file lets new sessions create a
+                                // fresh slot immediately even if SIGTERM is slow.
+                                // SAFETY: kill(2) with SIGTERM is safe for any valid PID.
+                                // EPERM means the process exists but we lack permission — log
+                                // and proceed with file removal regardless.
+                                let kill_ret =
+                                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                                if kill_ret != 0 {
+                                    let errno = std::io::Error::last_os_error();
+                                    warn!(
+                                        pid,
+                                        slot = ?path.file_name(),
+                                        error = %errno,
+                                        "SIGTERM failed for orphan slot PID; removing slot file anyway"
+                                    );
+                                }
+                                // Brief wait for graceful shutdown before removing the file.
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                if fs::remove_file(&path).is_ok() {
+                                    warn!(
+                                        pid,
+                                        slot = ?path.file_name(),
+                                        age_secs,
+                                        "Evicted orphan slot lock (alive PID with no session_id)"
+                                    );
+                                    orphan_slots_cleaned += 1;
+                                }
                             }
                         }
                     }
@@ -293,6 +362,7 @@ pub(crate) fn handle_gc(
                 "transcripts_removed": transcript_stats.files_removed,
                 "transcript_bytes_reclaimed": transcript_stats.bytes_reclaimed,
                 "stale_slots_cleaned": stale_slots_cleaned,
+                "orphan_slots_cleaned": orphan_slots_cleaned,
                 "orphan_scopes_cleaned": orphan_scopes_cleaned,
                 "review_gate_markers_removed": review_gate_stats.markers_removed,
             });
@@ -328,6 +398,9 @@ pub(crate) fn handle_gc(
                 prefix, transcript_stats.files_removed, transcript_stats.bytes_reclaimed
             );
             eprintln!("{prefix}  Stale slots cleaned: {stale_slots_cleaned}");
+            if orphan_slots_cleaned > 0 {
+                eprintln!("{prefix}  Orphan slot locks evicted: {orphan_slots_cleaned}");
+            }
             eprintln!("{prefix}  Orphan cgroup scopes cleaned: {orphan_scopes_cleaned}");
             if review_gate_stats.markers_removed > 0 {
                 eprintln!(
@@ -363,6 +436,26 @@ fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
     let v: serde_json::Value = serde_json::from_str(json_content).ok()?;
     let n = v.get("pid")?.as_u64()?;
     u32::try_from(n).ok()
+}
+
+/// Parse a slot lock file's JSON into `(pid, session_id_is_null, acquired_at)`.
+///
+/// `session_id_is_null` is `true` when the `session_id` field is JSON `null` or absent.
+/// `acquired_at` is `None` when the field is absent or unparseable.
+fn extract_slot_lock_info(
+    json_content: &str,
+) -> Option<(u32, bool, Option<chrono::DateTime<chrono::Utc>>)> {
+    let v: serde_json::Value = serde_json::from_str(json_content).ok()?;
+    let pid = u32::try_from(v.get("pid")?.as_u64()?).ok()?;
+    let session_id_is_null = match v.get("session_id") {
+        Some(s) => s.is_null(),
+        None => true, // absent field is treated the same as null
+    };
+    let acquired_at = v
+        .get("acquired_at")
+        .and_then(|t| t.as_str())
+        .and_then(|s| s.parse::<chrono::DateTime<chrono::Utc>>().ok());
+    Some((pid, session_id_is_null, acquired_at))
 }
 
 /// Returns `true` for valid-ULID non-hidden dirs in `sessions/` lacking `state.toml`.
