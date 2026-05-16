@@ -428,16 +428,166 @@ fn test_rotated_skips_restricted_tool_when_needs_edit() {
 }
 
 #[test]
-fn test_rotated_returns_none_when_all_restricted_and_needs_edit() {
+fn test_rotated_returns_err_when_all_restricted_and_needs_edit() {
     let temp = tempdir().unwrap();
     let config = make_config_with_restrictions(
         vec!["gemini-cli/google/gemini-2.5-pro/0"],
         vec!["gemini-cli"],
     );
 
-    let result = resolve_tier_tool_rotated(&config, "default", temp.path(), true).unwrap();
+    let result = resolve_tier_tool_rotated(&config, "default", temp.path(), true);
     assert!(
-        result.is_none(),
-        "Should return None when only tool is restricted and needs_edit"
+        result.is_err(),
+        "Should return Err when only tool is write-restricted and needs_edit"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("No writable tool available in tier"),
+        "Error should identify the write-restriction cause: {err_msg}"
+    );
+}
+
+#[test]
+fn test_rotated_err_when_fully_readonly_and_needs_edit() {
+    let temp = tempdir().unwrap();
+    // Simulate user config with both write restrictions set to false
+    let mut tools = HashMap::new();
+    tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            restrictions: Some(ToolRestrictions {
+                allow_edit_existing_files: false,
+                allow_write_new_files: false,
+            }),
+            ..Default::default()
+        },
+    );
+    let mut tiers = HashMap::new();
+    use csa_config::TierConfig;
+    tiers.insert(
+        "tier3".to_string(),
+        TierConfig {
+            description: "test tier".to_string(),
+            models: vec!["gemini-cli/google/gemini-2.5-pro/0".to_string()],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier3".to_string());
+    use csa_config::ProjectMeta;
+    let config = ProjectConfig {
+        schema_version: 1,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: Default::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping,
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    let result = resolve_tier_tool_rotated(&config, "default", temp.path(), true);
+    assert!(
+        result.is_err(),
+        "Should return Err when gemini-cli has both write restrictions false"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("No writable tool available in tier"),
+        "Error should mention no writable tool: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("allow_edit_existing_files = false or allow_write_new_files = false"),
+        "Error should mention the specific restrictions: {err_msg}"
+    );
+}
+
+#[test]
+fn test_rotated_ok_when_all_restricted_but_no_edit_needed() {
+    let temp = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&temp);
+    // Same fully read-only config — but needs_edit=false (csa review / csa debate context)
+    let mut tools = HashMap::new();
+    tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            restrictions: Some(ToolRestrictions {
+                allow_edit_existing_files: false,
+                allow_write_new_files: false,
+            }),
+            ..Default::default()
+        },
+    );
+    let mut tiers = HashMap::new();
+    use csa_config::TierConfig;
+    tiers.insert(
+        "tier3".to_string(),
+        TierConfig {
+            description: "test tier".to_string(),
+            models: vec!["gemini-cli/google/gemini-2.5-pro/0".to_string()],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier3".to_string());
+    use csa_config::ProjectMeta;
+    let config = ProjectConfig {
+        schema_version: 1,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: Default::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping,
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    // needs_edit=false → read-only tools are eligible (csa review/debate context)
+    let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.0, "gemini-cli",
+        "Fully read-only tool should be selectable when needs_edit=false"
     );
 }
