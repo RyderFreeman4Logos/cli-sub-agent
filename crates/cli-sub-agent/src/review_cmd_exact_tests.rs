@@ -69,7 +69,10 @@ fn exact_test_project_config_with_enabled_tools(tools: &[&str]) -> csa_config::P
     csa_config::ProjectConfig {
         schema_version: 1,
         project: csa_config::ProjectMeta::default(),
-        resources: csa_config::ResourcesConfig::default(),
+        resources: csa_config::ResourcesConfig {
+            min_free_memory_mb: 1,
+            ..Default::default()
+        },
         acp: Default::default(),
         tools: tool_map,
         review: None,

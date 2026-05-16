@@ -5,7 +5,7 @@ use crate::config::EnforcementMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesConfig {
-    /// Minimum combined free memory (physical + swap) in MB before refusing launch.
+    /// Minimum physical MemAvailable in MB before refusing launch.
     #[serde(default = "default_min_mem")]
     pub min_free_memory_mb: u64,
     /// Kill child if no streamed output for this many consecutive seconds.

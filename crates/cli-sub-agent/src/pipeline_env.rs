@@ -34,6 +34,11 @@ pub(crate) fn build_merged_env(
         .unwrap_or(true);
 
     let mut merged_env = extra_env.cloned().unwrap_or_default();
+    if !merged_env.contains_key("PATH")
+        && let Some(path) = std::env::var_os("PATH")
+    {
+        merged_env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
+    }
     if suppress {
         merged_env.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
     }
@@ -58,6 +63,11 @@ pub(crate) fn build_merged_env(
         merged_env.insert(
             "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
             if allow_degraded_mcp { "1" } else { "0" }.to_string(),
+        );
+        #[cfg(test)]
+        merged_env.insert(
+            "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+            "1".to_string(),
         );
     }
 

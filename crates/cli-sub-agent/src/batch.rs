@@ -317,6 +317,15 @@ async fn execute_batch(
             level.len()
         );
 
+        check_level_resource_availability(level, &task_map, &mut resource_guard).with_context(
+            || {
+                format!(
+                    "Resource check failed before spawning batch level {}",
+                    level_idx + 1
+                )
+            },
+        )?;
+
         // Separate parallel and sequential tasks in this level
         let mut parallel_tasks = Vec::new();
         let mut sequential_tasks = Vec::new();
@@ -337,7 +346,6 @@ async fn execute_batch(
                 &parallel_tasks,
                 project_root,
                 config,
-                &mut resource_guard,
                 level_idx + 1,
                 tasks.len(),
             )
@@ -364,12 +372,33 @@ async fn execute_batch(
     Ok(results)
 }
 
+fn check_level_resource_availability(
+    level: &[String],
+    task_map: &HashMap<&str, &BatchTask>,
+    resource_guard: &mut Option<ResourceGuard>,
+) -> Result<()> {
+    let Some(guard) = resource_guard else {
+        return Ok(());
+    };
+
+    for task_name in level {
+        let Some(task) = task_map.get(task_name.as_str()) else {
+            continue;
+        };
+        let tool_name = parse_tool_name(&task.tool)?;
+        guard
+            .check_availability(tool_name.as_str())
+            .with_context(|| format!("task='{}' tool='{}'", task.name, tool_name.as_str()))?;
+    }
+
+    Ok(())
+}
+
 /// Execute parallel tasks concurrently using JoinSet.
 async fn execute_parallel_tasks(
     tasks: &[BatchTask],
     project_root: &Path,
     config: Option<&ProjectConfig>,
-    resource_guard: &mut Option<ResourceGuard>,
     level: usize,
     total_tasks: usize,
 ) -> Result<Vec<TaskResult>> {
@@ -380,17 +409,6 @@ async fn execute_parallel_tasks(
         let task = task.clone();
         let project_root = project_root.clone();
         let config = config.cloned();
-
-        // Check resource availability before spawning (best effort)
-        if let Some(guard) = resource_guard {
-            let tool_name = parse_tool_name(&task.tool)?;
-            if let Err(e) = guard.check_availability(tool_name.as_str()) {
-                warn!(
-                    "Resource check failed for task '{}': {}. Proceeding anyway.",
-                    task.name, e
-                );
-            }
-        }
 
         join_set.spawn(async move {
             execute_task(

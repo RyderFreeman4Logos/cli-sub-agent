@@ -508,6 +508,33 @@ fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
 }
 
 #[test]
+fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
+    let cfg = test_config_with_node_heap_limit(None);
+    let Some(path) = std::env::var_os("PATH") else {
+        return;
+    };
+
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode");
+
+    assert_eq!(
+        merged.get("PATH"),
+        Some(&path.to_string_lossy().into_owned())
+    );
+}
+
+#[test]
+fn build_merged_env_disables_gemini_direct_launch_in_tests() {
+    let cfg = test_config_with_node_heap_limit(None);
+
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "gemini-cli");
+
+    assert_eq!(
+        merged.get("CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH"),
+        Some(&"1".to_string())
+    );
+}
+
+#[test]
 fn build_merged_env_appends_node_options_when_existing_value_present() {
     let cfg = test_config_with_node_heap_limit(Some(2048));
     let mut extra_env = HashMap::new();

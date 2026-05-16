@@ -324,10 +324,16 @@ sleep 2
     std::fs::set_permissions(&script_path, perms).expect("chmod +x");
 
     let old_path = std::env::var("PATH").unwrap_or_default();
-    let env = HashMap::from([(
-        "PATH".to_string(),
-        format!("{}:{old_path}", temp.path().display()),
-    )]);
+    let env = HashMap::from([
+        (
+            "PATH".to_string(),
+            format!("{}:{old_path}", temp.path().display()),
+        ),
+        (
+            "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+            "1".to_string(),
+        ),
+    ]);
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,
@@ -378,10 +384,16 @@ exit 1
     std::fs::set_permissions(&script_path, perms).expect("chmod +x");
 
     let old_path = std::env::var("PATH").unwrap_or_default();
-    let env = HashMap::from([(
-        "PATH".to_string(),
-        format!("{}:{old_path}", temp.path().display()),
-    )]);
+    let env = HashMap::from([
+        (
+            "PATH".to_string(),
+            format!("{}:{old_path}", temp.path().display()),
+        ),
+        (
+            "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+            "1".to_string(),
+        ),
+    ]);
 
     let transport = AcpTransport::new("gemini-cli", None);
     let error = transport
@@ -470,6 +482,10 @@ async fn test_execute_in_retries_with_degraded_mcp_when_allowed() {
             format!("{}:{old_path}", temp.path().display()),
         ),
         (
+            "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+            "1".to_string(),
+        ),
+        (
             "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
             "1".to_string(),
         ),
@@ -526,6 +542,10 @@ async fn test_execute_in_hard_fails_when_degraded_mcp_disabled() {
             format!("{}:{old_path}", temp.path().display()),
         ),
         (
+            "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+            "1".to_string(),
+        ),
+        (
             "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
             "0".to_string(),
         ),
@@ -580,6 +600,10 @@ async fn test_execute_in_healthy_mcp_has_no_warning() {
         (
             "PATH".to_string(),
             format!("{}:{old_path}", temp.path().display()),
+        ),
+        (
+            "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
+            "1".to_string(),
         ),
     ]);
     let transport = LegacyTransport::new(Executor::GeminiCli {

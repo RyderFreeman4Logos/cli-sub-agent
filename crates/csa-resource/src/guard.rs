@@ -6,9 +6,10 @@ use tracing::warn;
 /// but duplicated here to avoid circular dependency).
 #[derive(Debug, Clone)]
 pub struct ResourceLimits {
-    /// Minimum combined free memory (physical + swap) in MB.
-    /// CSA refuses to launch a tool if the combined available memory
-    /// is below this threshold.
+    /// Minimum physical MemAvailable in MB.
+    /// CSA refuses to launch a tool if physical available memory is below
+    /// this threshold. Swap is reported for diagnostics but is not counted
+    /// toward the hard pre-spawn gate.
     pub min_free_memory_mb: u64,
 }
 
@@ -36,24 +37,22 @@ impl ResourceGuard {
     /// Check if enough resources are available to launch a tool.
     ///
     /// Two-tier threshold:
-    /// - **Hard block**: available < reserve_mb → refuse to launch.
-    /// - **Warning**: available < 150% of reserve_mb → warn but allow.
+    /// - **Hard block**: MemAvailable < reserve_mb → refuse to launch.
+    /// - **Warning**: MemAvailable < 150% of reserve_mb → warn but allow.
     pub fn check_availability(&mut self, tool_name: &str) -> Result<()> {
         self.sys.refresh_memory();
 
         let available_phys_bytes = self.sys.available_memory();
         let available_swap_bytes = self.sys.free_swap();
-        let available_total_bytes = available_phys_bytes.saturating_add(available_swap_bytes);
-
         let available_phys = available_phys_bytes / 1024 / 1024;
         let available_swap = available_swap_bytes / 1024 / 1024;
-        let available_total = available_total_bytes / 1024 / 1024;
+        let available_combined = available_phys.saturating_add(available_swap);
 
         evaluate_memory_availability(
             tool_name,
-            available_total,
             available_phys,
             available_swap,
+            available_combined,
             self.limits.min_free_memory_mb,
         )
     }
@@ -102,32 +101,42 @@ const WARNING_MULTIPLIER_DEN: u64 = 2;
 
 /// Pure evaluation of memory availability against reserve.
 ///
-/// - Hard block when `available_total_mb < reserve_mb`.
-/// - Warning when `available_total_mb < reserve_mb * 150%`.
+/// - Hard block when `available_phys_mb < reserve_mb`.
+/// - Warning when `available_phys_mb < reserve_mb * 150%`.
 /// - Silent pass otherwise.
 fn evaluate_memory_availability(
     tool_name: &str,
-    available_total_mb: u64,
     available_phys_mb: u64,
     available_swap_mb: u64,
+    available_combined_mb: u64,
     reserve_mb: u64,
 ) -> Result<()> {
-    if available_total_mb < reserve_mb {
+    if available_phys_mb < reserve_mb {
+        let message = format!(
+            "CSA: low memory — available={available_phys_mb}MB < required={reserve_mb}MB. \
+             Refusing to spawn tool scopes. actual_available_mb={available_phys_mb} \
+             required_mb={reserve_mb} physical_available_mb={available_phys_mb} \
+             swap_available_mb={available_swap_mb} combined_available_mb={available_combined_mb}"
+        );
+        eprintln!("{message}");
         bail!(
-            "Insufficient system memory: available {available_total_mb}MB \
-             (physical {available_phys_mb} + swap {available_swap_mb}) \
-             but session requires {reserve_mb}MB. \
-             Free system memory or reduce [resources] min_free_memory_mb in .csa/config.toml."
+            "{message}. Free system memory or reduce [resources] min_free_memory_mb in \
+             .csa/config.toml."
         );
     }
 
     let warn_threshold = reserve_mb.saturating_mul(WARNING_MULTIPLIER_NUM) / WARNING_MULTIPLIER_DEN;
-    if available_total_mb < warn_threshold {
+    if available_phys_mb < warn_threshold {
+        eprintln!(
+            "CSA: low memory warning — available={available_phys_mb}MB < \
+             warning={warn_threshold}MB; required={reserve_mb}MB. Proceeding, but tool scopes \
+             may hit memory pressure."
+        );
         warn!(
-            available_mb = available_total_mb,
+            available_mb = available_phys_mb,
             reserve_mb,
             warn_threshold_mb = warn_threshold,
-            "Low memory: {available_total_mb}MB available for '{tool_name}' \
+            "Low memory: {available_phys_mb}MB available for '{tool_name}' \
              (reserve {reserve_mb}MB, warning threshold {warn_threshold}MB). \
              Session will proceed but may hit OOM pressure."
         );
@@ -168,7 +177,7 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("Insufficient system memory"),
+            err_msg.contains("CSA: low memory"),
             "Expected memory error, got: {err_msg}"
         );
     }
@@ -189,66 +198,86 @@ mod tests {
     }
 
     #[test]
-    fn test_check_availability_includes_swap() {
+    fn test_check_availability_reports_swap_without_requiring_it() {
         // With a very small reserve, the check must pass even if
-        // physical memory alone would be tight — swap is counted.
+        // swap is present. The hard gate is based on physical MemAvailable.
         let limits = ResourceLimits {
             min_free_memory_mb: 1,
         };
         let mut guard = ResourceGuard::new(limits);
 
-        // Refresh and verify combined memory is used
+        // Refresh and verify the host reports physical memory.
         guard.sys.refresh_memory();
         let phys = guard.sys.available_memory() / 1024 / 1024;
         let swap = guard.sys.free_swap() / 1024 / 1024;
-        let combined = phys + swap;
 
-        // The check should pass because combined >= 1 MB
         let result = guard.check_availability("swap_tool");
-        assert!(result.is_ok(), "combined {combined} MB should be >= 1 MB");
+        assert!(
+            result.is_ok(),
+            "physical {phys} MB with swap {swap} MB should be >= 1 MB"
+        );
     }
 
     // --- Pure function tests (deterministic, no sysinfo dependency) ---
 
     #[test]
     fn test_evaluate_hard_block_when_available_below_reserve() {
-        let result = evaluate_memory_availability("test_tool", 3000, 2000, 1000, 4096);
+        let result = evaluate_memory_availability("test_tool", 3000, 1000, 4000, 4096);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("Insufficient system memory"),
+            msg.contains("CSA: low memory"),
             "Expected hard block, got: {msg}"
         );
-        assert!(msg.contains("3000MB"), "Should show available: {msg}");
-        assert!(msg.contains("4096MB"), "Should show reserve: {msg}");
+        assert!(
+            msg.contains("actual_available_mb=3000"),
+            "Should show available: {msg}"
+        );
+        assert!(
+            msg.contains("required_mb=4096"),
+            "Should show reserve: {msg}"
+        );
     }
 
     #[test]
     fn test_evaluate_warning_when_available_between_100_and_150_percent() {
         // reserve=4096, 150% = 6144. available=5000 is between 4096..6144.
-        let result = evaluate_memory_availability("test_tool", 5000, 4000, 1000, 4096);
+        let result = evaluate_memory_availability("test_tool", 5000, 1000, 6000, 4096);
         // Should succeed (warning only, no error).
         assert!(result.is_ok(), "Should warn but not block: {result:?}");
     }
 
     #[test]
+    fn test_evaluate_blocks_when_memavailable_below_reserve_even_with_swap() {
+        let result = evaluate_memory_availability("test_tool", 3900, 4096, 7996, 4096);
+        assert!(
+            result.is_err(),
+            "swap must not satisfy min_free_memory_mb when MemAvailable is low"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("actual_available_mb=3900"));
+        assert!(msg.contains("swap_available_mb=4096"));
+        assert!(msg.contains("combined_available_mb=7996"));
+    }
+
+    #[test]
     fn test_evaluate_no_warning_when_available_above_150_percent() {
         // reserve=4096, 150% = 6144. available=7000 is above 6144.
-        let result = evaluate_memory_availability("test_tool", 7000, 6000, 1000, 4096);
+        let result = evaluate_memory_availability("test_tool", 7000, 1000, 8000, 4096);
         assert!(result.is_ok(), "Should pass without warning: {result:?}");
     }
 
     #[test]
     fn test_evaluate_exact_boundary_at_reserve() {
         // Exactly at reserve — should pass (not strictly less than).
-        let result = evaluate_memory_availability("test_tool", 4096, 3000, 1096, 4096);
+        let result = evaluate_memory_availability("test_tool", 4096, 1096, 5192, 4096);
         assert!(result.is_ok(), "Exact reserve should pass: {result:?}");
     }
 
     #[test]
     fn test_evaluate_exact_boundary_at_warning_threshold() {
         // reserve=4096, 150% = 6144. available=6144 is exactly at warning threshold.
-        let result = evaluate_memory_availability("test_tool", 6144, 5000, 1144, 4096);
+        let result = evaluate_memory_availability("test_tool", 6144, 1144, 7288, 4096);
         // 6144 is NOT < 6144, so no warning.
         assert!(
             result.is_ok(),
