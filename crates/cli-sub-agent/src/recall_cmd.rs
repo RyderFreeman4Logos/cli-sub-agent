@@ -1,5 +1,8 @@
 //! recall_cmd — main-agent session history tracking and xurl-based recovery.
 
+#[path = "recall_cmd_pages.rs"]
+mod pages;
+
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -33,8 +36,9 @@ struct SessionRef {
 pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
     match cmd {
         RecallCommands::List { limit } => handle_recall_list(limit),
-        RecallCommands::Read { session } => handle_recall_read(&session),
+        RecallCommands::Read { session, page } => handle_recall_read(&session, page),
         RecallCommands::Search { query } => handle_recall_search(&query),
+        RecallCommands::Pages { session } => handle_recall_pages(&session),
     }
 }
 
@@ -144,18 +148,75 @@ fn handle_recall_list(limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn handle_recall_read(session: &str) -> Result<()> {
+fn handle_recall_read(session: &str, page: Option<i32>) -> Result<()> {
     let session_ref = resolve_session_ref(session)?;
     let content = render_session_markdown(&session_ref)?;
 
-    if std::io::stdout().is_terminal()
-        && let Some(message) = output_guard_message(&session_ref.sid, &content)
-    {
-        println!("{message}");
+    let Some(page_n) = page else {
+        if std::io::stdout().is_terminal()
+            && let Some(message) = output_guard_message(&session_ref.sid, &content)
+        {
+            println!("{message}");
+            return Ok(());
+        }
+        print!("{content}");
+        return Ok(());
+    };
+
+    let page_list = pages::split_markdown_pages(&content);
+    let total = page_list.len();
+    let idx = pages::resolve_page_index(page_n, total).with_context(|| {
+        format!(
+            "Page {page_n} is out of range: session has {total} page(s) \
+             (use negative values to count from the end)"
+        )
+    })?;
+    print!("{}", page_list[idx]);
+    Ok(())
+}
+
+fn handle_recall_pages(session: &str) -> Result<()> {
+    let session_ref = resolve_session_ref(session)?;
+    let (resolved, content) = resolve_session_thread(&session_ref)?;
+
+    let page_list = pages::split_markdown_pages(&content);
+    if page_list.is_empty() {
+        println!("No content found in session {}.", session_ref.sid);
         return Ok(());
     }
 
-    print!("{content}");
+    let timestamps = pages::extract_jsonl_compact_timestamps(&resolved.path);
+
+    let mut line_cursor = 1usize;
+    println!(
+        "{:<6} {:<15} {:<22} {:<8} Note",
+        "Page", "Lines", "Timestamp", "Size"
+    );
+    println!("{}", "-".repeat(70));
+    for (i, page_content) in page_list.iter().enumerate() {
+        let page_num = i + 1;
+        let page_line_count = page_content.lines().count().max(1);
+        let line_start = line_cursor;
+        let line_end = line_cursor + page_line_count - 1;
+        line_cursor = line_end + 1;
+
+        let ts = timestamps
+            .get(i)
+            .and_then(Option::as_ref)
+            .map_or_else(|| String::from("-"), |ts| pages::format_timestamp_short(ts));
+        let size_kb = page_content.len().div_ceil(1024);
+        let note = if i == 0 { "" } else { "(compact)" };
+
+        println!(
+            "{:<6} {:<15} {:<22} {:<8} {}",
+            page_num,
+            format!("{line_start}-{line_end}"),
+            ts,
+            format!("{size_kb}KB"),
+            note,
+        );
+    }
+    println!("\nTotal pages: {}", page_list.len());
     Ok(())
 }
 
@@ -236,18 +297,21 @@ fn entry_to_session_ref(entry: &RecallHistoryEntry) -> SessionRef {
     }
 }
 
-fn render_session_markdown(session_ref: &SessionRef) -> Result<String> {
+fn resolve_session_thread(session_ref: &SessionRef) -> Result<(xurl_core::ResolvedThread, String)> {
     let roots = provider_roots()?;
     let uri_str = format!("agents://{}/{}", session_ref.provider, session_ref.sid);
     let uri: xurl_core::AgentsUri = uri_str
         .parse()
         .with_context(|| format!("Invalid agents URI: {uri_str}"))?;
-
     let resolved = xurl_core::resolve_thread(&uri, &roots)
         .with_context(|| format!("Failed to resolve thread {uri_str}"))?;
+    let content = xurl_core::render_thread_markdown(&uri, &resolved)
+        .with_context(|| format!("Failed to render thread {uri_str}"))?;
+    Ok((resolved, content))
+}
 
-    xurl_core::render_thread_markdown(&uri, &resolved)
-        .with_context(|| format!("Failed to render thread {uri_str}"))
+fn render_session_markdown(session_ref: &SessionRef) -> Result<String> {
+    resolve_session_thread(session_ref).map(|(_, content)| content)
 }
 
 fn provider_roots() -> Result<xurl_core::ProviderRoots> {
