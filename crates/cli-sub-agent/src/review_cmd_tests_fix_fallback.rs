@@ -16,6 +16,15 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
     std::fs::create_dir_all(&bin_dir).unwrap();
     let opencode_count_path = project_dir.path().join("opencode-count.txt");
 
+    // Codex stubs are used here instead of gemini-cli to avoid a bwrap +
+    // CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH interaction (#1407): build_merged_env
+    // injects CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH=1 for gemini-cli which forces the
+    // launch command to the bare name "gemini" (no absolute path). Inside the bwrap
+    // sandbox the stub dir is unmounted, so PATH lookup bypasses the stub and reaches
+    // the real mise-managed gemini binary, triggering live API calls that hang the test.
+    // Codex uses CLI transport with no runtime PATH-pinning; PATH stubs work reliably
+    // when combined with no_fs_sandbox=true, which skips bwrap so the stub dir is
+    // accessible. Keep no_fs_sandbox=true on both the initial review and the fix loop.
     let codex_stub = "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'codex_429_retry_exhausted: temporary codex 429 rate limit persisted after 3 retries\\n' >&2\nexit 1\n";
     for binary in ["codex", "codex-acp"] {
         std::fs::write(bin_dir.join(binary), codex_stub).unwrap();
