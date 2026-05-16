@@ -2288,6 +2288,15 @@ fi
 # shellcheck disable=SC2086
 gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
 
+# --- Inline post-merge checkout (defense-in-depth for #1401) ---
+_SYNC_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${_SYNC_BRANCH}" ]; then
+  _SYNC_BRANCH="$(git symbolic-ref refs/remotes/${REMOTE_NAME:-origin}/HEAD 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME:-origin}/@@")"
+fi
+if [ -n "${_SYNC_BRANCH}" ]; then
+  git checkout "${_SYNC_BRANCH}" 2>/dev/null && git pull --ff-only "${REMOTE_NAME:-origin}" "${_SYNC_BRANCH}" 2>/dev/null || true
+fi
+
 # Write pr-bot completion marker (deterministic gate for pre-merge hook).
 MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
@@ -2356,6 +2365,15 @@ fi
 # shellcheck disable=SC2086
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
 
+# --- Inline post-merge checkout (defense-in-depth for #1401) ---
+_SYNC_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${_SYNC_BRANCH}" ]; then
+  _SYNC_BRANCH="$(git symbolic-ref refs/remotes/${REMOTE_NAME:-origin}/HEAD 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME:-origin}/@@")"
+fi
+if [ -n "${_SYNC_BRANCH}" ]; then
+  git checkout "${_SYNC_BRANCH}" 2>/dev/null && git pull --ff-only "${REMOTE_NAME:-origin}" "${_SYNC_BRANCH}" 2>/dev/null || true
+fi
+
 # Write pr-bot completion marker (deterministic gate for pre-merge hook).
 MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
@@ -2402,6 +2420,15 @@ if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; the
 fi
 # shellcheck disable=SC2086
 gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+
+# --- Inline post-merge checkout (defense-in-depth for #1401) ---
+_SYNC_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${_SYNC_BRANCH}" ]; then
+  _SYNC_BRANCH="$(git symbolic-ref refs/remotes/${REMOTE_NAME:-origin}/HEAD 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME:-origin}/@@")"
+fi
+if [ -n "${_SYNC_BRANCH}" ]; then
+  git checkout "${_SYNC_BRANCH}" 2>/dev/null && git pull --ff-only "${REMOTE_NAME:-origin}" "${_SYNC_BRANCH}" 2>/dev/null || true
+fi
 
 # Write pr-bot completion marker (deterministic gate for pre-merge hook).
 MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
