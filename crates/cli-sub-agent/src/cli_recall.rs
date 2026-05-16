@@ -20,12 +20,14 @@ pub enum RecallCommands {
     /// Render a recorded session as markdown
     Read {
         /// Session ID, `latest`, or a 1-based history index
+        #[arg(default_value = "latest")]
         session: String,
 
-        /// Show only page N (positive: from start, negative: from end; -1 = last/current page).
+        /// Page number (newest-first): 0 = current page (after last compact),
+        /// 1 = previous page, 2 = before that, and so on.
         /// Bypasses the OUTPUT_TOO_LARGE guard.
-        #[arg(long, allow_negative_numbers = true)]
-        page: Option<i32>,
+        #[arg(long)]
+        page: Option<u32>,
     },
 
     /// Search the most recent recorded session for a literal query
@@ -34,9 +36,14 @@ pub enum RecallCommands {
         query: String,
     },
 
-    /// List compact-event page boundaries in a recorded session
+    /// List compact-event page boundaries (newest-first).
+    ///
+    /// Page 0 is the content after the most recent compact event (the
+    /// "current" page).  Page 1 is between the second-to-last and last
+    /// compact, and so on.
     Pages {
         /// Session ID, `latest`, or a 1-based history index
+        #[arg(default_value = "latest")]
         session: String,
     },
 }

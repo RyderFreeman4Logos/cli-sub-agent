@@ -22,9 +22,8 @@ pub(super) fn is_compact_heading(line: &str) -> bool {
 
 /// Splits rendered markdown into pages at each `## N. Context Compacted` heading.
 ///
-/// Page 1 = everything before the first compact heading.
-/// Page N+1 = from the Nth compact heading to (but not including) the next one.
-/// Returns a single page containing the full content when no compact headings exist.
+/// Returns pages in chronological order. The caller maps user-facing page
+/// numbers (0 = newest) via [`resolve_page_index`].
 pub(super) fn split_markdown_pages(content: &str) -> Vec<String> {
     let mut pages: Vec<String> = Vec::new();
     let mut current_start = 0usize;
@@ -58,21 +57,17 @@ fn line_byte_offsets(content: &str) -> impl Iterator<Item = (usize, &str)> {
     })
 }
 
-/// Converts a signed page number to a 0-based index into a slice of `total` pages.
+/// Converts a 0-based newest-first page number to an index into the
+/// chronological page list.
 ///
-/// Positive: 1-based from start. Negative: -1 = last, -2 = second to last.
-/// Returns `None` if out of range or zero.
-pub(super) fn resolve_page_index(page: i32, total: usize) -> Option<usize> {
-    if page == 0 || total == 0 {
+/// Page 0 = last (newest) page, page 1 = second-to-last, etc.
+/// Returns `None` if `page >= total`.
+pub(super) fn resolve_page_index(page: u32, total: usize) -> Option<usize> {
+    let n = page as usize;
+    if n >= total {
         return None;
     }
-    if page > 0 {
-        let idx = (page as usize).checked_sub(1)?;
-        if idx < total { Some(idx) } else { None }
-    } else {
-        let offset = (-page) as usize;
-        total.checked_sub(offset)
-    }
+    Some(total - 1 - n)
 }
 
 /// Reads the JSONL file at `path` and returns one timestamp entry per page:
@@ -213,30 +208,30 @@ mod tests {
     }
 
     #[test]
-    fn resolve_page_index_positive() {
-        assert_eq!(resolve_page_index(1, 3), Some(0));
-        assert_eq!(resolve_page_index(2, 3), Some(1));
-        assert_eq!(resolve_page_index(3, 3), Some(2));
-        assert_eq!(resolve_page_index(4, 3), None, "out of range");
+    fn resolve_page_index_newest_first() {
+        assert_eq!(
+            resolve_page_index(0, 3),
+            Some(2),
+            "0 = newest (last chronological)"
+        );
+        assert_eq!(resolve_page_index(1, 3), Some(1), "1 = previous");
+        assert_eq!(
+            resolve_page_index(2, 3),
+            Some(0),
+            "2 = oldest (first chronological)"
+        );
+        assert_eq!(resolve_page_index(3, 3), None, "out of range");
     }
 
     #[test]
-    fn resolve_page_index_negative() {
-        assert_eq!(resolve_page_index(-1, 3), Some(2), "-1 = last");
-        assert_eq!(resolve_page_index(-2, 3), Some(1), "-2 = second to last");
-        assert_eq!(resolve_page_index(-3, 3), Some(0), "-3 = first");
-        assert_eq!(resolve_page_index(-4, 3), None, "too negative");
-    }
-
-    #[test]
-    fn resolve_page_index_zero_is_invalid() {
-        assert_eq!(resolve_page_index(0, 3), None, "page 0 is invalid");
+    fn resolve_page_index_single_page() {
+        assert_eq!(resolve_page_index(0, 1), Some(0), "only page");
+        assert_eq!(resolve_page_index(1, 1), None, "out of range");
     }
 
     #[test]
     fn resolve_page_index_empty_returns_none() {
-        assert_eq!(resolve_page_index(1, 0), None);
-        assert_eq!(resolve_page_index(-1, 0), None);
+        assert_eq!(resolve_page_index(0, 0), None);
     }
 
     #[test]
