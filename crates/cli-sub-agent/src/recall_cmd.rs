@@ -374,13 +374,13 @@ fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef
     let roots = provider_roots()?;
     for &provider in RECALL_PROVIDERS {
         let uri_str = format!("agents://{}/{}", provider, trimmed);
-        if let Ok(uri) = uri_str.parse::<xurl_core::AgentsUri>() {
-            if let Ok(_) = xurl_core::resolve_thread(&uri, &roots) {
-                return Ok(SessionRef {
-                    sid: trimmed.to_string(),
-                    provider: provider.to_string(),
-                });
-            }
+        if let Ok(uri) = uri_str.parse::<xurl_core::AgentsUri>()
+            && xurl_core::resolve_thread(&uri, &roots).is_ok()
+        {
+            return Ok(SessionRef {
+                sid: trimmed.to_string(),
+                provider: provider.to_string(),
+            });
         }
     }
 
