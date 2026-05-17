@@ -74,6 +74,12 @@ breaks prompt-guard propagation.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.
    - **Dimension 4 (Semantic Invariants)**: Capture invariants, assumptions, concurrent writers, and failure/rollback model.
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
+   
+   **RECON Skip Condition**: When ALL of the following are true, the orchestrator MAY skip CSA RECON and perform exploration directly (grep/read):
+   - Change touches ≤3 files AND ≤50 lines
+   - Relevant code is already in context OR locatable with ≤3 grep/read operations
+   - No cross-crate dependency analysis needed
+   This avoids the cold-start cost (~10K+ tokens per RECON session) for trivial changes. The orchestrator documents skipped RECON in the TODO draft with: `RECON: skipped (small task, context sufficient)`.
 2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> default Chinese (Simplified) when script is mixed/unknown -> fallback Chinese (Simplified) when `${FEATURE}` is empty. This language is captured as `${STEP_2_OUTPUT}`.
 3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_2_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 4. **Phase 2.5 -- THREAT MODEL** *(skipped in light mode)*: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults), plus concurrency-specific failure modes: concurrent writers, TOCTOU / rollback / cleanup races, state-machine invariants under concurrent transitions, and file-write atomicity. If the task is a default-change task (changes a default value, default transport, default tool, default feature gate, or default config field), emit an `existing-config x upgrade-path` matrix covering legitimate pre-change user states, pre-change behavior, post-change behavior, and whether a gap exists. Each matrix row with `Gap = Yes` MUST be tagged `[Security]` or `[Compat]` and added as a Phase-2.5-generated TODO item. Non-default-change tasks skip the matrix.

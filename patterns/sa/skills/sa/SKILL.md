@@ -86,9 +86,29 @@ NEVER treat pre-existing failures as justification for LEFTHOOK=0.
 5. If confidence is low, trigger cross-review by another employee.
 6. **After PR creation, invoke `/pr-bot`** — this is MANDATORY. The pr-bot skill handles `@codex review` triggering, polling (10 min timeout), fallback to local review, and the full bot review loop. Layer 1 executors MUST invoke this skill; it is NOT optional.
 
-### Layer 0 Manager: What You MUST NEVER Do
+### Small Task Fast Path (COST OPTIMIZATION)
 
-Absolute prohibitions (SOP breach):
+When ALL of the following are true, Layer 0 MAY execute directly instead of dispatching CSA:
+
+1. **Scope**: total change is ≤30 lines across ≤3 files
+2. **Complexity**: mechanical edit (config field addition, rename, flag wiring, template update)
+3. **Context**: relevant code is already in the main agent's context window
+4. **Risk**: no security-sensitive paths, no cross-crate architectural changes
+
+In fast-path mode, Layer 0 may:
+- Read/edit the specific files being changed (not exploratory reading)
+- Run `just pre-commit` to validate
+- Commit directly on the feature branch
+
+Layer 0 MUST still delegate via CSA when:
+- Change exceeds 30 lines or 3 files
+- Design judgment is required (which approach? which abstraction?)
+- Security-sensitive code paths are involved
+- User explicitly requested SA mode or CSA delegation
+
+### Layer 0 Manager: What You MUST NEVER Do (Full SA Mode)
+
+When NOT in small-task fast path, these absolute prohibitions apply:
 
 - NEVER `Read` source files (`*.rs`, `*.ts`, `*.py`, etc.).
 - NEVER `Grep`/`Glob` source code.
