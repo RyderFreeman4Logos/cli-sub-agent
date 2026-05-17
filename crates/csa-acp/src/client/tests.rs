@@ -204,6 +204,43 @@ fn session_event_store_bounds_retained_events_and_metadata() {
     );
 }
 
+/// `SessionEventStore` MUST count every `AgentMessage` as one conversation
+/// turn so the ACP transport can populate `StreamingMetadata.turn_count`
+/// with real turn counts rather than `csa run` invocations (#1438). The
+/// count must survive ring-buffer eviction (it is metadata, not an event).
+#[test]
+fn session_event_store_turn_count_tracks_agent_messages_and_survives_eviction() {
+    let mut store = SessionEventStore::default();
+    for i in 0..3 {
+        store.push(SessionEvent::AgentMessage(format!("turn-{i}")));
+        store.push(SessionEvent::ToolCallStarted {
+            id: format!("call-{i}"),
+            title: format!("cmd-{i}"),
+            kind: "Execute".to_string(),
+        });
+        store.push(SessionEvent::ToolCallCompleted {
+            id: format!("call-{i}"),
+            status: "success".to_string(),
+        });
+    }
+    store.push(SessionEvent::AgentThought("internal".to_string()));
+    assert_eq!(
+        store.turn_count(),
+        3,
+        "three AgentMessage events => three observed turns; thought/tool events do not count"
+    );
+
+    for i in 0..(MAX_RETAINED_EVENTS + 25) {
+        store.push(SessionEvent::AgentMessage(format!("flood-{i}")));
+    }
+    let expected_turns = 3 + (MAX_RETAINED_EVENTS as u32) + 25;
+    assert_eq!(
+        store.turn_count(),
+        expected_turns,
+        "turn_count is metadata; ring-buffer eviction must not lose it"
+    );
+}
+
 #[test]
 fn session_event_store_keeps_no_verify_sticky_after_command_ring_eviction() {
     let mut store = SessionEventStore::default();

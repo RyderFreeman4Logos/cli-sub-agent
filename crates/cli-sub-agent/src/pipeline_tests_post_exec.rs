@@ -270,6 +270,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         changed_paths: changed_paths.clone(),
         pre_exec_snapshot: None,
         has_tool_calls: true,
+        turn_count: 0,
         sa_mode: false,
     };
     let mut disabled_result = csa_process::ExecutionResult {
@@ -312,6 +313,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         changed_paths,
         pre_exec_snapshot: None,
         has_tool_calls: true,
+        turn_count: 0,
         sa_mode: false,
     };
     let mut enabled_result = csa_process::ExecutionResult {
@@ -513,6 +515,7 @@ auto_capture = true
         changed_paths: vec![],
         pre_exec_snapshot: None,
         has_tool_calls: true,
+        turn_count: 0,
         sa_mode: false,
     };
     let mut result = csa_process::ExecutionResult {

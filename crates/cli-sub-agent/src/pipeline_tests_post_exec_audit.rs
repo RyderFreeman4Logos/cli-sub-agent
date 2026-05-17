@@ -203,6 +203,7 @@ fn pre_execution_audit_baseline_returns_none_for_legacy_sessions_without_snapsho
         changed_paths: vec![],
         pre_exec_snapshot: None,
         has_tool_calls: false,
+        turn_count: 0,
         sa_mode: false,
     };
 
@@ -269,6 +270,7 @@ fn pre_execution_audit_baseline_prefers_per_execution_snapshot() {
             porcelain: Some(" M fresh.txt\0".to_string()),
         }),
         has_tool_calls: false,
+        turn_count: 0,
         sa_mode: false,
     };
 
@@ -362,6 +364,7 @@ fn audit_failure_does_not_fail_execution() {
         changed_paths: vec![],
         pre_exec_snapshot: None,
         has_tool_calls: false,
+        turn_count: 0,
         sa_mode: false,
     };
     let session = MetaSessionState {
@@ -484,6 +487,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         changed_paths: vec![],
         pre_exec_snapshot: Some(turn_two_snapshot),
         has_tool_calls: false,
+        turn_count: 0,
         sa_mode: false,
     };
     let session = MetaSessionState {
@@ -585,6 +589,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         changed_paths: vec![],
         pre_exec_snapshot: None,
         has_tool_calls: false,
+        turn_count: 0,
         sa_mode: false,
     };
     let session = MetaSessionState {

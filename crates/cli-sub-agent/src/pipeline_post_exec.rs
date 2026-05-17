@@ -56,6 +56,11 @@ pub(crate) struct PostExecContext<'a> {
     pub pre_exec_snapshot: Option<PreExecutionSnapshot>,
     /// Whether the transport observed any tool calls during execution.
     pub has_tool_calls: bool,
+    /// Number of agent conversation turns observed in this run (one per
+    /// `AgentMessage` event). `0` means the transport did not parse streaming
+    /// events; `process_execution_result` falls back to `+= 1` to preserve the
+    /// legacy "one increment per csa run" semantics.
+    pub turn_count: u32,
     /// Whether this session is running in SA (sub-agent / autonomous) mode.
     pub sa_mode: bool,
 }
@@ -109,8 +114,11 @@ pub(crate) async fn process_execution_result(
         }
     }
 
-    // Increment turn count
-    session.turn_count += 1;
+    // Increment turn count. Transports that parse streaming events (claude-code
+    // CLI, codex/gemini ACP) populate `ctx.turn_count` with the number of
+    // observed agent conversation turns; legacy transports leave it at `0` and
+    // fall back to the historical `+= 1` per-invocation contract (#1438).
+    session.turn_count = session.turn_count.saturating_add(ctx.turn_count.max(1));
 
     // Update cumulative token usage
     update_cumulative_tokens(session, token_usage);

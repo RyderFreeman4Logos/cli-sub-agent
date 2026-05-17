@@ -23,6 +23,12 @@ const MAX_EXTRACTED_COMMANDS: usize = 100;
 pub struct StreamingMetadata {
     /// Total number of events seen across the entire prompt turn, including dropped events.
     pub total_events_count: usize,
+    /// Number of agent conversation turns observed (one per `AgentMessage`).
+    ///
+    /// Mirrors `csa_core::transport_events::StreamingMetadata::turn_count`; copied
+    /// through `convert_acp_metadata` in the executor crate. See that field's
+    /// docstring for the legacy fallback contract.
+    pub turn_count: u32,
     /// Whether any `ToolCallStarted` event was observed.
     pub has_tool_calls: bool,
     /// Whether any execute `ToolCallStarted` event was observed.
@@ -60,6 +66,7 @@ pub struct StreamingMetadata {
 impl StreamingMetadata {
     pub(crate) fn sync_from_store(&mut self, store: &SessionEventStore) {
         self.total_events_count = store.total_events_count();
+        self.turn_count = store.turn_count();
         self.has_tool_calls = store.has_tool_calls();
         self.has_execute_tool_calls = store.has_execute_tool_calls();
         self.has_no_verify_commit = store.has_no_verify_commit();
@@ -143,6 +150,7 @@ pub(crate) fn event_counts_as_initial_response(event: &SessionEvent) -> bool {
 pub(crate) struct SessionEventStore {
     events: VecDeque<SessionEvent>,
     total_events_count: usize,
+    turn_count: u32,
     has_tool_calls: bool,
     has_execute_tool_calls: bool,
     has_no_verify_commit: bool,
@@ -191,6 +199,10 @@ impl SessionEventStore {
         self.total_events_count
     }
 
+    pub(crate) fn turn_count(&self) -> u32 {
+        self.turn_count
+    }
+
     pub(crate) fn has_tool_calls(&self) -> bool {
         self.has_tool_calls
     }
@@ -229,8 +241,10 @@ impl SessionEventStore {
             SessionEvent::PlanUpdate(_) => {
                 self.has_plan_updates = true;
             }
-            SessionEvent::AgentMessage(_)
-            | SessionEvent::AgentThought(_)
+            SessionEvent::AgentMessage(_) => {
+                self.turn_count = self.turn_count.saturating_add(1);
+            }
+            SessionEvent::AgentThought(_)
             | SessionEvent::ToolCallCompleted { .. }
             | SessionEvent::Other(_) => {}
         }

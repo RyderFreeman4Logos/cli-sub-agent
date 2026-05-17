@@ -3,6 +3,15 @@
 pub struct StreamingMetadata {
     /// Total number of events seen across the entire prompt turn, including dropped events.
     pub total_events_count: usize,
+    /// Number of agent conversation turns observed in this prompt run.
+    ///
+    /// Counted by transports as the number of `AgentMessage` events emitted by
+    /// the underlying tool. A single `csa run` invocation may span many turns
+    /// when the agent reads tool results, deliberates, and responds again.
+    /// Transports that do not parse streaming events leave this at `0`; callers
+    /// must treat `0` as "unknown" and fall back to a `+= 1` increment for
+    /// `MetaSessionState.turn_count` to preserve the legacy counting contract.
+    pub turn_count: u32,
     /// Whether any `ToolCallStarted` event was observed.
     pub has_tool_calls: bool,
     /// Whether any execute `ToolCallStarted` event was observed.
