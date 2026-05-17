@@ -542,48 +542,9 @@ impl ProjectConfig {
         None
     }
 
-    /// Suggest a tier name for a failed selector (for "Did you mean?" messages).
-    ///
-    /// Returns `Some(name)` when exactly one tier starts with the selector,
-    /// or the selector is a substring of exactly one tier name.
-    pub fn suggest_tier(&self, selector: &str) -> Option<String> {
-        if selector.trim().is_empty() {
-            return None;
-        }
-        // Try prefix match first
-        let prefix_matches: Vec<&String> = self
-            .tiers
-            .keys()
-            .filter(|name| name.starts_with(selector))
-            .collect();
-        if prefix_matches.len() == 1 {
-            return Some(prefix_matches[0].clone());
-        }
-        // Try substring match
-        let substr_matches: Vec<&String> = self
-            .tiers
-            .keys()
-            .filter(|name| name.contains(selector))
-            .collect();
-        if substr_matches.len() == 1 {
-            return Some(substr_matches[0].clone());
-        }
-        None
-    }
-
-    /// Format tier aliases for error messages (empty string if no mappings).
-    pub fn format_tier_aliases(&self) -> String {
-        if self.tier_mapping.is_empty() {
-            return String::new();
-        }
-        let mut aliases: Vec<String> = self
-            .tier_mapping
-            .iter()
-            .map(|(k, v)| format!("{k} \u{2192} {v}"))
-            .collect();
-        aliases.sort();
-        format!("\nAvailable tier aliases: [{}]", aliases.join(", "))
-    }
+    // Compound tier-tool parsing, tier suggestion, and alias formatting
+    // are in config_tier_helpers.rs to stay under the 800-line monolith gate.
+    // Methods: try_parse_compound_tier_tool, suggest_tier, format_tier_aliases
 
     /// Resolve tier-based tool selection for a given task type.
     ///

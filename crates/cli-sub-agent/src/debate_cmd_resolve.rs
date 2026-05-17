@@ -13,6 +13,62 @@ use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use tracing::warn;
 
+/// Bundle of CLI args needed to resolve the debate tier + compound tool.
+pub(crate) struct DebateTierResolveCtx<'a> {
+    pub(crate) project_root: &'a Path,
+    pub(crate) cli_tier: Option<&'a str>,
+    pub(crate) cli_model_spec: Option<&'a str>,
+    pub(crate) cli_hint_difficulty: Option<&'a str>,
+    pub(crate) cli_session: Option<&'a str>,
+    pub(crate) cli_tool: Option<ToolName>,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) frontmatter_difficulty: Option<&'a str>,
+    pub(crate) debate_description: &'a str,
+    pub(crate) explicit_tool: Option<ToolName>,
+}
+
+/// Resolve the effective debate tier, applying the difficulty hint, then the
+/// compound `--tier <tier>-<tool>` selector (#1441). Wraps both error paths in
+/// a pre-exec error result so the caller can simply propagate via `?`.
+pub(crate) fn resolve_debate_effective_tier_with_compound(
+    ctx: DebateTierResolveCtx<'_>,
+) -> Result<(Option<String>, Option<ToolName>)> {
+    let effective_tier = crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
+        ctx.config,
+        ctx.cli_tier,
+        ctx.cli_model_spec,
+        ctx.cli_hint_difficulty,
+        ctx.frontmatter_difficulty,
+    )
+    .map_err(|err| {
+        crate::session_guard::persist_pre_exec_error_result(crate::session_guard::PreExecErrorCtx {
+            project_root: ctx.project_root,
+            session_id: ctx.cli_session,
+            description: Some(ctx.debate_description),
+            parent: None,
+            tool_name: ctx.explicit_tool.map(|t| t.as_str()),
+            task_type: Some("debate"),
+            tier_name: ctx.cli_tier,
+            error: err,
+        })
+    })?;
+    crate::run_helpers::apply_compound_tier_selector(effective_tier, ctx.cli_tool, ctx.config)
+        .map_err(|err| {
+            crate::session_guard::persist_pre_exec_error_result(
+                crate::session_guard::PreExecErrorCtx {
+                    project_root: ctx.project_root,
+                    session_id: ctx.cli_session,
+                    description: Some(ctx.debate_description),
+                    parent: None,
+                    tool_name: ctx.explicit_tool.map(|t| t.as_str()),
+                    task_type: Some("debate"),
+                    tier_name: None,
+                    error: err,
+                },
+            )
+        })
+}
+
 /// Returns (tool, debate_mode, optional_model_spec). When tier resolves, model_spec is set.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedDebateSelection {

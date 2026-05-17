@@ -361,17 +361,22 @@ pub(crate) fn resolve_review_tier_name(
         .map(|s| s.to_string()))
 }
 
+/// Resolve the effective review tier, applying the difficulty hint and then the
+/// compound `--tier <tier>-<tool>` selector (#1441). Returns
+/// `(effective_tier, args_tool)` where `args_tool` is the compound's parsed tool
+/// when applicable, otherwise the caller's original `args.tool`.
 pub(crate) fn resolve_review_effective_tier(
     args: &ReviewArgs,
     project_config: Option<&ProjectConfig>,
-) -> Result<Option<String>> {
-    crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
+) -> Result<(Option<String>, Option<ToolName>)> {
+    let effective_tier = crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
         project_config,
         args.tier.as_deref(),
         args.model_spec.as_deref(),
         args.hint_difficulty.as_deref(),
         None,
-    )
+    )?;
+    crate::run_helpers::apply_compound_tier_selector(effective_tier, args.tool, project_config)
 }
 
 pub(crate) fn resolve_review_model(

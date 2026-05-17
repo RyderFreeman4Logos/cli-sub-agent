@@ -221,7 +221,7 @@ pub(crate) async fn handle_run(
         prompt
     };
 
-    let skill_res = resolve_skill_and_prompt(
+    let mut skill_res = resolve_skill_and_prompt(
         skill.as_deref(),
         prompt,
         tool,
@@ -287,6 +287,38 @@ pub(crate) async fn handle_run(
         hint_difficulty.as_deref(),
         frontmatter_difficulty.as_deref(),
     )?;
+
+    // #1441: compound `--tier <tier>-<tool>` selector. When the literal tier
+    // name isn't a configured tier but parses as `<tier>-<tool>`, replace the
+    // tier with the canonical prefix and inject the parsed tool. Conflicting
+    // --tool surfaces as a routing error.
+    let (effective_tier, compounded_tool) =
+        match crate::run_helpers::apply_compound_tier_selector_arg(
+            effective_tier,
+            skill_res.tool.take(),
+            config.as_ref(),
+        ) {
+            Ok(pair) => pair,
+            Err(err) => {
+                return Err(crate::session_guard::persist_pre_exec_error_result(
+                    crate::session_guard::PreExecErrorCtx {
+                        project_root: &project_root,
+                        session_id: if is_fork {
+                            None
+                        } else {
+                            session_arg.as_deref()
+                        },
+                        description: pre_exec_description,
+                        parent: pre_exec_parent,
+                        tool_name: explicit_tool_name,
+                        task_type: Some("run"),
+                        tier_name: None,
+                        error: err,
+                    },
+                ));
+            }
+        };
+    skill_res.tool = compounded_tool;
 
     // Enforce tier routing: when tiers are configured, explicit --tool (any
     // value, including "auto") is blocked unless --tier is also specified or
