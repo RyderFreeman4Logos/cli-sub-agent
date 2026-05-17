@@ -308,28 +308,12 @@ where
             let refreshed_result = refreshed_result.ok().flatten();
             let mut synthetic = false;
             let refreshed_result_available = refreshed_result.is_some();
-            let mut loaded_result = refreshed_result.filter(|result| {
-                match (
-                    fs::metadata(session_dir.join(csa_session::result::RESULT_FILE_NAME))
-                        .ok()
-                        .and_then(|metadata| metadata.modified().ok()),
-                    fs::metadata(daemon_completion_path(&session_dir))
-                        .ok()
-                        .and_then(|metadata| metadata.modified().ok()),
-                ) {
-                    (Some(result_modified), Some(completion_modified))
-                        if result_modified > completion_modified =>
-                    {
-                        true
-                    }
-                    (Some(result_modified), Some(completion_modified))
-                        if result_modified == completion_modified =>
-                    {
-                        completion.exit_code == 0 && result.exit_code != 0
-                    }
-                    _ => false,
-                }
-            });
+            // result.toml is the authoritative session artifact; trust it over the daemon
+            // completion packet (which records the daemon process exit, not the session
+            // outcome). The daemon may exit non-zero after writing a successful result.toml
+            // (e.g., post-write cleanup failure, parent SIGTERM), so prior mtime-based
+            // filtering caused #1442 false failures. See #1442.
+            let mut loaded_result = refreshed_result;
             if refreshed_result_available {
                 crate::session_cmds::retire_if_dead_with_result(
                     effective_root,
