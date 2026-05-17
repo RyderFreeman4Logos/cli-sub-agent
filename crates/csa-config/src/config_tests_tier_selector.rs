@@ -590,3 +590,172 @@ fn test_resolve_tier_selector_empty_string_rejected() {
     assert_eq!(config.suggest_tier(""), None);
     assert_eq!(config.suggest_tier("  "), None);
 }
+
+// ---------------------------------------------------------------------------
+// Compound tier-tool selector tests (#1441)
+// ---------------------------------------------------------------------------
+
+fn compound_tier_fixture(tool_aliases: HashMap<String, String>) -> ProjectConfig {
+    let mut tiers = HashMap::new();
+    for name in ["tier-3-complex", "tier-4-critical"] {
+        tiers.insert(
+            name.to_string(),
+            TierConfig {
+                description: "test".to_string(),
+                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                strategy: TierStrategy::default(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+    }
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases,
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    }
+}
+
+#[test]
+fn test_try_parse_compound_canonical_tool_suffix() {
+    let config = compound_tier_fixture(HashMap::new());
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-codex"),
+        Some((
+            "tier-4-critical".to_string(),
+            csa_core::types::ToolName::Codex
+        )),
+    );
+}
+
+#[test]
+fn test_try_parse_compound_multi_hyphen_tool_suffix() {
+    let config = compound_tier_fixture(HashMap::new());
+    // `code` alone is not a tool; `claude-code` matches on the second iteration.
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-claude-code"),
+        Some((
+            "tier-4-critical".to_string(),
+            csa_core::types::ToolName::ClaudeCode,
+        )),
+    );
+}
+
+#[test]
+fn test_try_parse_compound_builtin_alias_suffix() {
+    let config = compound_tier_fixture(HashMap::new());
+    // `claude` → ClaudeCode (built-in alias from ToolArg::from_str).
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-claude"),
+        Some((
+            "tier-4-critical".to_string(),
+            csa_core::types::ToolName::ClaudeCode,
+        )),
+    );
+    // `gemini` → GeminiCli (built-in alias from ToolArg::from_str).
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-gemini"),
+        Some((
+            "tier-4-critical".to_string(),
+            csa_core::types::ToolName::GeminiCli,
+        )),
+    );
+}
+
+#[test]
+fn test_try_parse_compound_user_defined_alias_suffix() {
+    let mut tool_aliases = HashMap::new();
+    tool_aliases.insert("cx".to_string(), "codex".to_string());
+    let config = compound_tier_fixture(tool_aliases);
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-cx"),
+        Some((
+            "tier-4-critical".to_string(),
+            csa_core::types::ToolName::Codex
+        )),
+    );
+}
+
+#[test]
+fn test_try_parse_compound_with_numeric_tier_prefix() {
+    let config = compound_tier_fixture(HashMap::new());
+    // Numeric shorthand: "tier-4" resolves to "tier-4-critical" via prefix matching.
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-codex"),
+        Some((
+            "tier-4-critical".to_string(),
+            csa_core::types::ToolName::Codex
+        )),
+    );
+}
+
+#[test]
+fn test_try_parse_compound_no_compound_for_direct_tier() {
+    // Callers should check resolve_tier_selector first; this method does NOT
+    // re-resolve direct tier names (which would shadow tier names that happen
+    // to contain a tool suffix). It only parses compound forms.
+    let config = compound_tier_fixture(HashMap::new());
+    // "tier-4-critical" itself does NOT contain a recognizable tool suffix,
+    // so compound parsing returns None and the caller's direct lookup wins.
+    assert_eq!(config.try_parse_compound_tier_tool("tier-4-critical"), None,);
+}
+
+#[test]
+fn test_try_parse_compound_unknown_tier_prefix() {
+    let config = compound_tier_fixture(HashMap::new());
+    // Tool suffix matches, but no configured tier matches the prefix.
+    assert_eq!(
+        config.try_parse_compound_tier_tool("nonexistent-codex"),
+        None,
+    );
+}
+
+#[test]
+fn test_try_parse_compound_unknown_tool_suffix() {
+    let config = compound_tier_fixture(HashMap::new());
+    // Prefix is a real tier but suffix is not a tool / not an alias.
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-nope"),
+        None,
+    );
+}
+
+#[test]
+fn test_try_parse_compound_no_hyphen() {
+    let config = compound_tier_fixture(HashMap::new());
+    assert_eq!(config.try_parse_compound_tier_tool("codex"), None);
+    assert_eq!(config.try_parse_compound_tier_tool(""), None);
+}
+
+#[test]
+fn test_try_parse_compound_skips_auto_and_any_available() {
+    let config = compound_tier_fixture(HashMap::new());
+    // `auto` and `any-available` are not specific tools, even though they parse.
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-auto"),
+        None,
+    );
+    assert_eq!(
+        config.try_parse_compound_tier_tool("tier-4-critical-any-available"),
+        None,
+    );
+}

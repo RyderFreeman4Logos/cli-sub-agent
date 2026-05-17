@@ -8,6 +8,8 @@ use csa_executor::{Executor, ModelSpec, ThinkingBudget};
 
 #[path = "run_helpers_atomic_commit.rs"]
 mod atomic_commit;
+#[path = "run_helpers_compound_tier.rs"]
+mod compound_tier;
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
 #[path = "run_helpers_inline_review_context.rs"]
@@ -27,6 +29,7 @@ mod tool_availability;
 #[cfg(test)]
 pub(crate) use atomic_commit::atomic_commit_discipline_preamble;
 pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
+pub(crate) use compound_tier::{apply_compound_tier_selector, apply_compound_tier_selector_arg};
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 pub(crate) use inline_review_context::prepend_review_context_to_prompt;
 #[cfg(test)]

@@ -9,7 +9,8 @@ use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
 use crate::debate_cmd_resolve::{
-    resolve_debate_model, resolve_debate_selection, resolve_debate_tier_name,
+    DebateTierResolveCtx, resolve_debate_effective_tier_with_compound, resolve_debate_model,
+    resolve_debate_selection, resolve_debate_tier_name,
 };
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
@@ -217,33 +218,22 @@ pub(crate) async fn handle_debate(
             .and_then(|spec| spec.split('/').next())
             .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
     });
-    let effective_tier =
-        match crate::difficulty_routing::resolve_effective_tier_with_difficulty_hint(
-            config.as_ref(),
-            args.tier.as_deref(),
-            args.model_spec.as_deref(),
-            args.hint_difficulty.as_deref(),
-            frontmatter_difficulty.as_deref(),
-        ) {
-            Ok(tier) => tier,
-            Err(err) => {
-                return Err(crate::session_guard::persist_pre_exec_error_result(
-                    crate::session_guard::PreExecErrorCtx {
-                        project_root: &project_root,
-                        session_id: args.session.as_deref(),
-                        description: Some(debate_description.as_str()),
-                        parent: None,
-                        tool_name: explicit_tool.map(|tool| tool.as_str()),
-                        task_type: Some("debate"),
-                        tier_name: args.tier.as_deref(),
-                        error: err,
-                    },
-                ));
-            }
-        };
-    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args.tool.is_some());
+    let (effective_tier, args_tool) =
+        resolve_debate_effective_tier_with_compound(DebateTierResolveCtx {
+            project_root: &project_root,
+            cli_tier: args.tier.as_deref(),
+            cli_model_spec: args.model_spec.as_deref(),
+            cli_hint_difficulty: args.hint_difficulty.as_deref(),
+            cli_session: args.session.as_deref(),
+            cli_tool: args.tool,
+            config: config.as_ref(),
+            frontmatter_difficulty: frontmatter_difficulty.as_deref(),
+            debate_description: debate_description.as_str(),
+            explicit_tool,
+        })?;
+    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args_tool.is_some());
     let resolved_selection = match resolve_debate_selection(
-        args.tool,
+        args_tool,
         args.model_spec.as_deref(),
         config.as_ref(),
         &global_config,

@@ -266,10 +266,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let effective_tier = resolve_review_effective_tier(&args, config.as_ref())?;
-    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args.tool.is_some());
+    let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
+    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args_tool.is_some());
     let resolved_selection = match resolve_review_selection(
-        args.tool,
+        args_tool,
         args.model_spec.as_deref(),
         config.as_ref(),
         &global_config,
@@ -787,14 +787,5 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 }
 
 #[cfg(test)]
-#[path = "review_cmd_tests_safety_preamble.rs"]
-mod safety_preamble_tests;
-#[cfg(test)]
-#[path = "review_cmd_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "review_cmd_tests_full_consistency.rs"]
-mod tests_full_consistency;
-#[cfg(test)]
-#[path = "review_cmd_timeout_tests.rs"]
-mod timeout_tests;
+#[path = "review_cmd_tests_barrel.rs"]
+mod tests_barrel;
