@@ -743,6 +743,8 @@ include!("session_cmds_tests_fork_tail.rs");
 
 #[path = "session_cmds_tests_daemon_pid_tail.rs"]
 mod daemon_pid_tail_tests;
+#[path = "session_cmds_tests_kv_warm.rs"]
+mod kv_warm_tests;
 #[path = "session_cmds_tests_list_format.rs"]
 mod list_format_tests;
 #[path = "session_cmds_tests_result_cli.rs"]

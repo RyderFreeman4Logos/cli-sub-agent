@@ -634,12 +634,12 @@ fn test_session_wait_memory_warn_disabled_when_zero() {
             panic!("disabled sampler must not emit marker");
         },
     )
-    .expect("wait should fall back to timeout");
+    .expect("wait should fall back to KV-warm exit");
 
     let _ = child.kill();
     let _ = child.wait();
 
-    assert_eq!(exit_code, 124);
+    assert_eq!(exit_code, 0);
     assert_eq!(sample_calls, 0);
 }
 
@@ -704,12 +704,12 @@ fn test_session_wait_procfs_failure_fallback() {
             panic!("sampling failure fallback must not emit marker");
         },
     )
-    .expect("wait should fall back to classic timeout");
+    .expect("wait should fall back to KV-warm exit");
 
     let _ = child.kill();
     let _ = child.wait();
 
-    assert_eq!(exit_code, 124);
+    assert_eq!(exit_code, 0);
     assert_eq!(sample_calls, 1);
 }
 

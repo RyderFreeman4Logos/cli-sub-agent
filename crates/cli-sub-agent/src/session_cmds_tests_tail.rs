@@ -568,9 +568,15 @@ fn handle_session_wait_ignores_incomplete_result_while_daemon_alive() {
     assert!(status.success());
 }
 
+/// Regression test for #1442: result.toml is the authoritative session artifact.
+/// When result.toml records success/exit_code=0 but the daemon process exited with
+/// non-zero (recording failure in daemon-completion.toml), the wait command MUST
+/// report the session's actual outcome from result.toml — not the daemon's process
+/// exit code. The daemon may exit non-zero for reasons unrelated to the session
+/// outcome (post-write cleanup failure, parent SIGTERM, etc.).
 #[cfg(unix)]
 #[test]
-fn handle_session_wait_prefers_daemon_completion_exit_code() {
+fn handle_session_wait_prefers_result_toml_over_daemon_completion_exit_code() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -594,8 +600,8 @@ fn handle_session_wait_prefers_daemon_completion_exit_code() {
         handle_session_wait(session_id, Some(project.to_string_lossy().into_owned()), 1).unwrap();
 
     assert_eq!(
-        exit_code, 1,
-        "session wait should return the daemon's final exit code, not the intermediate result.toml exit code"
+        exit_code, 0,
+        "result.toml records the session's actual outcome and must override the daemon process exit code"
     );
 }
 
@@ -643,9 +649,13 @@ fn handle_session_wait_ignores_completion_packet_while_daemon_alive() {
     let exit_code =
         handle_session_wait(session_id, Some(project.to_string_lossy().into_owned()), 1).unwrap();
 
+    // Daemon is still alive when the 1s wait cap fires; the completion packet
+    // recorded the daemon process exit, not the session outcome, so the wait
+    // must NOT surface it. Under #1439, alive-at-cap returns the KV-warm code
+    // (0) rather than the legacy 124.
     assert_eq!(
-        exit_code, 124,
-        "wait should time out instead of reporting completion while the daemon is still alive"
+        exit_code, 0,
+        "wait should emit the KV-warm exit instead of reporting completion while the daemon is still alive"
     );
 
     child.kill().ok();
