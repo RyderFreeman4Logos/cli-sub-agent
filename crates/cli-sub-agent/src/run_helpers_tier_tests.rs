@@ -701,3 +701,31 @@ fn resolve_tool_and_model_invalid_tier_selector_includes_aliases_in_error() {
         "msg should show aliases: {msg}"
     );
 }
+
+// --- tier_without_tool_should_warn tests ---
+
+#[test]
+fn tier_without_tool_warns_when_tier_set_and_no_tool() {
+    assert!(super::tier_without_tool_should_warn(
+        Some("tier-1-quick"),
+        false
+    ));
+}
+
+#[test]
+fn tier_without_tool_no_warn_when_tool_explicitly_set() {
+    assert!(!super::tier_without_tool_should_warn(
+        Some("tier-1-quick"),
+        true
+    ));
+}
+
+#[test]
+fn tier_without_tool_no_warn_when_no_tier() {
+    assert!(!super::tier_without_tool_should_warn(None, false));
+}
+
+#[test]
+fn tier_without_tool_no_warn_when_neither() {
+    assert!(!super::tier_without_tool_should_warn(None, true));
+}

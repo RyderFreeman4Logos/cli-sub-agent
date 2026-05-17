@@ -174,7 +174,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .await?;
 
             let summary = pipeline_result.summary_for_review();
-
             if !pipeline_result.passed {
                 match gate_mode {
                     csa_config::GateMode::Monitor => {
@@ -268,6 +267,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
     let effective_tier = resolve_review_effective_tier(&args, config.as_ref())?;
+    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args.tool.is_some());
     let resolved_selection = match resolve_review_selection(
         args.tool,
         args.model_spec.as_deref(),

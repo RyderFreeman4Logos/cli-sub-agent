@@ -86,6 +86,31 @@ pub(crate) fn validate_model_spec_tier_conflict(
     Ok(())
 }
 
+/// Returns true when `--tier` is specified without an explicit `--tool`.
+///
+/// Auto-routing in this case may silently select the wrong tool for the task
+/// (e.g., gemini-cli with allow_edit=false for write tasks).
+pub(crate) fn tier_without_tool_should_warn(tier: Option<&str>, tool_explicitly_set: bool) -> bool {
+    tier.is_some() && !tool_explicitly_set
+}
+
+/// Emit a warning when `--tier` is specified without `--tool`.
+///
+/// Backward-compatible: this is a warning only, not an error.
+pub(crate) fn warn_if_tier_without_tool(tier: Option<&str>, tool_explicitly_set: bool) {
+    if tier_without_tool_should_warn(tier, tool_explicitly_set) {
+        tracing::warn!(
+            tier = tier.unwrap_or(""),
+            "--tier without --tool uses auto-routing; \
+             specify --tool auto|claude-code|codex|gemini-cli to control tool selection"
+        );
+        eprintln!(
+            "warning: --tier without --tool uses auto-routing; \
+             specify --tool auto|claude-code|codex|gemini-cli to control tool selection"
+        );
+    }
+}
+
 /// Resolve tool and model from CLI args and config.
 ///
 /// Returns (tool, model_spec, model) where:

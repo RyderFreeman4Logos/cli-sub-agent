@@ -241,6 +241,7 @@ pub(crate) async fn handle_debate(
                 ));
             }
         };
+    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args.tool.is_some());
     let resolved_selection = match resolve_debate_selection(
         args.tool,
         args.model_spec.as_deref(),
