@@ -595,13 +595,15 @@ fn explicit_tool_no_failover_blocks_cross_tool_failover() {
     ));
 }
 
+// Regression #1440: explicit `--tool` blocks cross-tool failover even with `--tier`.
 #[test]
-fn explicit_tool_in_tier_keeps_cross_tool_failover_available() {
-    assert!(allow_cross_tool_failover(
-        ToolSelectionStrategy::Explicit(ToolName::Codex),
-        Some("tier-3-complex"),
+fn explicit_tool_in_tier_blocks_cross_tool_failover() {
+    let strategy = ToolSelectionStrategy::Explicit(ToolName::ClaudeCode);
+    assert!(!allow_cross_tool_failover(
+        strategy,
+        Some("t4"),
         false,
-        false,
+        false
     ));
 }
 

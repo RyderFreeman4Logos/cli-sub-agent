@@ -7,16 +7,19 @@ use crate::pipeline;
 
 pub(crate) fn allow_cross_tool_failover(
     strategy: ToolSelectionStrategy,
-    resolved_tier_name: Option<&str>,
-    force_ignore_tier_setting: bool,
+    _resolved_tier_name: Option<&str>,
+    _force_ignore_tier_setting: bool,
     no_failover: bool,
 ) -> bool {
     if no_failover {
         return false;
     }
 
+    // Explicit `--tool` (from CLI or skill agent_config) is the user's hard
+    // selection: never silently fall over to a different tool, even when a
+    // tier is also specified (#1440). Tier still drives model selection for
+    // the chosen tool via `resolve_requested_tool_from_tier`.
     !matches!(strategy, ToolSelectionStrategy::Explicit(_))
-        || (!force_ignore_tier_setting && resolved_tier_name.is_some())
 }
 
 pub(crate) fn resolve_attempt_initial_response_timeout_seconds(
