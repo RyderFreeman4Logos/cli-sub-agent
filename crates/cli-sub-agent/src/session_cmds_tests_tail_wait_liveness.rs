@@ -33,9 +33,9 @@ impl Drop for EnvVarGuard {
 
 /// When PID-level detection misses (session_has_terminal_process=false) but broader
 /// filesystem liveness signals remain (is_alive=true due to recent session writes),
-/// the wait must continue polling and eventually return 124 (timeout) — not 1 (failure).
-///
-/// Regression test for #1396.
+/// the wait must continue polling and eventually return the KV-warm exit (0) — not
+/// failure (1). Original regression for #1396; updated for #1439 which reclassifies
+/// the alive-at-cap exit code from 124 to 0.
 #[test]
 fn handle_session_wait_continues_polling_when_pid_missing_but_liveness_signals_present() {
     let td = tempdir().expect("tempdir");
@@ -95,7 +95,7 @@ fn handle_session_wait_continues_polling_when_pid_missing_but_liveness_signals_p
     .expect("wait should succeed");
 
     assert_eq!(
-        exit_code, 124,
-        "wait must time out (124) not report failure (1) when liveness signals exist"
+        exit_code, 0,
+        "wait must emit the KV-warm exit (0), not report failure (1), when liveness signals exist"
     );
 }

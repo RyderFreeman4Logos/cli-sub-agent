@@ -649,9 +649,13 @@ fn handle_session_wait_ignores_completion_packet_while_daemon_alive() {
     let exit_code =
         handle_session_wait(session_id, Some(project.to_string_lossy().into_owned()), 1).unwrap();
 
+    // Daemon is still alive when the 1s wait cap fires; the completion packet
+    // recorded the daemon process exit, not the session outcome, so the wait
+    // must NOT surface it. Under #1439, alive-at-cap returns the KV-warm code
+    // (0) rather than the legacy 124.
     assert_eq!(
-        exit_code, 124,
-        "wait should time out instead of reporting completion while the daemon is still alive"
+        exit_code, 0,
+        "wait should emit the KV-warm exit instead of reporting completion while the daemon is still alive"
     );
 
     child.kill().ok();

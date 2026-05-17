@@ -7,6 +7,11 @@ use std::os::fd::AsRawFd;
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
 const SESSION_WAIT_SUCCESS_EXIT_CODE: i32 = 0;
 const SESSION_WAIT_FAILURE_EXIT_CODE: i32 = 1;
+/// Healthy poll-cap exit when the session is still alive: callers should
+/// process tokens (warming their KV cache) and re-wait. See #1439.
+const SESSION_WAIT_KV_WARM_EXIT_CODE: i32 = 0;
+/// Reserved for the rare case where the wait cap is reached but the session
+/// daemon is no longer alive and no result.toml was produced.
 const SESSION_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
 const SESSION_WAIT_MEMORY_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -471,38 +476,46 @@ where
 
         let elapsed = start.elapsed().as_secs();
         if elapsed >= wait_behavior.wait_timeout_secs {
-            eprintln!(
-                "Timeout: session {} did not complete within {}s",
-                resolved.session_id, wait_behavior.wait_timeout_secs,
-            );
-            // Emit structured retry hint for orchestrators / agents.
             let cd_arg = cd
                 .as_ref()
                 .map(|path| format!(" --cd '{}'", path))
                 .unwrap_or_default();
+            let session_alive = session_has_terminal_process(&session_dir)
+                || csa_process::ToolLiveness::is_alive(&session_dir);
+            if session_alive {
+                // KV-warm exit: session still alive at the wait cap. See #1439.
+                eprintln!(
+                    "Session {} still running after {}s wait cap; returning so caller can warm its KV cache before re-waiting.",
+                    resolved.session_id, wait_behavior.wait_timeout_secs,
+                );
+                eprintln!(
+                    "<!-- CSA:SESSION_WAIT_KV_WARM session={} status=alive elapsed={}s action=re-wait cmd=\"csa session wait --session {}{}\" -->",
+                    resolved.session_id, elapsed, resolved.session_id, cd_arg,
+                );
+                eprintln!(
+                    "<!-- CSA:CALLER_HINT action=\"retry_wait\" \
+                     rule=\"Session is alive; this exit is healthy. Process this output NOW and generate tokens to warm your KV cache, \
+                     then call 'csa session wait --session {sid}{cd}' again in a NEW Bash call. \
+                     NEVER batch multiple session waits in one Bash call. \
+                     If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
+                     FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
+                     any manual polling wastes caller tokens with zero benefit.\" -->",
+                    sid = resolved.session_id,
+                    cd = cd
+                        .as_ref()
+                        .map(|p| format!(" --cd '{p}'"))
+                        .unwrap_or_default(),
+                );
+                return Ok(SESSION_WAIT_KV_WARM_EXIT_CODE);
+            }
+            // Defensive: daemon gone with no result.toml (rare; earlier loop branches usually exit-1 first).
             eprintln!(
-                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s cmd=\"csa session wait --session {}{}\" -->",
+                "Timeout: session {} did not complete within {}s and no live daemon process remains.",
+                resolved.session_id, wait_behavior.wait_timeout_secs,
+            );
+            eprintln!(
+                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s status=dead cmd=\"csa session result --session {}{}\" -->",
                 resolved.session_id, elapsed, resolved.session_id, cd_arg,
-            );
-            eprintln!(
-                "Hint: Call `csa session wait` again individually (not in a tight loop script). \
-                 The {}s timeout is designed to let the calling agent generate tokens between waits, \
-                 keeping its KV cache warm.",
-                wait_behavior.wait_timeout_secs,
-            );
-            eprintln!(
-                "<!-- CSA:CALLER_HINT action=\"retry_wait\" \
-                 rule=\"Process this output NOW and generate tokens to warm your KV cache, \
-                 then call 'csa session wait --session {sid}{cd}' again in a NEW Bash call. \
-                 NEVER batch multiple session waits in one Bash call. \
-                 If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
-                 FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-                 any manual polling wastes caller tokens with zero benefit.\" -->",
-                sid = resolved.session_id,
-                cd = cd
-                    .as_ref()
-                    .map(|p| format!(" --cd '{p}'"))
-                    .unwrap_or_default(),
             );
             return Ok(SESSION_WAIT_TIMEOUT_EXIT_CODE);
         }
