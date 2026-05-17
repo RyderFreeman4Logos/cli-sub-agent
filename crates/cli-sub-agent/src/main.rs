@@ -243,10 +243,8 @@ async fn run() -> Result<()> {
                 });
 
         if auto_upgrade {
-            use std::time::Duration;
-
             let mut success = false;
-            let mut delay = Duration::from_secs(1);
+            let mut delay = std::time::Duration::from_secs(1);
 
             for attempt in 0..3 {
                 let result = tokio::process::Command::new("weave")
@@ -320,6 +318,7 @@ async fn run() -> Result<()> {
             last,
             fork_from,
             fork_last,
+            fork_from_caller,
             description,
             fork_call,
             return_to,
@@ -404,6 +403,7 @@ async fn run() -> Result<()> {
                 last,
                 fork_from,
                 fork_last,
+                fork_from_caller,
                 description,
                 fork_call,
                 return_to,

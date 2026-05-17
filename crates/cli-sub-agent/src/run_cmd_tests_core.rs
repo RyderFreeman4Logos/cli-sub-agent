@@ -193,6 +193,117 @@ fn test_cli_fork_from_conflicts_with_ephemeral() {
 }
 
 #[test]
+fn test_cli_fork_from_caller_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--fork-from-caller", "do stuff"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            fork_from_caller, ..
+        } => {
+            assert!(fork_from_caller);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_from_caller_default_false() {
+    let cli = try_parse_cli(&["csa", "run", "do stuff"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            fork_from_caller, ..
+        } => {
+            assert!(!fork_from_caller);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_from_caller_conflicts_with_fork_from() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from-caller",
+        "--fork-from",
+        "01ABC",
+        "prompt",
+    ]);
+    assert!(
+        result.is_err(),
+        "fork-from-caller and fork-from should conflict"
+    );
+}
+
+#[test]
+fn test_cli_fork_from_caller_conflicts_with_fork_last() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from-caller",
+        "--fork-last",
+        "prompt",
+    ]);
+    assert!(
+        result.is_err(),
+        "fork-from-caller and fork-last should conflict"
+    );
+}
+
+#[test]
+fn test_cli_fork_from_caller_conflicts_with_session() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from-caller",
+        "--session",
+        "01DEF",
+        "prompt",
+    ]);
+    assert!(
+        result.is_err(),
+        "fork-from-caller and session should conflict"
+    );
+}
+
+#[test]
+fn test_cli_fork_from_caller_conflicts_with_last() {
+    let result = try_parse_cli(&["csa", "run", "--fork-from-caller", "--last", "prompt"]);
+    assert!(
+        result.is_err(),
+        "fork-from-caller and last should conflict"
+    );
+}
+
+#[test]
+fn test_cli_fork_from_caller_conflicts_with_ephemeral() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from-caller",
+        "--ephemeral",
+        "prompt",
+    ]);
+    assert!(
+        result.is_err(),
+        "fork-from-caller and ephemeral should conflict"
+    );
+}
+
+#[test]
+fn test_cli_fork_from_caller_appears_in_help() {
+    let result = try_parse_cli(&["csa", "run", "--help"]);
+    let err = match result {
+        Ok(_) => panic!("--help should produce a help error"),
+        Err(err) => err,
+    };
+    let help_text = err.to_string();
+    assert!(
+        help_text.contains("--fork-from-caller"),
+        "help should mention --fork-from-caller, got: {help_text}"
+    );
+}
+
+#[test]
 fn test_cli_fork_last_conflicts_with_ephemeral() {
     let result = try_parse_cli(&["csa", "run", "--fork-last", "--ephemeral", "prompt"]);
     assert!(result.is_err(), "fork-last and ephemeral should conflict");

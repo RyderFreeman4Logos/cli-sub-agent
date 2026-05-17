@@ -70,6 +70,7 @@ pub(crate) async fn handle_run(
     last: bool,
     fork_from: Option<String>,
     fork_last: bool,
+    fork_from_caller: bool,
     description: Option<String>,
     fork_call: bool,
     return_to: Option<String>,
@@ -130,6 +131,11 @@ pub(crate) async fn handle_run(
     } else {
         None
     };
+
+    if fork_from_caller {
+        // Resolution wired in run_cmd_fork::resolve_caller_fork (separate commit).
+        warn!("--fork-from-caller accepted but resolution not yet implemented");
+    }
 
     let mut is_fork = fork_from.is_some() || fork_last;
     let mut session_arg = if fork_last {
