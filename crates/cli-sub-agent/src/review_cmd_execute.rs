@@ -86,11 +86,11 @@ fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
 }
 
 fn warn_if_fast_mode_has_no_codex_review_candidate(
-    fast_but_more_cost: bool,
+    effective_fast_mode: bool,
     warn_no_codex_fast_mode: bool,
     candidates: &[(ToolName, Option<String>)],
 ) {
-    if fast_but_more_cost
+    if effective_fast_mode
         && warn_no_codex_fast_mode
         && !candidates.iter().any(|(tool, _)| *tool == ToolName::Codex)
     {
@@ -199,6 +199,16 @@ pub(crate) async fn execute_review_with_tier_filter(
             "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
         );
     }
+    let effective_fast_mode = fast_but_more_cost
+        || project_config
+            .and_then(|c| c.tools.get("codex"))
+            .and_then(|t| t.fast_mode)
+            .unwrap_or(false)
+        || global_config
+            .tools
+            .get("codex")
+            .and_then(|t| t.fast_mode)
+            .unwrap_or(false);
     let candidates = ordered_tier_candidates(
         tool,
         tier_model_spec.as_deref(),
@@ -209,7 +219,7 @@ pub(crate) async fn execute_review_with_tier_filter(
         tier_filter.as_ref(),
     );
     warn_if_fast_mode_has_no_codex_review_candidate(
-        fast_but_more_cost,
+        effective_fast_mode,
         warn_no_codex_fast_mode,
         &candidates,
     );
@@ -233,7 +243,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             false,
         )
         .await?;
-        if fast_but_more_cost {
+        if effective_fast_mode {
             executor.enable_codex_fast_mode();
         }
 

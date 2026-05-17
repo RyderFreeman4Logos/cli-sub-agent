@@ -108,6 +108,11 @@ pub struct ToolConfig {
     /// filesystem sandbox settings for this specific tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filesystem_sandbox: Option<ToolFilesystemSandboxConfig>,
+    /// Codex-only: enable fast mode (2× cost, faster output).
+    /// Equivalent to `--fast-but-more-cost` CLI flag; applies to every codex
+    /// session in this project when true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_mode: Option<bool>,
 }
 
 impl Default for ToolConfig {
@@ -131,6 +136,7 @@ impl Default for ToolConfig {
             base_url: None,
             api_key: None,
             filesystem_sandbox: None,
+            fast_mode: None,
         }
     }
 }
