@@ -368,6 +368,7 @@ fn build_result_json_payload_includes_review_iterations() {
         },
         None,
         Some(&review_meta),
+        None,
     )
     .unwrap();
     assert_eq!(payload["review_meta"]["review_iterations"], 4);
@@ -410,7 +411,7 @@ fn build_result_json_payload_includes_result_sidecars() {
         ),
     };
 
-    let payload = build_result_json_payload(&result, None, None).unwrap();
+    let payload = build_result_json_payload(&result, None, None, None).unwrap();
     assert_eq!(
         payload["manager_sidecar"]["report"]["summary"],
         "manager-visible"
@@ -448,7 +449,7 @@ fn build_result_json_payload_redacts_result_sidecars() {
         legacy_sidecar: None,
     };
 
-    let payload = build_result_json_payload(&result, None, None).unwrap();
+    let payload = build_result_json_payload(&result, None, None, None).unwrap();
     let rendered = serde_json::to_string(&payload).unwrap();
     assert!(!rendered.contains("hunter2"));
     assert!(rendered.contains("[REDACTED]"));

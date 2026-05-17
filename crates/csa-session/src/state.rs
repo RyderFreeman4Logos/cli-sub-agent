@@ -318,6 +318,29 @@ pub struct TokenUsage {
     /// Estimated cost in USD
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<f64>,
+
+    /// Cache-read input tokens (Anthropic prompt caching).
+    ///
+    /// When present, this is the portion of `input_tokens` served from the
+    /// provider's prompt cache. Older sessions and non-Claude tools may not
+    /// populate this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+}
+
+impl TokenUsage {
+    /// Ratio of cache-read input tokens to total input tokens (`cache_read / input_tokens`).
+    ///
+    /// Returns `None` when either field is missing or when `input_tokens` is
+    /// zero (no meaningful denominator).
+    pub fn cache_hit_ratio(&self) -> Option<f64> {
+        let cache_read = self.cache_read_input_tokens? as f64;
+        let total_input = self.input_tokens? as f64;
+        if total_input == 0.0 {
+            return None;
+        }
+        Some(cache_read / total_input)
+    }
 }
 
 /// Token budget for session-level resource governance.

@@ -81,6 +81,7 @@ mod self_update;
 mod session_cmds;
 mod session_cmds_daemon;
 mod session_cmds_result;
+mod session_cmds_result_measure;
 mod session_dispatch;
 mod session_guard;
 mod session_observability;

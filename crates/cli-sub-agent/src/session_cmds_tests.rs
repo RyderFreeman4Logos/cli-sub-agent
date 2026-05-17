@@ -294,6 +294,7 @@ fn sample_session_state() -> MetaSessionState {
             output_tokens: Some(20),
             total_tokens: Some(30),
             estimated_cost_usd: None,
+            cache_read_input_tokens: None,
         }),
         phase: SessionPhase::Available,
         task_context: TaskContext {

@@ -691,6 +691,12 @@ fn update_cumulative_tokens(session: &mut MetaSessionState, token_usage: Option<
     cumulative.estimated_cost_usd = Some(
         cumulative.estimated_cost_usd.unwrap_or(0.0) + new_usage.estimated_cost_usd.unwrap_or(0.0),
     );
+    // Accumulate cache-read tokens only when the new usage reports a value;
+    // missing fields must not zero out a previously recorded total.
+    if let Some(new_cache_read) = new_usage.cache_read_input_tokens {
+        cumulative.cache_read_input_tokens =
+            Some(cumulative.cache_read_input_tokens.unwrap_or(0) + new_cache_read);
+    }
 
     // Update token budget tracking
     if let Some(ref mut budget) = session.token_budget {

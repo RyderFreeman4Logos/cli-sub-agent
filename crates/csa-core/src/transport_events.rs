@@ -21,6 +21,31 @@ pub struct StreamingMetadata {
     pub thought_text: String,
     /// Whether the output used thought text as fallback.
     pub has_thought_fallback: bool,
+    /// Total input tokens reported by the underlying API response, when available.
+    pub input_tokens: Option<u64>,
+    /// Total output tokens reported by the underlying API response, when available.
+    pub output_tokens: Option<u64>,
+    /// Cache-read input tokens reported by the Anthropic API response.
+    ///
+    /// Anthropic returns `cache_read_input_tokens` in the response `usage`
+    /// block when prompt caching is active. Older API responses and non-Claude
+    /// backends may omit it, hence `Option`.
+    pub cache_read_input_tokens: Option<u64>,
+}
+
+impl StreamingMetadata {
+    /// Ratio of cache-read input tokens to total input tokens (`cache_read / input_tokens`).
+    ///
+    /// Returns `None` when either field is missing or when `input_tokens` is
+    /// zero (no meaningful denominator).
+    pub fn cache_hit_ratio(&self) -> Option<f64> {
+        let cache_read = self.cache_read_input_tokens? as f64;
+        let total_input = self.input_tokens? as f64;
+        if total_input == 0.0 {
+            return None;
+        }
+        Some(cache_read / total_input)
+    }
 }
 
 /// Streaming session events collected from agent notifications.

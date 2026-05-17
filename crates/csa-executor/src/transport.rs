@@ -750,6 +750,9 @@ fn convert_acp_metadata(
         message_text: metadata.message_text,
         thought_text: metadata.thought_text,
         has_thought_fallback: metadata.has_thought_fallback,
+        input_tokens: metadata.input_tokens,
+        output_tokens: metadata.output_tokens,
+        cache_read_input_tokens: metadata.cache_read_input_tokens,
     }
 }
 

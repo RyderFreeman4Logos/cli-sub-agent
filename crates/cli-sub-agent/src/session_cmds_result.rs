@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use csa_session::SessionResultView;
+use csa_session::TokenUsage;
 use csa_session::state::ReviewSessionMeta;
 
 use crate::session_cmds::{
@@ -184,11 +185,15 @@ pub(crate) fn handle_session_result(
                     }
                 }
             };
+            // Cross-project sessions cannot resolve their state through the
+            // local project path; load directly from the session_dir state.toml.
+            let token_usage = load_total_token_usage(&session_dir);
             if json {
                 display_result_json(
                     &result_view,
                     transcript_summary.as_ref(),
                     review_meta.as_ref(),
+                    token_usage.as_ref(),
                 )?;
             } else {
                 display_result_text(
@@ -196,6 +201,7 @@ pub(crate) fn handle_session_result(
                     &result_view,
                     transcript_summary.as_ref(),
                     review_meta.as_ref(),
+                    token_usage.as_ref(),
                 );
             }
         }
@@ -225,8 +231,9 @@ fn display_result_json(
     result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
+    token_usage: Option<&TokenUsage>,
 ) -> Result<()> {
-    let payload = build_result_json_payload(result, transcript_summary, review_meta)?;
+    let payload = build_result_json_payload(result, transcript_summary, review_meta, token_usage)?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
@@ -236,6 +243,7 @@ fn display_result_text(
     result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
+    token_usage: Option<&TokenUsage>,
 ) {
     let envelope = &result.envelope;
     println!("Session: {session_id}");
@@ -256,6 +264,9 @@ fn display_result_text(
     if let Some(meta) = review_meta {
         println!("Review Iterations: {}", meta.review_iterations);
     }
+    if let Some(usage) = token_usage {
+        print_token_usage(usage);
+    }
     if let Some(summary) = transcript_summary {
         println!("Transcript:");
         println!("  Events: {}", summary.event_count);
@@ -269,6 +280,68 @@ fn display_result_text(
             summary.last_timestamp.as_deref().unwrap_or("-")
         );
     }
+}
+
+/// Load total_token_usage from a session's state.toml on disk.
+///
+/// Returns None on any parse/read failure or when the field is absent.
+/// Reading directly avoids the project-root coupling of `load_session`,
+/// which lets cross-project sessions render their token totals too.
+fn load_total_token_usage(session_dir: &Path) -> Option<TokenUsage> {
+    let state_path = session_dir.join("state.toml");
+    let content = fs::read_to_string(&state_path).ok()?;
+    let value: toml::Value = toml::from_str(&content).ok()?;
+    let usage_table = value.get("total_token_usage")?;
+    usage_table.clone().try_into::<TokenUsage>().ok()
+}
+
+fn print_token_usage(usage: &TokenUsage) {
+    let any_field = usage.input_tokens.is_some()
+        || usage.output_tokens.is_some()
+        || usage.total_tokens.is_some()
+        || usage.estimated_cost_usd.is_some()
+        || usage.cache_read_input_tokens.is_some();
+    if !any_field {
+        return;
+    }
+    println!("Tokens:");
+    if let Some(v) = usage.input_tokens {
+        println!("  Input:  {} tokens", format_thousands(v));
+    }
+    if let Some(v) = usage.output_tokens {
+        println!("  Output: {} tokens", format_thousands(v));
+    }
+    if let Some(v) = usage.total_tokens {
+        println!("  Total:  {} tokens", format_thousands(v));
+    }
+    if let Some(v) = usage.cache_read_input_tokens {
+        if let Some(ratio) = usage.cache_hit_ratio() {
+            println!(
+                "  Cache read: {} tokens ({:.0}% hit rate)",
+                format_thousands(v),
+                ratio * 100.0
+            );
+        } else {
+            println!("  Cache read: {} tokens", format_thousands(v));
+        }
+    }
+    if let Some(cost) = usage.estimated_cost_usd {
+        println!("  Cost:   ${cost:.4}");
+    }
+}
+
+fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (idx, byte) in bytes.iter().enumerate() {
+        if idx > 0 && (len - idx).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*byte as char);
+    }
+    out
 }
 
 fn load_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
@@ -286,6 +359,7 @@ fn build_result_json_payload(
     result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
+    token_usage: Option<&TokenUsage>,
 ) -> Result<serde_json::Value> {
     let mut payload = serde_json::to_value(&result.envelope)?;
     if let Some(sidecar) = result
@@ -312,6 +386,13 @@ fn build_result_json_payload(
     }
     if let Some(meta) = review_meta {
         payload["review_meta"] = serde_json::to_value(meta)?;
+    }
+    if let Some(usage) = token_usage {
+        let mut value = serde_json::to_value(usage)?;
+        if let Some(ratio) = usage.cache_hit_ratio() {
+            value["cache_hit_ratio"] = serde_json::json!(ratio);
+        }
+        payload["total_token_usage"] = value;
     }
     Ok(payload)
 }
@@ -613,142 +694,9 @@ pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> R
     Ok(())
 }
 
-/// Token savings measurement for structured output.
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct TokenMeasurement {
-    pub session_id: String,
-    pub total_tokens: usize,
-    pub summary_tokens: usize,
-    pub savings_tokens: usize,
-    pub savings_percent: f64,
-    pub section_count: usize,
-    pub section_names: Vec<String>,
-    pub is_structured: bool,
-}
-
-pub(crate) fn handle_session_measure(
-    session: String,
-    json: bool,
-    cd: Option<String>,
-) -> Result<()> {
-    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let resolved_id = resolved.session_id;
-    let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
-
-    let measurement = compute_token_measurement(&session_dir, &resolved_id)?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&measurement)?);
-    } else {
-        let short_id = &resolved_id[..11.min(resolved_id.len())];
-        println!("Session: {short_id}");
-        println!(
-            "Total output: {} tokens",
-            format_number(measurement.total_tokens)
-        );
-        println!(
-            "Summary only: {} tokens",
-            format_number(measurement.summary_tokens)
-        );
-        if measurement.is_structured && measurement.total_tokens > 0 {
-            println!(
-                "Savings: {:.1}% ({} tokens saved)",
-                measurement.savings_percent,
-                format_number(measurement.savings_tokens)
-            );
-            println!(
-                "Sections: {} ({})",
-                measurement.section_count,
-                measurement.section_names.join(", ")
-            );
-        } else {
-            println!("Savings: N/A (unstructured output)");
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) fn compute_token_measurement(
-    session_dir: &Path,
-    session_id: &str,
-) -> Result<TokenMeasurement> {
-    // Try loading the structured output index
-    let index = csa_session::load_output_index(session_dir)?;
-
-    if let Some(index) = index {
-        let total_tokens = index.total_tokens;
-        let section_names: Vec<String> = index.sections.iter().map(|s| s.id.clone()).collect();
-        let section_count = index.sections.len();
-
-        // Find summary section tokens (first section named "summary", or first section)
-        let summary_tokens = index
-            .sections
-            .iter()
-            .find(|s| s.id == "summary")
-            .map(|s| s.token_estimate)
-            .unwrap_or_else(|| {
-                index
-                    .sections
-                    .first()
-                    .map(|s| s.token_estimate)
-                    .unwrap_or(0)
-            });
-
-        // "full" section means unstructured (parser wraps entire output as "full")
-        let is_structured = section_count > 1 || (section_count == 1 && section_names[0] != "full");
-
-        let savings_tokens = total_tokens.saturating_sub(summary_tokens);
-        let savings_percent = if total_tokens > 0 {
-            (1.0 - summary_tokens as f64 / total_tokens as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        Ok(TokenMeasurement {
-            session_id: session_id.to_string(),
-            total_tokens,
-            summary_tokens,
-            savings_tokens,
-            savings_percent,
-            section_count,
-            section_names,
-            is_structured,
-        })
-    } else {
-        // No index — try computing from output.log directly
-        let output_log = session_dir.join("output.log");
-        let total_tokens = if output_log.is_file() {
-            let content = fs::read_to_string(&output_log)?;
-            csa_session::estimate_tokens(&content)
-        } else {
-            0
-        };
-
-        Ok(TokenMeasurement {
-            session_id: session_id.to_string(),
-            total_tokens,
-            summary_tokens: total_tokens,
-            savings_tokens: 0,
-            savings_percent: 0.0,
-            section_count: 0,
-            section_names: vec![],
-            is_structured: false,
-        })
-    }
-}
-
-/// Format a number with commas for readability.
-pub(crate) fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let chars: Vec<char> = s.chars().rev().collect();
-    let chunks: Vec<String> = chars
-        .chunks(3)
-        .map(|chunk| chunk.iter().collect::<String>())
-        .collect();
-    chunks.join(",").chars().rev().collect()
-}
+pub(crate) use crate::session_cmds_result_measure::handle_session_measure;
+#[cfg(test)]
+pub(crate) use crate::session_cmds_result_measure::{compute_token_measurement, format_number};
 
 /// Handle `csa session tool-output <session> [index] [--list]`.
 pub(crate) fn handle_session_tool_output(

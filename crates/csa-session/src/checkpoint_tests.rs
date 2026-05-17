@@ -423,6 +423,7 @@ fn test_note_from_session() {
             output_tokens: Some(500),
             total_tokens: Some(1500),
             estimated_cost_usd: None,
+            cache_read_input_tokens: None,
         }),
         phase: crate::state::SessionPhase::Retired,
         task_context: Default::default(),

@@ -11,7 +11,7 @@ use agent_client_protocol::{
 
 use super::{
     AcpClient, MAX_EXTRACTED_COMMANDS, MAX_RETAINED_EVENTS, SessionEvent, SessionEventStore,
-    command_looks_like_no_verify_commit,
+    StreamingMetadata, command_looks_like_no_verify_commit,
 };
 
 #[test]
@@ -327,4 +327,45 @@ fn command_looks_like_no_verify_commit_detects_prefixed_shell_wrappers() {
     assert!(command_looks_like_no_verify_commit(
         "env -i git commit --no-verify -m unsafe"
     ));
+}
+
+#[test]
+fn streaming_metadata_cache_hit_ratio_returns_ratio_when_both_fields_set() {
+    let metadata = StreamingMetadata {
+        input_tokens: Some(200_000),
+        cache_read_input_tokens: Some(150_000),
+        ..Default::default()
+    };
+    let ratio = metadata.cache_hit_ratio().expect("ratio");
+    assert!((ratio - 0.75).abs() < f64::EPSILON);
+}
+
+#[test]
+fn streaming_metadata_cache_hit_ratio_returns_none_when_cache_read_missing() {
+    let metadata = StreamingMetadata {
+        input_tokens: Some(100),
+        cache_read_input_tokens: None,
+        ..Default::default()
+    };
+    assert!(metadata.cache_hit_ratio().is_none());
+}
+
+#[test]
+fn streaming_metadata_cache_hit_ratio_returns_none_when_input_tokens_missing() {
+    let metadata = StreamingMetadata {
+        input_tokens: None,
+        cache_read_input_tokens: Some(50),
+        ..Default::default()
+    };
+    assert!(metadata.cache_hit_ratio().is_none());
+}
+
+#[test]
+fn streaming_metadata_cache_hit_ratio_returns_none_when_input_tokens_zero() {
+    let metadata = StreamingMetadata {
+        input_tokens: Some(0),
+        cache_read_input_tokens: Some(0),
+        ..Default::default()
+    };
+    assert!(metadata.cache_hit_ratio().is_none());
 }
