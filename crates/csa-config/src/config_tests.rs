@@ -781,3 +781,16 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         "error must mention override flag: {msg}"
     );
 }
+
+#[test]
+fn test_tool_config_fast_mode_true_parses() {
+    let toml_str = r#"fast_mode = true"#;
+    let cfg: ToolConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.fast_mode, Some(true));
+}
+
+#[test]
+fn test_tool_config_fast_mode_absent_defaults_to_none() {
+    let cfg: ToolConfig = toml::from_str("").unwrap();
+    assert_eq!(cfg.fast_mode, None);
+}

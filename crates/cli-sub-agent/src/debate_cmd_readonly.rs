@@ -21,6 +21,27 @@ pub(crate) fn with_readonly_session_env(
 /// `pipeline::load_and_validate` (hard reject above `MAX_RECURSION_DEPTH`), so
 /// blanket "never call csa" text here would break the documented fractal
 /// recursion contract (Layer 1 -> Layer 2 is legitimate).
+/// Build a debate instruction that passes parameters to the debate skill.
+///
+/// The debate tool loads the debate skill from the project's `.claude/skills/`
+/// directory and follows its instructions autonomously. We only pass parameters.
+/// An anti-recursion preamble is prepended (see GitHub issue #272).
+pub(crate) fn build_debate_instruction(
+    question: &str,
+    is_continuation: bool,
+    rounds: u32,
+) -> String {
+    if is_continuation {
+        format!(
+            "{ANTI_RECURSION_PREAMBLE}Use the debate skill. continuation=true. rounds={rounds}. question={question}"
+        )
+    } else {
+        format!(
+            "{ANTI_RECURSION_PREAMBLE}Use the debate skill. rounds={rounds}. question={question}"
+        )
+    }
+}
+
 pub(crate) const ANTI_RECURSION_PREAMBLE: &str = "\
 CONTEXT: You are running INSIDE a CSA subprocess (csa review / csa debate). \
 Perform the debate task DIRECTLY using your own capabilities \

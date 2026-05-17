@@ -36,7 +36,8 @@ use fast_mode::{debate_execution_env_options, warn_if_fast_mode_has_no_codex_deb
 
 #[path = "debate_cmd_readonly.rs"]
 mod readonly;
-pub(crate) use readonly::{ANTI_RECURSION_PREAMBLE, with_readonly_session_env};
+use readonly::build_debate_instruction;
+pub(crate) use readonly::with_readonly_session_env;
 
 /// Debate execution mode indicating model diversity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -341,7 +342,18 @@ pub(crate) async fn handle_debate(
         tier_active,
         tier_filter.as_ref(),
     );
-    warn_if_fast_mode_has_no_codex_debate_candidate(args.fast_but_more_cost, &candidates);
+    let effective_fast_mode = args.fast_but_more_cost
+        || config
+            .as_ref()
+            .and_then(|c| c.tools.get("codex"))
+            .and_then(|t| t.fast_mode)
+            .unwrap_or(false)
+        || global_config
+            .tools
+            .get("codex")
+            .and_then(|t| t.fast_mode)
+            .unwrap_or(false);
+    warn_if_fast_mode_has_no_codex_debate_candidate(effective_fast_mode, &candidates);
 
     if args.dry_run {
         let Some((attempt_tool, attempt_model_spec)) = candidates.first() else {
@@ -361,7 +373,7 @@ pub(crate) async fn handle_debate(
             false,
         )
         .await?;
-        if args.fast_but_more_cost {
+        if effective_fast_mode {
             executor.enable_codex_fast_mode();
         }
         let summary = DebateDryRunSummary {
@@ -410,7 +422,7 @@ pub(crate) async fn handle_debate(
             false,
         )
         .await?;
-        if args.fast_but_more_cost {
+        if effective_fast_mode {
             executor.enable_codex_fast_mode();
         }
         let base_env_owned = global_config.build_execution_env(
@@ -768,23 +780,6 @@ fn should_retry_debate_after_error(
 async fn wait_for_still_working_backoff() {
     tracing::info!("Tool still working, waiting before next attempt...");
     tokio::time::sleep(STILL_WORKING_BACKOFF).await;
-}
-
-/// Build a debate instruction that passes parameters to the debate skill.
-///
-/// The debate tool loads the debate skill from the project's `.claude/skills/`
-/// directory and follows its instructions autonomously. We only pass parameters.
-/// An anti-recursion preamble is prepended (see GitHub issue #272).
-fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) -> String {
-    if is_continuation {
-        format!(
-            "{ANTI_RECURSION_PREAMBLE}Use the debate skill. continuation=true. rounds={rounds}. question={question}"
-        )
-    } else {
-        format!(
-            "{ANTI_RECURSION_PREAMBLE}Use the debate skill. rounds={rounds}. question={question}"
-        )
-    }
 }
 
 #[cfg(test)]

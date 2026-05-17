@@ -11,10 +11,10 @@ pub(crate) fn debate_execution_env_options(no_failover: bool) -> ExecutionEnvOpt
 }
 
 pub(crate) fn warn_if_fast_mode_has_no_codex_debate_candidate(
-    fast_but_more_cost: bool,
+    effective_fast_mode: bool,
     candidates: &[(ToolName, Option<String>)],
 ) {
-    if fast_but_more_cost && !candidates.iter().any(|(tool, _)| *tool == ToolName::Codex) {
+    if effective_fast_mode && !candidates.iter().any(|(tool, _)| *tool == ToolName::Codex) {
         eprintln!(
             "warning: --fast-but-more-cost only affects codex; no codex debate attempt is in the resolved candidate set."
         );

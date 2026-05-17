@@ -24,6 +24,7 @@ max_concurrent = 3  # Default max parallel instances per tool
 #
 # [tools.codex]
 # max_concurrent = 3
+# fast_mode = true  # 2x cost, faster output
 # [tools.codex.env]
 # OPENAI_API_KEY = "sk-..."
 #

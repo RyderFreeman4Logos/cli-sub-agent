@@ -726,6 +726,11 @@ pub struct GlobalToolConfig {
     /// Defaults to true so startup-time MCP degradation is non-fatal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_degraded_mcp: Option<bool>,
+    /// Codex-only: enable fast mode (2× cost, faster output).
+    /// Equivalent to `--fast-but-more-cost` CLI flag; applies to all codex
+    /// sessions when true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_mode: Option<bool>,
 }
 
 fn default_max_concurrent() -> u32 {
