@@ -440,6 +440,81 @@ fn test_session_config_is_default_reflects_result_report_spill_threshold() {
     assert!(!cfg.is_default());
 }
 
+#[test]
+fn test_session_config_default_fork_prefix_budget_is_none() {
+    let cfg = SessionConfig::default();
+    assert!(cfg.fork_prefix_budget.is_none());
+    assert_eq!(
+        cfg.resolved_fork_prefix_budget(),
+        DEFAULT_FORK_PREFIX_BUDGET_TOKENS
+    );
+    assert!(cfg.is_default());
+}
+
+#[test]
+fn test_session_config_fork_prefix_budget_roundtrip() {
+    let cfg = SessionConfig {
+        fork_prefix_budget: Some(DEFAULT_FORK_PREFIX_BUDGET_TOKENS),
+        ..Default::default()
+    };
+    let toml_str = toml::to_string(&cfg).expect("serialize");
+    assert!(
+        toml_str.contains("fork_prefix_budget = 32768"),
+        "expected fork_prefix_budget in serialized output, got: {toml_str}"
+    );
+    let parsed: SessionConfig = toml::from_str(&toml_str).expect("deserialize");
+    assert_eq!(
+        parsed.fork_prefix_budget,
+        Some(DEFAULT_FORK_PREFIX_BUDGET_TOKENS)
+    );
+    assert_eq!(
+        parsed.resolved_fork_prefix_budget(),
+        DEFAULT_FORK_PREFIX_BUDGET_TOKENS
+    );
+}
+
+#[test]
+fn test_session_config_is_default_reflects_fork_prefix_budget() {
+    let cfg = SessionConfig {
+        fork_prefix_budget: Some(DEFAULT_FORK_PREFIX_BUDGET_TOKENS),
+        ..Default::default()
+    };
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_session_config_resolved_fork_prefix_budget_clamps_below_min() {
+    let cfg = SessionConfig {
+        fork_prefix_budget: Some(1024),
+        ..Default::default()
+    };
+    assert_eq!(
+        cfg.resolved_fork_prefix_budget(),
+        FORK_PREFIX_BUDGET_MIN_TOKENS
+    );
+}
+
+#[test]
+fn test_session_config_resolved_fork_prefix_budget_clamps_above_max() {
+    let cfg = SessionConfig {
+        fork_prefix_budget: Some(1_000_000),
+        ..Default::default()
+    };
+    assert_eq!(
+        cfg.resolved_fork_prefix_budget(),
+        FORK_PREFIX_BUDGET_MAX_TOKENS
+    );
+}
+
+#[test]
+fn test_session_config_resolved_fork_prefix_budget_passes_through_in_range() {
+    let cfg = SessionConfig {
+        fork_prefix_budget: Some(65_536),
+        ..Default::default()
+    };
+    assert_eq!(cfg.resolved_fork_prefix_budget(), 65_536);
+}
+
 // ---------------------------------------------------------------------------
 // ResourcesConfig: initial_response_timeout_seconds
 // ---------------------------------------------------------------------------

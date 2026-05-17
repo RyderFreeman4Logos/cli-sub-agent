@@ -433,6 +433,54 @@ fn test_validate_max_recursion_depth_zero() {
     assert!(result.is_ok(), "max_recursion_depth 0 should be valid");
 }
 
+#[test]
+fn test_validate_config_warns_but_passes_on_fork_prefix_budget_below_min() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert("codex".to_string(), ToolConfig::default());
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test-project".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: crate::SessionConfig {
+            fork_prefix_budget: Some(512),
+            ..Default::default()
+        },
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(
+        result.is_ok(),
+        "out-of-range fork_prefix_budget should warn, not fail: {result:?}"
+    );
+}
+
 include!("validate_tests_deprecated.rs");
 include!("validate_tests_preferences.rs");
 include!("validate_tests_sandbox.rs");

@@ -210,8 +210,10 @@ fn default_recursion_depth() -> u32 {
 }
 
 pub use super::config_session::{
-    DEFAULT_COOLDOWN_SECS, DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES, ExecutionConfig,
-    HooksSection, PostExecGateConfig, RunConfig, SessionConfig, SnapshotTrigger, VcsConfig,
+    DEFAULT_COOLDOWN_SECS, DEFAULT_FORK_PREFIX_BUDGET_TOKENS,
+    DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES, ExecutionConfig, FORK_PREFIX_BUDGET_MAX_TOKENS,
+    FORK_PREFIX_BUDGET_MIN_TOKENS, HooksSection, PostExecGateConfig, RunConfig, SessionConfig,
+    SnapshotTrigger, VcsConfig,
 };
 pub use super::config_tool::{
     ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions, TransportKind,
