@@ -316,6 +316,8 @@ pub(crate) async fn handle_run(
         ));
     }
 
+    crate::run_helpers::warn_if_tier_without_tool(tier.as_deref(), user_explicit_tool);
+
     let strategy = skill_res
         .tool
         .unwrap_or(ToolArg::Auto)

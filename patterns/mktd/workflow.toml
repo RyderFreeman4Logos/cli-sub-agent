@@ -240,6 +240,8 @@ CONSTRAINT ANCHOR: The user prompt above may specify target crates, key files, i
 
 Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
 Working directory: ${CWD}"""
+# RECON steps are read-only (workspace_access = "read-only"); auto-routing is safe here because
+# no tool writes files, so allow_edit restrictions do not apply. Any tool in the tier can explore.
 tier = "tier-1-quick"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
@@ -256,6 +258,7 @@ CONSTRAINT ANCHOR: If the user prompt specifies an architectural approach or tar
 
 Report: file paths with approach, reusable components, conventions to follow.
 Working directory: ${CWD}"""
+# RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 tier = "tier-1-quick"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
@@ -272,6 +275,7 @@ CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, 
 
 Report: potential breaking changes, security considerations, performance, compatibility.
 Working directory: ${CWD}"""
+# RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 tier = "tier-1-quick"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
@@ -292,6 +296,7 @@ Report using these keys:
 - `concurrency_model`: who else can write to the files/state this touches, plus the failure / rollback model for each important step
 
 Working directory: ${CWD}"""
+# RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 tier = "tier-1-quick"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"

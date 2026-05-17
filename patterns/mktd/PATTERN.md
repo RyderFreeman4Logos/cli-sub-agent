@@ -155,6 +155,7 @@ echo "Chinese (Simplified)"
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: tier-1-quick
+Note: RECON steps are read-only (`workspace_access = "read-only"`); auto-routing is safe here because no tool writes files, so `allow_edit` restrictions do not apply. Any tool in the tier can explore.
 
 Analyze codebase structure relevant to ${FEATURE}.
 
@@ -168,6 +169,7 @@ Working directory: ${CWD}
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: tier-1-quick
+Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 
 Find existing patterns or similar features to ${FEATURE} in this codebase.
 
@@ -181,6 +183,7 @@ Working directory: ${CWD}
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: tier-1-quick
+Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 
 Identify constraints and risks for implementing ${FEATURE}.
 
@@ -194,6 +197,7 @@ Working directory: ${CWD}
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: tier-1-quick
+Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 
 Identify the semantic invariants and concurrency assumptions for ${FEATURE}.
 
