@@ -67,6 +67,25 @@ Why this is the canonical LLM-friendly form:
 
 Default to this form unless the user explicitly asks for tier-based routing or a different tool.
 
+## When NOT to Use CSA
+
+CSA session spawn has a fixed cold-start cost (~10K-60K tokens for rules/context ingestion).
+For small tasks, the cold-start cost can exceed the actual work cost by 10-20x.
+
+**Prefer native subagent (Agent tool) or direct execution when**:
+- Change is ≤30 lines across ≤3 files
+- Same model as main agent (cache sharing via native Agent)
+- No filesystem sandbox or resource isolation needed
+- No cross-tool heterogeneous review needed (e.g., codex write + gemini review)
+
+**Use CSA when**:
+- Cross-tool execution (different model/provider than main agent)
+- Filesystem sandbox isolation required (bwrap/landlock)
+- Memory/PID resource limits needed (cgroup)
+- Long-running task (>1h, may outlive main agent session)
+- Audit trail required (session metadata, review verdict, token tracking)
+- Task exceeds 100 lines or 5+ files
+
 ## Core Concepts
 
 - **Meta-Session**: Persistent workspace for a specific task, stored in `~/.local/state/csa/`.
