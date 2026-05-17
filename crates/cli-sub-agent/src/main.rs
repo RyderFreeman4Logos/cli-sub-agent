@@ -68,6 +68,7 @@ mod review_prior_rounds;
 mod review_routing;
 mod review_session_findings;
 mod run_cmd;
+mod run_cmd_caller_fork;
 mod run_cmd_daemon;
 mod run_cmd_fork;
 mod run_cmd_post;
@@ -279,14 +280,6 @@ async fn run() -> Result<()> {
 
     let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
     if !legacy_xdg_paths.is_empty() {
-        for path in &legacy_xdg_paths {
-            tracing::debug!(
-                label = path.label,
-                legacy = %path.legacy_path.display(),
-                new = %path.new_path.display(),
-                "legacy XDG path detected, auto-migrating"
-            );
-        }
         match csa_config::migrate::run_xdg_migration() {
             Ok(()) => {
                 tracing::debug!(

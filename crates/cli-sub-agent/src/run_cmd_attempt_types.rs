@@ -44,6 +44,11 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) run_started_at: Instant,
     pub(crate) is_fork: bool,
     pub(crate) is_auto_seed_fork: bool,
+    /// Pre-resolved fork from `--fork-from-caller` (CSA-lite, #1432).
+    /// When present, supplies the initial fork_resolution before the loop
+    /// runs `resolve_fork()`; downstream prepend-to-prompt path picks up
+    /// the extracted caller conversation prefix.
+    pub(crate) caller_fork_resolution: Option<ForkResolution>,
     pub(crate) ephemeral: bool,
     pub(crate) fork_call: bool,
     pub(crate) session_arg: Option<String>,

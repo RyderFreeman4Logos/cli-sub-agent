@@ -132,11 +132,6 @@ pub(crate) async fn handle_run(
         None
     };
 
-    if fork_from_caller {
-        // Resolution wired in run_cmd_fork::resolve_caller_fork (separate commit).
-        warn!("--fork-from-caller accepted but resolution not yet implemented");
-    }
-
     let mut is_fork = fork_from.is_some() || fork_last;
     let mut session_arg = if fork_last {
         info!("Resolving --fork-last to most recent session");
@@ -187,6 +182,15 @@ pub(crate) async fn handle_run(
     let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
+    };
+    let caller_fork_resolution = if fork_from_caller {
+        let resolved = crate::run_cmd_caller_fork::resolve_fork_from_caller(config.as_ref());
+        if resolved.is_none() {
+            warn!("--fork-from-caller: no caller session resolved; falling back to cold start");
+        }
+        resolved
+    } else {
+        None
     };
     let branch_guard = crate::run_helpers_branch_guard::BranchGuardRuntime::for_run(
         allow_base_branch_working,
@@ -537,6 +541,7 @@ pub(crate) async fn handle_run(
         run_started_at,
         is_fork,
         is_auto_seed_fork,
+        caller_fork_resolution,
         ephemeral,
         fork_call,
         session_arg,
