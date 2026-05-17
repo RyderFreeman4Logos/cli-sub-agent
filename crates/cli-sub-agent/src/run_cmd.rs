@@ -114,6 +114,7 @@ impl SubagentRunConfig {
             false,
             None,
             false,
+            false,
             None,
             false,
             None,

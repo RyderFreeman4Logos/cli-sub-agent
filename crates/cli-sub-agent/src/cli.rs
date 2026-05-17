@@ -96,17 +96,22 @@ pub enum Commands {
         #[arg(long, value_name = "SESSION_ID", value_parser = validate_ulid)]
         inline_context_from_review_session: Option<String>,
         /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
-        #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last"])]
+        #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last", "fork_from_caller"])]
         session: Option<String>,
         /// Resume the most recent session for this project [DEPRECATED: use --fork-last]
-        #[arg(long, conflicts_with_all = ["session", "ephemeral", "fork_from", "fork_last"])]
+        #[arg(long, conflicts_with_all = ["session", "ephemeral", "fork_from", "fork_last", "fork_from_caller"])]
         last: bool,
         /// Fork from a specific session (ULID or prefix match)
-        #[arg(long, conflicts_with_all = ["session", "last", "fork_last", "ephemeral"])]
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_last", "fork_from_caller", "ephemeral"])]
         fork_from: Option<String>,
         /// Fork the most recent session for this project
-        #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "ephemeral"])]
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "fork_from_caller", "ephemeral"])]
         fork_last: bool,
+        /// Fork from the auto-detected caller's Claude conversation (CSA-lite, #1432).
+        /// Reads `CLAUDE_SESSION_ID` or the most recent Claude thread on disk,
+        /// extracts a budgeted conversation prefix, and seeds the new session with it.
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "fork_last", "ephemeral"])]
+        fork_from_caller: bool,
         /// Human-readable description for a new session
         #[arg(short, long)]
         description: Option<String>,

@@ -124,6 +124,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         false,
         None,
         false,
+        false,
         None,
         false,
         None,

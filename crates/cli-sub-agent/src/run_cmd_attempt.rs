@@ -81,7 +81,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     );
     let mut executed_session_id: Option<String> = None;
     let mut pre_created_fork_session_id: Option<String> = None;
-    let mut fork_resolution: Option<ForkResolution> = None;
+    let mut fork_resolution: Option<ForkResolution> = request.caller_fork_resolution;
     let mut is_fork = request.is_fork;
     let mut failover_context_addendum: Option<String> = None;
     let mut is_auto_seed_fork = request.is_auto_seed_fork;

@@ -1,6 +1,7 @@
 //! Session management with ULID-based genealogy tracking.
 
 pub mod adjudication;
+pub mod caller_detect;
 pub mod checklist_store;
 pub mod checkpoint;
 pub mod cooldown;
@@ -50,6 +51,7 @@ pub use cooldown::{
 
 // Re-export key types
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
+pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use state::{
     ContextStatus, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta, SandboxInfo,

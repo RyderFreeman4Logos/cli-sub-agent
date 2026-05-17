@@ -155,6 +155,10 @@ long_poll_seconds = 240
 # ACP transport tuning. Project-level [acp] overrides these values.
 # [acp]
 # init_timeout_seconds = 120  # Timeout for ACP session creation (seconds)
+
+# Session behaviour. Project-level [session] overrides these values.
+# [session]
+# fork_prefix_budget = 32768  # CSA-lite fork prefix token budget; clamped to [4096, 131072]
 "#
     .to_string()
 }

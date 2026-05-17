@@ -7,6 +7,7 @@ use csa_session::TokenUsage;
 /// Looks for common patterns in stdout/stderr:
 /// - "tokens: N" or "Tokens: N" or "total_tokens: N"
 /// - "input_tokens: N" / "output_tokens: N"
+/// - "cache_read_input_tokens: N" (Anthropic prompt caching)
 /// - "cost: $N.NN" or "estimated_cost: $N.NN"
 pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
     let mut usage = TokenUsage::default();
@@ -16,12 +17,25 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
     for line in output.lines() {
         let line_lower = line.to_lowercase();
 
-        // Parse input_tokens
-        if let Some(pos) = line_lower.find("input_tokens")
+        // Parse cache_read_input_tokens BEFORE input_tokens to prevent the
+        // less-specific "input_tokens" probe from matching this longer key.
+        if let Some(pos) = line_lower.find("cache_read_input_tokens")
             && let Some(val) = extract_number(&line[pos..])
         {
-            usage.input_tokens = Some(val);
+            usage.cache_read_input_tokens = Some(val);
             found_any = true;
+        }
+
+        // Parse input_tokens (only when not actually pointing at cache_read_input_tokens)
+        if let Some(pos) = line_lower.find("input_tokens") {
+            let prev_run_start = line_lower[..pos]
+                .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .map_or(0, |i| i + 1);
+            let is_cache_read = line_lower[prev_run_start..pos].ends_with("cache_read_");
+            if !is_cache_read && let Some(val) = extract_number(&line[pos..]) {
+                usage.input_tokens = Some(val);
+                found_any = true;
+            }
         }
 
         // Parse output_tokens

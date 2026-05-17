@@ -23,6 +23,7 @@ regex.workspace = true
 sha2.workspace = true
 data-encoding = "2.6"
 tempfile.workspace = true
+xurl-core.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

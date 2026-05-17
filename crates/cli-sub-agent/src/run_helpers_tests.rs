@@ -615,6 +615,26 @@ fn parse_token_usage_empty_string_returns_none() {
     assert!(super::parse_token_usage("").is_none());
 }
 
+#[test]
+fn parse_token_usage_with_cache_read_input_tokens() {
+    // cache_read_input_tokens MUST be captured AND MUST NOT shadow input_tokens.
+    let output = "input_tokens: 1000\ncache_read_input_tokens: 750\noutput_tokens: 500";
+    let usage = super::parse_token_usage(output).unwrap();
+    assert_eq!(usage.input_tokens, Some(1000));
+    assert_eq!(usage.cache_read_input_tokens, Some(750));
+    assert_eq!(usage.output_tokens, Some(500));
+}
+
+#[test]
+fn parse_token_usage_cache_read_only_does_not_set_input() {
+    // When only cache_read_input_tokens is present, the lookback guard prevents
+    // the longer key from being mis-parsed as a bare input_tokens hit.
+    let output = "cache_read_input_tokens: 750";
+    let usage = super::parse_token_usage(output).unwrap();
+    assert_eq!(usage.cache_read_input_tokens, Some(750));
+    assert_eq!(usage.input_tokens, None);
+}
+
 // --- extract_number tests ---
 
 #[test]

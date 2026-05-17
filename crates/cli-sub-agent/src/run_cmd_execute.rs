@@ -70,6 +70,7 @@ pub(crate) async fn handle_run(
     last: bool,
     fork_from: Option<String>,
     fork_last: bool,
+    fork_from_caller: bool,
     description: Option<String>,
     fork_call: bool,
     return_to: Option<String>,
@@ -181,6 +182,15 @@ pub(crate) async fn handle_run(
     let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
+    };
+    let caller_fork_resolution = if fork_from_caller {
+        let resolved = crate::run_cmd_caller_fork::resolve_fork_from_caller(config.as_ref());
+        if resolved.is_none() {
+            warn!("--fork-from-caller: no caller session resolved; falling back to cold start");
+        }
+        resolved
+    } else {
+        None
     };
     let branch_guard = crate::run_helpers_branch_guard::BranchGuardRuntime::for_run(
         allow_base_branch_working,
@@ -531,6 +541,7 @@ pub(crate) async fn handle_run(
         run_started_at,
         is_fork,
         is_auto_seed_fork,
+        caller_fork_resolution,
         ephemeral,
         fork_call,
         session_arg,

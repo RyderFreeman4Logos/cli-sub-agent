@@ -141,6 +141,14 @@ pub struct SessionConfig {
     /// daemon shutdown from hanging.  Default: 5 seconds.
     #[serde(default = "default_stderr_drain_timeout_secs")]
     pub stderr_drain_timeout_secs: u64,
+    /// Token budget for CSA-lite fork prefix extraction (issue #1432).
+    ///
+    /// Caps the JSONL conversation prefix injected into a forked session.
+    /// `None` means use [`DEFAULT_FORK_PREFIX_BUDGET_TOKENS`] (32_768).
+    /// Resolved values are clamped to [`FORK_PREFIX_BUDGET_MIN_TOKENS`,
+    /// [`FORK_PREFIX_BUDGET_MAX_TOKENS`]].
+    #[serde(default)]
+    pub fork_prefix_budget: Option<u32>,
 }
 
 fn default_seed_max_age_secs() -> u64 {
@@ -183,6 +191,18 @@ const DEFAULT_SPOOL_MAX_MB: u32 = 32;
 const DEFAULT_STDERR_SPOOL_MAX_MB: u32 = 50;
 const DEFAULT_SPOOL_KEEP_ROTATED: bool = true;
 
+/// Default token budget for CSA-lite fork prefix extraction (issue #1432).
+///
+/// Mirrors `csa-acp::prefix_extract::DEFAULT_PREFIX_BUDGET_TOKENS` (32_768).
+/// Duplicated here to avoid a `csa-config -> csa-acp` dependency edge.
+pub const DEFAULT_FORK_PREFIX_BUDGET_TOKENS: u32 = 32_768;
+
+/// Minimum accepted value for `session.fork_prefix_budget`.
+pub const FORK_PREFIX_BUDGET_MIN_TOKENS: u32 = 4_096;
+
+/// Maximum accepted value for `session.fork_prefix_budget`.
+pub const FORK_PREFIX_BUDGET_MAX_TOKENS: u32 = 131_072;
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
@@ -201,6 +221,7 @@ impl Default for SessionConfig {
             result_report_spill_threshold_bytes: default_result_report_spill_threshold_bytes(),
             cooldown_seconds: default_cooldown_secs(),
             stderr_drain_timeout_secs: default_stderr_drain_timeout_secs(),
+            fork_prefix_budget: None,
         }
     }
 }
@@ -223,6 +244,7 @@ impl SessionConfig {
                 == default_result_report_spill_threshold_bytes()
             && self.cooldown_seconds == default_cooldown_secs()
             && self.stderr_drain_timeout_secs == default_stderr_drain_timeout_secs()
+            && self.fork_prefix_budget.is_none()
     }
 
     /// Resolve cooldown duration (0 = disabled).
@@ -249,6 +271,20 @@ impl SessionConfig {
     pub fn resolved_spool_keep_rotated(&self) -> bool {
         self.spool_keep_rotated
             .unwrap_or(DEFAULT_SPOOL_KEEP_ROTATED)
+    }
+
+    /// Resolve the fork prefix token budget, clamping out-of-range values.
+    ///
+    /// Returns [`DEFAULT_FORK_PREFIX_BUDGET_TOKENS`] when unset; otherwise
+    /// clamps to [`FORK_PREFIX_BUDGET_MIN_TOKENS`,
+    /// [`FORK_PREFIX_BUDGET_MAX_TOKENS`]] silently. The corresponding
+    /// validation pass in `csa-config::validate` emits a user-visible
+    /// warning for out-of-range configured values.
+    pub fn resolved_fork_prefix_budget(&self) -> u32 {
+        match self.fork_prefix_budget {
+            None => DEFAULT_FORK_PREFIX_BUDGET_TOKENS,
+            Some(v) => v.clamp(FORK_PREFIX_BUDGET_MIN_TOKENS, FORK_PREFIX_BUDGET_MAX_TOKENS),
+        }
     }
 }
 

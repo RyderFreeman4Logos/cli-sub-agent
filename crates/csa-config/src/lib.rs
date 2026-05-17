@@ -28,10 +28,12 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    DEFAULT_COOLDOWN_SECS, DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES, EnforcementMode,
-    ExecutionConfig, HooksSection, PostExecGateConfig, ProjectConfig, ProjectMeta, RunConfig,
-    SessionConfig, SnapshotTrigger, TierConfig, TierStrategy, ToolConfig,
-    ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions, VcsConfig,
+    DEFAULT_COOLDOWN_SECS, DEFAULT_FORK_PREFIX_BUDGET_TOKENS,
+    DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES, EnforcementMode, ExecutionConfig,
+    FORK_PREFIX_BUDGET_MAX_TOKENS, FORK_PREFIX_BUDGET_MIN_TOKENS, HooksSection, PostExecGateConfig,
+    ProjectConfig, ProjectMeta, RunConfig, SessionConfig, SnapshotTrigger, TierConfig,
+    TierStrategy, ToolConfig, ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions,
+    VcsConfig,
 };
 pub type MergedConfig = ProjectConfig;
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;

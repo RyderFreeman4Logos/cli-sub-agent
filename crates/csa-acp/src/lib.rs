@@ -2,6 +2,7 @@ pub mod client;
 pub mod connection;
 pub mod error;
 pub mod mcp_proxy_client;
+pub mod prefix_extract;
 pub mod session_config;
 pub mod transport;
 
@@ -11,5 +12,8 @@ pub use connection::{
     fork_session_via_cli,
 };
 pub use error::{AcpError, AcpResult};
+pub use prefix_extract::{
+    DEFAULT_PREFIX_BUDGET_TOKENS, ExtractedPrefix, PrefixConfig, PrefixExtractor,
+};
 pub use session_config::{McpServerConfig, SessionConfig};
 pub use transport::{AcpOutput, AcpOutputIoOptions, AcpRunOptions, AcpSession};

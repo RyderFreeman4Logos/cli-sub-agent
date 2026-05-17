@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use std::path::Path;
 
 use crate::TransportKind;
-use crate::config::ProjectConfig;
+use crate::config::{FORK_PREFIX_BUDGET_MAX_TOKENS, FORK_PREFIX_BUDGET_MIN_TOKENS, ProjectConfig};
 use crate::global::ToolSelection;
 
 const KNOWN_TOOLS: &[&str] = &[
@@ -46,6 +46,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     validate_debate(&config)?;
     validate_tiers(&config)?;
     warn_unknown_tool_priority(&config);
+    warn_fork_prefix_budget_out_of_range(&config);
 
     Ok(())
 }
@@ -401,6 +402,24 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Warn (non-fatal) when `session.fork_prefix_budget` falls outside the
+/// supported range. The value is silently clamped at use-site by
+/// [`crate::SessionConfig::resolved_fork_prefix_budget`]; this surfaces the
+/// configuration mistake to the user.
+fn warn_fork_prefix_budget_out_of_range(config: &ProjectConfig) {
+    let Some(raw) = config.session.fork_prefix_budget else {
+        return;
+    };
+    if !(FORK_PREFIX_BUDGET_MIN_TOKENS..=FORK_PREFIX_BUDGET_MAX_TOKENS).contains(&raw) {
+        let clamped = raw.clamp(FORK_PREFIX_BUDGET_MIN_TOKENS, FORK_PREFIX_BUDGET_MAX_TOKENS);
+        eprintln!(
+            "warning: session.fork_prefix_budget = {raw} is outside the supported range \
+             [{FORK_PREFIX_BUDGET_MIN_TOKENS}, {FORK_PREFIX_BUDGET_MAX_TOKENS}]; \
+             clamping to {clamped}."
+        );
+    }
 }
 
 /// Warn (non-fatal) if `preferences.tool_priority` contains unrecognized tool names.
