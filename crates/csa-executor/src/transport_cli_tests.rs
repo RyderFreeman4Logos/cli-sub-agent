@@ -358,6 +358,42 @@ fn parse_stream_json_happy_path_emits_events() {
     assert!(parsed.metadata.has_execute_tool_calls);
     assert_eq!(parsed.metadata.total_events_count, 5);
     assert_eq!(parsed.metadata.message_text, "Hello");
+    assert_eq!(
+        parsed.metadata.turn_count, 1,
+        "one assistant envelope => one observed turn (#1438)"
+    );
+}
+
+/// `parse_stream_json` MUST count every `assistant` envelope as one
+/// observed conversation turn so `MetaSessionState.turn_count` reflects
+/// actual turns rather than `csa run` invocations (#1438). Before the
+/// fix, multi-turn streams (read tool result → think → respond again)
+/// left `turn_count` at `0` and downstream pipeline added a single
+/// `+= 1` per invocation regardless of how many turns the agent took.
+#[test]
+fn parse_stream_json_counts_each_assistant_message_as_turn() {
+    let stream = concat!(
+        r#"{"type":"system","session_id":"sess-multi","subtype":"init"}"#,
+        "\n",
+        r#"{"type":"assistant","session_id":"sess-multi","message":{"content":[{"type":"text","text":"first"}]}}"#,
+        "\n",
+        r#"{"type":"tool_use","session_id":"sess-multi","tool_use_id":"tu-1","name":"Read"}"#,
+        "\n",
+        r#"{"type":"tool_result","session_id":"sess-multi","tool_use_id":"tu-1","status":"success"}"#,
+        "\n",
+        r#"{"type":"assistant","session_id":"sess-multi","message":{"content":[{"type":"text","text":"second"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","session_id":"sess-multi","message":{"content":[{"type":"text","text":"third"}]}}"#,
+        "\n",
+        r#"{"type":"result","session_id":"sess-multi","subtype":"final"}"#,
+        "\n",
+    );
+    let parsed = parse_stream_json(stream);
+    assert_eq!(
+        parsed.metadata.turn_count, 3,
+        "three assistant envelopes => three observed turns"
+    );
+    assert_eq!(parsed.metadata.message_text, "firstsecondthird");
 }
 
 #[test]

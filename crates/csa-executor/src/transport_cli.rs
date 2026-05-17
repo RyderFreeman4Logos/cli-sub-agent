@@ -562,6 +562,7 @@ fn parse_stream_json(buffer: &str) -> StreamParseResult {
             }
             SessionEvent::AgentMessage(text) => {
                 result.metadata.message_text.push_str(text);
+                result.metadata.turn_count = result.metadata.turn_count.saturating_add(1);
             }
             SessionEvent::AgentThought(text) => {
                 result.metadata.thought_text.push_str(text);

@@ -741,6 +741,7 @@ fn convert_acp_metadata(
 ) -> csa_core::transport_events::StreamingMetadata {
     csa_core::transport_events::StreamingMetadata {
         total_events_count: metadata.total_events_count,
+        turn_count: metadata.turn_count,
         has_tool_calls: metadata.has_tool_calls,
         has_execute_tool_calls: metadata.has_execute_tool_calls,
         has_no_verify_commit: metadata.has_no_verify_commit,

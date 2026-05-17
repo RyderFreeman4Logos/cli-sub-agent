@@ -35,6 +35,7 @@ fn build_test_ctx<'a>(
         changed_paths: vec![],
         pre_exec_snapshot: None,
         has_tool_calls,
+        turn_count: 0,
         sa_mode,
     }
 }
