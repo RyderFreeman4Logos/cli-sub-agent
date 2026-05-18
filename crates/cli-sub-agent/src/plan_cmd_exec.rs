@@ -54,6 +54,7 @@ pub(super) struct StepExecutionOutcome {
     pub(super) exit_code: i32,
     pub(super) output: String,
     pub(super) session_id: Option<String>,
+    pub(super) stderr: String,
 }
 
 pub(super) struct CsaStepExecutionOptions<'a> {
@@ -130,6 +131,7 @@ pub(super) async fn execute_bash_step(
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
     if !stdout.is_empty() {
         eprint!("{stdout}");
     }
@@ -137,6 +139,7 @@ pub(super) async fn execute_bash_step(
         exit_code: output.status.code().unwrap_or(1),
         output: stdout,
         session_id: None,
+        stderr: stderr_str,
     })
 }
 
@@ -321,6 +324,7 @@ pub(super) async fn execute_csa_step(
         exit_code: result.execution.exit_code,
         output: captured,
         session_id: Some(result.meta_session_id),
+        stderr: result.execution.stderr_output,
     })
 }
 
