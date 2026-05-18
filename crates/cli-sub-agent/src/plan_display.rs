@@ -38,6 +38,7 @@ pub(crate) fn print_plan(
             Ok(StepTarget::CsaTool {
                 tool_name,
                 model_spec,
+                ..
             }) => match model_spec {
                 Some(s) => format!("{} ({})", tool_name.as_str(), s),
                 None => tool_name.as_str().to_string(),

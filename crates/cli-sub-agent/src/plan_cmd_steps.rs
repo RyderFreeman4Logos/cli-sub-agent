@@ -16,14 +16,12 @@ use super::plan_cmd_assignment::{
     extract_output_assignment_markers, should_inject_assignment_markers,
     strip_assignment_marker_lines,
 };
-use super::plan_cmd_exec::{
-    CsaStepExecutionOptions, StepExecutionOutcome, execute_bash_step, execute_csa_step,
-    run_with_heartbeat,
-};
+use super::plan_cmd_exec::{StepExecutionOutcome, execute_bash_step, run_with_heartbeat};
 use super::plan_cmd_flow::{
     OrchestratorHandoff, find_next_step, format_orchestrator_message, format_plan_resume_command,
     orchestrator_handoff_mode,
 };
+use super::plan_cmd_tier_failover::{TierFailoverParams, execute_csa_step_with_tier_failover};
 use super::{
     PlanRunJournal, apply_repo_fingerprint, detect_repo_fingerprint, persist_plan_journal,
     substitute_vars,
@@ -46,6 +44,7 @@ pub(crate) enum StepTarget {
     CsaTool {
         tool_name: ToolName,
         model_spec: Option<String>,
+        tier_name: Option<String>,
     },
 }
 
@@ -54,6 +53,15 @@ impl StepTarget {
         Self::CsaTool {
             tool_name: tool,
             model_spec: spec,
+            tier_name: None,
+        }
+    }
+
+    fn csa_with_tier(tool: ToolName, spec: Option<String>, tier: String) -> Self {
+        Self::CsaTool {
+            tool_name: tool,
+            model_spec: spec,
+            tier_name: Some(tier),
         }
     }
 }
@@ -137,7 +145,11 @@ pub(crate) fn resolve_step_tool(
                             let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
                             if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
                                 let tool = parse_tool_name(parts[0])?;
-                                return Ok(StepTarget::csa(tool, Some(model_spec_str.clone())));
+                                return Ok(StepTarget::csa_with_tier(
+                                    tool,
+                                    Some(model_spec_str.clone()),
+                                    tier_name.clone(),
+                                ));
                             }
                         }
                     }
@@ -171,7 +183,11 @@ pub(crate) fn resolve_step_tool(
                     let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
                     if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
                         let tool = parse_tool_name(parts[0])?;
-                        return Ok(StepTarget::csa(tool, Some(model_spec_str.clone())));
+                        return Ok(StepTarget::csa_with_tier(
+                            tool,
+                            Some(model_spec_str.clone()),
+                            tier_name.clone(),
+                        ));
                     }
                 }
             }
@@ -203,36 +219,6 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
         "claude-code" => Ok(ToolName::ClaudeCode),
         other => bail!("Unknown tool: {other}"),
     }
-}
-
-/// Execute all steps in the plan sequentially.
-///
-/// After each successful step, injects `STEP_<id>_OUTPUT` into the variables
-/// map so subsequent steps can reference prior outputs via `${STEP_1_OUTPUT}`.
-#[cfg(test)]
-pub(crate) async fn execute_plan(
-    plan: &ExecutionPlan,
-    variables: &HashMap<String, String>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    tool_override: Option<&ToolName>,
-) -> Result<Vec<StepResult>> {
-    let workflow_path = project_root.join("workflow.toml");
-    let mut journal = PlanRunJournal::new(&plan.name, &workflow_path, variables.clone());
-    let completed = HashSet::new();
-    let mut run_ctx = PlanRunContext {
-        project_root,
-        workflow_path: &workflow_path,
-        config,
-        tool_override,
-        model_spec_override: None,
-        journal: &mut journal,
-        journal_path: None,
-        resume_completed_steps: &completed,
-        chunked: false,
-        no_fs_sandbox: false,
-    };
-    execute_plan_with_journal(plan, variables, &mut run_ctx).await
 }
 
 pub(super) async fn execute_plan_with_journal(
@@ -422,32 +408,6 @@ pub(super) async fn execute_plan_with_journal(
     Ok(results)
 }
 
-/// Execute a single step with on_fail handling.
-#[cfg(test)]
-pub(crate) async fn execute_step(
-    step: &PlanStep,
-    variables: &HashMap<String, String>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    tool_override: Option<&ToolName>,
-    model_spec_override: Option<&String>,
-) -> StepResult {
-    let workflow_path_buf = project_root.join("workflow.toml");
-    execute_step_with_workflow(
-        step,
-        variables,
-        &StepExecutionContext {
-            project_root,
-            workflow_path: &workflow_path_buf,
-            config,
-            tool_override,
-            model_spec_override,
-            no_fs_sandbox: false,
-        },
-    )
-    .await
-}
-
 pub(crate) async fn execute_step_with_workflow(
     step: &PlanStep,
     variables: &HashMap<String, String>,
@@ -518,7 +478,7 @@ pub(crate) async fn execute_step_with_workflow(
     };
 
     // Apply --tool override: replace tool for all CSA steps (bash/weave unaffected).
-    // Clear model_spec since the tier-resolved spec may reference a different tool.
+    // Clear model_spec and tier_name since the override bypasses tier routing.
     let target = if let Some(override_tool) = step_ctx.tool_override {
         match target {
             StepTarget::CsaTool { .. } => {
@@ -531,6 +491,7 @@ pub(crate) async fn execute_step_with_workflow(
                 StepTarget::CsaTool {
                     tool_name: *override_tool,
                     model_spec: None,
+                    tier_name: None,
                 }
             }
             other => other,
@@ -674,22 +635,19 @@ pub(crate) async fn execute_step_with_workflow(
             StepTarget::CsaTool {
                 tool_name,
                 model_spec,
+                tier_name,
             } => {
                 let prompt = csa_prompt.as_deref().unwrap_or_default();
-                run_with_heartbeat(
+                execute_csa_step_with_tier_failover(
                     &label,
-                    execute_csa_step(
-                        &label,
-                        prompt,
-                        tool_name,
-                        step_ctx.project_root,
-                        step_ctx.config,
-                        CsaStepExecutionOptions {
-                            model_spec: model_spec.as_deref(),
-                            forwarded_session: csa_session.as_deref(),
-                            no_fs_sandbox: step_ctx.no_fs_sandbox,
-                        },
-                    ),
+                    prompt,
+                    &TierFailoverParams {
+                        initial_tool: tool_name,
+                        initial_model_spec: model_spec.as_deref(),
+                        tier_name: tier_name.as_deref(),
+                        forwarded_session: csa_session.as_deref(),
+                    },
+                    step_ctx,
                     start,
                 )
                 .await
@@ -707,6 +665,7 @@ pub(crate) async fn execute_step_with_workflow(
                     exit_code: 1,
                     output: String::new(),
                     session_id: None,
+                    stderr: String::new(),
                 }
             }
         };
