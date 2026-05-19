@@ -51,19 +51,11 @@ pub(crate) fn is_codex_transient_rate_limit_text(text: &str) -> bool {
 }
 
 pub(crate) fn is_codex_transient_rate_limit_result(execution: &ExecutionResult) -> bool {
-    execution.exit_code != 0
-        && is_codex_transient_rate_limit_text(&format!(
-            "{}\n{}",
-            execution.summary, execution.stderr_output
-        ))
+    execution.exit_code != 0 && is_codex_transient_rate_limit_text(&execution.stderr_output)
 }
 
 pub(crate) fn is_codex_permanent_quota_result(execution: &ExecutionResult) -> bool {
-    execution.exit_code != 0
-        && is_codex_permanent_quota_text(&format!(
-            "{}\n{}",
-            execution.summary, execution.stderr_output
-        ))
+    execution.exit_code != 0 && is_codex_permanent_quota_text(&execution.stderr_output)
 }
 
 pub(crate) fn apply_codex_rate_limit_retry_exhausted_summary(
