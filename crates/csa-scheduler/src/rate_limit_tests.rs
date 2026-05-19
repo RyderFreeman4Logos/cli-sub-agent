@@ -479,6 +479,45 @@ fn test_quota_exhausted_false_for_transient_rate_limits() {
 }
 
 #[test]
+fn test_quota_exhausted_patterns_do_not_set_quota_from_stdout() {
+    let stdout_only_quota_patterns = [
+        ("gemini-cli", "reason: QUOTA_EXHAUSTED"),
+        (
+            "codex",
+            "render_billing_disabled_banner monthly spending cap",
+        ),
+        ("claude-code", "429_quota_exhausted"),
+        ("opencode", "429_quota_exhausted"),
+        ("unknown-tool", "429_quota_exhausted"),
+    ];
+    for (tool, stdout) in stdout_only_quota_patterns {
+        let result = detect_rate_limit(tool, "process exited with status 1", stdout, 1, None);
+        if let Some(detected) = result {
+            assert!(
+                !detected.quota_exhausted,
+                "stdout-only quota pattern must not set quota_exhausted (tool={tool}, stdout={stdout})"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_transient_rate_limit_patterns_still_match_stdout() {
+    let detected = detect_rate_limit(
+        "codex",
+        "process exited with status 1",
+        "HTTP 429 Too Many Requests",
+        1,
+        None,
+    )
+    .expect("transient stdout rate limit should still classify");
+
+    assert_eq!(detected.matched_pattern, "429");
+    assert_eq!(detected.reason, "HTTP 429");
+    assert!(!detected.quota_exhausted);
+}
+
+#[test]
 fn test_gemini_retry_chain_exhausted_is_not_permanent_quota() {
     let result = detect_rate_limit(
         "gemini-cli",
