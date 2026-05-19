@@ -114,6 +114,7 @@ fn todo_prefix(cmd: &TodoCommands) -> Vec<&'static str> {
         TodoCommands::Save { .. } => vec!["todo", "save"],
         TodoCommands::List { .. } => vec!["todo", "list"],
         TodoCommands::Find { .. } => vec!["todo", "find"],
+        TodoCommands::Errors { .. } => vec!["todo", "errors"],
         TodoCommands::Show { .. } => vec!["todo", "show"],
         TodoCommands::Ref { cmd } => match cmd {
             TodoRefCommands::Add { .. } => vec!["todo", "ref", "add"],

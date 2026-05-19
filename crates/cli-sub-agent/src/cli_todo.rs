@@ -102,6 +102,17 @@ pub enum TodoCommands {
         cd: Option<String>,
     },
 
+    /// Aggregate failed CSA sessions for a TODO plan
+    Errors {
+        /// Branch whose associated TODO plan should be scanned (default: current branch)
+        #[arg(long)]
+        plan: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
     /// Show a TODO plan's content
     Show {
         /// Timestamp of the TODO plan (default: latest)
