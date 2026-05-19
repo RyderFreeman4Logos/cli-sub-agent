@@ -4,9 +4,14 @@ use csa_config::global::GlobalConfig;
 use csa_core::types::OutputFormat;
 use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_todo::dag::DependencyGraph;
-use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager, TodoStatus};
+use csa_todo::{
+    CriterionKind, CriterionStatus, SpecDocument, TodoAttestationStatus, TodoManager, TodoStatus,
+};
 use std::path::Path;
 use tracing::warn;
+
+const PLAN_TAMPERED_WARNING: &str =
+    "[PLAN TAMPERED] Plan content does not match stored attestation hash";
 
 /// Auto-detect current git branch. Returns None on detached HEAD or error.
 fn detect_current_branch(project_root: &Path) -> Option<String> {
@@ -114,6 +119,7 @@ pub(crate) fn handle_save(
     let manager = TodoManager::new(&project_root)?;
     let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
     let plan = manager.load(&ts)?;
+    manager.ensure_attestation(&ts)?;
 
     let commit_msg = message.unwrap_or_else(|| format!("update: {}", plan.metadata.title));
     match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
@@ -155,6 +161,16 @@ pub(crate) fn handle_save(
         None => eprintln!("No changes to save for plan '{ts}'."),
     }
 
+    Ok(())
+}
+
+pub(crate) fn handle_attest(timestamp: Option<String>, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let manager = TodoManager::new(&project_root)?;
+    let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
+    let attestation = manager.attest(&ts)?;
+
+    eprintln!("Attested {ts} ({})", attestation.hash);
     Ok(())
 }
 
@@ -364,6 +380,8 @@ pub(crate) fn handle_show(
             std::fs::read_to_string(plan.todo_md_path())?
         };
 
+        warn_if_plan_tampered(&manager, &ts)?;
+
         if refs {
             let index = manager.list_references(&plan, true)?;
             content.push_str("\n---\n## References\n\n");
@@ -386,6 +404,23 @@ pub(crate) fn handle_show(
     }
 
     Ok(())
+}
+
+fn warn_if_plan_tampered(manager: &TodoManager, timestamp: &str) -> Result<()> {
+    if let Some(warning) = plan_attestation_warning(manager, timestamp)? {
+        eprintln!("{warning}");
+    }
+    Ok(())
+}
+
+fn plan_attestation_warning(
+    manager: &TodoManager,
+    timestamp: &str,
+) -> Result<Option<&'static str>> {
+    match manager.verify_attestation(timestamp)? {
+        TodoAttestationStatus::Missing | TodoAttestationStatus::Valid => Ok(None),
+        TodoAttestationStatus::Mismatch { .. } => Ok(Some(PLAN_TAMPERED_WARNING)),
+    }
 }
 
 fn render_spec_document(spec: &SpecDocument) -> String {
@@ -661,7 +696,8 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
+    use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
+    use tempfile::tempdir;
 
     // --- truncate tests ---
 
@@ -727,6 +763,19 @@ mod tests {
             rendered.contains("- [pending] scenario scenario-show: show --spec renders criteria")
         );
         assert!(rendered.contains("- [failed] check check-failure: failed criteria are labeled"));
+    }
+
+    #[test]
+    fn plan_attestation_warning_reports_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+        let plan = manager.create("Warn on tamper", None).expect("plan");
+        std::fs::write(plan.todo_md_path(), "# Tampered\n").expect("tamper");
+
+        assert_eq!(
+            plan_attestation_warning(&manager, &plan.timestamp).expect("warning"),
+            Some(PLAN_TAMPERED_WARNING)
+        );
     }
 
     // --- resolve_timestamp tests ---

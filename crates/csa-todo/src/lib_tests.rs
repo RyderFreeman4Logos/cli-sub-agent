@@ -39,6 +39,25 @@ fn test_create_plan() {
 }
 
 #[test]
+fn test_create_plan_writes_valid_attestation() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Attested Plan", None).unwrap();
+
+    assert!(plan.attestation_path().exists());
+    assert_eq!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Valid
+    );
+
+    let attestation: TodoAttestation =
+        toml::from_str(&std::fs::read_to_string(plan.attestation_path()).unwrap()).unwrap();
+    let content = std::fs::read(plan.todo_md_path()).unwrap();
+    assert_eq!(attestation.hash, hash_todo_content(&content));
+}
+
+#[test]
 fn test_create_plan_no_branch() {
     let dir = tempdir().unwrap();
     let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
@@ -212,6 +231,50 @@ fn test_write_todo_md() {
 
     let read_back = std::fs::read_to_string(plan.todo_md_path()).unwrap();
     assert_eq!(read_back, new_content);
+    assert_eq!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Valid
+    );
+}
+
+#[test]
+fn test_verify_attestation_detects_manual_tamper() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Tamper Test", None).unwrap();
+    std::fs::write(plan.todo_md_path(), "# Tampered\n").unwrap();
+
+    match manager.verify_attestation(&plan.timestamp).unwrap() {
+        TodoAttestationStatus::Mismatch {
+            expected_hash,
+            actual_hash,
+        } => assert_ne!(expected_hash, actual_hash),
+        other => panic!("expected mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_attest_repairs_manual_tamper() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Repair Test", None).unwrap();
+    let edited = "# Legitimate manual edit\n";
+    std::fs::write(plan.todo_md_path(), edited).unwrap();
+
+    assert!(matches!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Mismatch { .. }
+    ));
+
+    let attestation = manager.attest(&plan.timestamp).unwrap();
+
+    assert_eq!(attestation.hash, hash_todo_content(edited.as_bytes()));
+    assert_eq!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Valid
+    );
 }
 
 #[test]

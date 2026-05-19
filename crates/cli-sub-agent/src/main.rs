@@ -674,6 +674,7 @@ async fn run() -> Result<()> {
             } => {
                 todo_cmd::handle_save(timestamp, message, cd)?;
             }
+            TodoCommands::Attest { timestamp, cd } => todo_cmd::handle_attest(timestamp, cd)?,
             TodoCommands::Diff {
                 timestamp,
                 revision,

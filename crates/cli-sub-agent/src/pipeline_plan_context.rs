@@ -7,7 +7,8 @@
 use std::path::Path;
 
 use csa_todo::{
-    CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager, TodoPlan,
+    CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoAttestationStatus,
+    TodoManager, TodoPlan,
 };
 use tracing::{debug, warn};
 
@@ -33,6 +34,27 @@ fn load_plan_context_for_branch(manager: &TodoManager, branch: &str) -> Option<S
             return None;
         }
     };
+
+    match manager.verify_attestation(&plan.timestamp) {
+        Ok(TodoAttestationStatus::Missing | TodoAttestationStatus::Valid) => {}
+        Ok(TodoAttestationStatus::Mismatch { .. }) => {
+            warn!(
+                branch,
+                plan = %plan.timestamp,
+                "[PLAN TAMPERED] Plan content does not match stored attestation hash"
+            );
+            return None;
+        }
+        Err(error) => {
+            warn!(
+                branch,
+                plan = %plan.timestamp,
+                error = %error,
+                "Failed to verify TODO plan attestation"
+            );
+            return None;
+        }
+    }
 
     let spec = match manager.load_spec(&plan.timestamp) {
         Ok(spec) => spec,
@@ -223,5 +245,17 @@ mod tests {
         let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
 
         assert!(load_plan_context_for_branch(&manager, "feat/missing").is_none());
+    }
+
+    #[test]
+    fn plan_context_refuses_tampered_plan() {
+        let dir = tempdir().expect("tempdir");
+        let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+        let plan = manager
+            .create("Protected plan", Some("feat/tamper"))
+            .expect("plan");
+        std::fs::write(plan.todo_md_path(), "# Tampered\n").expect("tamper");
+
+        assert!(load_plan_context_for_branch(&manager, "feat/tamper").is_none());
     }
 }

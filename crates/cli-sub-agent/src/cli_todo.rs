@@ -42,6 +42,17 @@ pub enum TodoCommands {
         cd: Option<String>,
     },
 
+    /// Recompute and store the TODO.md attestation hash
+    Attest {
+        /// Timestamp of the TODO plan (default: latest)
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
     /// Show diff of TODO plan changes
     Diff {
         /// Timestamp of the TODO plan (default: latest)

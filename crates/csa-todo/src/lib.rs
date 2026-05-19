@@ -20,10 +20,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 const METADATA_FILE: &str = "metadata.toml";
 const TODO_MD_FILE: &str = "TODO.md";
+const ATTESTATION_FILE: &str = ".attestation";
 const SPEC_FILE: &str = "spec.toml";
 const EPIC_PLAN_FILE: &str = "epic-plan.toml";
 const LOCK_FILE: &str = ".lock";
@@ -124,6 +126,24 @@ pub struct TodoMetadata {
     pub updated_at: DateTime<Utc>,
 }
 
+/// SHA-256 attestation for the current TODO.md content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TodoAttestation {
+    pub hash: String,
+    pub attested_at: DateTime<Utc>,
+}
+
+/// Result of comparing TODO.md with its stored attestation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TodoAttestationStatus {
+    Missing,
+    Valid,
+    Mismatch {
+        expected_hash: String,
+        actual_hash: String,
+    },
+}
+
 /// A TODO plan with its filesystem location and metadata.
 #[derive(Debug, Clone)]
 pub struct TodoPlan {
@@ -142,6 +162,10 @@ impl TodoPlan {
 
     pub fn todo_md_path(&self) -> PathBuf {
         self.todo_dir.join(TODO_MD_FILE)
+    }
+
+    pub fn attestation_path(&self) -> PathBuf {
+        self.todo_dir.join(ATTESTATION_FILE)
     }
 }
 
@@ -227,6 +251,7 @@ impl TodoManager {
             plan.metadata.updated_at = Utc::now();
             if updated_content != content {
                 atomic_write(&todo_path, updated_content.as_bytes())?;
+                self.write_attestation_for_content(&plan, updated_content.as_bytes())?;
             }
             self.write_metadata(&plan)?;
             Ok(plan)
@@ -253,8 +278,35 @@ impl TodoManager {
         self.with_write_lock(|| {
             let mut plan = self.load_inner(timestamp)?;
             atomic_write(&plan.todo_md_path(), content.as_bytes())?;
+            self.write_attestation_for_content(&plan, content.as_bytes())?;
             plan.metadata.updated_at = Utc::now();
             self.write_metadata(&plan)
+        })
+    }
+
+    /// Recompute and store the SHA-256 attestation for TODO.md.
+    pub fn attest(&self, timestamp: &str) -> Result<TodoAttestation> {
+        self.with_write_lock(|| {
+            let plan = self.load_inner(timestamp)?;
+            let content = read_todo_content(&plan)?;
+            self.write_attestation_for_content(&plan, &content)
+        })
+    }
+
+    /// Store an attestation when one is missing or no longer matches TODO.md.
+    pub fn ensure_attestation(&self, timestamp: &str) -> Result<TodoAttestation> {
+        self.with_write_lock(|| {
+            let plan = self.load_inner(timestamp)?;
+            let content = read_todo_content(&plan)?;
+            let actual_hash = hash_todo_content(&content);
+
+            if let Some(attestation) = self.read_attestation(&plan)?
+                && attestation.hash == actual_hash
+            {
+                return Ok(attestation);
+            }
+
+            self.write_attestation(&plan, actual_hash)
         })
     }
 
@@ -263,6 +315,25 @@ impl TodoManager {
     /// Load a TODO plan by timestamp.
     pub fn load(&self, timestamp: &str) -> Result<TodoPlan> {
         self.load_inner(timestamp)
+    }
+
+    /// Verify TODO.md against its stored attestation.
+    pub fn verify_attestation(&self, timestamp: &str) -> Result<TodoAttestationStatus> {
+        let plan = self.load_inner(timestamp)?;
+        let Some(attestation) = self.read_attestation(&plan)? else {
+            return Ok(TodoAttestationStatus::Missing);
+        };
+
+        let content = read_todo_content(&plan)?;
+        let actual_hash = hash_todo_content(&content);
+        if attestation.hash == actual_hash {
+            Ok(TodoAttestationStatus::Valid)
+        } else {
+            Ok(TodoAttestationStatus::Mismatch {
+                expected_hash: attestation.hash,
+                actual_hash,
+            })
+        }
     }
 
     /// Load the most recent TODO plan, or error if none exist.
@@ -448,6 +519,11 @@ impl TodoManager {
             return Err(e.context("Failed to write TODO.md (rolled back plan directory)"));
         }
 
+        if let Err(e) = self.write_attestation_for_content(&plan, initial_content.as_bytes()) {
+            let _ = std::fs::remove_dir_all(&plan.todo_dir);
+            return Err(e.context("Failed to write TODO attestation (rolled back plan directory)"));
+        }
+
         Ok(plan)
     }
 
@@ -479,6 +555,46 @@ impl TodoManager {
         atomic_write(&plan.metadata_path(), content.as_bytes())
     }
 
+    fn read_attestation(&self, plan: &TodoPlan) -> Result<Option<TodoAttestation>> {
+        let attestation_path = plan.attestation_path();
+        if !attestation_path.exists() {
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(&attestation_path).with_context(|| {
+            format!(
+                "Failed to read TODO attestation: {}",
+                attestation_path.display()
+            )
+        })?;
+        let attestation: TodoAttestation = toml::from_str(&content).with_context(|| {
+            format!(
+                "Failed to parse TODO attestation: {}",
+                attestation_path.display()
+            )
+        })?;
+        Ok(Some(attestation))
+    }
+
+    fn write_attestation_for_content(
+        &self,
+        plan: &TodoPlan,
+        content: &[u8],
+    ) -> Result<TodoAttestation> {
+        self.write_attestation(plan, hash_todo_content(content))
+    }
+
+    fn write_attestation(&self, plan: &TodoPlan, hash: String) -> Result<TodoAttestation> {
+        let attestation = TodoAttestation {
+            hash,
+            attested_at: Utc::now(),
+        };
+        let content =
+            toml::to_string_pretty(&attestation).context("Failed to serialize TODO attestation")?;
+        atomic_write(&plan.attestation_path(), content.as_bytes())?;
+        Ok(attestation)
+    }
+
     /// Acquire a write lock on the todos directory, execute `f`, then release.
     fn with_write_lock<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         std::fs::create_dir_all(&self.todos_dir).with_context(|| {
@@ -502,6 +618,16 @@ impl TodoManager {
 
         f()
     }
+}
+
+fn read_todo_content(plan: &TodoPlan) -> Result<Vec<u8>> {
+    let todo_path = plan.todo_md_path();
+    std::fs::read(&todo_path)
+        .with_context(|| format!("Failed to read TODO markdown: {}", todo_path.display()))
+}
+
+fn hash_todo_content(content: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(content))
 }
 
 /// Write data to a file atomically using temp-file + rename.
