@@ -81,12 +81,19 @@ pub fn detect_rate_limit(
         return None;
     }
 
-    let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
+    let stderr_lower = stderr.to_ascii_lowercase();
+    let stdout_lower = stdout.to_ascii_lowercase();
+    let combined_lower = format!("{stderr_lower}\n{stdout_lower}");
     for pattern in patterns_for_tool(tool_name)
         .iter()
         .chain(failover_patterns_for_tool(tool_name).iter())
     {
-        if combined_lower.contains(pattern.pattern) {
+        let haystack = if pattern.quota_exhausted {
+            &stderr_lower
+        } else {
+            &combined_lower
+        };
+        if haystack.contains(pattern.pattern) {
             return Some(RateLimitDetected {
                 tool: tool_name.to_string(),
                 matched_pattern: pattern.pattern.to_string(),
@@ -375,7 +382,37 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: true,
             },
             FailoverPattern {
-                pattern: "billing",
+                pattern: "billing limit",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing cap",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing disabled",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing not enabled",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing hard limit",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing budget",
                 reason: "QUOTA_EXHAUSTED",
                 advance_to_next_model: true,
                 quota_exhausted: true,
