@@ -692,8 +692,8 @@ async fn run() -> Result<()> {
             TodoCommands::Find { branch, status, cd } => {
                 todo_cmd::handle_find(branch, status, cd, output_format)?;
             }
-            TodoCommands::Errors { plan, cd } => {
-                todo_errors_cmd::handle_errors(plan, cd)?;
+            TodoCommands::Errors { branch, cd } => {
+                todo_errors_cmd::handle_errors(branch, cd)?;
             }
             TodoCommands::Show {
                 timestamp,

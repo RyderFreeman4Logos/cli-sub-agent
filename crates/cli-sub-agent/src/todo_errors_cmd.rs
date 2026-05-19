@@ -14,12 +14,12 @@ struct PlanErrorRow {
     stderr_summary: String,
 }
 
-pub(crate) fn handle_errors(plan: Option<String>, cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_errors(branch: Option<String>, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let branch = match plan {
+    let branch = match branch {
         Some(branch) => branch,
         None => detect_current_branch(&project_root)
-            .ok_or_else(|| anyhow::anyhow!("No current branch detected; pass --plan <branch>"))?,
+            .ok_or_else(|| anyhow::anyhow!("No current branch detected; pass --branch <branch>"))?,
     };
     let manager = TodoManager::new(&project_root)?;
 

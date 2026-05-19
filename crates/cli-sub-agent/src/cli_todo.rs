@@ -106,7 +106,7 @@ pub enum TodoCommands {
     Errors {
         /// Branch whose associated TODO plan should be scanned (default: current branch)
         #[arg(long)]
-        plan: Option<String>,
+        branch: Option<String>,
 
         /// Working directory
         #[arg(long)]
