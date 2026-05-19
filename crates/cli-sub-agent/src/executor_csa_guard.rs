@@ -14,6 +14,7 @@ const CSA_SKILL_MODE_EXECUTOR: &str = "executor";
 const EXECUTOR_SAFE_CSA_COMMAND_PREFIXES: &[&[&str]] = &[
     &["todo", "create"],
     &["todo", "save"],
+    &["todo", "attest"],
     &["todo", "ref", "add"],
     &["todo", "ref", "list"],
     &["todo", "ref", "show"],
@@ -112,6 +113,7 @@ fn todo_prefix(cmd: &TodoCommands) -> Vec<&'static str> {
     match cmd {
         TodoCommands::Create { .. } => vec!["todo", "create"],
         TodoCommands::Save { .. } => vec!["todo", "save"],
+        TodoCommands::Attest { .. } => vec!["todo", "attest"],
         TodoCommands::List { .. } => vec!["todo", "list"],
         TodoCommands::Find { .. } => vec!["todo", "find"],
         TodoCommands::Errors { .. } => vec!["todo", "errors"],
