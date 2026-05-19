@@ -13,6 +13,7 @@ use tracing::{debug, info};
 #[derive(Debug, Default)]
 pub(crate) struct FirstTurnContext {
     pub project_context: Option<String>,
+    pub plan_context: Option<String>,
     pub design_context: Option<String>,
 }
 
@@ -21,6 +22,7 @@ pub(crate) fn load_first_turn_context(
     session_project_path: &str,
     project_root: &Path,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
+    plan_injection_enabled: bool,
 ) -> FirstTurnContext {
     // Project context (CLAUDE.md, AGENTS.md).
     let opts = context_load_options.cloned().unwrap_or_default();
@@ -42,8 +44,16 @@ pub(crate) fn load_first_turn_context(
         info!(bytes = dc.len(), "Injecting design context into prompt");
     });
 
+    let plan_context = plan_injection_enabled
+        .then(|| super::plan_context::load_plan_context(project_root))
+        .flatten()
+        .inspect(|pc| {
+            info!(bytes = pc.len(), "Injecting plan context into prompt");
+        });
+
     FirstTurnContext {
         project_context,
+        plan_context,
         design_context,
     }
 }

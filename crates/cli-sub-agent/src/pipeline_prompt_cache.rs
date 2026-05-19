@@ -34,6 +34,13 @@ impl PromptAssembly {
             }
         }
 
+        if let Some(plan_context) = context.plan_context {
+            if !self.dynamic_prompt.ends_with('\n') {
+                self.dynamic_prompt.push('\n');
+            }
+            self.dynamic_prompt.push_str(&plan_context);
+        }
+
         if let Some(design_context) = context.design_context {
             if !self.dynamic_prompt.ends_with('\n') {
                 self.dynamic_prompt.push('\n');
@@ -103,6 +110,7 @@ mod tests {
             project_context: Some(
                 "<context-file path=\"CLAUDE.md\">\nstatic\n</context-file>\n\n".to_string(),
             ),
+            plan_context: Some("<plan-context>\ndynamic plan\n</plan-context>".to_string()),
             design_context: Some("<design-context>\ndynamic design\n</design-context>".to_string()),
         }
     }
@@ -122,7 +130,8 @@ mod tests {
         assert!(!prompt.contains(STATIC_START));
         assert!(!prompt.contains(STATIC_END));
         assert!(prompt.starts_with("STATIC RESTRICTION\n\n<context-file"));
-        assert!(prompt.contains("user task\n<design-context>"));
+        assert!(prompt.contains("user task\n<plan-context>"));
+        assert!(prompt.contains("</plan-context>\n<design-context>"));
         assert!(prompt.ends_with("<csa-output-format>static</csa-output-format>"));
     }
 
@@ -147,6 +156,7 @@ mod tests {
         let static_end = prompt.find(STATIC_END).expect("static end marker");
         let dynamic_warning = prompt.find("dynamic warning").expect("dynamic warning");
         let user_task = prompt.find("user task").expect("user task");
+        let plan = prompt.find("<plan-context>").expect("plan context");
         let memory = prompt.find("<memory>dynamic</memory>").expect("memory");
         let guard = prompt.find("<guard>dynamic guard</guard>").expect("guard");
 
@@ -157,7 +167,8 @@ mod tests {
         assert!(output_format < static_end);
         assert!(static_end < dynamic_warning);
         assert!(dynamic_warning < user_task);
-        assert!(user_task < memory);
+        assert!(user_task < plan);
+        assert!(plan < memory);
         assert!(memory < guard);
     }
 }

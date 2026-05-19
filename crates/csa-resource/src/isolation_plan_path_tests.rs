@@ -1,8 +1,5 @@
 use super::*;
 use std::ffi::OsString;
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct ScopedEnvVar {
     key: &'static str,

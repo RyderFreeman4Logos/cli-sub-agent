@@ -36,6 +36,9 @@ mod result_contract;
 #[path = "pipeline_design_context.rs"]
 pub(crate) mod design_context;
 
+#[path = "pipeline_plan_context.rs"]
+pub(crate) mod plan_context;
+
 #[path = "pipeline_session_exec.rs"]
 mod session_exec;
 
