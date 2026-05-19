@@ -63,6 +63,7 @@ pub enum Commands {
     /// Execute a task using a specific AI tool
     Run {
         /// Tool selection: auto (default), any-available, or specific tool name.
+        /// A specific --tool disables failover by default; add --allow-fallback to keep tier failover.
         /// Combine with --tier to use that tier's model/thinking for the selected tool.
         /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
         #[arg(long)]
@@ -160,6 +161,10 @@ pub enum Commands {
         /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
         #[arg(long)]
         force_override_user_config: bool,
+
+        /// Allow tier failover even when a specific --tool is explicitly selected.
+        #[arg(long)]
+        allow_fallback: bool,
 
         /// Disable all retry/failover paths (cross-tool 429, ACP crash, Gemini rate-limit). Pair with --model-spec to fail fast.
         #[arg(long)]

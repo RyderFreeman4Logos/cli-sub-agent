@@ -326,6 +326,7 @@ async fn run() -> Result<()> {
             thinking,
             force,
             force_override_user_config,
+            allow_fallback,
             no_failover,
             fast_but_more_cost,
             wait,
@@ -375,7 +376,6 @@ async fn run() -> Result<()> {
                 ),
             )?;
 
-            // Daemon child path: continue with normal run logic and resolve stream mode.
             let stream_mode = if no_stream_stdout {
                 csa_process::StreamMode::BufferOnly
             } else if stream_stdout || text_output {
@@ -411,6 +411,7 @@ async fn run() -> Result<()> {
                 thinking,
                 force,
                 force_override_user_config,
+                allow_fallback,
                 no_failover,
                 fast_but_more_cost,
                 wait,
