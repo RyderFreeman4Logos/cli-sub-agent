@@ -41,6 +41,7 @@ pub struct ReviewArgs {
     pub check_verdict: bool,
 
     /// Tool to use for review (defaults to global [review] config or project fallback).
+    /// Unlike `csa run`, explicit --tool keeps failover enabled; use --no-failover to fail fast.
     /// Combine with --tier to use that tier's model/thinking for the selected tool.
     /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
     #[arg(long)]
@@ -362,6 +363,7 @@ pub struct DebateArgs {
     #[arg(long, value_name = "BOOL")]
     pub sa_mode: Option<bool>,
     /// Tool to use for debate (overrides auto heterogeneous selection).
+    /// Unlike `csa run`, explicit --tool keeps failover enabled; use --no-failover to fail fast.
     /// Combine with --tier to use that tier's model/thinking for the selected tool.
     /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
     #[arg(long)]

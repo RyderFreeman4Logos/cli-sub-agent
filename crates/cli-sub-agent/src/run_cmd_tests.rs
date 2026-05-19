@@ -95,6 +95,16 @@ fn run_cli_parses_fast_but_more_cost_flag() {
 }
 
 #[test]
+fn run_cli_parses_allow_fallback_flag() {
+    let cli = try_parse_cli(&["csa", "run", "--tool", "codex", "--allow-fallback", "x"]).unwrap();
+
+    match cli.command {
+        crate::cli::Commands::Run { allow_fallback, .. } => assert!(allow_fallback),
+        _ => panic!("expected run command"),
+    }
+}
+
+#[test]
 fn run_rejects_unknown_tool_at_clap_parse() {
     let result = try_parse_cli(&["csa", "run", "--model-spec", "unknown-tool/x/y/medium", "x"]);
     let err = match result {

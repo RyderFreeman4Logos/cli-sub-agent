@@ -1,4 +1,17 @@
 use csa_config::ProjectConfig;
+use csa_core::types::ToolSelectionStrategy;
+
+pub(super) fn resolve_run_no_failover(
+    user_explicit_tool: bool,
+    strategy: &ToolSelectionStrategy,
+    no_failover: bool,
+    allow_fallback: bool,
+) -> bool {
+    no_failover
+        || (user_explicit_tool
+            && matches!(strategy, ToolSelectionStrategy::Explicit(_))
+            && !allow_fallback)
+}
 
 pub(super) fn resolve_run_tier_context(
     config: Option<&ProjectConfig>,

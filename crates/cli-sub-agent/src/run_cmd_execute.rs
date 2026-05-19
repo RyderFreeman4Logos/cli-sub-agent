@@ -31,7 +31,7 @@ mod run_context;
 use post_exec_gate::{execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner};
 use routing::{
     RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
-    resolve_run_tier_context,
+    resolve_run_no_failover, resolve_run_tier_context,
 };
 use run_context::finalize_prompt_text;
 
@@ -83,6 +83,7 @@ pub(crate) async fn handle_run(
     thinking: Option<String>,
     force: bool,
     force_override_user_config: bool,
+    allow_fallback: bool,
     no_failover: bool,
     fast_but_more_cost: bool,
     wait: bool,
@@ -366,6 +367,8 @@ pub(crate) async fn handle_run(
         .resolve_alias(&merged_aliases)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .into_strategy();
+    let effective_no_failover =
+        resolve_run_no_failover(user_explicit_tool, &strategy, no_failover, allow_fallback);
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let idle_timeout_seconds = if no_idle_timeout {
         info!("Idle timeout disabled via --no-idle-timeout");
@@ -562,7 +565,7 @@ pub(crate) async fn handle_run(
         force,
         force_override_user_config,
         force_ignore_tier_setting,
-        no_failover,
+        no_failover: effective_no_failover,
         fast_but_more_cost,
         wait,
         idle_timeout_seconds,

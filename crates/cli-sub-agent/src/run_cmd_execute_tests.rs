@@ -1,6 +1,6 @@
 use super::{
     RunModelSelectionFlags, finalize_prompt_text, resolve_primary_writer_spec_for_run,
-    resolve_run_tier_context,
+    resolve_run_no_failover, resolve_run_tier_context,
 };
 use crate::run_cmd_tool_selection::{resolve_skill_and_prompt, resolve_tool_by_strategy};
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -426,6 +426,26 @@ fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
     assert!(!tier_auto_select);
     assert!(failover_on_crash_enabled);
     assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
+}
+
+#[test]
+fn run_explicit_tool_defaults_to_no_failover() {
+    assert!(resolve_run_no_failover(
+        true,
+        &ToolSelectionStrategy::Explicit(ToolName::Codex),
+        false,
+        false,
+    ));
+}
+
+#[test]
+fn run_explicit_tool_allow_fallback_keeps_failover_enabled() {
+    assert!(!resolve_run_no_failover(
+        true,
+        &ToolSelectionStrategy::Explicit(ToolName::Codex),
+        false,
+        true,
+    ));
 }
 
 #[test]

@@ -700,6 +700,13 @@ fn review_cli_parses_allow_fallback_flag() {
 }
 
 #[test]
+fn review_explicit_tool_keeps_failover_enabled_by_default() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--tool", "gemini-cli"]);
+    assert_eq!(args.tool, Some(ToolName::GeminiCli));
+    assert!(!args.no_failover);
+}
+
+#[test]
 fn review_cli_rejects_zero_timeout() {
     let result = Cli::try_parse_from(["csa", "review", "--diff", "--timeout", "0"]);
     assert!(result.is_err(), "timeout=0 should be rejected");
