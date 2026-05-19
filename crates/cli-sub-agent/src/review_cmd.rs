@@ -788,4 +788,4 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
 #[cfg(test)]
 #[path = "review_cmd_tests_barrel.rs"]
-mod tests_barrel;
+pub(crate) mod tests;
