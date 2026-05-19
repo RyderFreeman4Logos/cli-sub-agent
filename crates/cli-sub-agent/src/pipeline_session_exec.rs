@@ -212,7 +212,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     super::lefthook_auto_install::spawn_lefthook_setup_if_needed(project_root);
     // Spawn background review-gate auto-setup if configured (non-blocking, rate-limited).
     crate::setup_cmds::spawn_review_gate_setup_if_needed(project_root, global_config);
-
     let memory_project_key = resolve_memory_project_key(project_root);
     let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
     let depth = crate::pipeline_env::current_csa_depth();
@@ -391,6 +390,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &session.project_path,
             project_root,
             context_load_options,
+            config.is_none_or(|cfg| cfg.session.resolved_plan_injection()),
         );
         prompt_assembly.add_first_turn_context(first_turn_context);
     }

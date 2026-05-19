@@ -370,6 +370,67 @@ transcript_enabled = false
 }
 
 #[test]
+fn test_session_config_plan_injection_defaults_to_true_when_missing() {
+    let toml_str = r#"
+transcript_enabled = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.plan_injection, None);
+    assert!(cfg.resolved_plan_injection());
+    assert!(cfg.is_default());
+}
+
+#[test]
+fn test_session_config_deserializes_plan_injection_override() {
+    let toml_str = r#"
+plan_injection = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.plan_injection, Some(false));
+    assert!(!cfg.resolved_plan_injection());
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_session_plan_injection_project_overrides_global() {
+    let dir = tempdir().unwrap();
+
+    let user_dir = dir.path().join("user");
+    std::fs::create_dir_all(&user_dir).unwrap();
+    let user_path = user_dir.join("config.toml");
+    std::fs::write(
+        &user_path,
+        r#"
+        [session]
+        plan_injection = true
+    "#,
+    )
+    .unwrap();
+
+    let project_dir = dir.path().join("project").join(".csa");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let project_path = project_dir.join("config.toml");
+    std::fs::write(
+        &project_path,
+        r#"
+        [project]
+        name = "test-project"
+
+        [session]
+        plan_injection = false
+    "#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(config.session.plan_injection, Some(false));
+    assert!(!config.session.resolved_plan_injection());
+}
+
+#[test]
 fn test_session_config_default_does_not_require_commit_on_mutation() {
     let cfg = SessionConfig::default();
     assert!(!cfg.require_commit_on_mutation);

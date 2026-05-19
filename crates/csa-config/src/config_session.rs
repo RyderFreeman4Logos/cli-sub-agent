@@ -81,6 +81,12 @@ pub struct SessionConfig {
     /// `<!-- CSA:SECTION:<id> -->` delimiters for machine-readable parsing.
     #[serde(default = "default_true")]
     pub structured_output: bool,
+    /// Inject the active plan into session prompts.
+    ///
+    /// `None` preserves the default-on behavior while still allowing global
+    /// and project config to override each other through the normal TOML merge.
+    #[serde(default)]
+    pub plan_injection: Option<bool>,
     /// Maximum age (seconds) for a seed session to remain valid.
     /// Sessions older than this are not eligible as fork sources.
     #[serde(default = "default_seed_max_age_secs")]
@@ -209,6 +215,7 @@ impl Default for SessionConfig {
             transcript_enabled: false,
             transcript_redaction: true,
             structured_output: true,
+            plan_injection: None,
             seed_max_age_secs: default_seed_max_age_secs(),
             auto_seed_fork: true,
             max_seed_sessions: default_max_seed_sessions(),
@@ -231,6 +238,7 @@ impl SessionConfig {
         !self.transcript_enabled
             && self.transcript_redaction
             && self.structured_output
+            && self.plan_injection.is_none()
             && self.seed_max_age_secs == default_seed_max_age_secs()
             && self.auto_seed_fork
             && self.max_seed_sessions == default_max_seed_sessions()
@@ -271,6 +279,10 @@ impl SessionConfig {
     pub fn resolved_spool_keep_rotated(&self) -> bool {
         self.spool_keep_rotated
             .unwrap_or(DEFAULT_SPOOL_KEEP_ROTATED)
+    }
+
+    pub fn resolved_plan_injection(&self) -> bool {
+        self.plan_injection.unwrap_or(true)
     }
 
     /// Resolve the fork prefix token budget, clamping out-of-range values.

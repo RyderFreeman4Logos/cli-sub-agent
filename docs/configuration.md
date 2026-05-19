@@ -68,6 +68,21 @@ Leave it off if soft fallback is acceptable; turn it on when debate diversity is
 
 Successful `csa run` employee sessions now pass through a configurable post-exec gate before CSA returns success to the caller. Configure it under `[run.post_exec_gate]`; the default is enabled, runs `just pre-commit`, times out after 600 seconds, and skips itself when `git status --porcelain` is clean so read-only or no-op runs do not pay the extra gate cost.
 
+### `[session]` -- Session Prompt Behavior
+
+```toml
+[session]
+plan_injection = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `plan_injection` | Boolean | `true` | Inject the active plan into session prompts. Set to `false` to disable plan prompt injection for sessions in this config scope. |
+
+The setting is optional. When omitted from both global and project config, CSA
+behaves as if `plan_injection = true`. Project config overrides the global value
+through the standard config merge.
+
 ### `[project]` -- Metadata
 
 | Field | Type | Default | Description |

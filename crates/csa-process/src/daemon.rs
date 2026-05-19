@@ -8,7 +8,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
@@ -41,7 +41,7 @@ enum DaemonSpawnMode {
     IndependentScope { unit: String },
 }
 
-fn open_log_file(dir: &std::path::Path, name: &str) -> Result<File> {
+fn open_log_file(dir: &Path, name: &str) -> Result<File> {
     OpenOptions::new()
         .create(true)
         .write(true)
@@ -51,7 +51,7 @@ fn open_log_file(dir: &std::path::Path, name: &str) -> Result<File> {
         .with_context(|| format!("failed to create {name} in {}", dir.display()))
 }
 
-fn open_log_file_append(dir: &std::path::Path, name: &str) -> Result<File> {
+fn open_log_file_append(dir: &Path, name: &str) -> Result<File> {
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -117,6 +117,14 @@ fn append_daemon_child_args(cmd: &mut Command, config: &DaemonSpawnConfig) {
 }
 
 fn build_daemon_command(config: &DaemonSpawnConfig, mode: &DaemonSpawnMode) -> Command {
+    build_daemon_command_with_systemd_run(config, mode, Path::new("systemd-run"))
+}
+
+fn build_daemon_command_with_systemd_run(
+    config: &DaemonSpawnConfig,
+    mode: &DaemonSpawnMode,
+    systemd_run: &Path,
+) -> Command {
     match mode {
         DaemonSpawnMode::Direct => {
             let mut cmd = Command::new(&config.csa_binary);
@@ -124,7 +132,7 @@ fn build_daemon_command(config: &DaemonSpawnConfig, mode: &DaemonSpawnMode) -> C
             cmd
         }
         DaemonSpawnMode::IndependentScope { unit } => {
-            let mut cmd = Command::new("systemd-run");
+            let mut cmd = Command::new(systemd_run);
             cmd.args(["--user", "--scope", "--quiet", "--collect", "--unit", unit]);
             cmd.arg("--");
             cmd.arg(&config.csa_binary);
@@ -158,6 +166,13 @@ fn read_process_start_time_ticks(_pid: u32) -> Option<u64> {
 /// Spawn a detached daemon process with setsid, stdin=/dev/null,
 /// stdout/stderr redirected to spool files in the session directory.
 pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
+    spawn_daemon_with_systemd_run(config, Path::new("systemd-run"))
+}
+
+fn spawn_daemon_with_systemd_run(
+    config: DaemonSpawnConfig,
+    systemd_run: &Path,
+) -> Result<DaemonSpawnResult> {
     std::fs::create_dir_all(&config.session_dir).with_context(|| {
         format!(
             "failed to create session dir {}",
@@ -186,7 +201,7 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
         }
     }
 
-    let mut cmd = build_daemon_command(&config, &spawn_mode);
+    let mut cmd = build_daemon_command_with_systemd_run(&config, &spawn_mode, systemd_run);
 
     cmd.stdin(Stdio::null());
     cmd.stdout(stdout_file);
@@ -511,8 +526,8 @@ mod tests {
         );
     }
 
-    /// Verify that when IndependentScope is forced but systemd-run cannot be found
-    /// in PATH, spawn_daemon retries with Direct mode and still succeeds.
+    /// Verify that when IndependentScope is forced but systemd-run cannot be
+    /// spawned, spawn_daemon retries with Direct mode and still succeeds.
     ///
     /// Simulates the nested-CSA-subprocess scenario where the env override forces
     /// IndependentScope but dbus / systemd-run is absent (ENOENT at exec time).
@@ -524,15 +539,7 @@ mod tests {
         let session_dir = tmp.path().join("session-fallback");
         let wrapper = write_wrapper_script(tmp.path(), "wrapper-fallback.sh");
 
-        // Replace PATH with the (empty) tmp dir so that `systemd-run` cannot be
-        // resolved, causing cmd.spawn() to return Err(NotFound) and triggering
-        // the retry path.  The csa_binary uses an absolute path so no PATH
-        // lookup is needed for the Direct-mode retry.
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        // SAFETY: test serialises env mutation via DAEMON_SCOPE_ENV_LOCK.
-        unsafe {
-            std::env::set_var("PATH", tmp.path().as_os_str());
-        }
+        let missing_systemd_run = tmp.path().join("missing-systemd-run");
 
         let config = DaemonSpawnConfig {
             session_id: "TEST_FALLBACK".to_string(),
@@ -543,13 +550,7 @@ mod tests {
             env: HashMap::new(),
         };
 
-        let result = spawn_daemon(config);
-
-        // Restore PATH before asserting so it is always restored even on failure.
-        // SAFETY: restoring the saved value.
-        unsafe {
-            std::env::set_var("PATH", original_path);
-        }
+        let result = spawn_daemon_with_systemd_run(config, &missing_systemd_run);
 
         let result = result.expect("spawn_daemon should succeed via direct fallback");
         assert!(result.pid > 0);

@@ -1,8 +1,5 @@
 use super::*;
 use std::ffi::OsString;
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct ScopedEnvVar {
     key: &'static str,
@@ -115,6 +112,7 @@ fn test_builder_off_forces_none() {
 
 #[test]
 fn test_tool_defaults_claude_code() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -226,6 +224,7 @@ fn test_tool_defaults_landlock_uses_session_tmpdir() {
 
 #[test]
 fn test_cargo_and_rustup_paths_presence_matches_filesystem() {
+    let _guard = ENV_LOCK.lock().unwrap();
     // Verify that cargo/rustup paths are included correctly based on env
     // vars and filesystem state.  This test runs against the real HOME.
     let project = PathBuf::from("/tmp/project");
@@ -546,6 +545,7 @@ fn test_parent_tool_defaults_expose_existing_codex_home_for_nested_csa() {
 
 #[test]
 fn test_tool_defaults_gemini_cli() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -589,6 +589,7 @@ fn test_tool_defaults_gemini_cli() {
 
 #[test]
 fn test_tool_defaults_opencode() {
+    let _guard = ENV_LOCK.lock().unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -665,6 +666,7 @@ fn test_validate_accepts_tmp_subpath() {
 
 #[test]
 fn test_validate_accepts_home_subpath() {
+    let _guard = ENV_LOCK.lock().unwrap();
     if let Some(home) = home_dir() {
         let result = validate_writable_paths(&[home.join("workspace")], Path::new("/tmp/project"));
         assert!(result.is_ok());

@@ -232,6 +232,7 @@ fn tool_override_clears_model_spec() {
         StepTarget::CsaTool { .. } => StepTarget::CsaTool {
             tool_name: override_tool,
             model_spec: None,
+            tier_name: None,
         },
         other => other,
     };
@@ -239,6 +240,7 @@ fn tool_override_clears_model_spec() {
         StepTarget::CsaTool {
             tool_name,
             model_spec,
+            tier_name: _,
         } => {
             assert_eq!(tool_name, ToolName::ClaudeCode, "tool must be overridden");
             assert!(
@@ -271,6 +273,7 @@ fn tool_override_does_not_affect_weave_include() {
         StepTarget::CsaTool { .. } => StepTarget::CsaTool {
             tool_name: override_tool,
             model_spec: None,
+            tier_name: None,
         },
         other => other,
     };
@@ -291,6 +294,7 @@ async fn run_with_heartbeat_returns_success_exit_code() {
                 super::plan_cmd_exec::StepExecutionOutcome {
                     exit_code: 0,
                     output: "ok".into(),
+                    stderr: String::new(),
                     session_id: None,
                 },
             )

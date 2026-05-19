@@ -19,7 +19,7 @@ fn assume_review_tools_available() -> (OwnedMutexGuard<()>, ScopedEnvVarRestore)
         ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1"),
     )
 }
-pub(super) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
+pub(crate) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
     for tool in csa_config::global::all_known_tools() {
         tool_map.insert(
@@ -132,7 +132,7 @@ fn run_git(repo: &std::path::Path, args: &[&str]) {
     );
 }
 
-pub(super) fn setup_git_repo() -> TempDir {
+pub(crate) fn setup_git_repo() -> TempDir {
     let temp = TempDir::new().expect("create tempdir");
     run_git(temp.path(), &["init"]);
     run_git(temp.path(), &["config", "user.email", "test@example.com"]);

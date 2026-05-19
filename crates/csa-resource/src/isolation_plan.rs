@@ -1,6 +1,5 @@
 //! Isolation plan: combines resource and filesystem capabilities into a
 //! single, builder-configured plan that executors can apply uniformly.
-
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
@@ -13,10 +12,6 @@ pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 
 #[path = "isolation_plan_codex.rs"]
 mod codex_paths;
-
-// ---------------------------------------------------------------------------
-// EnforcementMode (local copy)
-// ---------------------------------------------------------------------------
 
 /// Sandbox enforcement mode.
 ///
@@ -790,6 +785,9 @@ fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
 
     None
 }
+
+#[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 #[path = "isolation_plan_tests.rs"]
