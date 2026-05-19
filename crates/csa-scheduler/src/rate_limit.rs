@@ -375,7 +375,37 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: true,
             },
             FailoverPattern {
-                pattern: "billing",
+                pattern: "billing limit",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing cap",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing disabled",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing not enabled",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing hard limit",
+                reason: "QUOTA_EXHAUSTED",
+                advance_to_next_model: true,
+                quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "billing budget",
                 reason: "QUOTA_EXHAUSTED",
                 advance_to_next_model: true,
                 quota_exhausted: true,

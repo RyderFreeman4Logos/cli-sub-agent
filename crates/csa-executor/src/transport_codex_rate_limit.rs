@@ -4,6 +4,25 @@ use csa_process::ExecutionResult;
 
 pub(crate) const CODEX_RATE_LIMIT_MAX_RETRIES: u8 = 3;
 pub(crate) const CODEX_RATE_LIMIT_RETRY_EXHAUSTED_REASON: &str = "codex_429_retry_exhausted";
+const CODEX_PERMANENT_QUOTA_PATTERNS: &[&str] = &[
+    CODEX_RATE_LIMIT_RETRY_EXHAUSTED_REASON,
+    "usage_limit_exceeded",
+    "usage limit",
+    "billing limit",
+    "billing cap",
+    "billing disabled",
+    "billing not enabled",
+    "billing hard limit",
+    "billing budget",
+    "monthly limit",
+    "monthly cap",
+    "monthly spending",
+    "monthly quota",
+    "spending cap",
+    "hard limit",
+    "insufficient_quota",
+    "daily quota",
+];
 
 pub(crate) fn codex_rate_limit_backoff(retry_count: u8) -> Duration {
     let capped = retry_count.min(CODEX_RATE_LIMIT_MAX_RETRIES.saturating_sub(1));
@@ -22,15 +41,9 @@ fn is_codex_rate_limited_text(text: &str) -> bool {
 
 fn is_codex_permanent_quota_text(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
-    lowered.contains(CODEX_RATE_LIMIT_RETRY_EXHAUSTED_REASON)
-        || lowered.contains("usage_limit_exceeded")
-        || lowered.contains("usage limit")
-        || lowered.contains("billing")
-        || lowered.contains("monthly")
-        || lowered.contains("spending cap")
-        || lowered.contains("hard limit")
-        || lowered.contains("insufficient_quota")
-        || lowered.contains("daily quota")
+    CODEX_PERMANENT_QUOTA_PATTERNS
+        .iter()
+        .any(|pattern| lowered.contains(pattern))
 }
 
 pub(crate) fn is_codex_transient_rate_limit_text(text: &str) -> bool {
@@ -40,16 +53,16 @@ pub(crate) fn is_codex_transient_rate_limit_text(text: &str) -> bool {
 pub(crate) fn is_codex_transient_rate_limit_result(execution: &ExecutionResult) -> bool {
     execution.exit_code != 0
         && is_codex_transient_rate_limit_text(&format!(
-            "{}\n{}\n{}",
-            execution.summary, execution.stderr_output, execution.output
+            "{}\n{}",
+            execution.summary, execution.stderr_output
         ))
 }
 
 pub(crate) fn is_codex_permanent_quota_result(execution: &ExecutionResult) -> bool {
     execution.exit_code != 0
         && is_codex_permanent_quota_text(&format!(
-            "{}\n{}\n{}",
-            execution.summary, execution.stderr_output, execution.output
+            "{}\n{}",
+            execution.summary, execution.stderr_output
         ))
 }
 
@@ -67,3 +80,7 @@ pub(crate) fn apply_codex_rate_limit_retry_exhausted_summary(
     execution.stderr_output.push_str(&summary);
     execution.stderr_output.push('\n');
 }
+
+#[cfg(test)]
+#[path = "transport_codex_rate_limit_tests.rs"]
+mod tests;
