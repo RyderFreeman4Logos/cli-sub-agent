@@ -98,6 +98,7 @@ mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;
 mod todo_epic_cmd;
+mod todo_errors_cmd;
 mod todo_ref_cmd;
 mod tool_version;
 mod triage_cmd;
@@ -690,6 +691,9 @@ async fn run() -> Result<()> {
             }
             TodoCommands::Find { branch, status, cd } => {
                 todo_cmd::handle_find(branch, status, cd, output_format)?;
+            }
+            TodoCommands::Errors { branch, cd } => {
+                todo_errors_cmd::handle_errors(branch, cd)?;
             }
             TodoCommands::Show {
                 timestamp,
