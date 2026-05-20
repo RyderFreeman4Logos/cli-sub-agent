@@ -238,6 +238,7 @@ pub(crate) async fn handle_debate(
         effective_tier.as_deref(),
         args.force_override_user_config,
         args.force_ignore_tier_setting,
+        args.model_spec.is_some(),
     )?;
     crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args_tool.is_some());
     let resolved_selection = match resolve_debate_selection(

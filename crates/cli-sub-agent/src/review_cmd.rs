@@ -110,6 +110,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         effective_tier.as_deref(),
         args.force_override_user_config,
         args.force_ignore_tier_setting,
+        args.model_spec.is_some(),
     )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     verify_review_skill_available(&project_root, args.allow_fallback)?;
