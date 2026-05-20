@@ -400,7 +400,7 @@ fn verify_debate_skill_no_fallback_without_skill() {
 }
 
 #[tokio::test]
-async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
+async fn handle_debate_rejects_direct_tool_tier_before_session_creation() {
     let project_dir = tempdir().unwrap();
     let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
     sandbox.track_env("CSA_SESSION_ID");
@@ -443,18 +443,9 @@ async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
     );
 
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
-    assert_eq!(sessions.len(), 1, "expected one failed debate session");
-
-    let result = csa_session::load_result(project_dir.path(), &sessions[0].meta_session_id)
-        .unwrap()
-        .expect("result.toml must be written for debate tier rejection");
-    assert_eq!(result.status, "failure");
-    assert_eq!(result.exit_code, 1);
-    assert!(result.summary.contains("pre-exec:"));
     assert!(
-        result
-            .summary
-            .contains("restricted when tiers are configured")
+        sessions.is_empty(),
+        "direct --tool tier rejection must happen before debate session creation"
     );
 }
 

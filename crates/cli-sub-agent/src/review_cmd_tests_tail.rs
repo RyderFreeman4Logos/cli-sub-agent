@@ -662,7 +662,7 @@ fn install_pattern(project_root: &Path, name: &str) {
 }
 
 #[tokio::test]
-async fn handle_review_persists_result_for_direct_tool_tier_rejection() {
+async fn handle_review_rejects_direct_tool_tier_before_session_creation() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
@@ -702,18 +702,9 @@ async fn handle_review_persists_result_for_direct_tool_tier_rejection() {
     );
 
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
-    assert_eq!(sessions.len(), 1, "expected one failed review session");
-
-    let result = csa_session::load_result(project_dir.path(), &sessions[0].meta_session_id)
-        .unwrap()
-        .expect("result.toml must be written for review tier rejection");
-    assert_eq!(result.status, "failure");
-    assert_eq!(result.exit_code, 1);
-    assert!(result.summary.contains("pre-exec:"));
     assert!(
-        result
-            .summary
-            .contains("restricted when tiers are configured")
+        sessions.is_empty(),
+        "direct --tool tier rejection must happen before review session creation"
     );
 }
 

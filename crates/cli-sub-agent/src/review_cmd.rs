@@ -82,7 +82,8 @@ use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
     resolve_review_effective_tier, resolve_review_model, resolve_review_selection,
     resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
-    review_scope_allows_auto_discovery, verify_review_skill_available,
+    review_scope_allows_auto_discovery, validate_review_direct_tool_tier_restriction,
+    verify_review_skill_available,
 };
 use result_handling::{build_reviewer_outcome, resolve_single_review_result};
 #[rustfmt::skip]
@@ -102,6 +103,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     else {
         return Ok(1);
     };
+    let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
+    validate_review_direct_tool_tier_restriction(
+        args_tool.is_some(),
+        config.as_ref(),
+        effective_tier.as_deref(),
+        args.force_override_user_config,
+        args.force_ignore_tier_setting,
+    )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     verify_review_skill_available(&project_root, args.allow_fallback)?;
     if is_worktree_submodule(&project_root) {
@@ -266,7 +275,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
     crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args_tool.is_some());
     let resolved_selection = match resolve_review_selection(
         args_tool,
