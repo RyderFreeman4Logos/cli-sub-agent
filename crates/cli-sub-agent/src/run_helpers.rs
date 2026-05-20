@@ -74,6 +74,39 @@ pub(crate) fn validate_tool_tier_override_flags(
     Ok(())
 }
 
+pub(crate) fn validate_direct_tool_tier_restriction(
+    direct_tool_requested: bool,
+    project_config: Option<&ProjectConfig>,
+    effective_tier: Option<&str>,
+    force_override_user_config: bool,
+    force_ignore_tier_setting: bool,
+    model_spec_provided: bool,
+) -> Result<()> {
+    let Some(cfg) = project_config else {
+        return Ok(());
+    };
+    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+    if cfg.tiers.is_empty()
+        || bypass_tier
+        || effective_tier.is_some()
+        || !direct_tool_requested
+        || model_spec_provided
+    {
+        return Ok(());
+    }
+
+    let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+    let alias_hint = cfg.format_tier_aliases();
+    anyhow::bail!(
+        "Direct --tool is restricted when tiers are configured. \
+         Use --tier <name> to specify which tier's model/thinking config to use, \
+         --hint-difficulty <label> to route through [tier_mapping], \
+         or add --force-ignore-tier-setting to override. \
+         Available tiers: [{}]{alias_hint}",
+        available.join(", ")
+    );
+}
+
 pub(crate) fn validate_model_spec_tier_conflict(
     model_spec: Option<&str>,
     tier: Option<&str>,

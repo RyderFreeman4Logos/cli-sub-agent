@@ -11,6 +11,7 @@ use crate::cli::DebateArgs;
 use crate::debate_cmd_resolve::{
     DebateTierResolveCtx, resolve_debate_effective_tier_with_compound, resolve_debate_model,
     resolve_debate_selection, resolve_debate_tier_name,
+    validate_debate_direct_tool_tier_restriction,
 };
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
@@ -231,6 +232,14 @@ pub(crate) async fn handle_debate(
             debate_description: debate_description.as_str(),
             explicit_tool,
         })?;
+    validate_debate_direct_tool_tier_restriction(
+        args_tool.is_some(),
+        config.as_ref(),
+        effective_tier.as_deref(),
+        args.force_override_user_config,
+        args.force_ignore_tier_setting,
+        args.model_spec.is_some(),
+    )?;
     crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args_tool.is_some());
     let resolved_selection = match resolve_debate_selection(
         args_tool,

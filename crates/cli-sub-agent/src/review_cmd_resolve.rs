@@ -83,6 +83,24 @@ pub(crate) struct ResolvedReviewSelection {
     pub(crate) tier_filter: Option<TierFilter>,
 }
 
+pub(crate) fn validate_review_direct_tool_tier_restriction(
+    direct_tool_requested: bool,
+    project_config: Option<&ProjectConfig>,
+    effective_tier: Option<&str>,
+    force_override_user_config: bool,
+    force_ignore_tier_setting: bool,
+    model_spec_provided: bool,
+) -> Result<()> {
+    crate::run_helpers::validate_direct_tool_tier_restriction(
+        direct_tool_requested,
+        project_config,
+        effective_tier,
+        force_override_user_config,
+        force_ignore_tier_setting,
+        model_spec_provided,
+    )
+}
+
 /// Returns (tool, optional_model_spec). When tier resolves, model_spec is set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_review_selection(
@@ -96,9 +114,6 @@ pub(crate) fn resolve_review_selection(
     cli_tier: Option<&str>,
     force_ignore_tier_setting: bool,
 ) -> Result<ResolvedReviewSelection> {
-    let tiers_configured = project_config.is_some_and(|c| !c.tiers.is_empty());
-    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
-
     crate::run_helpers::validate_tool_tier_override_flags(
         arg_tool.is_some(),
         cli_tier,
@@ -131,19 +146,14 @@ pub(crate) fn resolve_review_selection(
 
     // Enforce tier routing: block direct --tool when tiers are configured,
     // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
-    if tiers_configured && !bypass_tier && cli_tier.is_none() && arg_tool.is_some() {
-        let cfg = project_config.unwrap();
-        let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
-        let alias_hint = cfg.format_tier_aliases();
-        anyhow::bail!(
-            "Direct --tool is restricted when tiers are configured. \
-             Use --tier <name> to specify which tier's model/thinking config to use, \
-             --hint-difficulty <label> to route through [tier_mapping], \
-             or add --force-ignore-tier-setting to override. \
-             Available tiers: [{}]{alias_hint}",
-            available.join(", ")
-        );
-    }
+    validate_review_direct_tool_tier_restriction(
+        arg_tool.is_some(),
+        project_config,
+        cli_tier,
+        force_override_user_config,
+        force_ignore_tier_setting,
+        arg_model_spec.is_some(),
+    )?;
 
     let tier_name = resolve_review_tier_name(
         project_config,
