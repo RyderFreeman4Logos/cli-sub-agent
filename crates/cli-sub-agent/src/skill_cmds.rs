@@ -683,4 +683,88 @@ mod tests {
         let result = read_skill_title(tmp.path());
         assert!(result.is_none());
     }
+
+    // --- skill_md_template tests ---
+
+    #[test]
+    fn skill_md_template_contains_name() {
+        let t = skill_md_template("my-tool");
+        assert!(t.contains("# my-tool"));
+        assert!(t.contains("csa skill run my-tool"));
+    }
+
+    // --- copy_dir_recursive tests ---
+
+    #[test]
+    fn copy_dir_recursive_copies_nested_files() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let dest_skill = dest.path().join("skill-copy");
+
+        fs::create_dir_all(src.path().join("sub")).unwrap();
+        fs::write(src.path().join("SKILL.md"), "# Root").unwrap();
+        fs::write(src.path().join("sub/data.txt"), "nested").unwrap();
+
+        copy_dir_recursive(src.path(), &dest_skill).unwrap();
+
+        assert!(dest_skill.join("SKILL.md").exists());
+        assert_eq!(
+            fs::read_to_string(dest_skill.join("sub/data.txt")).unwrap(),
+            "nested"
+        );
+    }
+
+    // --- copy_skills tests ---
+
+    #[test]
+    fn copy_skills_skips_existing() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+
+        fs::create_dir_all(src.path().join("existing")).unwrap();
+        fs::write(src.path().join("existing/SKILL.md"), "# src").unwrap();
+
+        fs::create_dir_all(dest.path().join("existing")).unwrap();
+        fs::write(dest.path().join("existing/SKILL.md"), "# dest-original").unwrap();
+
+        fs::create_dir_all(src.path().join("new-one")).unwrap();
+        fs::write(src.path().join("new-one/SKILL.md"), "# new").unwrap();
+
+        let installed = copy_skills(src.path(), dest.path()).unwrap();
+        assert_eq!(installed, vec!["new-one"]);
+
+        let existing_content = fs::read_to_string(dest.path().join("existing/SKILL.md")).unwrap();
+        assert_eq!(existing_content, "# dest-original");
+    }
+
+    #[test]
+    fn copy_skills_skips_non_dirs() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+
+        fs::write(src.path().join("README.md"), "not a skill dir").unwrap();
+
+        let installed = copy_skills(src.path(), dest.path()).unwrap();
+        assert!(installed.is_empty());
+    }
+
+    // --- collect_active_skill_dirs tests ---
+
+    #[test]
+    fn collect_active_skill_dirs_returns_expected_paths() {
+        let dirs = collect_active_skill_dirs();
+        assert!(
+            dirs.iter()
+                .any(|d| d.ends_with(".claude/skills") || d.ends_with(".csa/skills")),
+            "should contain .claude/skills or .csa/skills: {dirs:?}"
+        );
+    }
+
+    // --- gethostname tests ---
+
+    #[test]
+    fn gethostname_returns_nonempty() {
+        let name = gethostname();
+        assert!(!name.is_empty());
+    }
 }

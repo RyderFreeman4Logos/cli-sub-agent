@@ -412,4 +412,254 @@ mod tests {
         let skills = mgr.list_skills().unwrap();
         assert_eq!(skills, vec!["my-skill"]);
     }
+
+    #[test]
+    fn test_list_skills_ignores_hidden_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        fs::create_dir_all(tmp.path().join(".hidden")).unwrap();
+        fs::write(tmp.path().join(".hidden/SKILL.md"), "# Hidden\n").unwrap();
+        fs::create_dir_all(tmp.path().join("visible")).unwrap();
+        fs::write(tmp.path().join("visible/SKILL.md"), "# Visible\n").unwrap();
+
+        let skills = mgr.list_skills().unwrap();
+        assert_eq!(skills, vec!["visible"]);
+    }
+
+    #[test]
+    fn test_list_skills_ignores_dirs_without_skill_md() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        fs::create_dir_all(tmp.path().join("no-skill-md")).unwrap();
+        fs::write(tmp.path().join("no-skill-md/README.md"), "# Readme\n").unwrap();
+
+        assert_eq!(mgr.list_skills().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_list_skills_sorted() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        for name in &["zeta", "alpha", "mid"] {
+            fs::create_dir_all(tmp.path().join(name)).unwrap();
+            fs::write(tmp.path().join(name).join("SKILL.md"), "# Skill\n").unwrap();
+        }
+
+        let skills = mgr.list_skills().unwrap();
+        assert_eq!(skills, vec!["alpha", "mid", "zeta"]);
+    }
+
+    #[test]
+    fn test_list_skills_nonexistent_root() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(&tmp.path().join("does-not-exist"));
+        assert_eq!(mgr.list_skills().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_with_write_lock_executes_closure() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        let result = mgr.with_write_lock(|| Ok(42)).unwrap();
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_with_write_lock_propagates_error() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        let result: Result<()> = mgr.with_write_lock(|| anyhow::bail!("deliberate"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("deliberate"));
+    }
+
+    #[test]
+    fn test_with_write_lock_creates_lock_file() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+
+        mgr.with_write_lock(|| {
+            assert!(tmp.path().join(".lock").exists());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_git_commit_paths_commits_file() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        fs::create_dir_all(tmp.path().join("s1")).unwrap();
+        fs::write(tmp.path().join("s1/SKILL.md"), "# S1\n").unwrap();
+
+        let committed = git_commit_paths(tmp.path(), &["s1/SKILL.md"], "add s1").unwrap();
+        assert!(committed);
+
+        let log = Command::new("git")
+            .args(["log", "--oneline", "-1"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let msg = String::from_utf8_lossy(&log.stdout);
+        assert!(msg.contains("add s1"), "commit message: {msg}");
+    }
+
+    #[test]
+    fn test_git_commit_paths_noop_when_clean() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        fs::create_dir_all(tmp.path().join("s1")).unwrap();
+        fs::write(tmp.path().join("s1/SKILL.md"), "# S1\n").unwrap();
+        git_commit_paths(tmp.path(), &["s1/SKILL.md"], "first").unwrap();
+
+        let committed = git_commit_paths(tmp.path(), &["s1/SKILL.md"], "second").unwrap();
+        assert!(!committed);
+    }
+
+    #[test]
+    fn test_git_commit_all_commits_everything() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        fs::create_dir_all(tmp.path().join("a")).unwrap();
+        fs::write(tmp.path().join("a/SKILL.md"), "# A\n").unwrap();
+        fs::create_dir_all(tmp.path().join("b")).unwrap();
+        fs::write(tmp.path().join("b/SKILL.md"), "# B\n").unwrap();
+
+        let committed = git_commit_all(tmp.path(), "add all").unwrap();
+        assert!(committed);
+
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            out.trim().is_empty(),
+            "worktree dirty after commit_all: {out}"
+        );
+    }
+
+    #[test]
+    fn test_git_commit_all_noop_when_clean() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(tmp.path());
+        mgr.ensure_init().unwrap();
+
+        let committed = git_commit_all(tmp.path(), "should noop").unwrap();
+        assert!(!committed);
+    }
+
+    #[test]
+    fn test_ensure_gitignore_appends_to_existing() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join(".gitignore"), "*.tmp\n").unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+
+        ensure_gitignore(tmp.path()).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("*.tmp"), "original entry preserved");
+        assert!(content.contains(".lock"), ".lock appended");
+    }
+
+    #[test]
+    fn test_ensure_git_init_sets_local_identity() {
+        let tmp = TempDir::new().unwrap();
+        ensure_git_init(tmp.path()).unwrap();
+
+        let email = Command::new("git")
+            .args(["config", "user.email"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let email_str = String::from_utf8_lossy(&email.stdout);
+        assert_eq!(email_str.trim(), "csa-skills@localhost");
+    }
+
+    #[test]
+    fn test_sanitize_skill_md_case_insensitive_tags() {
+        let input = "before\n<System-Reminder>injected</System-Reminder>\nafter\n";
+        let out = sanitize_skill_md(input);
+        assert!(!out.contains("injected"));
+        assert!(out.contains("before"));
+        assert!(out.contains("after"));
+    }
+
+    #[test]
+    fn test_sanitize_skill_md_interleaved_injection_types() {
+        // Two DIFFERENT tag types overlapping — both stripped independently.
+        let input = "top\n<system-reminder>\nsr-line\n</system-reminder>\n<csa-caller-prompt-injection>\ninj-line\n</csa-caller-prompt-injection>\nbottom\n";
+        let out = sanitize_skill_md(input);
+        assert!(!out.contains("sr-line"));
+        assert!(!out.contains("inj-line"));
+        assert!(out.contains("top"));
+        assert!(out.contains("bottom"));
+    }
+
+    #[test]
+    fn test_sanitize_skill_md_preserves_html_comments() {
+        let input = "# Skill\n<!-- normal comment -->\nContent\n";
+        let out = sanitize_skill_md(input);
+        assert!(out.contains("<!-- normal comment -->"));
+    }
+
+    #[test]
+    fn test_sanitize_skill_md_preserves_code_fences() {
+        let input = "```bash\necho '<system-reminder>not stripped</system-reminder>'\n```\n";
+        let out = sanitize_skill_md(input);
+        assert!(
+            !out.contains("not stripped"),
+            "tags inside code fences are still stripped for safety"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_skill_md_empty_input() {
+        assert_eq!(sanitize_skill_md(""), "");
+    }
+
+    #[test]
+    fn test_sanitize_skill_md_no_trailing_newline_preserved() {
+        let input = "content";
+        let out = sanitize_skill_md(input);
+        assert_eq!(out, "content");
+    }
+
+    #[test]
+    fn test_validate_skill_name_with_null_bytes() {
+        assert!(validate_skill_name("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_skill_name_unicode_ok() {
+        assert!(validate_skill_name("skill-\u{00e9}t\u{00e9}").is_ok());
+    }
+
+    #[test]
+    fn test_validate_skill_name_dots_ok() {
+        assert!(validate_skill_name("my.skill").is_ok());
+        assert!(validate_skill_name("v1.2.3").is_ok());
+    }
 }
