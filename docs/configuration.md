@@ -131,7 +131,7 @@ allow_edit_existing_files = false    # Inject read-only restriction into prompt
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | Boolean | `true` | Whether this tool is available |
-| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, and `cli`; `codex` currently accepts `auto` and `acp`; `gemini-cli` and `opencode` accept `auto` and `cli` |
+| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, `cli`, and `tmux`; `codex` currently accepts `auto` and `acp`; `gemini-cli` and `opencode` accept `auto` and `cli` |
 | `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
 Unconfigured tools default to enabled with no restrictions. Setting
@@ -139,9 +139,10 @@ Unconfigured tools default to enabled with no restrictions. Setting
 
 `transport` is validated per tool.
 
-- `claude-code` accepts `auto`, `acp`, and `cli`. `auto` resolves to the
-  build default, which is ACP today; `acp` probes `claude-code-acp`, and
-  `cli` probes `claude`.
+- `claude-code` accepts `auto`, `acp`, `cli`, and `tmux`. `auto` resolves to
+  the build default, which is ACP today; `acp` probes `claude-code-acp`,
+  `cli` probes `claude`, and `tmux` runs Claude Code inside a detached tmux
+  session (see below).
 - `codex` currently accepts `auto` and `acp`. `auto` resolves to the current
   build default, which is ACP today, so both the default path and an explicit
   `acp` override probe `codex-acp`. Config validation checks only whether the
@@ -165,6 +166,38 @@ transport = "cli"
 
 With that override, CSA probes `claude` instead of `claude-code-acp`, and
 `csa doctor` prints the effective transport under the `claude-code` block.
+
+#### Claude Code tmux transport (Experimental)
+
+The `tmux` transport runs Claude Code inside a real interactive tmux session.
+This keeps usage in Anthropic's interactive billing pool rather than the
+capped Agent SDK credit pool (effective June 15, 2026).
+
+```toml
+[tools.claude-code]
+transport = "tmux"
+```
+
+**Requirements**: `tmux` must be installed and available in PATH.
+
+**How it works**: CSA spawns `tmux new-session -d -s csa-<ULID> -- claude`,
+sends prompts via `tmux load-buffer`/`paste-buffer`, and reads output by
+tailing Claude Code's JSONL conversation log until the `turn_duration`
+completion marker.
+
+**Limitations**:
+- Incompatible with filesystem sandbox (bwrap/landlock). Set
+  `[filesystem_sandbox] enforcement_mode = "off"` when using this transport.
+- No session resume or fork support — each invocation creates a fresh session.
+- JSONL format is an internal Claude Code detail and may change between
+  versions. The transport validates the schema on startup and fails fast if
+  critical fields are missing.
+- **Billing classification is not guaranteed.** Anthropic may change how
+  interactive sessions are detected. This feature is experimental and may
+  stop providing billing benefits at any time.
+
+**Orphan cleanup**: If CSA crashes, orphan `csa-*` tmux sessions are cleaned
+up by `csa gc`.
 
 #### Codex transport override
 
