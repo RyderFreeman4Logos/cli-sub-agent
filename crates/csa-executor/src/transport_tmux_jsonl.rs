@@ -179,11 +179,10 @@ pub(super) async fn watch_jsonl_for_turn(
                         Some(JsonlEvent::AssistantText(text)) => {
                             collected_text.push_str(&text);
                         }
-                        Some(JsonlEvent::ResultText(text)) => {
-                            if collected_text.is_empty() {
-                                collected_text = text;
-                            }
+                        Some(JsonlEvent::ResultText(text)) if collected_text.is_empty() => {
+                            collected_text = text;
                         }
+                        Some(JsonlEvent::ResultText(_)) => {}
                         Some(JsonlEvent::TurnDuration) => {
                             return Ok(collected_text);
                         }
