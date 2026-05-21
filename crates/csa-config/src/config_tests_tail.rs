@@ -699,6 +699,7 @@ fn test_enforce_tool_enabled_omits_hint_when_no_alternatives() {
         "codex",
         "claude-code",
         "openai-compat",
+        "antigravity-cli",
     ];
     let mut tools = HashMap::new();
     for name in &known_tools {

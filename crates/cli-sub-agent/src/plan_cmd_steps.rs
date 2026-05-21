@@ -131,6 +131,7 @@ pub(crate) fn resolve_step_tool(
             "manual" => return Ok(StepTarget::Manual),
             "await-user" => return Ok(StepTarget::AwaitUser),
             "gemini-cli" => return Ok(StepTarget::csa(ToolName::GeminiCli, None)),
+            "antigravity-cli" => return Ok(StepTarget::csa(ToolName::AntigravityCli, None)),
             "opencode" => return Ok(StepTarget::csa(ToolName::Opencode, None)),
             "codex" => return Ok(StepTarget::csa(ToolName::Codex, None)),
             "claude-code" => return Ok(StepTarget::csa(ToolName::ClaudeCode, None)),
@@ -217,6 +218,7 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
+        "antigravity-cli" => Ok(ToolName::AntigravityCli),
         other => bail!("Unknown tool: {other}"),
     }
 }

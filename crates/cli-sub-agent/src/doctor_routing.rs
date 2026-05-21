@@ -8,7 +8,13 @@ use csa_config::{GlobalConfig, ProjectConfig, TierStrategy};
 use csa_core::types::OutputFormat;
 use std::{env, fmt::Write as _, path::Path};
 
-const BUILTIN_TOOLS: &[&str] = &["gemini-cli", "opencode", "codex", "claude-code"];
+const BUILTIN_TOOLS: &[&str] = &[
+    "gemini-cli",
+    "opencode",
+    "codex",
+    "claude-code",
+    "antigravity-cli",
+];
 
 /// Map tool name (from model spec) to its executable binary name.
 fn tool_exe_name(tool: &str, config: &ProjectConfig) -> String {
@@ -549,6 +555,7 @@ mod tests {
         // the CLI binary is `claude`, not `claude-code-acp`.
         assert_eq!(tool_exe_name("claude-code", &config), "claude");
         assert_eq!(tool_exe_name("opencode", &config), "opencode");
+        assert_eq!(tool_exe_name("antigravity-cli", &config), "antigravity");
         assert_eq!(tool_exe_name("unknown-tool", &config), "unknown-tool");
     }
 

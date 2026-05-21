@@ -131,7 +131,7 @@ allow_edit_existing_files = false    # Inject read-only restriction into prompt
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | Boolean | `true` | Whether this tool is available |
-| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, `cli`, and `tmux`; `codex` currently accepts `auto` and `acp`; `gemini-cli` and `opencode` accept `auto` and `cli` |
+| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, `cli`, and `tmux`; `codex` currently accepts `auto` and `acp`; `gemini-cli`, `antigravity-cli`, and `opencode` accept `auto` and `cli` |
 | `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
 Unconfigured tools default to enabled with no restrictions. Setting
@@ -148,8 +148,8 @@ Unconfigured tools default to enabled with no restrictions. Setting
   `acp` override probe `codex-acp`. Config validation checks only whether the
   value is legal for codex; missing binaries are surfaced separately by
   `csa doctor`. `cli` remains rejected in project config today.
-- `gemini-cli` and `opencode` accept `auto` and `cli`, stay on their direct
-  CLI runtimes, and reject `acp`.
+- `gemini-cli`, `antigravity-cli`, and `opencode` accept `auto` and `cli`,
+  stay on their direct CLI runtimes, and reject `acp`.
 
 When you change a tool transport, `csa doctor` reports the active transport
 and probed binary for that tool.
@@ -221,7 +221,7 @@ transport = "acp"
 
 ```toml
 [review]
-tool = "auto"    # or "codex", "claude-code", "gemini-cli", "opencode"
+tool = "auto"    # or "codex", "claude-code", "gemini-cli", "antigravity-cli", "opencode"
 ```
 
 Overrides the global review tool for this project. In `auto` mode, CSA
@@ -321,12 +321,12 @@ CSA validates on load:
 
 1. **Model spec format:** Each model must be `tool/provider/model/budget`
 2. **Tier references:** All `tier_mapping` values must reference existing tiers
-3. **Tool names:** Must be one of `gemini-cli`, `codex`, `opencode`, `claude-code`
+3. **Tool names:** Must be one of `gemini-cli`, `antigravity-cli`, `codex`, `opencode`, `claude-code`
 4. **Thinking budget:** Must be `low`, `medium`, `high`, `xhigh`, or a number
 5. **Tool transport overrides:** validated per tool. In particular,
    `[tools.claude-code].transport` accepts `auto`, `acp`, or `cli`;
    `[tools.codex].transport` currently accepts `auto` or `acp` and defaults
-   to ACP; `gemini-cli` and `opencode` accept `auto` or `cli`. Missing
+   to ACP; `gemini-cli`, `antigravity-cli`, and `opencode` accept `auto` or `cli`. Missing
    runtime binaries are reported by `csa doctor`, not by config-value
    validation.
 

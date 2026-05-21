@@ -58,8 +58,8 @@ pub(crate) fn build_merged_env(
             .or_insert(heap_flag);
     }
 
-    if tool_name == "gemini-cli" {
-        let allow_degraded_mcp = global_config.is_none_or(|gc| gc.allow_degraded_mcp("gemini-cli"));
+    if tool_name == "gemini-cli" || tool_name == "antigravity-cli" {
+        let allow_degraded_mcp = global_config.is_none_or(|gc| gc.allow_degraded_mcp(tool_name));
         merged_env.insert(
             "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
             if allow_degraded_mcp { "1" } else { "0" }.to_string(),

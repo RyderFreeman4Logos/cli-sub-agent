@@ -379,7 +379,7 @@ pub(crate) fn handle_session_compress(session: String, cd: Option<String>) -> Re
         .ok_or_else(|| anyhow::anyhow!("Session '{resolved_id}' has no tool history"))?;
 
     let compress_cmd = match tool_name.as_str() {
-        "gemini-cli" => "/compress",
+        "gemini-cli" | "antigravity-cli" => "/compress",
         _ => "/compact",
     };
 

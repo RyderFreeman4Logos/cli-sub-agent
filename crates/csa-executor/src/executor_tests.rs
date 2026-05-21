@@ -645,6 +645,10 @@ fn test_execute_in_preserves_model_override() {
             agent: None,
             thinking_budget: Some(ThinkingBudget::Medium),
         },
+        Executor::AntigravityCli {
+            model_override: Some("gemini-3-pro".to_string()),
+            thinking_budget: Some(ThinkingBudget::High),
+        },
     ];
 
     for exec in &tools {
@@ -705,6 +709,12 @@ fn test_execute_in_preserves_model_override() {
             }
             Executor::OpenaiCompat { .. } => {
                 // HTTP-only tool — no CLI args. Nothing to assert on Command.
+            }
+            Executor::AntigravityCli { .. } => {
+                assert!(
+                    debug_str.contains("gemini-3-pro"),
+                    "AntigravityCli missing model: {debug_str}"
+                );
             }
         }
     }

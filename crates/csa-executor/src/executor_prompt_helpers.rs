@@ -57,6 +57,11 @@ impl Executor {
                 }
             }
             Self::OpenaiCompat { .. } => {} // HTTP-only
+            Self::AntigravityCli { .. } => {
+                if matches!(prompt_transport, PromptTransport::Argv) {
+                    cmd.arg("-p").arg(prompt);
+                }
+            }
         }
     }
 
@@ -90,6 +95,7 @@ impl Executor {
             Self::Codex { .. } => ToolName::Codex,
             Self::ClaudeCode { .. } => ToolName::ClaudeCode,
             Self::OpenaiCompat { .. } => ToolName::OpenaiCompat,
+            Self::AntigravityCli { .. } => ToolName::AntigravityCli,
         }
     }
 }

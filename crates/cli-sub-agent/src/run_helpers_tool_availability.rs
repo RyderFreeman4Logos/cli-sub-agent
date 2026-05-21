@@ -69,6 +69,7 @@ pub(crate) fn resolved_tool_binary_name(
         "opencode" => Some("opencode"),
         "codex" => Some(resolved_codex_transport(config).runtime_binary_name()),
         "claude-code" => Some(resolved_claude_code_transport(config).runtime_binary_name()),
+        "antigravity-cli" => Some("antigravity"),
         "openai-compat" => None,
         _ => None,
     }

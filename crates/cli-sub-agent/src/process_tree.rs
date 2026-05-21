@@ -24,6 +24,7 @@ const KNOWN_TOOL_EXECUTABLES: &[(&str, &str)] = &[
     // Native CLI binaries
     ("claude", "claude-code"),
     ("gemini", "gemini-cli"),
+    ("antigravity", "antigravity-cli"),
     ("codex", "codex"),
     ("opencode", "opencode"),
     // Standalone ACP adapter binaries (Zed ACP packages)
