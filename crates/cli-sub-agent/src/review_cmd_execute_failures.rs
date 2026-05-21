@@ -1,4 +1,5 @@
 use super::*;
+use csa_session::{PhaseEvent, SessionPhase};
 
 pub(super) fn classify_review_failover_reason(
     tool: ToolName,
@@ -194,6 +195,57 @@ fn classify_review_failure(
 fn truncate_for_summary(text: &str, max_chars: usize) -> String {
     let truncated: String = text.chars().take(max_chars).collect();
     truncated.trim().replace('\n', " ")
+}
+
+/// Status written to result.toml for tier-failover intermediate attempts.
+///
+/// Prevents `csa session list` from showing "Failed" during the window between
+/// a tier-failover attempt and the next model's result (#1475).
+pub(super) const TIER_FAILOVER_SUPERSEDED_STATUS: &str = "tier_failover_superseded";
+
+/// Mark an intermediate tier-failover session so it shows as "Retired" in
+/// `csa session list` rather than "Failed" during the failover transition.
+///
+/// Called before `continue`-ing to the next tier candidate so that the
+/// window where the failed session's result.toml is visible does not
+/// mislead operators or callers (including `csa session wait`).
+pub(super) fn retire_tier_failover_session(project_root: &Path, session_id: &str) {
+    if let Ok(Some(mut result)) = load_result(project_root, session_id) {
+        result.status = TIER_FAILOVER_SUPERSEDED_STATUS.to_string();
+        if let Err(e) = save_result(project_root, session_id, &result) {
+            warn!(
+                session_id,
+                error = %e,
+                "Failed to mark tier-failover session as superseded in result.toml"
+            );
+        }
+    }
+    match load_session(project_root, session_id) {
+        Ok(mut session_state) => {
+            if let Err(e) = session_state.apply_phase_event(PhaseEvent::Retired) {
+                warn!(
+                    session_id,
+                    error = %e,
+                    "Skipping phase transition for tier-failover superseded session; forcing Retired"
+                );
+                session_state.phase = SessionPhase::Retired;
+            }
+            if let Err(e) = save_session(&session_state) {
+                warn!(
+                    session_id,
+                    error = %e,
+                    "Failed to retire tier-failover superseded session"
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                session_id,
+                error = %e,
+                "Failed to load session state for tier-failover retirement"
+            );
+        }
+    }
 }
 
 fn fail_review_execution(
