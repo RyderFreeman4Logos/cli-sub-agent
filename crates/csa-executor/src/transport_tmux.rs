@@ -357,9 +357,13 @@ async fn watch_jsonl_for_turn(jsonl_path: &Path, idle_timeout_seconds: u64) -> R
 /// This is safer than `send-keys` for prompts containing special characters,
 /// shell metacharacters, multi-byte UTF-8, or large payloads.
 fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
+    // Use a named buffer (session_name) to avoid cross-session races when
+    // multiple CSA tmux sessions run concurrently.
+    let buffer_name = session_name;
+
     // load-buffer reads from stdin; pipe the raw prompt text in.
     let mut load = Command::new("tmux")
-        .args(["load-buffer", "-"])
+        .args(["load-buffer", "-b", buffer_name, "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -378,9 +382,9 @@ fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
         bail!("tmux load-buffer exited with {status}");
     }
 
-    // Paste the buffer into the target pane (deletes it after paste).
+    // Paste the named buffer into the target pane (deletes it after paste).
     let status = Command::new("tmux")
-        .args(["paste-buffer", "-d", "-t", session_name])
+        .args(["paste-buffer", "-b", buffer_name, "-d", "-t", session_name])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -427,11 +431,27 @@ impl TmuxTransport {
         session_name: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        model_override: Option<&str>,
+        thinking_budget: Option<&crate::model_spec::ThinkingBudget>,
     ) -> Result<()> {
         let work_dir_str = work_dir.to_str().context("work_dir is not valid UTF-8")?;
 
-        let mut cmd = tokio::process::Command::new("tmux");
-        cmd.args([
+        let mut claude_args = vec![
+            "claude".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+        ];
+        if let Some(model) = model_override {
+            claude_args.push("--model".into());
+            claude_args.push(model.to_string());
+        }
+        if let Some(budget) = thinking_budget
+            && let Some(level) = budget.claude_effort()
+        {
+            claude_args.push("--effort".into());
+            claude_args.push(level.to_string());
+        }
+
+        let mut tmux_args: Vec<&str> = vec![
             "new-session",
             "-d",
             "-s",
@@ -439,9 +459,12 @@ impl TmuxTransport {
             "-c",
             work_dir_str,
             "--",
-            "claude",
-            "--dangerously-skip-permissions",
-        ]);
+        ];
+        let claude_arg_refs: Vec<&str> = claude_args.iter().map(String::as_str).collect();
+        tmux_args.extend_from_slice(&claude_arg_refs);
+
+        let mut cmd = tokio::process::Command::new("tmux");
+        cmd.args(&tmux_args);
 
         // Strip CSA recursion guards from the child's environment.
         for var in [
@@ -550,7 +573,22 @@ impl TmuxTransport {
             "tmux transport: spawning session"
         );
 
-        Self::spawn_tmux(&session_name, work_dir, extra_env).await?;
+        let (model_override, thinking_budget) = match &self.executor {
+            Executor::ClaudeCode {
+                model_override,
+                thinking_budget,
+                ..
+            } => (model_override.as_deref(), thinking_budget.as_ref()),
+            _ => (None, None),
+        };
+        Self::spawn_tmux(
+            &session_name,
+            work_dir,
+            extra_env,
+            model_override,
+            thinking_budget,
+        )
+        .await?;
         // RAII guard: kills the session when this function exits (normal or panic).
         let _guard = TmuxCleanupGuard {
             session_name: session_name.clone(),
@@ -625,6 +663,15 @@ impl Transport for TmuxTransport {
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
         tracing::debug!(tool = %self.executor.tool_name(), "tmux transport: execute");
+
+        if options.sandbox.is_some() {
+            tracing::warn!(
+                "tmux transport: sandbox options are ignored — tmux sessions run \
+                 outside the sandbox namespace. Set [filesystem_sandbox] \
+                 enforcement_mode = \"off\" to suppress this warning."
+            );
+        }
+
         let work_dir = PathBuf::from(&session.project_path);
         self.execute_session(prompt, &work_dir, extra_env, options.idle_timeout_seconds)
             .await

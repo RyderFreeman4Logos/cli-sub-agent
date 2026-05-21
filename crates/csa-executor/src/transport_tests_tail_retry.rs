@@ -106,10 +106,12 @@ fn test_should_retry_codex_transient_429_until_retry_budget_exhausted() {
             crate::codex_runtime::CodexTransport::Cli,
         ),
     });
+    // Since #1460, rate-limit detection is stderr-only; put the pattern in stderr.
     let execution = ExecutionResult {
         summary: "429_quota_exhausted: repeated 3 identical 429/quota errors: HTTP 429 Too Many Requests; Retry-After: 30".to_string(),
         output: String::new(),
-        stderr_output: String::new(),
+        stderr_output:
+            "HTTP 429 Too Many Requests; Retry-After: 30".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
     };
