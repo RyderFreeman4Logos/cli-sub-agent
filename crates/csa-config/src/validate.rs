@@ -11,6 +11,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "codex",
     "claude-code",
     "openai-compat",
+    "antigravity-cli",
 ];
 const LEGAL_TRANSPORT_VALUES: &str = "auto, acp, cli, tmux";
 
@@ -268,7 +269,7 @@ fn validate_tool_transport_override_with_raw(
                 bail!("Invalid {key} = \"{raw_transport}\": codex does not support tmux transport.")
             }
         },
-        "gemini-cli" | "opencode" => match transport {
+        "gemini-cli" | "opencode" | "antigravity-cli" => match transport {
             TransportKind::Auto | TransportKind::Cli => Ok(()),
             TransportKind::Acp => bail!(
                 "Invalid {key} = \"{raw_transport}\": {tool_name} does not support ACP transport."
@@ -306,14 +307,27 @@ fn transport_key(tool_name: &str) -> String {
 
 /// Validate a `ToolSelection` value for review/debate config.
 fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
-    let single_supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
-    let whitelist_supported = ["gemini-cli", "opencode", "codex", "claude-code"];
+    let single_supported = [
+        "auto",
+        "gemini-cli",
+        "opencode",
+        "codex",
+        "claude-code",
+        "antigravity-cli",
+    ];
+    let whitelist_supported = [
+        "gemini-cli",
+        "opencode",
+        "codex",
+        "claude-code",
+        "antigravity-cli",
+    ];
     match tool {
         ToolSelection::Single(s) => {
             if !single_supported.contains(&s.as_str()) {
                 bail!(
                     "Invalid [{section}].tool value '{s}'. \
-                     Supported values: auto, gemini-cli, opencode, codex, claude-code."
+                     Supported values: auto, gemini-cli, antigravity-cli, opencode, codex, claude-code."
                 );
             }
         }
@@ -322,7 +336,7 @@ fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
                 if !whitelist_supported.contains(&t.as_str()) {
                     bail!(
                         "Invalid tool '{t}' in [{section}].tool array. \
-                         Supported values: gemini-cli, opencode, codex, claude-code. \
+                         Supported values: gemini-cli, antigravity-cli, opencode, codex, claude-code. \
                          ('auto' is not valid inside a whitelist array)"
                     );
                 }
@@ -441,6 +455,7 @@ fn warn_unknown_tool_priority(config: &ProjectConfig) {
         "codex",
         "claude-code",
         "openai-compat",
+        "antigravity-cli",
     ];
     if let Some(prefs) = &config.preferences {
         for name in &prefs.tool_priority {

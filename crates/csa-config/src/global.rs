@@ -619,6 +619,7 @@ pub fn all_known_tools() -> &'static [ToolName] {
         ToolName::Codex,
         ToolName::ClaudeCode,
         ToolName::OpenaiCompat,
+        ToolName::AntigravityCli,
     ]
 }
 
