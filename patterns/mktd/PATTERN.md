@@ -42,6 +42,21 @@ After mktd completes, use `csa todo epic show` to view the story DAG and
 
 Each story follows: branch from main -> mktd (story-specific) -> dev2merge -> merge to main.
 
+### Tier Configuration
+
+`TIER` controls which tier the four RECON sub-sessions (Dimensions 1–4) use.
+When unset, RECON defaults to `tier-1-quick` (lightweight exploration).
+Set `TIER` to a heavier tier when RECON needs deeper analysis:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `TIER` | (empty) | RECON uses `tier-1-quick` |
+| `TIER=tier-2-standard` | — | RECON uses `tier-2-standard` |
+| `TIER=tier-4-critical` | — | RECON uses `tier-4-critical` |
+
+The resolved value is written to `RECON_TIER` in Step 1.5 and applied to all four RECON csa steps.
+Debate and Revise phases always use the tier specified at the step level (`tier-2-standard` / `tier-3-complex`).
+
 ## Step 0: Phase 0.5 — Auto Session Discovery
 
 Tool: bash
@@ -92,13 +107,15 @@ PY
 
 Tool: bash
 
-Resolve planning language for TODO content.
-Priority:
+Resolve planning language for TODO content, and initialize `RECON_TIER` for RECON sub-sessions.
+Priority (language):
 1) Explicit `${USER_LANGUAGE}`
 2) Environment `${CSA_USER_LANGUAGE}`
 3) Script-aware detection from `${FEATURE}`
 4) Default to Chinese (Simplified) when script is mixed/unknown
 5) Fallback to Chinese (Simplified) when `${FEATURE}` is empty
+
+Priority (RECON tier): `${TIER}` if set; else `tier-1-quick`.
 
 ```bash
 # --- Intensity detection (CSA_VAR side-effect, stripped from STEP_OUTPUT) ---
@@ -108,6 +125,13 @@ if [[ "${INTENSITY:-full}" == "light" ]]; then
 else
   echo "Planning intensity: full" >&2
   echo "CSA_VAR:INTENSITY_IS_LIGHT=false"
+fi
+
+# --- RECON tier propagation: caller-specified TIER takes precedence; default to tier-1-quick ---
+if [[ -n "${TIER:-}" ]]; then
+  echo "CSA_VAR:RECON_TIER=${TIER}"
+else
+  echo "CSA_VAR:RECON_TIER=tier-1-quick"
 fi
 
 # --- Language detection (result is the step's logical output) ---
@@ -154,7 +178,7 @@ echo "Chinese (Simplified)"
 
 Tool: csa
 Session: ${STEP_1_OUTPUT}
-Tier: tier-1-quick
+Tier: ${RECON_TIER}
 Note: RECON steps are read-only (`workspace_access = "read-only"`); auto-routing is safe here because no tool writes files, so `allow_edit` restrictions do not apply. Any tool in the tier can explore.
 
 Analyze codebase structure relevant to ${FEATURE}.
@@ -168,7 +192,7 @@ Working directory: ${CWD}
 
 Tool: csa
 Session: ${STEP_1_OUTPUT}
-Tier: tier-1-quick
+Tier: ${RECON_TIER}
 Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 
 Find existing patterns or similar features to ${FEATURE} in this codebase.
@@ -182,7 +206,7 @@ Working directory: ${CWD}
 
 Tool: csa
 Session: ${STEP_1_OUTPUT}
-Tier: tier-1-quick
+Tier: ${RECON_TIER}
 Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 
 Identify constraints and risks for implementing ${FEATURE}.
@@ -196,7 +220,7 @@ Working directory: ${CWD}
 
 Tool: csa
 Session: ${STEP_1_OUTPUT}
-Tier: tier-1-quick
+Tier: ${RECON_TIER}
 Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
 
 Identify the semantic invariants and concurrency assumptions for ${FEATURE}.

@@ -501,6 +501,49 @@ fn test_quota_exhausted_patterns_do_not_set_quota_from_stdout() {
     }
 }
 
+// --- #1473: codex quota error in stdout JSON triggers failover ---
+
+#[test]
+fn test_codex_usage_limit_in_stdout_json_triggers_failover() {
+    let detected = detect_rate_limit(
+        "codex",
+        "",
+        r#"{"type":"error","message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at 3:50 AM."}"#,
+        1,
+        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+    )
+    .expect("codex stdout usage limit should classify for failover");
+    assert_eq!(detected.matched_pattern, "usage limit");
+    assert!(
+        detected.advance_to_next_model,
+        "must advance to next tier model on codex quota hit"
+    );
+    assert!(
+        !detected.quota_exhausted,
+        "stdout-only match should not set permanent quota flag"
+    );
+    assert_eq!(
+        detected.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.3-codex-spark/xhigh")
+    );
+}
+
+#[test]
+fn test_codex_usage_limit_in_stderr_sets_quota_exhausted() {
+    let detected = detect_rate_limit(
+        "codex",
+        "Error: Usage limit exceeded for this account",
+        "",
+        1,
+        None,
+    )
+    .expect("codex stderr usage limit should classify");
+    assert!(
+        detected.quota_exhausted,
+        "stderr-confirmed match should set permanent quota flag"
+    );
+}
+
 #[test]
 fn test_transient_rate_limit_patterns_still_match_stdout() {
     let detected = detect_rate_limit(
