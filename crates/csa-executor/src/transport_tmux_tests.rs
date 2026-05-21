@@ -1,3 +1,4 @@
+use super::jsonl::JsonlEvent;
 use super::*;
 use serde::Deserialize;
 use std::io::Write;
@@ -299,6 +300,69 @@ async fn discover_new_jsonl_times_out_when_no_new_file() {
         err.to_string().contains("no new JSONL"),
         "expected timeout error, got: {err}"
     );
+}
+
+// ── try_read_contract_result ─────────────────────────────────────────────
+
+#[test]
+fn read_contract_result_returns_summary_when_present() {
+    let tmp = TempDir::new().unwrap();
+    let output = tmp.path().join("output");
+    fs::create_dir_all(&output).unwrap();
+    fs::write(
+        output.join("result.toml"),
+        "status = \"success\"\nsummary = \"The task is done.\"\nexit_code = 0\n",
+    )
+    .unwrap();
+
+    let result = try_read_contract_result(tmp.path());
+    assert_eq!(result, Some("The task is done.".to_string()));
+}
+
+#[test]
+fn read_contract_result_returns_none_when_missing() {
+    let tmp = TempDir::new().unwrap();
+    assert!(try_read_contract_result(tmp.path()).is_none());
+}
+
+#[test]
+fn read_contract_result_returns_none_when_no_summary_field() {
+    let tmp = TempDir::new().unwrap();
+    let output = tmp.path().join("output");
+    fs::create_dir_all(&output).unwrap();
+    fs::write(output.join("result.toml"), "status = \"success\"\n").unwrap();
+
+    assert!(try_read_contract_result(tmp.path()).is_none());
+}
+
+// ── create_jsonl_audit_symlink ──────────────────────────────────────────
+
+#[cfg(unix)]
+#[test]
+fn audit_symlink_links_to_jsonl() {
+    let tmp = TempDir::new().unwrap();
+    let jsonl = tmp.path().join("conv.jsonl");
+    fs::write(&jsonl, b"").unwrap();
+
+    create_jsonl_audit_symlink(tmp.path(), &jsonl);
+
+    let link = tmp.path().join("output").join(JSONL_AUDIT_LINK_NAME);
+    assert!(link.exists(), "symlink should exist");
+    assert_eq!(fs::read_link(&link).unwrap(), jsonl);
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_symlink_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let jsonl = tmp.path().join("conv.jsonl");
+    fs::write(&jsonl, b"").unwrap();
+
+    create_jsonl_audit_symlink(tmp.path(), &jsonl);
+    create_jsonl_audit_symlink(tmp.path(), &jsonl);
+
+    let link = tmp.path().join("output").join(JSONL_AUDIT_LINK_NAME);
+    assert!(link.exists());
 }
 
 // ── list_csa_tmux_sessions ───────────────────────────────────────────────
