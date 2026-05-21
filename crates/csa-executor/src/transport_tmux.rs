@@ -10,14 +10,13 @@
 //!
 //! ## Lifecycle
 //!
-//! 1. Spawn `tmux new-session -d -s csa-<ULID> -- claude --dangerously-skip-permissions`
-//! 2. Get pane PID: `tmux display-message -p '#{pane_pid}'`
-//! 3. Discover Claude session: `~/.claude/sessions/<pid>.json` → `sessionId`
-//! 4. Find JSONL log: `~/.claude/projects/**/<sessionId>.jsonl`
-//! 5. Wait for JSONL creation (readiness, 30s timeout)
-//! 6. Send prompt: `tmux load-buffer` → `paste-buffer` → `send-keys Enter`
-//! 7. Tail JSONL until `type=system subtype=turn_duration` marker
-//! 8. Kill tmux session on Drop (`TmuxCleanupGuard`)
+//! 1. Snapshot existing `.jsonl` files in `~/.claude/projects/<escaped-path>/`
+//! 2. Spawn `tmux new-session -d -s csa-<ULID> -- /path/to/claude --dangerously-skip-permissions`
+//! 3. Wait for Claude TUI readiness (poll tmux pane for `❯` prompt)
+//! 4. Send prompt: `tmux load-buffer` → `paste-buffer` → `send-keys Enter`
+//! 5. Discover new JSONL: diff snapshot to find newly created `.jsonl` file
+//! 6. Tail JSONL until `type=system subtype=turn_duration` marker
+//! 7. Kill tmux session on Drop (`TmuxCleanupGuard`)
 //!
 //! ## Limitations
 //!
@@ -39,7 +38,6 @@ use async_trait::async_trait;
 use csa_core::transport_events::StreamingMetadata;
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
-use serde::Deserialize;
 use tokio::time::sleep;
 
 use crate::executor::Executor;
@@ -72,13 +70,6 @@ impl Drop for TmuxCleanupGuard {
 
 // ── Session discovery ─────────────────────────────────────────────────────────
 
-/// Claude Code session metadata from `~/.claude/sessions/<pid>.json`.
-#[derive(Debug, Deserialize)]
-struct ClaudeSessionMeta {
-    #[serde(rename = "sessionId")]
-    session_id: String,
-}
-
 fn claude_root() -> Result<PathBuf> {
     let home = home_dir().context("cannot determine HOME directory")?;
     Ok(home.join(".claude"))
@@ -88,104 +79,79 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Read `~/.claude/sessions/<pid>.json` to get Claude's session ID, then verify
-/// that PID <pid> still runs `claude` (guards against PID reuse).
-fn read_session_meta(pid: u32) -> Result<ClaudeSessionMeta> {
+/// Escape a project path the way Claude Code does for its
+/// `~/.claude/projects/` directory names: replace every `/` with `-`.
+fn escape_project_path(work_dir: &Path) -> String {
+    work_dir.to_string_lossy().replace('/', "-")
+}
+
+/// Return the Claude projects directory for the given work_dir.
+fn project_jsonl_dir(work_dir: &Path) -> Result<PathBuf> {
     let root = claude_root()?;
-    let meta_path = root.join("sessions").join(format!("{pid}.json"));
+    let escaped = escape_project_path(work_dir);
+    Ok(root.join("projects").join(escaped))
+}
 
-    if !meta_path.exists() {
-        bail!(
-            "Claude session metadata not yet written at {}",
-            meta_path.display()
-        );
+/// Snapshot all `.jsonl` files in the project's Claude directory.
+fn snapshot_jsonl_files(project_dir: &Path) -> std::collections::HashSet<PathBuf> {
+    let mut set = std::collections::HashSet::new();
+    if let Ok(entries) = fs::read_dir(project_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                set.insert(path);
+            }
+        }
     }
+    set
+}
 
-    // Verify cmdline to catch PID reuse before trusting the metadata.
-    // On Linux, read /proc/<pid>/cmdline. On other platforms, skip this check.
-    #[cfg(target_os = "linux")]
-    {
-        let cmdline_path = format!("/proc/{pid}/cmdline");
-        let cmdline = fs::read_to_string(&cmdline_path)
-            .unwrap_or_default()
-            .replace('\0', " ");
-        if !cmdline.to_lowercase().contains("claude") {
+/// Poll until a new `.jsonl` file appears that wasn't in `before`.
+/// Returns the path and the session ID (UUID filename stem).
+async fn discover_new_jsonl(
+    project_dir: &Path,
+    before: &std::collections::HashSet<PathBuf>,
+) -> Result<(PathBuf, String)> {
+    discover_new_jsonl_with_timeout(project_dir, before, SESSION_DISCOVERY_TIMEOUT).await
+}
+
+async fn discover_new_jsonl_with_timeout(
+    project_dir: &Path,
+    before: &std::collections::HashSet<PathBuf>,
+    timeout: Duration,
+) -> Result<(PathBuf, String)> {
+    let deadline = Instant::now() + timeout;
+    let mut backoff = Duration::from_millis(500);
+
+    loop {
+        if let Ok(entries) = fs::read_dir(project_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                    && !before.contains(&path)
+                {
+                    let session_id = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    return Ok((path, session_id));
+                }
+            }
+        }
+
+        if Instant::now() + backoff > deadline {
             bail!(
-                "PID {pid} cmdline does not contain 'claude' (got: {:?}); \
-                 possible PID reuse — not safe to read session metadata",
-                &cmdline[..cmdline.len().min(120)]
+                "tmux transport: no new JSONL file appeared in {} within {}s. \
+                 Claude Code may have failed to start or process the prompt.",
+                project_dir.display(),
+                timeout.as_secs()
             );
         }
+        sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(2));
     }
-
-    let content =
-        fs::read_to_string(&meta_path).with_context(|| meta_path.display().to_string())?;
-    let meta: ClaudeSessionMeta =
-        serde_json::from_str(&content).with_context(|| format!("parse {}", meta_path.display()))?;
-    Ok(meta)
-}
-
-/// Walk `~/.claude/projects/` one level deep and return the path for
-/// `<session_id>.jsonl` when found.  Checks `sessions-index.json` first for
-/// efficiency, then falls back to filename search.
-fn find_jsonl_path(claude_root: &Path, session_id: &str) -> Option<PathBuf> {
-    let projects = claude_root.join("projects");
-    if !projects.exists() {
-        return None;
-    }
-
-    let needle = format!("{session_id}.jsonl");
-    let Ok(project_dirs) = fs::read_dir(&projects) else {
-        return None;
-    };
-
-    for entry in project_dirs.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        // Fast path: check sessions-index.json for the session_id.
-        let index_path = path.join("sessions-index.json");
-        if index_path.exists()
-            && let Some(jsonl) = find_in_sessions_index(&index_path, session_id)
-            && jsonl.exists()
-        {
-            return Some(jsonl);
-        }
-
-        // Filename-based fallback.
-        let candidate = path.join(&needle);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-#[derive(Deserialize)]
-struct SessionsIndex {
-    #[serde(default)]
-    entries: Vec<SessionsIndexEntry>,
-}
-
-#[derive(Deserialize)]
-struct SessionsIndexEntry {
-    #[serde(rename = "sessionId")]
-    session_id: String,
-    #[serde(rename = "fullPath")]
-    full_path: Option<PathBuf>,
-}
-
-fn find_in_sessions_index(index_path: &Path, session_id: &str) -> Option<PathBuf> {
-    let content = fs::read_to_string(index_path).ok()?;
-    let index: SessionsIndex = serde_json::from_str(&content).ok()?;
-    index
-        .entries
-        .into_iter()
-        .find(|e| e.session_id == session_id)
-        .and_then(|e| e.full_path)
 }
 
 // ── JSONL watcher ─────────────────────────────────────────────────────────────
@@ -360,7 +326,11 @@ async fn watch_jsonl_for_turn(jsonl_path: &Path, idle_timeout_seconds: u64) -> R
 ///
 /// This is safer than `send-keys` for prompts containing special characters,
 /// shell metacharacters, multi-byte UTF-8, or large payloads.
-fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
+///
+/// A delay between paste-buffer and Enter is required because Claude Code's
+/// TUI uses bracketed-paste mode: the paste event must finish processing before
+/// Enter can submit the message.
+async fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
     // Use a named buffer (session_name) to avoid cross-session races when
     // multiple CSA tmux sessions run concurrently.
     let buffer_name = session_name;
@@ -397,6 +367,15 @@ fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
         bail!("tmux paste-buffer exited with {status}");
     }
 
+    // Wait for Claude Code's TUI to finish processing the bracketed paste.
+    // Large prompts (>10K chars) need more time for the TUI to render.
+    let paste_settle = if prompt.len() > 10_000 {
+        Duration::from_millis(1000)
+    } else {
+        Duration::from_millis(200)
+    };
+    sleep(paste_settle).await;
+
     // Send Enter to submit the prompt.
     let status = Command::new("tmux")
         .args(["send-keys", "-t", session_name, "Enter"])
@@ -430,6 +409,25 @@ impl TmuxTransport {
         format!("csa-{}", csa_session::new_session_id())
     }
 
+    /// Resolve the absolute path of the `claude` binary, skipping shell aliases.
+    fn resolve_claude_binary() -> Result<String> {
+        let output = std::process::Command::new("bash")
+            .args([
+                "-c",
+                "command -p which claude 2>/dev/null || which claude 2>/dev/null",
+            ])
+            .output()
+            .context("resolving claude binary path")?;
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            bail!(
+                "tmux transport: could not locate `claude` binary. \
+                 Ensure Claude Code is installed and in PATH."
+            );
+        }
+        Ok(path)
+    }
+
     /// Spawn a detached tmux session running `claude --dangerously-skip-permissions`.
     async fn spawn_tmux(
         session_name: &str,
@@ -439,11 +437,9 @@ impl TmuxTransport {
         thinking_budget: Option<&crate::model_spec::ThinkingBudget>,
     ) -> Result<()> {
         let work_dir_str = work_dir.to_str().context("work_dir is not valid UTF-8")?;
+        let claude_bin = Self::resolve_claude_binary()?;
 
-        let mut claude_args = vec![
-            "claude".to_string(),
-            "--dangerously-skip-permissions".to_string(),
-        ];
+        let mut claude_args = vec![claude_bin, "--dangerously-skip-permissions".to_string()];
         if let Some(model) = model_override {
             claude_args.push("--model".into());
             claude_args.push(model.to_string());
@@ -498,63 +494,24 @@ impl TmuxTransport {
         Ok(())
     }
 
-    /// Get the PID of the process running in the given tmux pane.
-    async fn pane_pid(session_name: &str) -> Result<u32> {
-        let output = tokio::process::Command::new("tmux")
-            .args(["display-message", "-p", "-t", session_name, "#{pane_pid}"])
-            .output()
-            .await
-            .context("tmux display-message")?;
-        let raw = String::from_utf8_lossy(&output.stdout);
-        raw.trim()
-            .parse::<u32>()
-            .context("pane_pid from tmux is not a valid u32")
-    }
-
-    /// Poll until `~/.claude/sessions/<pid>.json` exists and yields a session ID,
-    /// then find the corresponding JSONL log in `~/.claude/projects/`.
-    async fn discover_jsonl(session_name: &str) -> Result<(PathBuf, String)> {
-        let deadline = Instant::now() + SESSION_DISCOVERY_TIMEOUT;
-        let mut backoff = Duration::from_millis(200);
-        let root = claude_root()?;
-
-        loop {
-            let pid = Self::pane_pid(session_name).await?;
-
-            if let Ok(meta) = read_session_meta(pid) {
-                if let Some(jsonl) = find_jsonl_path(&root, &meta.session_id) {
-                    return Ok((jsonl, meta.session_id));
-                }
-                tracing::debug!(
-                    session_id = %meta.session_id,
-                    "tmux transport: JSONL not yet written; retrying"
-                );
-            }
-
-            if Instant::now() + backoff > deadline {
-                bail!(
-                    "tmux transport: Claude Code did not produce a session file within {}s. \
-                     Ensure `claude` is installed and accessible in the tmux environment.",
-                    SESSION_DISCOVERY_TIMEOUT.as_secs()
-                );
-            }
-            sleep(backoff).await;
-            backoff = (backoff * 2).min(Duration::from_secs(2));
-        }
-    }
-
-    /// Wait for the JSONL file to be created (Claude is ready for input).
-    async fn wait_for_readiness(jsonl_path: &Path) -> Result<()> {
+    /// Wait for Claude's TUI to finish initializing by checking tmux pane content.
+    async fn wait_for_readiness(session_name: &str) -> Result<()> {
         let deadline = Instant::now() + READINESS_TIMEOUT;
         loop {
-            if jsonl_path.exists() {
-                return Ok(());
+            let output = std::process::Command::new("tmux")
+                .args(["capture-pane", "-t", session_name, "-p"])
+                .output();
+            if let Ok(out) = output {
+                let text = String::from_utf8_lossy(&out.stdout);
+                // Claude's TUI shows the input prompt line with "❯" when ready.
+                if text.contains('❯') {
+                    return Ok(());
+                }
             }
             if Instant::now() > deadline {
                 bail!(
-                    "tmux transport: Claude Code did not create its JSONL log at {} \
-                     within {}s. Claude may have failed to start.",
-                    jsonl_path.display(),
+                    "tmux transport: Claude Code did not become ready within {}s. \
+                     Check tmux session '{session_name}' for errors.",
                     READINESS_TIMEOUT.as_secs()
                 );
             }
@@ -562,7 +519,7 @@ impl TmuxTransport {
         }
     }
 
-    /// Full session lifecycle: spawn → discover → ready → prompt → watch → result.
+    /// Full session lifecycle: snapshot → spawn → ready → prompt → discover → watch.
     async fn execute_session(
         &self,
         prompt: &str,
@@ -575,6 +532,15 @@ impl TmuxTransport {
             session = %session_name,
             work_dir = %work_dir.display(),
             "tmux transport: spawning session"
+        );
+
+        // Snapshot existing JSONL files before spawning so we can diff later.
+        let jsonl_dir = project_jsonl_dir(work_dir)?;
+        let before_snapshot = snapshot_jsonl_files(&jsonl_dir);
+        tracing::debug!(
+            jsonl_dir = %jsonl_dir.display(),
+            existing_count = before_snapshot.len(),
+            "tmux transport: pre-spawn JSONL snapshot"
         );
 
         let (model_override, thinking_budget) = match &self.executor {
@@ -598,27 +564,30 @@ impl TmuxTransport {
             session_name: session_name.clone(),
         };
 
-        let (jsonl_path, provider_session_id) = Self::discover_jsonl(&session_name).await?;
+        Self::wait_for_readiness(&session_name).await?;
+        tracing::debug!(session = %session_name, "tmux transport: Claude ready");
+
+        deliver_prompt(&session_name, prompt).await?;
+        tracing::debug!(
+            session = %session_name,
+            prompt_len = prompt.len(),
+            "tmux transport: prompt delivered"
+        );
+
+        // JSONL is created after Claude processes the first prompt.
+        let (jsonl_path, provider_session_id) =
+            discover_new_jsonl(&jsonl_dir, &before_snapshot).await?;
         tracing::debug!(
             jsonl = %jsonl_path.display(),
             session_id = %provider_session_id,
             "tmux transport: discovered JSONL log"
         );
 
-        Self::wait_for_readiness(&jsonl_path).await?;
-
         // Schema validation: confirm the JSONL format matches expectations.
         if let Err(e) = validate_jsonl_schema(&jsonl_path) {
             tracing::warn!(error = %e, "tmux transport: JSONL schema validation failed");
             bail!(e);
         }
-
-        deliver_prompt(&session_name, prompt)?;
-        tracing::debug!(
-            session = %session_name,
-            prompt_len = prompt.len(),
-            "tmux transport: prompt delivered"
-        );
 
         let output_text = watch_jsonl_for_turn(&jsonl_path, idle_timeout_seconds).await?;
 
@@ -669,10 +638,10 @@ impl Transport for TmuxTransport {
         tracing::debug!(tool = %self.executor.tool_name(), "tmux transport: execute");
 
         if options.sandbox.is_some() {
-            bail!(
-                "tmux transport is incompatible with sandbox isolation — tmux sessions \
-                 run outside the sandbox namespace. Set [filesystem_sandbox] \
-                 enforcement_mode = \"off\" when using transport = \"tmux\"."
+            tracing::warn!(
+                "tmux transport: sandbox configuration is present but cannot be enforced — \
+                 tmux sessions spawn outside the sandbox namespace. The sandbox is \
+                 silently skipped for this transport."
             );
         }
 
