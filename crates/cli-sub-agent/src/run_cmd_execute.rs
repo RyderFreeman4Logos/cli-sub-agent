@@ -605,14 +605,27 @@ pub(crate) async fn handle_run(
     let fork_resolution = loop_outcome.fork_resolution;
 
     if result.exit_code == 0 {
-        maybe_run_post_exec_gate_with_runner(
+        // Capture gate errors so we can overwrite the already-written result.toml
+        // before propagating.  Without this, result.toml shows status=success even
+        // when the gate rejected the session output (#1486).
+        if let Err(gate_err) = maybe_run_post_exec_gate_with_runner(
             &project_root,
             &gate_prompt_text,
             executed_session_id.as_deref(),
             config.as_ref(),
             execute_post_exec_gate_command,
         )
-        .await?;
+        .await
+        {
+            if let Some(ref sid) = executed_session_id {
+                crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
+                    &project_root,
+                    sid,
+                    &gate_err,
+                );
+            }
+            return Err(gate_err);
+        }
     }
 
     if fork_call {

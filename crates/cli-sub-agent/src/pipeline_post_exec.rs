@@ -248,6 +248,31 @@ pub(crate) async fn process_execution_result(
             tool_state.last_action_summary = no_op_summary;
         }
     }
+    // Worker-blocked gate (#1483): rewrite to failure when output/summary
+    // contains "STATUS: BLOCKED" (Bash unavailable, EROFS, missing tooling).
+    if result.exit_code == 0
+        && blocked::worker_output_indicates_blocked(&result.output, &result.summary)
+    {
+        let blocked_summary = format!(
+            "worker blocked: STATUS: BLOCKED detected; task was not completed. \
+             Original summary: {}",
+            result.summary,
+        );
+        warn!(
+            session = %session.meta_session_id,
+            original_summary = %result.summary,
+            "STATUS: BLOCKED in session output — rewriting exit_code to 1"
+        );
+        session_result.exit_code = 1;
+        session_result.status = csa_session::SessionResult::status_from_exit_code(1);
+        session_result.summary = blocked_summary.clone();
+        result.exit_code = 1;
+        result.summary = blocked_summary.clone();
+        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+            tool_state.last_exit_code = 1;
+            tool_state.last_action_summary = blocked_summary;
+        }
+    }
     if result.exit_code == 0
         && ctx.task_type == Some("run")
         && let Err(err) = progress::maybe_mark_no_progress_session(
@@ -748,6 +773,9 @@ fn persist_output_sections(session_dir: &Path) {
         warn!("Failed to persist structured output: {}", e);
     }
 }
+
+#[path = "pipeline_post_exec_blocked.rs"]
+mod blocked;
 
 #[cfg(test)]
 #[path = "pipeline_tests_post_exec.rs"]

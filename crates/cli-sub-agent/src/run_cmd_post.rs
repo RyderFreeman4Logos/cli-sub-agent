@@ -169,6 +169,46 @@ struct TransportErrorFailoverSignal {
     requires_init_failure_window: bool,
 }
 
+/// Overwrite a session's `result.toml` after a post-exec gate failure (#1486).
+///
+/// The result was written with status=success before the gate ran.
+/// This function loads the existing result and overwrites `exit_code` and
+/// `status` so orchestrators reading the session never observe false success.
+pub(crate) fn overwrite_result_as_post_exec_gate_failure(
+    project_root: &Path,
+    session_id: &str,
+    gate_err: &anyhow::Error,
+) {
+    let gate_summary = format!("post-exec gate failed: {gate_err:#}");
+    match load_result(project_root, session_id) {
+        Ok(Some(mut result)) => {
+            result.exit_code = 1;
+            result.status = "failure".to_string();
+            result.summary = gate_summary;
+            if let Err(save_err) = save_result(project_root, session_id, &result) {
+                warn!(
+                    session = %session_id,
+                    error = %save_err,
+                    "Failed to overwrite result.toml after post-exec gate failure"
+                );
+            }
+        }
+        Ok(None) => {
+            warn!(
+                session = %session_id,
+                "No result.toml to overwrite after post-exec gate failure"
+            );
+        }
+        Err(load_err) => {
+            warn!(
+                session = %session_id,
+                error = %load_err,
+                "Failed to load result.toml for post-exec gate failure overwrite"
+            );
+        }
+    }
+}
+
 pub(crate) fn format_tool_exhausted_summary(tool_name: &str, matched_pattern: &str) -> String {
     format!(
         "tool_exhausted: {tool_name} permanent quota exhaustion detected \
@@ -741,3 +781,7 @@ pub(crate) fn write_fallback_chain_to_result_toml(
         );
     }
 }
+
+#[cfg(test)]
+#[path = "run_cmd_post_gate_failure_tests.rs"]
+mod post_exec_gate_overwrite_tests;
