@@ -12,11 +12,14 @@
 //!
 //! 1. Snapshot existing `.jsonl` files in `~/.claude/projects/<escaped-path>/`
 //! 2. Spawn `tmux new-session -d -s csa-<ULID> -- /path/to/claude --dangerously-skip-permissions`
+//!    with `CSA_SESSION_DIR` and `CSA_RESULT_TOML_PATH_CONTRACT` env vars injected
 //! 3. Wait for Claude TUI readiness (poll tmux pane for `❯` prompt)
 //! 4. Send prompt: `tmux load-buffer` → `paste-buffer` → `send-keys Enter`
 //! 5. Discover new JSONL: diff snapshot to find newly created `.jsonl` file
 //! 6. Tail JSONL until `type=system subtype=turn_duration` marker
-//! 7. Kill tmux session on Drop (`TmuxCleanupGuard`)
+//! 7. Read output: prefer `output/result.toml` (if child wrote it), fall back to JSONL text
+//! 8. Symlink Claude JSONL → `<session_dir>/output/claude-conversation.jsonl` for audit
+//! 9. Kill tmux session on Drop (`TmuxCleanupGuard`)
 //!
 //! ## Limitations
 //!
@@ -28,7 +31,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -154,171 +156,11 @@ async fn discover_new_jsonl_with_timeout(
     }
 }
 
-// ── JSONL watcher ─────────────────────────────────────────────────────────────
-
-/// Validate that the first few JSONL events contain the expected fields
-/// (`type`, `sessionId`, `timestamp`).  Fails fast if the schema has changed.
-fn validate_jsonl_schema(jsonl_path: &Path) -> Result<()> {
-    let file = fs::File::open(jsonl_path).with_context(|| jsonl_path.display().to_string())?;
-    let reader = std::io::BufReader::new(file);
-    let mut checked = 0u32;
-
-    for line in reader.lines().map_while(Result::ok) {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let value: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => {
-                checked += 1;
-                continue;
-            }
-        };
-        // Require at minimum a `type` field in the first parseable event.
-        if value.get("type").is_none() {
-            bail!(
-                "Incompatible Claude JSONL schema at {}: first event lacks 'type' field. \
-                 Claude Code may have changed its conversation log format.",
-                jsonl_path.display()
-            );
-        }
-        checked += 1;
-        if checked >= 3 {
-            break;
-        }
-    }
-    Ok(())
-}
-
-/// Events extracted from the JSONL watcher.
-#[derive(Debug)]
-enum JsonlEvent {
-    AssistantText(String),
-    TurnDuration,
-    CompactBoundary,
-}
-
-/// Parse a single JSONL line into a `JsonlEvent`.
-fn parse_jsonl_line(line: &str) -> Option<JsonlEvent> {
-    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-    let event_type = value.get("type")?.as_str()?;
-
-    match event_type {
-        "assistant" => {
-            let text = extract_assistant_text(&value).unwrap_or_default();
-            Some(JsonlEvent::AssistantText(text))
-        }
-        "system" => {
-            let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-            match subtype {
-                "turn_duration" => Some(JsonlEvent::TurnDuration),
-                "compact_boundary" => Some(JsonlEvent::CompactBoundary),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Extract the text content from an `assistant` JSONL event.
-///
-/// Claude's conversation log stores assistant text in:
-/// `{"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}}`
-fn extract_assistant_text(value: &serde_json::Value) -> Option<String> {
-    let message = value.get("message")?;
-    let content = message.get("content")?.as_array()?;
-    let text = content
-        .iter()
-        .filter_map(|block| {
-            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                block.get("text").and_then(|t| t.as_str())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    if text.is_empty() { None } else { Some(text) }
-}
-
-/// Poll the JSONL file until a `turn_duration` event is seen, then return
-/// the collected assistant text from that turn.
-///
-/// Handles:
-/// - File not yet existing: retries with `POLL_INTERVAL` backoff.
-/// - `compact_boundary`: resets byte offset to 0 (Claude rewrote the log).
-/// - EOF without event: continues polling.
-/// - `idle_timeout_seconds`: returns error if no `turn_duration` in time.
-async fn watch_jsonl_for_turn(jsonl_path: &Path, idle_timeout_seconds: u64) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(idle_timeout_seconds);
-    let mut byte_offset: u64 = 0;
-    let mut collected_text = String::new();
-
-    loop {
-        if Instant::now() > deadline {
-            bail!(
-                "JSONL watcher timed out after {}s waiting for turn_duration; \
-                 collected {} chars of text so far",
-                idle_timeout_seconds,
-                collected_text.len()
-            );
-        }
-
-        // Try to open and read new data from the current offset.
-        match fs::File::open(jsonl_path) {
-            Err(_) => {
-                sleep(POLL_INTERVAL).await;
-                continue;
-            }
-            Ok(mut file) => {
-                if file.seek(SeekFrom::Start(byte_offset)).is_err() {
-                    // File may have been truncated (compaction); reset.
-                    byte_offset = 0;
-                    collected_text.clear();
-                    sleep(POLL_INTERVAL).await;
-                    continue;
-                }
-
-                let reader = std::io::BufReader::new(&mut file);
-                let mut advanced = false;
-
-                for line in reader.lines().map_while(Result::ok) {
-                    let line = line.trim().to_string();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    // Advance offset by line bytes + newline.
-                    byte_offset += line.len() as u64 + 1;
-                    advanced = true;
-
-                    match parse_jsonl_line(&line) {
-                        Some(JsonlEvent::AssistantText(text)) => {
-                            collected_text.push_str(&text);
-                        }
-                        Some(JsonlEvent::TurnDuration) => {
-                            return Ok(collected_text);
-                        }
-                        Some(JsonlEvent::CompactBoundary) => {
-                            // Claude compacted context; restart from new file beginning.
-                            byte_offset = 0;
-                            collected_text.clear();
-                            tracing::debug!(
-                                path = %jsonl_path.display(),
-                                "tmux transport: JSONL compact_boundary detected; resetting watcher"
-                            );
-                        }
-                        None => {}
-                    }
-                }
-
-                if !advanced {
-                    sleep(POLL_INTERVAL).await;
-                }
-            }
-        }
-    }
-}
+#[path = "transport_tmux_jsonl.rs"]
+mod jsonl;
+#[cfg(test)]
+use jsonl::parse_jsonl_line;
+use jsonl::{validate_jsonl_schema, watch_jsonl_for_turn};
 
 // ── Prompt delivery ───────────────────────────────────────────────────────────
 
@@ -388,6 +230,66 @@ async fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── Result contract ──────────────────────────────────────────────────────────
+
+/// Read the `output/result.toml` contract artifact if the child agent wrote one.
+/// Checks both top-level `summary` (canonical CSA `SessionResult` schema) and
+/// nested `[result].summary` for robustness. Returns `None` when the file is
+/// absent or contains neither variant so callers fall back to JSONL text.
+fn try_read_contract_result(session_dir: &Path) -> Option<String> {
+    let path = csa_session::contract_result_path(session_dir);
+    let contents = fs::read_to_string(&path).ok()?;
+    let table: toml::Table = toml::from_str(&contents).ok()?;
+    let summary = table
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            table
+                .get("result")
+                .and_then(|v| v.as_table())
+                .and_then(|t| t.get("summary"))
+                .and_then(|v| v.as_str())
+        })
+        .map(String::from)?;
+    tracing::debug!(
+        path = %path.display(),
+        summary_len = summary.len(),
+        "tmux transport: read result.toml contract output"
+    );
+    Some(summary)
+}
+
+const JSONL_AUDIT_LINK_NAME: &str = "claude-conversation.jsonl";
+
+/// Create a symlink from `<session_dir>/output/claude-conversation.jsonl` to
+/// Claude's JSONL conversation log.  Best-effort: logs a warning on failure.
+fn create_jsonl_audit_symlink(session_dir: &Path, jsonl_path: &Path) {
+    let output_dir = session_dir.join("output");
+    if let Err(e) = fs::create_dir_all(&output_dir) {
+        tracing::warn!(error = %e, "tmux transport: failed to create output dir for JSONL symlink");
+        return;
+    }
+    let link = output_dir.join(JSONL_AUDIT_LINK_NAME);
+    if link.exists() {
+        return;
+    }
+    #[cfg(unix)]
+    if let Err(e) = std::os::unix::fs::symlink(jsonl_path, &link) {
+        tracing::warn!(
+            error = %e,
+            target = %jsonl_path.display(),
+            link = %link.display(),
+            "tmux transport: failed to create JSONL audit symlink"
+        );
+    } else {
+        tracing::debug!(
+            link = %link.display(),
+            target = %jsonl_path.display(),
+            "tmux transport: created JSONL audit symlink"
+        );
+    }
 }
 
 // ── TmuxTransport ─────────────────────────────────────────────────────────────
@@ -520,12 +422,18 @@ impl TmuxTransport {
     }
 
     /// Full session lifecycle: snapshot → spawn → ready → prompt → discover → watch.
+    ///
+    /// When `session_dir` is provided, the transport injects `CSA_SESSION_DIR` and
+    /// `CSA_RESULT_TOML_PATH_CONTRACT` into the tmux environment, enables
+    /// result.toml reading as the preferred output source, and creates a JSONL
+    /// symlink in the session output directory for xurl/recall audit access.
     async fn execute_session(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         idle_timeout_seconds: u64,
+        session_dir: Option<PathBuf>,
     ) -> Result<TransportResult> {
         let session_name = Self::session_name();
         tracing::debug!(
@@ -551,10 +459,27 @@ impl TmuxTransport {
             } => (model_override.as_deref(), thinking_budget.as_ref()),
             _ => (None, None),
         };
+
+        // Merge caller-provided env with CSA session env vars so Claude Code
+        // inside tmux can write to the result.toml contract path.
+        let merged_env = {
+            let mut env = extra_env.cloned().unwrap_or_default();
+            if let Some(dir) = &session_dir {
+                env.insert("CSA_SESSION_DIR".into(), dir.to_string_lossy().into_owned());
+                env.insert(
+                    csa_session::RESULT_TOML_PATH_CONTRACT_ENV.into(),
+                    csa_session::contract_result_path(dir)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            env
+        };
+
         Self::spawn_tmux(
             &session_name,
             work_dir,
-            extra_env,
+            Some(&merged_env),
             model_override,
             thinking_budget,
         )
@@ -586,15 +511,35 @@ impl TmuxTransport {
         // Schema validation: confirm the JSONL format matches expectations.
         if let Err(e) = validate_jsonl_schema(&jsonl_path) {
             tracing::warn!(error = %e, "tmux transport: JSONL schema validation failed");
-            bail!(e);
+            return Err(e);
         }
 
-        let output_text = watch_jsonl_for_turn(&jsonl_path, idle_timeout_seconds).await?;
+        let jsonl_fallback_text = watch_jsonl_for_turn(&jsonl_path, idle_timeout_seconds).await?;
+
+        tracing::debug!(
+            session = %session_name,
+            jsonl_text_len = jsonl_fallback_text.len(),
+            "tmux transport: turn complete"
+        );
+
+        // Prefer result.toml written by the child agent (if session_dir is set
+        // and the prompt instructed Claude to write there). Fall back to JSONL
+        // text extraction when result.toml is absent.
+        let output_text = match &session_dir {
+            Some(dir) => try_read_contract_result(dir).unwrap_or(jsonl_fallback_text),
+            None => jsonl_fallback_text,
+        };
+
+        // Symlink Claude's JSONL into the CSA session output dir so xurl/recall
+        // can locate the conversation log by CSA session ID.
+        if let Some(dir) = &session_dir {
+            create_jsonl_audit_symlink(dir, &jsonl_path);
+        }
 
         tracing::debug!(
             session = %session_name,
             output_len = output_text.len(),
-            "tmux transport: turn complete"
+            "tmux transport: output resolved"
         );
 
         Ok(TransportResult {
@@ -646,8 +591,16 @@ impl Transport for TmuxTransport {
         }
 
         let work_dir = PathBuf::from(&session.project_path);
-        self.execute_session(prompt, &work_dir, extra_env, options.idle_timeout_seconds)
-            .await
+        let session_dir =
+            csa_session::manager::get_session_dir(&work_dir, &session.meta_session_id).ok();
+        self.execute_session(
+            prompt,
+            &work_dir,
+            extra_env,
+            options.idle_timeout_seconds,
+            session_dir,
+        )
+        .await
     }
 
     async fn execute_in(
@@ -659,7 +612,7 @@ impl Transport for TmuxTransport {
         idle_timeout_seconds: u64,
         _initial_response_timeout: ResolvedTimeout,
     ) -> Result<TransportResult> {
-        self.execute_session(prompt, work_dir, extra_env, idle_timeout_seconds)
+        self.execute_session(prompt, work_dir, extra_env, idle_timeout_seconds, None)
             .await
     }
 
