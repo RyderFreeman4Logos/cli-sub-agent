@@ -14,6 +14,11 @@ pub enum TransportMode {
     Legacy,
     Acp,
     OpenaiCompat,
+    /// Experimental: tmux-backed interactive transport for claude-code.
+    /// Claude runs inside a detached tmux session; prompt delivery is via
+    /// `tmux load-buffer`/`paste-buffer`; output is read from the JSONL
+    /// conversation log.
+    Tmux,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +39,7 @@ impl std::fmt::Display for TransportMode {
             Self::Legacy => f.write_str("cli"),
             Self::Acp => f.write_str("acp"),
             Self::OpenaiCompat => f.write_str("openai_compat"),
+            Self::Tmux => f.write_str("tmux"),
         }
     }
 }
@@ -59,6 +65,12 @@ impl TransportMode {
                 typed_events: true,
             },
             Self::OpenaiCompat => TransportCapabilities {
+                streaming: false,
+                session_resume: false,
+                session_fork: false,
+                typed_events: false,
+            },
+            Self::Tmux => TransportCapabilities {
                 streaming: false,
                 session_resume: false,
                 session_fork: false,
@@ -102,6 +114,10 @@ impl TransportFactory {
                 Some(crate::ClaudeCodeTransport::Acp) => {
                     Self::validate_mode_for_executor(executor, TransportMode::Acp)?;
                     Ok(TransportMode::Acp)
+                }
+                Some(crate::ClaudeCodeTransport::Tmux) => {
+                    Self::validate_mode_for_executor(executor, TransportMode::Tmux)?;
+                    Ok(TransportMode::Tmux)
                 }
                 Some(crate::ClaudeCodeTransport::Cli) | None => {
                     Self::validate_mode_for_executor(executor, TransportMode::Legacy)?;
@@ -158,8 +174,9 @@ impl TransportFactory {
             #[cfg(all(feature = "acp", feature = "claude-code-acp"))]
             (Executor::ClaudeCode { .. }, TransportMode::Acp) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::Legacy) => Ok(()),
+            (Executor::ClaudeCode { .. }, TransportMode::Tmux) => Ok(()),
             (Executor::ClaudeCode { .. }, TransportMode::OpenaiCompat) => {
-                err("claude-code only supports cli or acp transport")
+                err("claude-code only supports cli, acp, or tmux transport")
             }
 
             // Codex + ACP: gated behind the `codex-acp` cargo feature.
@@ -176,7 +193,8 @@ impl TransportFactory {
             ),
             #[cfg(all(feature = "acp", feature = "codex-acp"))]
             (Executor::Codex { .. }, TransportMode::Acp) => Ok(()),
-            (Executor::Codex { .. }, TransportMode::OpenaiCompat) => {
+            (Executor::Codex { .. }, TransportMode::OpenaiCompat)
+            | (Executor::Codex { .. }, TransportMode::Tmux) => {
                 err("codex only supports cli or acp transport")
             }
 
@@ -184,7 +202,8 @@ impl TransportFactory {
             (Executor::GeminiCli { .. }, TransportMode::Legacy) => Ok(()),
             #[cfg(feature = "acp")]
             (Executor::GeminiCli { .. }, TransportMode::Acp) => Ok(()),
-            (Executor::GeminiCli { .. }, TransportMode::OpenaiCompat) => {
+            (Executor::GeminiCli { .. }, TransportMode::OpenaiCompat)
+            | (Executor::GeminiCli { .. }, TransportMode::Tmux) => {
                 err("gemini-cli only supports cli or acp transport")
             }
 
@@ -192,7 +211,8 @@ impl TransportFactory {
             (Executor::Opencode { .. }, TransportMode::Legacy) => Ok(()),
             #[cfg(feature = "acp")]
             (Executor::Opencode { .. }, TransportMode::Acp) => err("opencode has no acp transport"),
-            (Executor::Opencode { .. }, TransportMode::OpenaiCompat) => {
+            (Executor::Opencode { .. }, TransportMode::OpenaiCompat)
+            | (Executor::Opencode { .. }, TransportMode::Tmux) => {
                 err("opencode only supports cli transport")
             }
 
@@ -204,6 +224,9 @@ impl TransportFactory {
             #[cfg(feature = "acp")]
             (Executor::OpenaiCompat { .. }, TransportMode::Acp) => {
                 err("openai-compat does not support acp transport")
+            }
+            (Executor::OpenaiCompat { .. }, TransportMode::Tmux) => {
+                err("openai-compat does not support tmux transport")
             }
         }
     }
@@ -305,6 +328,9 @@ impl TransportFactory {
                     crate::transport_openai_compat::OpenaiCompatTransport::new(default_model),
                 ))
             }
+            TransportMode::Tmux => Ok(Box::new(crate::transport_tmux::TmuxTransport::new(
+                executor.clone(),
+            ))),
         }
     }
 

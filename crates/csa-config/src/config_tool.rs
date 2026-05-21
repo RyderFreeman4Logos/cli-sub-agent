@@ -14,6 +14,9 @@ pub enum TransportKind {
     Auto,
     Cli,
     Acp,
+    /// Experimental: runs Claude Code inside a detached tmux session for
+    /// interactive billing pool placement. Only valid for the `claude-code` tool.
+    Tmux,
 }
 
 pub fn default_transport_for_tool(tool_name: &str) -> Option<TransportKind> {
@@ -364,6 +367,33 @@ transport = "acp"
             tool.resolve_transport("codex"),
             Some(TransportKind::Acp),
             "explicit transport=\"acp\" must resolve to ACP, not the build default"
+        );
+    }
+
+    /// Parsing `[tools.claude-code] transport = "tmux"` MUST yield
+    /// `TransportKind::Tmux` and resolve to `Tmux` for claude-code.
+    /// `TmuxTransport` in `csa-executor` keys off this exact resolution.
+    #[test]
+    fn test_resolve_transport_claude_code_tmux_round_trips() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            tools: HashMap<String, ToolConfig>,
+        }
+        let toml_str = r#"
+[tools.claude-code]
+transport = "tmux"
+"#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("parse claude-code tmux toml");
+        let tool = wrapper
+            .tools
+            .get("claude-code")
+            .expect("claude-code tool entry missing");
+
+        assert_eq!(tool.transport, Some(TransportKind::Tmux));
+        assert_eq!(
+            tool.resolve_transport("claude-code"),
+            Some(TransportKind::Tmux),
+            "explicit transport=\"tmux\" must resolve to Tmux"
         );
     }
 

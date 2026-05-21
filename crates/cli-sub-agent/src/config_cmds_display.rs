@@ -109,6 +109,7 @@ pub(super) fn inject_resolved_tool_transports_toml(
                     csa_config::TransportKind::Auto => "auto",
                     csa_config::TransportKind::Cli => "cli",
                     csa_config::TransportKind::Acp => "acp",
+                    csa_config::TransportKind::Tmux => "tmux",
                 }
                 .to_string(),
             ),
@@ -144,6 +145,7 @@ pub(super) fn inject_resolved_tool_transports_json(
                     csa_config::TransportKind::Auto => "auto",
                     csa_config::TransportKind::Cli => "cli",
                     csa_config::TransportKind::Acp => "acp",
+                    csa_config::TransportKind::Tmux => "tmux",
                 }
                 .to_string(),
             ),

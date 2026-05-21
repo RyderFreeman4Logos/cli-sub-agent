@@ -233,7 +233,7 @@ fn test_matrix_claude_code_openai_compat_rejected() {
     assert_unsupported(
         &make_claude_code(),
         super::TransportMode::OpenaiCompat,
-        "only supports cli or acp",
+        "only supports cli, acp, or tmux",
     );
 }
 
