@@ -41,6 +41,7 @@ pub(crate) fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexT
             TransportKind::Cli => CodexTransport::Cli,
             TransportKind::Acp => CodexTransport::Acp,
             TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
+            TransportKind::Tmux => unreachable!("codex does not support tmux transport"),
         })
         .unwrap_or_else(CodexTransport::default_for_build)
 }
@@ -53,6 +54,7 @@ pub(crate) fn resolved_claude_code_transport(
         .map(|transport| match transport {
             TransportKind::Cli => ClaudeCodeTransport::Cli,
             TransportKind::Acp => ClaudeCodeTransport::Acp,
+            TransportKind::Tmux => ClaudeCodeTransport::Tmux,
             TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
         })
         .unwrap_or_else(ClaudeCodeTransport::default_for_build)

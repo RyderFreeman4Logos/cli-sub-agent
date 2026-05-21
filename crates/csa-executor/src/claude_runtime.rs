@@ -21,6 +21,10 @@ use crate::install_hints::{CLAUDE_CODE_ACP_INSTALL_HINT, CLAUDE_CODE_CLI_INSTALL
 pub enum ClaudeCodeTransport {
     Cli,
     Acp,
+    /// Experimental: run Claude Code inside a detached tmux session.
+    /// Uses the same `claude` binary as `Cli` but wraps it in tmux for
+    /// interactive billing pool placement.
+    Tmux,
 }
 
 impl ClaudeCodeTransport {
@@ -40,7 +44,7 @@ impl ClaudeCodeTransport {
     #[must_use]
     pub const fn runtime_binary_name(self) -> &'static str {
         match self {
-            Self::Cli => "claude",
+            Self::Cli | Self::Tmux => "claude",
             Self::Acp => "claude-code-acp",
         }
     }
@@ -48,7 +52,7 @@ impl ClaudeCodeTransport {
     #[must_use]
     pub const fn install_hint(self) -> &'static str {
         match self {
-            Self::Cli => CLAUDE_CODE_CLI_INSTALL_HINT,
+            Self::Cli | Self::Tmux => CLAUDE_CODE_CLI_INSTALL_HINT,
             Self::Acp => CLAUDE_CODE_ACP_INSTALL_HINT,
         }
     }

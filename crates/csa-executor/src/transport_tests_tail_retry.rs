@@ -148,10 +148,12 @@ fn test_should_not_retry_codex_explicit_usage_limit() {
             crate::codex_runtime::CodexTransport::Cli,
         ),
     });
+    // Since #1460, quota detection is stderr-only; put the pattern in stderr.
     let execution = ExecutionResult {
         summary: r#"Internal error: {"codex_error_info":"usage_limit_exceeded"}"#.to_string(),
         output: String::new(),
-        stderr_output: String::new(),
+        stderr_output: r#"Internal error: {"codex_error_info":"usage_limit_exceeded"}"#
+            .to_string(),
         exit_code: 1,
         peak_memory_mb: None,
     };

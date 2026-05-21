@@ -257,15 +257,23 @@ fn validate_tool_transport_override_with_raw(
 
     match tool_name {
         "claude-code" => match transport {
-            TransportKind::Auto | TransportKind::Cli | TransportKind::Acp => Ok(()),
+            TransportKind::Auto | TransportKind::Cli | TransportKind::Acp | TransportKind::Tmux => {
+                Ok(())
+            }
         },
         "codex" => match transport {
             TransportKind::Auto | TransportKind::Cli | TransportKind::Acp => Ok(()),
+            TransportKind::Tmux => {
+                bail!("Invalid {key} = \"{raw_transport}\": codex does not support tmux transport.")
+            }
         },
         "gemini-cli" | "opencode" => match transport {
             TransportKind::Auto | TransportKind::Cli => Ok(()),
             TransportKind::Acp => bail!(
                 "Invalid {key} = \"{raw_transport}\": {tool_name} does not support ACP transport."
+            ),
+            TransportKind::Tmux => bail!(
+                "Invalid {key} = \"{raw_transport}\": {tool_name} does not support tmux transport."
             ),
         },
         "openai-compat" => {
@@ -286,6 +294,7 @@ fn validate_tool_transport_override(tool_name: &str, transport: TransportKind) -
         TransportKind::Auto => "auto",
         TransportKind::Cli => "cli",
         TransportKind::Acp => "acp",
+        TransportKind::Tmux => "tmux",
     };
     validate_tool_transport_override_with_raw(tool_name, transport, raw_transport)
 }

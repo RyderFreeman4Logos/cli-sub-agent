@@ -207,6 +207,7 @@ fn claude_code_transport_label(transport: ClaudeCodeTransport) -> &'static str {
     match transport {
         ClaudeCodeTransport::Cli => "cli",
         ClaudeCodeTransport::Acp => "acp",
+        ClaudeCodeTransport::Tmux => "tmux",
     }
 }
 

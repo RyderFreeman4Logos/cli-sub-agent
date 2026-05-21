@@ -15,6 +15,7 @@ pub mod session_id;
 pub mod transport;
 pub(crate) mod transport_gemini_retry;
 pub mod transport_openai_compat;
+pub mod transport_tmux;
 
 pub use agent_backend_adapter::ExecutorAgentBackend;
 pub use claude_runtime::{ClaudeCodeRuntimeMetadata, ClaudeCodeTransport, claude_runtime_metadata};
@@ -45,3 +46,4 @@ pub use transport::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, resolve_initial_response_timeout,
     strip_ansi_escape_sequences,
 };
+pub use transport_tmux::{TmuxReapStats, TmuxTransport, reap_orphan_tmux_sessions};
