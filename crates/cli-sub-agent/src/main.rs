@@ -274,10 +274,10 @@ async fn run() -> Result<()> {
             }
 
             if !success {
-                let msg = "auto weave upgrade failed after 3 attempts (non-fatal). \
-                           Disable with [execution] auto_weave_upgrade = false";
-                tracing::warn!(msg);
-                eprintln!("warning: {msg}");
+                tracing::debug!(
+                    "auto weave upgrade failed after 3 attempts (non-fatal). \
+                     Disable with [execution] auto_weave_upgrade = false"
+                );
             }
         }
     }

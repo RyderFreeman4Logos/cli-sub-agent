@@ -335,20 +335,52 @@ fn validate_timeout(
     {
         return Err(clap::Error::raw(
             clap::error::ErrorKind::ValueValidation,
-            timeout_validation_message(min_timeout),
+            timeout_validation_message(t, min_timeout),
         ));
     }
     Ok(())
 }
 
-fn timeout_validation_message(min_timeout: u64) -> String {
+fn timeout_validation_message(given: u64, min_timeout: u64) -> String {
     let min_minutes = min_timeout / 60;
+    let suggested = build_suggested_command(given, min_timeout);
     format!(
         "Absolute timeout (--timeout) must be at least {min_timeout} seconds ({min_minutes} minutes). \
          Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
          Record this in your CLAUDE.md or memory: CSA minimum timeout is {min_timeout} seconds. \
-         Use --timeout >= {min_timeout}, or inspect the effective floor with `csa config get execution.min_timeout_seconds`."
+         Use --timeout >= {min_timeout}, or inspect the effective floor with `csa config get execution.min_timeout_seconds`.\n\
+         Suggested: {suggested}"
     )
+}
+
+fn build_suggested_command(given: u64, min_timeout: u64) -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let given_str = given.to_string();
+    let min_str = min_timeout.to_string();
+
+    let mut result = args.clone();
+    let mut replaced = false;
+    let mut i = 0;
+
+    while i < result.len() {
+        if result[i] == "--timeout" && i + 1 < result.len() && result[i + 1] == given_str {
+            result[i + 1] = min_str.clone();
+            replaced = true;
+            break;
+        }
+        if result[i] == format!("--timeout={given_str}") {
+            result[i] = format!("--timeout={min_str}");
+            replaced = true;
+            break;
+        }
+        i += 1;
+    }
+
+    if replaced {
+        result.join(" ")
+    } else {
+        format!("csa ... --timeout {min_str}")
+    }
 }
 
 #[derive(clap::Args)]
@@ -504,12 +536,22 @@ mod tests {
             !rendered.contains("Configure via [execution] min_timeout_seconds"),
             "error text should not encourage lowering the configured safety floor"
         );
+        assert!(
+            rendered.contains("Suggested:"),
+            "error should include a ready-to-copy corrected command"
+        );
+        assert!(
+            rendered.contains("--timeout 1800"),
+            "suggestion should show the corrected floor timeout"
+        );
     }
 
     #[test]
     fn timeout_validation_message_guides_toward_effective_floor() {
-        let rendered = timeout_validation_message(2400);
+        let rendered = timeout_validation_message(1200, 2400);
         assert!(rendered.contains("Use --timeout >= 2400"));
         assert!(rendered.contains("effective floor"));
+        assert!(rendered.contains("Suggested:"));
+        assert!(rendered.contains("--timeout 2400"));
     }
 }
