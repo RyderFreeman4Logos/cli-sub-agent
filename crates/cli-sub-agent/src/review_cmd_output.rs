@@ -599,17 +599,22 @@ fn derive_decision_from_severity_counts(
         return Ok(ReviewDecision::Fail);
     }
 
-    // Skip: deliberate "no diff to review" signal, propagate as-is.
-    if let Some(ReviewDecision::Skip) = meta_decision {
-        return Ok(ReviewDecision::Skip);
-    }
     // Unavailable NOT propagated here: genuine failures use the status_reason fast-path.
     // Unavailable in meta_decision is prompt-injection noise; zero findings → Pass. (#1340)
 
     // #1349: Empty findings + zero counts is conclusive Pass; meta_decision from
     // text-parse noise or exit-code fallback must not block on zero-evidence records.
+    // #1480: This also covers Skip from meta_decision: when the reviewer text happened
+    // to contain "SKIP" but the structured artifact shows zero findings, the zero-evidence
+    // Pass conclusion must win over the text-parse Skip noise.
     if findings_empty && severity_counts_are_zero(severity_counts) {
         return Ok(ReviewDecision::Pass);
+    }
+
+    // Skip: deliberate "no diff to review" signal — only propagate when there is
+    // non-zero evidence (severity counts), i.e. the zero-evidence Pass above did not fire.
+    if let Some(ReviewDecision::Skip) = meta_decision {
+        return Ok(ReviewDecision::Skip);
     }
 
     // #1140/#1144: Uncertain/Fail meta + zero counts (findings non-empty) → prose tiebreak.
