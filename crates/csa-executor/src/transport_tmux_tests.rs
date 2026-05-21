@@ -320,6 +320,21 @@ fn read_contract_result_returns_summary_when_present() {
 }
 
 #[test]
+fn read_contract_result_reads_nested_result_summary() {
+    let tmp = TempDir::new().unwrap();
+    let output = tmp.path().join("output");
+    fs::create_dir_all(&output).unwrap();
+    fs::write(
+        output.join("result.toml"),
+        "[result]\nstatus = \"success\"\nsummary = \"Nested result.\"\n",
+    )
+    .unwrap();
+
+    let result = try_read_contract_result(tmp.path());
+    assert_eq!(result, Some("Nested result.".to_string()));
+}
+
+#[test]
 fn read_contract_result_returns_none_when_missing() {
     let tmp = TempDir::new().unwrap();
     assert!(try_read_contract_result(tmp.path()).is_none());

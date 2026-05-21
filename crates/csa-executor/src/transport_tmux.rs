@@ -235,8 +235,9 @@ async fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
 // ── Result contract ──────────────────────────────────────────────────────────
 
 /// Read the `output/result.toml` contract artifact if the child agent wrote one.
-/// Returns `Some(summary)` when the file exists and contains a `summary` field;
-/// returns `None` otherwise so callers can fall back to JSONL text.
+/// Checks both top-level `summary` (canonical CSA `SessionResult` schema) and
+/// nested `[result].summary` for robustness. Returns `None` when the file is
+/// absent or contains neither variant so callers fall back to JSONL text.
 fn try_read_contract_result(session_dir: &Path) -> Option<String> {
     let path = csa_session::contract_result_path(session_dir);
     let contents = fs::read_to_string(&path).ok()?;
@@ -244,6 +245,13 @@ fn try_read_contract_result(session_dir: &Path) -> Option<String> {
     let summary = table
         .get("summary")
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            table
+                .get("result")
+                .and_then(|v| v.as_table())
+                .and_then(|t| t.get("summary"))
+                .and_then(|v| v.as_str())
+        })
         .map(String::from)?;
     tracing::debug!(
         path = %path.display(),
