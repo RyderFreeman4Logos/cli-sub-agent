@@ -368,18 +368,9 @@ impl TmuxTransport {
         let mut cmd = tokio::process::Command::new("tmux");
         cmd.args(&tmux_args);
 
-        // Strip CSA recursion guards from the child's environment.
-        for var in [
-            "CLAUDECODE",
-            "CLAUDE_CODE_ENTRYPOINT",
-            "LEFTHOOK",
-            "LEFTHOOK_SKIP",
-            "CSA_SESSION_ID",
-            "CSA_SESSION_DIR",
-            "CSA_PARENT_SESSION",
-            "CSA_PARENT_SESSION_DIR",
-            "CSA_DAEMON_SESSION_DIR",
-        ] {
+        // Strip inherited CSA/hook env vars, then re-inject the current
+        // session's values via extra_env (populated by execute_session).
+        for var in crate::executor::executor_env::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
 
@@ -423,8 +414,9 @@ impl TmuxTransport {
 
     /// Full session lifecycle: snapshot → spawn → ready → prompt → discover → watch.
     ///
-    /// When `session_dir` is provided, the transport injects `CSA_SESSION_DIR` and
-    /// `CSA_RESULT_TOML_PATH_CONTRACT` into the tmux environment, enables
+    /// When `session` is provided, the transport injects the full CSA session env
+    /// (`CSA_SESSION_ID`, `CSA_DEPTH`, `CSA_PROJECT_ROOT`, `CSA_TOOL`,
+    /// `CSA_RESULT_TOML_PATH_CONTRACT`, etc.) into the tmux environment, enables
     /// result.toml reading as the preferred output source, and creates a JSONL
     /// symlink in the session output directory for xurl/recall audit access.
     async fn execute_session(
@@ -433,7 +425,7 @@ impl TmuxTransport {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         idle_timeout_seconds: u64,
-        session_dir: Option<PathBuf>,
+        session: Option<&MetaSessionState>,
     ) -> Result<TransportResult> {
         let session_name = Self::session_name();
         tracing::debug!(
@@ -460,20 +452,54 @@ impl TmuxTransport {
             _ => (None, None),
         };
 
-        // Merge caller-provided env with CSA session env vars so Claude Code
-        // inside tmux can write to the result.toml contract path.
-        let merged_env = {
+        // Merge caller-provided env with full CSA session env vars, aligned
+        // with inject_cli_session_env in transport_cli.rs.
+        let (merged_env, session_dir) = {
             let mut env = extra_env.cloned().unwrap_or_default();
-            if let Some(dir) = &session_dir {
-                env.insert("CSA_SESSION_DIR".into(), dir.to_string_lossy().into_owned());
+            let mut dir = None;
+            if let Some(session) = session {
+                env.insert("CSA_SESSION_ID".into(), session.meta_session_id.clone());
                 env.insert(
-                    csa_session::RESULT_TOML_PATH_CONTRACT_ENV.into(),
-                    csa_session::contract_result_path(dir)
-                        .to_string_lossy()
-                        .into_owned(),
+                    "CSA_DEPTH".into(),
+                    (session.genealogy.depth + 1).to_string(),
                 );
+                env.insert("CSA_PROJECT_ROOT".into(), session.project_path.clone());
+                env.insert("CSA_TOOL".into(), "claude-code".into());
+                if let Ok(current_tool) = std::env::var("CSA_TOOL") {
+                    env.insert("CSA_PARENT_TOOL".into(), current_tool);
+                }
+                if let Some(parent) = session.genealogy.parent_session_id.as_deref() {
+                    env.insert("CSA_PARENT_SESSION".into(), parent.to_string());
+                }
+                if let Ok(session_dir_path) = csa_session::manager::get_session_dir(
+                    Path::new(&session.project_path),
+                    &session.meta_session_id,
+                ) {
+                    env.insert(
+                        "CSA_SESSION_DIR".into(),
+                        session_dir_path.to_string_lossy().into_owned(),
+                    );
+                    env.insert(
+                        csa_session::RESULT_TOML_PATH_CONTRACT_ENV.into(),
+                        csa_session::contract_result_path(&session_dir_path)
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                    dir = Some(session_dir_path);
+                }
+                if let Some(parent) = session.genealogy.parent_session_id.as_deref()
+                    && let Ok(parent_dir) = csa_session::manager::get_session_dir(
+                        Path::new(&session.project_path),
+                        parent,
+                    )
+                {
+                    env.insert(
+                        "CSA_PARENT_SESSION_DIR".into(),
+                        parent_dir.to_string_lossy().into_owned(),
+                    );
+                }
             }
-            env
+            (env, dir)
         };
 
         Self::spawn_tmux(
@@ -591,14 +617,12 @@ impl Transport for TmuxTransport {
         }
 
         let work_dir = PathBuf::from(&session.project_path);
-        let session_dir =
-            csa_session::manager::get_session_dir(&work_dir, &session.meta_session_id).ok();
         self.execute_session(
             prompt,
             &work_dir,
             extra_env,
             options.idle_timeout_seconds,
-            session_dir,
+            Some(session),
         )
         .await
     }

@@ -32,7 +32,7 @@ use arg_helpers::{
 };
 
 #[path = "executor_env.rs"]
-mod executor_env;
+pub(crate) mod executor_env;
 #[path = "executor_pre_session.rs"]
 mod pre_session;
 #[path = "executor_prompt_helpers.rs"]
