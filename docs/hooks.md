@@ -101,6 +101,22 @@ command = "echo post-run: session={session_id} exit={exit_code}"
 timeout_secs = 30
 ```
 
+#### Auto-scan managed skills after each session (opt-in)
+
+If you use `csa skill add` to maintain a managed skill repo, you can configure
+`post_run` to automatically commit any in-place edits you make to skill files
+during a session:
+
+```toml
+[post_run]
+enabled = true
+command = "csa skill scan"
+timeout_secs = 30
+```
+
+This is a no-op when no files changed. It is **opt-in** — CSA does not enable
+this by default.
+
 ### `post_review`
 
 Fires after `csa review` produces its final result (including after a `--fix`
