@@ -22,6 +22,11 @@ pub enum SkillCommands {
         /// Skill name (must exist in the managed skill repo)
         name: String,
 
+        /// Emit the skill prompt to stdout for the calling agent to execute directly,
+        /// instead of spawning a CSA session.
+        #[arg(long)]
+        inject: bool,
+
         /// Optional prompt to pass to the skill session
         #[arg(trailing_var_arg = true)]
         prompt: Vec<String>,

@@ -1,9 +1,38 @@
-//! Async handler for `csa skill run` — delegates to the standard CSA run pipeline.
+//! Async handler for `csa skill run` — delegates to the standard CSA run pipeline
+//! or emits the skill prompt for direct execution (`--inject`).
 
 use anyhow::Result;
 use csa_core::types::OutputFormat;
 
 use crate::goal_loop;
+use crate::skill_resolver;
+
+/// Emit the resolved skill prompt to stdout for the calling agent to execute
+/// directly, bypassing CSA session creation.
+pub(crate) async fn handle_skill_inject(name: String, prompt: Vec<String>) -> Result<i32> {
+    let project_root = std::env::current_dir()?;
+    let resolved = skill_resolver::resolve_skill(&name, &project_root)?;
+
+    let prompt_str = if prompt.is_empty() {
+        String::new()
+    } else {
+        prompt.join(" ")
+    };
+
+    println!("<skill-injection name=\"{name}\">");
+    println!("You MUST execute the following skill instructions directly. Do NOT delegate to csa.");
+    if !prompt_str.is_empty() {
+        println!();
+        println!("## Input");
+        println!();
+        println!("{prompt_str}");
+    }
+    println!();
+    println!("{}", resolved.skill_md);
+    println!("</skill-injection>");
+
+    Ok(0)
+}
 
 /// Run a named skill via the standard CSA run pipeline.
 ///

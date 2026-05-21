@@ -31,7 +31,14 @@ pub(crate) async fn dispatch(
         SkillCommands::Backup => {
             skill_cmds::handle_skill_backup()?;
         }
-        SkillCommands::Run { name, prompt } => {
+        SkillCommands::Run {
+            name,
+            inject,
+            prompt,
+        } => {
+            if inject {
+                return skill_run_cmd::handle_skill_inject(name, prompt).await;
+            }
             return skill_run_cmd::handle_skill_run(name, prompt, current_depth, output_format)
                 .await;
         }
