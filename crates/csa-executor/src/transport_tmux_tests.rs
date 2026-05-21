@@ -1,7 +1,68 @@
 use super::*;
+use serde::Deserialize;
 use std::io::Write;
 use std::path::Path;
 use tempfile::TempDir;
+
+// ── test-only session index helpers (moved from transport_tmux.rs) ──────
+
+#[derive(Deserialize)]
+struct SessionsIndex {
+    #[serde(default)]
+    entries: Vec<SessionsIndexEntry>,
+}
+
+#[derive(Deserialize)]
+struct SessionsIndexEntry {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(rename = "fullPath")]
+    full_path: Option<PathBuf>,
+}
+
+fn find_in_sessions_index(index_path: &Path, session_id: &str) -> Option<PathBuf> {
+    let content = fs::read_to_string(index_path).ok()?;
+    let index: SessionsIndex = serde_json::from_str(&content).ok()?;
+    index
+        .entries
+        .into_iter()
+        .find(|e| e.session_id == session_id)
+        .and_then(|e| e.full_path)
+}
+
+fn find_jsonl_path(claude_root: &Path, session_id: &str) -> Option<PathBuf> {
+    let projects = claude_root.join("projects");
+    if !projects.exists() {
+        return None;
+    }
+
+    let needle = format!("{session_id}.jsonl");
+    let Ok(project_dirs) = fs::read_dir(&projects) else {
+        return None;
+    };
+
+    for entry in project_dirs.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let index_path = path.join("sessions-index.json");
+        if index_path.exists()
+            && let Some(jsonl) = find_in_sessions_index(&index_path, session_id)
+            && jsonl.exists()
+        {
+            return Some(jsonl);
+        }
+
+        let candidate = path.join(&needle);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
 
 fn write_jsonl(dir: &Path, name: &str, lines: &[&str]) -> PathBuf {
     let path = dir.join(name);
@@ -174,6 +235,68 @@ async fn watcher_times_out_without_turn_duration() {
     let err = watch_jsonl_for_turn(&path, 1).await.unwrap_err();
     assert!(
         err.to_string().contains("timed out"),
+        "expected timeout error, got: {err}"
+    );
+}
+
+// ── escape_project_path ──────────────────────────────────────────────────
+
+#[test]
+fn escape_project_path_replaces_slashes() {
+    let path = Path::new("/home/obj/project/github/RyderFreeman4Logos/cli-sub-agent");
+    assert_eq!(
+        escape_project_path(path),
+        "-home-obj-project-github-RyderFreeman4Logos-cli-sub-agent"
+    );
+}
+
+#[test]
+fn escape_project_path_root() {
+    assert_eq!(escape_project_path(Path::new("/")), "-");
+}
+
+// ── snapshot and discovery ──────────────────────────────────────────────
+
+#[test]
+fn snapshot_captures_only_jsonl_files() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("a.jsonl"), b"").unwrap();
+    fs::write(tmp.path().join("b.jsonl"), b"").unwrap();
+    fs::write(tmp.path().join("c.json"), b"").unwrap();
+    fs::create_dir(tmp.path().join("d.jsonl")).ok(); // directory, not file
+
+    let snap = snapshot_jsonl_files(tmp.path());
+    assert_eq!(snap.len(), 2);
+    assert!(snap.contains(&tmp.path().join("a.jsonl")));
+    assert!(snap.contains(&tmp.path().join("b.jsonl")));
+}
+
+#[tokio::test]
+async fn discover_new_jsonl_finds_added_file() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("old.jsonl"), b"").unwrap();
+
+    let before = snapshot_jsonl_files(tmp.path());
+    assert_eq!(before.len(), 1);
+
+    // Simulate Claude creating a new JSONL after prompt.
+    fs::write(tmp.path().join("abc-123-def.jsonl"), b"").unwrap();
+
+    let (path, session_id) = discover_new_jsonl(tmp.path(), &before).await.unwrap();
+    assert_eq!(path, tmp.path().join("abc-123-def.jsonl"));
+    assert_eq!(session_id, "abc-123-def");
+}
+
+#[tokio::test]
+async fn discover_new_jsonl_times_out_when_no_new_file() {
+    let tmp = TempDir::new().unwrap();
+    let before = snapshot_jsonl_files(tmp.path());
+
+    let err = discover_new_jsonl_with_timeout(tmp.path(), &before, Duration::from_secs(2))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("no new JSONL"),
         "expected timeout error, got: {err}"
     );
 }
