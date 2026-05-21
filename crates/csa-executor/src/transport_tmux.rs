@@ -102,16 +102,20 @@ fn read_session_meta(pid: u32) -> Result<ClaudeSessionMeta> {
     }
 
     // Verify cmdline to catch PID reuse before trusting the metadata.
-    let cmdline_path = format!("/proc/{pid}/cmdline");
-    let cmdline = fs::read_to_string(&cmdline_path)
-        .unwrap_or_default()
-        .replace('\0', " ");
-    if !cmdline.to_lowercase().contains("claude") {
-        bail!(
-            "PID {pid} cmdline does not contain 'claude' (got: {:?}); \
-             possible PID reuse — not safe to read session metadata",
-            &cmdline[..cmdline.len().min(120)]
-        );
+    // On Linux, read /proc/<pid>/cmdline. On other platforms, skip this check.
+    #[cfg(target_os = "linux")]
+    {
+        let cmdline_path = format!("/proc/{pid}/cmdline");
+        let cmdline = fs::read_to_string(&cmdline_path)
+            .unwrap_or_default()
+            .replace('\0', " ");
+        if !cmdline.to_lowercase().contains("claude") {
+            bail!(
+                "PID {pid} cmdline does not contain 'claude' (got: {:?}); \
+                 possible PID reuse — not safe to read session metadata",
+                &cmdline[..cmdline.len().min(120)]
+            );
+        }
     }
 
     let content =
@@ -665,10 +669,10 @@ impl Transport for TmuxTransport {
         tracing::debug!(tool = %self.executor.tool_name(), "tmux transport: execute");
 
         if options.sandbox.is_some() {
-            tracing::warn!(
-                "tmux transport: sandbox options are ignored — tmux sessions run \
-                 outside the sandbox namespace. Set [filesystem_sandbox] \
-                 enforcement_mode = \"off\" to suppress this warning."
+            bail!(
+                "tmux transport is incompatible with sandbox isolation — tmux sessions \
+                 run outside the sandbox namespace. Set [filesystem_sandbox] \
+                 enforcement_mode = \"off\" when using transport = \"tmux\"."
             );
         }
 

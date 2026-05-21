@@ -12,7 +12,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "claude-code",
     "openai-compat",
 ];
-const LEGAL_TRANSPORT_VALUES: &str = "auto, acp, cli";
+const LEGAL_TRANSPORT_VALUES: &str = "auto, acp, cli, tmux";
 
 /// Validate a project configuration file.
 /// Returns Ok(()) if valid, or Err with descriptive messages.
@@ -237,6 +237,7 @@ fn validate_tool_transport_override_value(tool_name: &str, raw_transport: &str) 
         "auto" => TransportKind::Auto,
         "cli" => TransportKind::Cli,
         "acp" => TransportKind::Acp,
+        "tmux" => TransportKind::Tmux,
         _ => {
             let key = transport_key(tool_name);
             bail!(
