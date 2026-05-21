@@ -51,19 +51,46 @@ pub(super) fn validate_jsonl_schema(jsonl_path: &Path) -> Result<()> {
 #[derive(Debug)]
 pub(super) enum JsonlEvent {
     AssistantText(String),
+    /// Final text from a "result" event (fallback when no assistant text seen).
+    ResultText(String),
     TurnDuration,
     CompactBoundary,
 }
 
 /// Parse a single JSONL line into a `JsonlEvent`.
 pub(super) fn parse_jsonl_line(line: &str) -> Option<JsonlEvent> {
-    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let trimmed = line.trim();
+    let value: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                line_preview = &trimmed[..trimmed.len().min(120)],
+                "tmux transport: failed to parse JSONL line"
+            );
+            return None;
+        }
+    };
     let event_type = value.get("type")?.as_str()?;
 
     match event_type {
         "assistant" => {
             let text = extract_assistant_text(&value).unwrap_or_default();
             Some(JsonlEvent::AssistantText(text))
+        }
+        "result" => {
+            // Fallback text source — same as xurl-core's claude provider:
+            // use `value.result` when no assistant text was collected.
+            let text = value
+                .get("result")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if text.is_empty() {
+                None
+            } else {
+                Some(JsonlEvent::ResultText(text))
+            }
         }
         "system" => {
             let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
@@ -152,6 +179,10 @@ pub(super) async fn watch_jsonl_for_turn(
                         Some(JsonlEvent::AssistantText(text)) => {
                             collected_text.push_str(&text);
                         }
+                        Some(JsonlEvent::ResultText(text)) if collected_text.is_empty() => {
+                            collected_text = text;
+                        }
+                        Some(JsonlEvent::ResultText(_)) => {}
                         Some(JsonlEvent::TurnDuration) => {
                             return Ok(collected_text);
                         }

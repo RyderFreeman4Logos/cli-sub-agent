@@ -88,18 +88,21 @@ pub fn detect_rate_limit(
         .iter()
         .chain(failover_patterns_for_tool(tool_name).iter())
     {
-        let haystack = if pattern.quota_exhausted {
-            &stderr_lower
-        } else {
-            &combined_lower
-        };
-        if haystack.contains(pattern.pattern) {
+        // Always search combined (stderr+stdout) so codex quota errors emitted
+        // as JSON on stdout are detected. The exit_code!=0 precondition already
+        // filters normal successful output.
+        //
+        // quota_exhausted is only confirmed when the pattern also appears in
+        // stderr (stdout-only matches could be tool output echoing the phrase,
+        // so we still failover but don't mark it as permanent quota exhaustion).
+        if combined_lower.contains(pattern.pattern) {
+            let confirmed_quota = pattern.quota_exhausted && stderr_lower.contains(pattern.pattern);
             return Some(RateLimitDetected {
                 tool: tool_name.to_string(),
                 matched_pattern: pattern.pattern.to_string(),
                 reason: pattern.reason.to_string(),
                 advance_to_next_model: pattern.advance_to_next_model,
-                quota_exhausted: pattern.quota_exhausted,
+                quota_exhausted: confirmed_quota,
                 model_spec: model_spec.map(String::from),
             });
         }

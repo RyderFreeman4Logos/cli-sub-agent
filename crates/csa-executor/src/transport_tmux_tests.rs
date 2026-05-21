@@ -113,6 +113,27 @@ fn parses_assistant_multiple_text_blocks() {
 }
 
 #[test]
+fn parses_result_event_text() {
+    let line = r#"{"type":"result","result":"final answer","session_id":"abc123"}"#;
+    match parse_jsonl_line(line) {
+        Some(JsonlEvent::ResultText(t)) => assert_eq!(t, "final answer"),
+        other => panic!("expected ResultText, got {other:?}"),
+    }
+}
+
+#[test]
+fn result_event_empty_text_returns_none() {
+    let line = r#"{"type":"result","result":"","session_id":"abc123"}"#;
+    assert!(parse_jsonl_line(line).is_none());
+}
+
+#[test]
+fn result_event_no_result_field_returns_none() {
+    let line = r#"{"type":"result","session_id":"abc123"}"#;
+    assert!(parse_jsonl_line(line).is_none());
+}
+
+#[test]
 fn ignores_unknown_event_type() {
     let line = r#"{"type":"human","message":{"content":"hello"}}"#;
     assert!(parse_jsonl_line(line).is_none());
@@ -222,6 +243,39 @@ async fn watcher_resets_on_compact_boundary() {
 
     let result = watch_jsonl_for_turn(&path, 10).await.unwrap();
     assert_eq!(result, "NEW");
+}
+
+#[tokio::test]
+async fn watcher_uses_result_text_as_fallback() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_jsonl(
+        tmp.path(),
+        "result_fallback.jsonl",
+        &[
+            r#"{"type":"result","result":"fallback text","session_id":"abc"}"#,
+            r#"{"type":"system","subtype":"turn_duration","durationMs":100}"#,
+        ],
+    );
+
+    let result = watch_jsonl_for_turn(&path, 10).await.unwrap();
+    assert_eq!(result, "fallback text");
+}
+
+#[tokio::test]
+async fn watcher_prefers_assistant_over_result() {
+    let tmp = TempDir::new().unwrap();
+    let path = write_jsonl(
+        tmp.path(),
+        "assistant_wins.jsonl",
+        &[
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"from assistant"}]}}"#,
+            r#"{"type":"result","result":"from result","session_id":"abc"}"#,
+            r#"{"type":"system","subtype":"turn_duration","durationMs":100}"#,
+        ],
+    );
+
+    let result = watch_jsonl_for_turn(&path, 10).await.unwrap();
+    assert_eq!(result, "from assistant");
 }
 
 #[tokio::test]

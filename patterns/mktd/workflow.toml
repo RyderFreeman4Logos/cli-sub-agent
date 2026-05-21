@@ -114,6 +114,12 @@ name = "INTENSITY"
 name = "INTENSITY_IS_LIGHT"
 
 [[workflow.variables]]
+name = "TIER"
+
+[[workflow.variables]]
+name = "RECON_TIER"
+
+[[workflow.variables]]
 name = "USER_LANGUAGE"
 
 [[workflow.steps]]
@@ -187,6 +193,13 @@ else
   echo "CSA_VAR:INTENSITY_IS_LIGHT=false"
 fi
 
+# --- RECON tier propagation: caller-specified TIER takes precedence; default to tier-1-quick ---
+if [[ -n "${TIER:-}" ]]; then
+  echo "CSA_VAR:RECON_TIER=${TIER}"
+else
+  echo "CSA_VAR:RECON_TIER=tier-1-quick"
+fi
+
 # --- Language detection (result is the step's logical output) ---
 if [[ -n "${USER_LANGUAGE:-}" ]]; then
   printf '%s\n' "${USER_LANGUAGE}"
@@ -242,7 +255,7 @@ Report: relevant files (path + purpose, max 20), key types, module dependencies,
 Working directory: ${CWD}"""
 # RECON steps are read-only (workspace_access = "read-only"); auto-routing is safe here because
 # no tool writes files, so allow_edit restrictions do not apply. Any tool in the tier can explore.
-tier = "tier-1-quick"
+tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
 
@@ -259,7 +272,7 @@ CONSTRAINT ANCHOR: If the user prompt specifies an architectural approach or tar
 Report: file paths with approach, reusable components, conventions to follow.
 Working directory: ${CWD}"""
 # RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
-tier = "tier-1-quick"
+tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
 
@@ -276,7 +289,7 @@ CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, 
 Report: potential breaking changes, security considerations, performance, compatibility.
 Working directory: ${CWD}"""
 # RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
-tier = "tier-1-quick"
+tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
 
@@ -297,7 +310,7 @@ Report using these keys:
 
 Working directory: ${CWD}"""
 # RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
-tier = "tier-1-quick"
+tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
 
