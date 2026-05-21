@@ -45,6 +45,9 @@ pub use cli_checklist::*;
 #[path = "cli_memory.rs"]
 mod cli_memory;
 pub use cli_memory::*;
+#[path = "cli_skill.rs"]
+mod cli_skill;
+pub use cli_skill::*;
 
 #[derive(Parser)]
 #[command(name = "csa", version = build_version())]
@@ -679,22 +682,6 @@ pub enum ConfigCommands {
         #[arg(long)]
         cd: Option<String>,
     },
-}
-
-#[derive(Subcommand)]
-pub enum SkillCommands {
-    /// Install skills from a GitHub repository
-    Install {
-        /// GitHub repo URL or user/repo format (e.g., "user/repo" or "https://github.com/user/repo")
-        source: String,
-
-        /// Target tool to install skills for (claude-code, codex, opencode). Defaults to claude-code.
-        #[arg(long)]
-        target: Option<String>,
-    },
-
-    /// List installed skills
-    List,
 }
 
 #[derive(Subcommand)]

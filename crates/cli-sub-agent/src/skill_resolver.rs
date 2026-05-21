@@ -5,12 +5,13 @@
 //! - Optional superproject root when current root is a git submodule
 //!
 //! Search order:
-//! 1. `./.csa/skills/<name>/`                    (project-local, CSA-specific)
-//! 2. `./.claude/skills/<name>/`                 (project-local, Claude Code compat)
-//! 3. `<superproject>/.csa/skills/<name>/`       (submodule only)
-//! 4. `<superproject>/.claude/skills/<name>/`    (submodule only)
-//! 5. `~/.config/cli-sub-agent/skills/<name>/`   (global user)
-//! 6. `<global_store>/<name>/<commit>/`          (weave global store via lockfiles)
+//! 1. `./.csa/skills/<name>/`                             (project-local, CSA-specific)
+//! 2. `./.claude/skills/<name>/`                          (project-local, Claude Code compat)
+//! 3. `<superproject>/.csa/skills/<name>/`                (submodule only)
+//! 4. `<superproject>/.claude/skills/<name>/`             (submodule only)
+//! 5. `~/.config/cli-sub-agent/skills/<name>/`            (global user config)
+//! 6. `~/.local/state/cli-sub-agent/skills/<name>/`       (CSA-managed inactive skills)
+//! 7. `<global_store>/<name>/<commit>/`                   (weave global store via lockfiles)
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -18,6 +19,8 @@ use std::path::{Path, PathBuf};
 
 use weave::package::{self, SourceKind};
 use weave::parser::{AgentConfig, SkillConfig, parse_skill_config};
+
+use crate::skill_repo::sanitize_skill_md;
 
 /// A skill resolved from disk, ready for injection into a CSA run.
 #[derive(Debug, Clone)]
@@ -51,8 +54,11 @@ pub(crate) fn resolve_skill(name: &str, project_root: &Path) -> Result<ResolvedS
     for dir in &candidates {
         let skill_md_path = dir.join("SKILL.md");
         if skill_md_path.is_file() {
-            let skill_md = std::fs::read_to_string(&skill_md_path)
+            let raw_skill_md = std::fs::read_to_string(&skill_md_path)
                 .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
+
+            // Strip prompt-injection tags before the content reaches any LLM.
+            let skill_md = sanitize_skill_md(&raw_skill_md);
 
             let config = load_skill_config(dir)?;
 
@@ -99,12 +105,17 @@ fn search_paths_with_store(
         search_roots.push(root.join(".claude").join("skills").join(name));
     }
 
-    // 3. Global user: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
+    // 5. Global user config: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
     if let Some(config_dir) = paths::config_dir() {
         search_roots.push(config_dir.join("skills").join(name));
     }
 
-    // 4. Weave global store: match locked packages by name.
+    // 6. CSA-managed inactive skills: ~/.local/state/cli-sub-agent/skills/<name>/
+    if let Some(state_dir) = paths::state_dir_write() {
+        search_roots.push(state_dir.join("skills").join(name));
+    }
+
+    // 7. Weave global store: match locked packages by name.
     if let Some(store) = store_root {
         for root in &repo_roots {
             if let Some(lockfile_path) = package::find_lockfile(root)

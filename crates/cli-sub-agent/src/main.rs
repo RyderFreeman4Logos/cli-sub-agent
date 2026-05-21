@@ -87,7 +87,10 @@ mod session_guard;
 mod session_observability;
 mod setup_cmds;
 mod skill_cmds;
+mod skill_dispatch;
+mod skill_repo;
 mod skill_resolver;
+mod skill_run_cmd;
 #[cfg(any(feature = "parallel-tasks", test))]
 pub mod task_lock;
 #[cfg(test)]
@@ -110,9 +113,8 @@ include!("review_round10_exact_tests.rs");
 include!("debate_cmd_exact_tests.rs");
 
 use cli::{
-    Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, SetupCommands, SkillCommands,
-    TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
-    validate_command_args,
+    Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, SetupCommands, TiersCommands,
+    TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl, validate_command_args,
 };
 use csa_core::types::OutputFormat;
 use main_bootstrap::{
@@ -630,14 +632,12 @@ async fn run() -> Result<()> {
                 mcp_hub::handle_gen_skill_command(socket).await?;
             }
         },
-        Commands::Skill { cmd } => match cmd {
-            SkillCommands::Install { source, target } => {
-                skill_cmds::handle_skill_install(source, target)?;
+        Commands::Skill { cmd } => {
+            let code = skill_dispatch::dispatch(cmd, current_depth, output_format).await?;
+            if code != 0 {
+                exit_current_process(code);
             }
-            SkillCommands::List => {
-                skill_cmds::handle_skill_list()?;
-            }
-        },
+        }
         Commands::Setup { cmd } => match cmd {
             SetupCommands::ClaudeCode => {
                 setup_cmds::handle_setup_claude_code()?;
