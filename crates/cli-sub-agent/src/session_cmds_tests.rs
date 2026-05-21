@@ -178,6 +178,24 @@ fn retired_phase_shows_retired_when_result_succeeded() {
     );
 }
 
+// #1475: tier-failover superseded sessions ───────────────────────────────────
+//
+// Intermediate tier-failover attempts write a special status so they show as
+// "Retired" rather than "Failed" during the failover window.
+
+#[test]
+fn tier_failover_superseded_shows_retired_not_failed() {
+    let superseded = make_result("tier_failover_superseded", 1);
+    assert_eq!(
+        status_from_phase_and_result(&SessionPhase::Active, Some(&superseded)),
+        "Retired"
+    );
+    assert_eq!(
+        status_from_phase_and_result(&SessionPhase::Retired, Some(&superseded)),
+        "Retired"
+    );
+}
+
 // #1118 part D ────────────────────────────────────────────────────────────────
 //
 // Active sessions whose `last_accessed` has not advanced for >= the stale

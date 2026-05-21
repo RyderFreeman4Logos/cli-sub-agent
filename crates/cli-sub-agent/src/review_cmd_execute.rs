@@ -45,7 +45,7 @@ use failures::{
     build_gemini_api_key_retry_env, classify_review_failover_reason,
     classify_review_failure_result, enforce_review_artifact_contract,
     extract_meta_session_id_from_error, maybe_synthesize_missing_review_result,
-    repair_completed_review_restriction_result,
+    repair_completed_review_restriction_result, retire_tier_failover_session,
 };
 
 const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
@@ -326,6 +326,19 @@ pub(crate) async fn execute_review_with_tier_filter(
                         "Review tier model failed before execution completed; advancing to next configured model"
                     );
                     if attempt_index + 1 < candidates.len() {
+                        // Ensure a result.toml exists for the failed attempt so the
+                        // superseded marker can be written, then retire the session to
+                        // prevent "Failed" from appearing in `csa session list` during
+                        // the failover window (#1475).
+                        maybe_synthesize_missing_review_result(
+                            project_root,
+                            *attempt_tool,
+                            execution_started_at,
+                            &err,
+                        );
+                        if let Some(session_id) = extract_meta_session_id_from_error(&err) {
+                            retire_tier_failover_session(project_root, &session_id);
+                        }
                         continue;
                     }
                     maybe_synthesize_missing_review_result(
@@ -515,6 +528,9 @@ pub(crate) async fn execute_review_with_tier_filter(
                     ),
                 });
             }
+            // Retire the failed intermediate session so `csa session list` shows
+            // "Retired" rather than "Failed" during the failover window (#1475).
+            retire_tier_failover_session(project_root, &execution.meta_session_id);
             continue;
         }
 

@@ -141,6 +141,11 @@ pub(super) fn status_from_phase_and_result(
         "success" => "Failed",
         "failure" | "timeout" | "signal" => "Failed",
         "error" => "Error",
+        // Intermediate tier-failover attempts are superseded and should not
+        // surface as "Failed" while the failover chain is still in progress
+        // (#1475). The session is retired immediately after being superseded,
+        // so this branch only fires during the very short window before GC.
+        "tier_failover_superseded" => "Retired",
         _ if result.exit_code != 0 => "Failed",
         _ => "Error",
     }
