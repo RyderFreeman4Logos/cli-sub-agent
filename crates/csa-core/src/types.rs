@@ -12,10 +12,17 @@ pub enum ToolName {
     Codex,
     ClaudeCode,
     OpenaiCompat,
+    AntigravityCli,
 }
 
 /// Primary CLI-backed tools surfaced by doctor and default tool listings.
-pub const PRIMARY_TOOL_NAMES: &[&str] = &["gemini-cli", "opencode", "codex", "claude-code"];
+pub const PRIMARY_TOOL_NAMES: &[&str] = &[
+    "gemini-cli",
+    "opencode",
+    "codex",
+    "claude-code",
+    "antigravity-cli",
+];
 
 impl ToolName {
     /// Returns the CLI-facing name for this tool
@@ -26,6 +33,7 @@ impl ToolName {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
             Self::OpenaiCompat => "openai-compat",
+            Self::AntigravityCli => "antigravity-cli",
         }
     }
 
@@ -33,7 +41,7 @@ impl ToolName {
     pub fn model_family(&self) -> ModelFamily {
         match self {
             Self::ClaudeCode => ModelFamily::Claude,
-            Self::GeminiCli => ModelFamily::Gemini,
+            Self::GeminiCli | Self::AntigravityCli => ModelFamily::Gemini,
             Self::Codex => ModelFamily::OpenAI,
             Self::Opencode => ModelFamily::Other,
             Self::OpenaiCompat => ModelFamily::Other,
@@ -61,7 +69,7 @@ const PROMPT_TRANSPORT_ARGV_AND_STDIN: &[PromptTransport] =
 pub fn prompt_transport_capabilities(tool: &ToolName) -> &'static [PromptTransport] {
     match tool {
         ToolName::Codex => PROMPT_TRANSPORT_ARGV_AND_STDIN,
-        ToolName::GeminiCli => PROMPT_TRANSPORT_ARGV_AND_STDIN,
+        ToolName::GeminiCli | ToolName::AntigravityCli => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::ClaudeCode => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::Opencode => PROMPT_TRANSPORT_ARGV_ONLY,
         // OpenAI-compat is HTTP-only; prompt transport is irrelevant (no CLI process).
@@ -140,9 +148,11 @@ impl std::str::FromStr for ToolArg {
             "codex" => Ok(Self::Specific(ToolName::Codex)),
             "claude-code" => Ok(Self::Specific(ToolName::ClaudeCode)),
             "openai-compat" => Ok(Self::Specific(ToolName::OpenaiCompat)),
+            "antigravity-cli" => Ok(Self::Specific(ToolName::AntigravityCli)),
             // Built-in aliases for common short names
             "gemini" => Ok(Self::Specific(ToolName::GeminiCli)),
             "claude" => Ok(Self::Specific(ToolName::ClaudeCode)),
+            "antigravity" => Ok(Self::Specific(ToolName::AntigravityCli)),
             // Unknown string — store for config-based resolution
             other => Ok(Self::Alias(other.to_string())),
         }
@@ -165,14 +175,14 @@ impl ToolArg {
                     match resolved {
                         Self::Alias(ref inner) => Err(format!(
                             "tool alias '{alias}' maps to '{inner}' which is not a valid tool \
-                             name. Valid targets: gemini-cli, opencode, codex, claude-code"
+                             name. Valid targets: gemini-cli, opencode, codex, claude-code, antigravity-cli"
                         )),
                         other => Ok(other),
                     }
                 } else {
                     Err(format!(
                         "unknown tool '{alias}'. Valid values: auto, any-available, \
-                         gemini-cli, opencode, codex, claude-code, openai-compat. \
+                         gemini-cli, opencode, codex, claude-code, openai-compat, antigravity-cli. \
                          Or define it in [tool_aliases] in config."
                     ))
                 }

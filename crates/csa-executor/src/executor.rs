@@ -1,6 +1,6 @@
-//! Executor enum for 4 AI tools.
+//! Executor enum for 6 AI tools.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use csa_core::types::{PromptTransport, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
@@ -15,7 +15,8 @@ use crate::claude_runtime::{
 };
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 use crate::install_hints::{
-    GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT, OPENCODE_INSTALL_HINT,
+    ANTIGRAVITY_CLI_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT,
+    OPENCODE_INSTALL_HINT,
 };
 use crate::lefthook_guard::{sanitize_args_for_codex, sanitize_env_for_codex};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
@@ -46,9 +47,6 @@ pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 mod options;
 pub use options::{ExecuteOptions, SandboxContext};
 
-/// Executor: Closed enum for AI tools.
-///
-/// Uses data enum pattern (not trait + dynamic dispatch) for a fixed set of tools.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "kebab-case")]
 pub enum Executor {
@@ -73,8 +71,11 @@ pub enum Executor {
         #[serde(default = "default_claude_runtime_metadata")]
         runtime_metadata: ClaudeCodeRuntimeMetadata,
     },
-    /// OpenAI-compatible HTTP API tool (no CLI process, pure HTTP).
     OpenaiCompat {
+        model_override: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
+    },
+    AntigravityCli {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
     },
@@ -88,7 +89,6 @@ const fn default_claude_runtime_metadata() -> ClaudeCodeRuntimeMetadata {
 }
 
 impl Executor {
-    /// Get the tool name as a string.
     pub fn tool_name(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "gemini-cli",
@@ -96,22 +96,21 @@ impl Executor {
             Self::Codex { .. } => "codex",
             Self::ClaudeCode { .. } => "claude-code",
             Self::OpenaiCompat { .. } => "openai-compat",
+            Self::AntigravityCli { .. } => "antigravity-cli",
         }
     }
 
-    /// Executable name for `LegacyTransport` CLI commands.
-    /// For availability checks, use `runtime_binary_name()`.
     pub fn executable_name(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "gemini",
             Self::Opencode { .. } => "opencode",
             Self::Codex { .. } => "codex",
             Self::ClaudeCode { .. } => "claude",
-            Self::OpenaiCompat { .. } => "openai-compat", // no CLI binary
+            Self::OpenaiCompat { .. } => "openai-compat",
+            Self::AntigravityCli { .. } => "antigravity",
         }
     }
 
-    /// Binary spawned at runtime (ACP adapters or native CLI).
     pub fn runtime_binary_name(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "gemini",
@@ -122,11 +121,11 @@ impl Executor {
             Self::ClaudeCode {
                 runtime_metadata, ..
             } => runtime_metadata.runtime_binary_name(),
-            Self::OpenaiCompat { .. } => "openai-compat", // no binary; HTTP-only
+            Self::OpenaiCompat { .. } => "openai-compat",
+            Self::AntigravityCli { .. } => "antigravity",
         }
     }
 
-    /// Get installation instructions for the tool.
     pub fn install_hint(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => GEMINI_CLI_INSTALL_HINT,
@@ -138,17 +137,17 @@ impl Executor {
                 runtime_metadata, ..
             } => runtime_metadata.install_hint(),
             Self::OpenaiCompat { .. } => OPENAI_COMPAT_INSTALL_HINT,
+            Self::AntigravityCli { .. } => ANTIGRAVITY_CLI_INSTALL_HINT,
         }
     }
 
-    /// Get "yolo" args for the tool (bypass approval prompts).
     pub fn yolo_args(&self) -> &[&str] {
         match self {
-            Self::GeminiCli { .. } => &["-y"],
-            Self::Opencode { .. } => &[] as &[&str], // opencode does not have a yolo mode
+            Self::GeminiCli { .. } | Self::AntigravityCli { .. } => &["-y"],
+            Self::Opencode { .. } => &[] as &[&str],
             Self::Codex { .. } => &["--dangerously-bypass-approvals-and-sandbox"],
             Self::ClaudeCode { .. } => &["--dangerously-skip-permissions"],
-            Self::OpenaiCompat { .. } => &[] as &[&str], // HTTP-only, no CLI args
+            Self::OpenaiCompat { .. } => &[] as &[&str],
         }
     }
 
@@ -156,32 +155,16 @@ impl Executor {
     pub fn from_spec(spec: &ModelSpec) -> Result<Self> {
         let model = Some(spec.model.clone());
         let budget = Some(spec.thinking_budget.clone());
-        match spec.tool.as_str() {
-            "gemini-cli" => Ok(Self::GeminiCli {
-                model_override: model,
-                thinking_budget: budget,
-            }),
-            "opencode" => Ok(Self::Opencode {
-                model_override: model,
-                agent: None,
-                thinking_budget: budget,
-            }),
-            "codex" => Ok(Self::Codex {
-                model_override: model,
-                thinking_budget: budget,
-                runtime_metadata: codex_runtime_metadata(),
-            }),
-            "claude-code" => Ok(Self::ClaudeCode {
-                model_override: model,
-                thinking_budget: budget,
-                runtime_metadata: claude_runtime_metadata(),
-            }),
-            "openai-compat" => Ok(Self::OpenaiCompat {
-                model_override: model,
-                thinking_budget: budget,
-            }),
-            other => bail!("Unknown tool '{other}' in model spec"),
-        }
+        let tool = match spec.tool.as_str() {
+            "gemini-cli" => ToolName::GeminiCli,
+            "opencode" => ToolName::Opencode,
+            "codex" => ToolName::Codex,
+            "claude-code" => ToolName::ClaudeCode,
+            "openai-compat" => ToolName::OpenaiCompat,
+            "antigravity-cli" => ToolName::AntigravityCli,
+            other => anyhow::bail!("Unknown tool '{other}' in model spec"),
+        };
+        Ok(Self::from_tool_name(&tool, model, budget))
     }
 
     /// Construct executor from ToolName enum with optional model and thinking budget.
@@ -214,6 +197,10 @@ impl Executor {
                 model_override: model,
                 thinking_budget,
             },
+            ToolName::AntigravityCli => Self::AntigravityCli {
+                model_override: model,
+                thinking_budget,
+            },
         }
     }
 
@@ -233,6 +220,9 @@ impl Executor {
                 thinking_budget, ..
             }
             | Self::OpenaiCompat {
+                thinking_budget, ..
+            }
+            | Self::AntigravityCli {
                 thinking_budget, ..
             } => thinking_budget.as_ref(),
         }
@@ -255,6 +245,9 @@ impl Executor {
             }
             | Self::OpenaiCompat {
                 thinking_budget, ..
+            }
+            | Self::AntigravityCli {
+                thinking_budget, ..
             } => {
                 *thinking_budget = Some(budget);
             }
@@ -268,7 +261,8 @@ impl Executor {
             | Self::Opencode { model_override, .. }
             | Self::Codex { model_override, .. }
             | Self::ClaudeCode { model_override, .. }
-            | Self::OpenaiCompat { model_override, .. } => {
+            | Self::OpenaiCompat { model_override, .. }
+            | Self::AntigravityCli { model_override, .. } => {
                 *model_override = Some(model);
             }
         }
@@ -302,7 +296,7 @@ impl Executor {
             _ => prompt,
         };
         let mut cmd = self.build_base_command(session);
-        if matches!(self, Self::GeminiCli { .. }) {
+        if matches!(self, Self::GeminiCli { .. } | Self::AntigravityCli { .. }) {
             Self::strip_gemini_inherited_env(&mut cmd);
         }
         if let Some(env) = extra_env {
@@ -459,7 +453,7 @@ impl Executor {
         for var in Self::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
-        if matches!(self, Self::GeminiCli { .. }) {
+        if matches!(self, Self::GeminiCli { .. } | Self::AntigravityCli { .. }) {
             Self::strip_gemini_inherited_env(&mut cmd);
         }
         if let Some(env) = extra_env {
@@ -470,7 +464,7 @@ impl Executor {
             gemini_include_directories(extra_env, prompt, Some(work_dir));
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
-        if matches!(self, Self::GeminiCli { .. }) {
+        if matches!(self, Self::GeminiCli { .. } | Self::AntigravityCli { .. }) {
             append_gemini_include_directories_args(&mut cmd, &gemini_include_directories);
         }
         if matches!(self, Self::Codex { .. })
@@ -638,14 +632,14 @@ impl Executor {
                 cmd.arg("--dangerously-skip-permissions");
                 cmd.arg("--output-format").arg("json");
             }
-            Self::OpenaiCompat { .. } => {} // HTTP-only
+            Self::OpenaiCompat { .. } | Self::AntigravityCli { .. } => {}
         }
 
         // Model and thinking budget (shared with execute_in)
         self.append_model_args(cmd);
 
-        // Yolo flag for gemini (other tools handle it in structural args above)
-        if matches!(self, Self::GeminiCli { .. }) {
+        // Yolo flag for gemini/antigravity (other tools handle it in structural args above)
+        if matches!(self, Self::GeminiCli { .. } | Self::AntigravityCli { .. }) {
             cmd.arg("-y");
             append_gemini_include_directories_args(cmd, gemini_include_directories);
         }
@@ -655,7 +649,7 @@ impl Executor {
             && let Some(ref session_id) = state.provider_session_id
         {
             match self {
-                Self::GeminiCli { .. } => {
+                Self::GeminiCli { .. } | Self::AntigravityCli { .. } => {
                     cmd.arg("-r").arg(session_id);
                 }
                 Self::Opencode { .. } => {
@@ -677,7 +671,7 @@ impl Executor {
         // Prompt (position matters per tool)
         match prompt_transport {
             PromptTransport::Argv => match self {
-                Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
+                Self::GeminiCli { .. } | Self::ClaudeCode { .. } | Self::AntigravityCli { .. } => {
                     cmd.arg("-p").arg(prompt);
                 }
                 Self::Opencode { .. } | Self::Codex { .. } => {
@@ -687,7 +681,9 @@ impl Executor {
             },
             PromptTransport::Stdin => {
                 match self {
-                    Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
+                    Self::GeminiCli { .. }
+                    | Self::ClaudeCode { .. }
+                    | Self::AntigravityCli { .. } => {
                         cmd.arg("-p");
                     }
                     Self::Codex { .. } if codex_resume => {
@@ -707,14 +703,19 @@ impl Executor {
             Self::GeminiCli {
                 model_override,
                 thinking_budget,
+            }
+            | Self::AntigravityCli {
+                model_override,
+                thinking_budget,
             } => {
                 if let Some(model) = effective_gemini_model_override(model_override) {
                     cmd.arg("-m").arg(model);
                 }
                 if thinking_budget.is_some() {
-                    // gemini-cli (0.31+) no longer accepts thinking-budget flags.
-                    // Ignore CSA thinking hints and let gemini-cli decide routing.
-                    tracing::debug!("Ignoring thinking budget for gemini-cli: no flag support");
+                    tracing::debug!(
+                        "Ignoring thinking budget for {}: no flag support",
+                        self.tool_name()
+                    );
                 }
             }
             Self::Opencode {
@@ -777,7 +778,6 @@ impl Executor {
         }
     }
 
-    /// Append "yolo" args (bypass approvals).
     fn append_yolo_args(&self, cmd: &mut Command) {
         for arg in self.yolo_args() {
             cmd.arg(arg);
@@ -788,13 +788,11 @@ impl Executor {
 include!("executor_runtime_transport.rs");
 
 #[cfg(test)]
-#[path = "executor_tests.rs"]
-mod tests;
-
-#[cfg(test)]
 #[path = "executor_build_cmd_tests.rs"]
 mod build_cmd_tests;
-
 #[cfg(test)]
 #[path = "executor_prompt_transport_tests.rs"]
 mod prompt_transport_tests;
+#[cfg(test)]
+#[path = "executor_tests.rs"]
+mod tests;

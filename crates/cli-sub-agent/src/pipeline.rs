@@ -142,7 +142,7 @@ pub(crate) fn resolve_initial_response_timeout_seconds(
 fn per_tool_default(tool_name: &str) -> u64 {
     match tool_name {
         "codex" => DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS,
-        "gemini-cli" => DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS,
+        "gemini-cli" | "antigravity-cli" => DEFAULT_GEMINI_INITIAL_RESPONSE_TIMEOUT_SECONDS,
         _ => DEFAULT_RESOURCES_INITIAL_RESPONSE_TIMEOUT_SECONDS,
     }
 }

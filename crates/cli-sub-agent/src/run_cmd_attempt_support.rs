@@ -52,6 +52,7 @@ pub(crate) fn build_failover_context_addendum(
     let sid = session_id?;
     let provider = match failed_tool {
         "gemini-cli" => "gemini",
+        "antigravity-cli" => "antigravity",
         "claude-code" => "claude",
         "codex" => "codex",
         "opencode" => "opencode",

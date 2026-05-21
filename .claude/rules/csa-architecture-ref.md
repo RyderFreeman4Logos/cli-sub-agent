@@ -67,5 +67,5 @@ Patterns in `patterns/` (weave packages). Skills in `.claude/skills/` (SKILL.md 
 
 ## Implementation Status
 
-Version 0.1.54. 4 tools (claude-code, codex, gemini-cli, opencode). ACP + legacy transport. Native fork (claude-code), soft fork (others), codex PTY fork behind feature gate. Fork-call-return protocol. Resource sandbox. MCP hub. Seed sessions. Structured output sections. TODO/workflow with spec intent flow. Config at `.csa/config.toml` + `~/.config/cli-sub-agent/config.toml`.
+Version 0.1.54. 6 tools (claude-code, codex, gemini-cli, opencode, openai-compat, antigravity-cli). ACP + legacy transport. Native fork (claude-code), soft fork (others), codex PTY fork behind feature gate. Fork-call-return protocol. Resource sandbox. MCP hub. Seed sessions. Structured output sections. TODO/workflow with spec intent flow. Config at `.csa/config.toml` + `~/.config/cli-sub-agent/config.toml`.
 → `.agents/project-rules-ref/implementation-status.md`

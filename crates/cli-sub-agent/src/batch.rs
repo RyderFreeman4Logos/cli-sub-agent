@@ -691,6 +691,7 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
+        "antigravity-cli" => Ok(ToolName::AntigravityCli),
         _ => anyhow::bail!("Unknown tool: {tool}"),
     }
 }

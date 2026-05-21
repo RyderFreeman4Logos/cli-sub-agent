@@ -228,6 +228,15 @@ impl TransportFactory {
             (Executor::OpenaiCompat { .. }, TransportMode::Tmux) => {
                 err("openai-compat does not support tmux transport")
             }
+
+            // AntigravityCli: Legacy and ACP (same as gemini-cli)
+            (Executor::AntigravityCli { .. }, TransportMode::Legacy) => Ok(()),
+            #[cfg(feature = "acp")]
+            (Executor::AntigravityCli { .. }, TransportMode::Acp) => Ok(()),
+            (Executor::AntigravityCli { .. }, TransportMode::OpenaiCompat)
+            | (Executor::AntigravityCli { .. }, TransportMode::Tmux) => {
+                err("antigravity-cli only supports cli or acp transport")
+            }
         }
     }
 
