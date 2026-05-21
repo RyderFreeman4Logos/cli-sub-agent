@@ -635,3 +635,7 @@ fn long_option_consumes_value(token: &str) -> bool {
             | "--cleanup"
     )
 }
+
+#[cfg(test)]
+#[path = "run_cmd_shell_tests.rs"]
+mod tests;
