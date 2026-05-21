@@ -77,7 +77,7 @@ breaks prompt-guard propagation.
 
 1. **Branch check**: Verify on a feature branch (not main/dev). Abort if protected.
 2. **Quality gates**: Run `just fmt`, `just clippy`, `just test` sequentially. Fix any failures.
-3. **Stage changes**: `git add` relevant files. Verify no untracked files remain.
+3. **Stage changes**: `git add` relevant files. Also stages all tracked modifications via `git add -u` to include `just fmt`-reformatted files (outside requested scope) and rule-055 pre-existing dirty state. Logs any files staged beyond the requested scope with a NOTE line. Verify no untracked files remain.
 4. **Security scan**: Grep staged files for hardcoded secrets (API_KEY, SECRET, PASSWORD, PRIVATE_KEY).
 5. **Security audit**: Invoke the `security-audit` pattern via CSA -- three-phase audit (test completeness, vulnerability scan, code quality).
 6. **Pre-commit review**: Invoke the `ai-reviewed-commit` pattern via CSA -- authorship-aware review (debate for self-authored, `csa review --diff --allow-fallback` for others). Fix-and-retry up to **3 rounds (hard cap)**. After round 3, if review still reports non-false-positive P0/P1 findings, STOP and ask the user whether to continue. Exception: if the user's prior prompt explicitly authorized unbounded looping (e.g., "loop until clean", "keep fixing until review passes"), continue without asking. Also continue without asking if all round-3 findings are false positives per orchestrator judgement.
@@ -155,10 +155,10 @@ All commits created by this workflow must use:
 
 1. Branch is a feature branch (not main/dev).
 2. `just fmt`, `just clippy`, `just test` all exit 0.
-3. No untracked files remain after staging.
+3. No untracked files remain after staging. Tracked modifications from `just fmt` and rule-055 pre-existing dirty state are staged with NOTE log lines. Review/fix cycle modifications staged in Step 20 before commit.
 4. Security scan found no hardcoded secrets.
 5. Security audit returned PASS or PASS_DEFERRED.
 6. Pre-commit review completed with zero unresolved P0/P1 issues.
 7. Commit created with Conventional Commits format AND includes AI Reviewer Metadata block.
-8. `git status` shows clean working tree.
+8. `git status` shows clean working tree (enforced: Step 6 stages pre-commit dirty state, Step 20 stages review/fix-cycle modifications before `git commit`).
 9. PR created and `/pr-bot` invoked (skipped when `CSA_SKIP_PUBLISH=true`).

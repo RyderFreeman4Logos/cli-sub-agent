@@ -118,6 +118,20 @@ Stage all relevant files. Verify no untracked files remain.
 
 ```bash
 git add ${FILES}
+# Stage all tracked modifications to prevent dirty worktree after commit.
+# This covers two cases:
+# 1. Files auto-staged by `just fmt` in Step 3: cargo fmt --all reformats the
+#    entire workspace, not just FILES. Those extra .rs files are already staged
+#    by just fmt's auto-staging, but any non-.rs pre-existing modifications are not.
+# 2. Pre-existing dirty tracked files that rule 055 requires to commit alongside
+#    the feature change (never leave worktree dirty after a commit).
+# Extra staged files are logged so the commit reviewer has full visibility.
+TRACKED_UNSTAGED="$(git diff --name-only)"
+if [ -n "${TRACKED_UNSTAGED}" ]; then
+  echo "NOTE: Staging tracked modifications for clean worktree (rustfmt/rule-055):"
+  printf '%s\n' "${TRACKED_UNSTAGED}"
+  git add -u
+fi
 # Allow deletions so cleanup commits can remove previously tracked artifacts.
 STAGED_GENERATED_ARTIFACTS="$(
   git diff --cached --name-only --diff-filter=ACMR \
@@ -458,6 +472,18 @@ COMMIT_MESSAGE_FILE_LOCAL="${COMMIT_MESSAGE_FILE:-}"
 if [ -z "${COMMIT_MESSAGE_FILE_LOCAL}" ] || [ ! -f "${COMMIT_MESSAGE_FILE_LOCAL}" ]; then
   echo "ERROR: Commit message file is missing." >&2
   exit 1
+fi
+
+# Final staging sweep: pick up any tracked modifications introduced by review/fix
+# cycles (Steps 12-13) that were not staged in Step 6. Review sessions may edit
+# non-.rs files (test fixtures, docs, PATTERN.md) that just fmt's .rs-only
+# auto-staging skips. Without this, those changes are left unstaged, causing a
+# dirty worktree after the commit.
+UNSTAGED_BEFORE_COMMIT="$(git diff --name-only)"
+if [ -n "${UNSTAGED_BEFORE_COMMIT}" ]; then
+  echo "NOTE: Staging review/fix-induced tracked modifications for clean worktree:"
+  printf '%s\n' "${UNSTAGED_BEFORE_COMMIT}"
+  git add -u
 fi
 
 trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
