@@ -429,10 +429,18 @@ install-skills target=".claude/skills":
 			fi
 		done
 	done
-	# Also install independent skills from skills/ directory
+	# Also install independent skills from skills/ directory.
+	# Skills listed in MANAGED_SKILLS are inactive (user-triggered only via
+	# `csa skill run`) and should NOT be symlinked into .claude/skills/
+	# to avoid consuming context-window tokens.
+	MANAGED_SKILLS="nohup-poll pattern-creator quality-gate split-project-docs"
 	for skill_dir in "${repo_root}"/skills/*/; do
 		[ -d "$skill_dir" ] || continue
 		skill_name=$(basename "$skill_dir")
+		if echo " ${MANAGED_SKILLS} " | grep -q " ${skill_name} "; then
+			echo "  skip (managed): ${skill_name}"
+			continue
+		fi
 		target_path="{{target}}/${skill_name}"
 		if [ -L "$target_path" ]; then
 			echo "  skip (symlink exists): ${skill_name}"

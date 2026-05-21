@@ -6,7 +6,7 @@ Note: Workflow logic is defined in `./patterns/`. `skills/csa-review` and
 `skills/debate` are kept as compatibility shims so `csa skill install` still
 installs the workflow entrypoints required by `csa review` and `csa debate`.
 
-## Global Persona Skills (7)
+## Global Persona Skills (6)
 
 | Skill | Description |
 |---|---|
@@ -16,7 +16,21 @@ installs the workflow entrypoints required by `csa review` and `csa debate`.
 | `csa-rust-dev` | Comprehensive Rust development guidance for architecture, implementation, and standards. |
 | `csa-security` | Adversarial security analysis to identify vulnerabilities before release. |
 | `csa-test-gen` | Core-first test design and TDD guidance following the test pyramid. |
-| `nohup-poll` | Launch long-running commands via nohup and poll at `kv_cache.long_poll_seconds` (default 240s) to keep KV cache warm. |
+
+## CSA-Managed Skills (6)
+
+Inactive skills migrated to `~/.local/state/cli-sub-agent/skills/` via `csa skill add`.
+These are NOT symlinked into `.claude/skills/` to avoid consuming context-window tokens.
+Invoke via `csa skill run <name>`.
+
+| Skill | Description |
+|---|---|
+| `health` | Claude Code configuration health audit (six-layer framework). |
+| `mcp-hub-routing-guide` | MCP Hub routing, server setup, and troubleshooting reference. |
+| `nohup-poll` | Launch long-running commands via nohup with KV cache-warm polling. |
+| `pattern-creator` | Create CSA patterns (PATTERN.md + skill + workflow.toml). |
+| `quality-gate` | Repository quality gate infrastructure builder (hooks, CI guards, merge protection). |
+| `split-project-docs` | Split monolith documentation into AGENTS.md-style progressive disclosure. |
 
 ## Compatibility Workflow Skills (2)
 
