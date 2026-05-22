@@ -87,8 +87,8 @@ impl BwrapCommandBuilder {
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
 
-        // Writable bind mounts (after tmpfs). /tmp itself is skipped; /tmp
-        // sub-paths get pre-created mount points inside the fresh tmpfs.
+        // Writable bind mounts (after tmpfs). File paths under /tmp only need
+        // parent dirs; creating the file path as a dir breaks bwrap file binds.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
             let s = path.to_string_lossy();
@@ -101,7 +101,9 @@ impl BwrapCommandBuilder {
                     let p = parent.to_string_lossy();
                     cmd.args(["--dir", &p]);
                 }
-                cmd.args(["--dir", &s]);
+                if !(path.is_file() || (!path.exists() && path.extension().is_some())) {
+                    cmd.args(["--dir", &s]);
+                }
                 cmd.args(["--bind", &s, &s]);
             } else {
                 cmd.args(["--bind", &s, &s]);

@@ -103,6 +103,68 @@ enforcement_mode = "best-effort"
 }
 
 #[test]
+fn test_extra_writable_creates_missing_file_source_before_sandbox_launch() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let state_file = project_root.path().join("state/e2e-test-state.json");
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let extra = vec![PathBuf::from("state/e2e-test-state.json")];
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "codex",
+        "test-session",
+        project_root.path(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &extra,
+        &[],
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected missing file-like --extra-writable path to be prepared");
+    };
+    assert!(
+        state_file.is_file(),
+        "missing file-like --extra-writable path should be pre-created"
+    );
+
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&state_file.canonicalize().unwrap()),
+        "prepared file should remain the writable mount source, got: {:?}",
+        sandbox.isolation_plan.writable_paths
+    );
+}
+
+#[test]
+fn test_run_extra_writable_pre_daemon_validation_creates_missing_file_source() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let state_file = project_root.path().join("nested/state.json");
+    let extra = vec![PathBuf::from("nested/state.json")];
+
+    validate_run_extra_writable_sources_exist(None, project_root.path(), false, &extra)
+        .expect("missing file-like --extra-writable path should be prepared before daemon spawn");
+
+    assert!(
+        state_file.is_file(),
+        "pre-daemon validation should create the file source for bwrap"
+    );
+}
+
+#[test]
 fn test_run_extra_writable_pre_daemon_validation_rejects_nonexistent_path() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let missing = project_root.path().join("missing-extra");
