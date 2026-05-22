@@ -60,6 +60,13 @@ fn build_failed_test_result(summary: &str, stderr: &str) -> csa_process::Executi
     }
 }
 
+fn write_result_sidecar(session_dir: &std::path::Path, contents: &str) {
+    let path = session_dir.join(csa_session::CONTRACT_RESULT_ARTIFACT_PATH);
+    std::fs::create_dir_all(path.parent().expect("result sidecar parent"))
+        .expect("create output dir");
+    std::fs::write(path, contents).expect("write output/result.toml");
+}
+
 #[tokio::test]
 async fn permanent_tool_quota_sets_tool_exhausted_phase() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -153,6 +160,109 @@ async fn no_op_gate_triggers_when_sa_mode_and_zero_tools_and_short_elapsed() {
     assert_eq!(
         result.exit_code, 1,
         "ExecutionResult exit_code must also be rewritten"
+    );
+}
+
+#[tokio::test]
+async fn no_op_gate_preserves_success_when_result_sidecar_reports_success() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+    write_result_sidecar(
+        &session_dir,
+        r#"[result]
+status = "success"
+summary = "PASS"
+"#,
+    );
+
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        false,
+        true,
+    );
+    let mut result = build_test_result("PASS");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(0));
+    assert!(
+        !persisted.summary.starts_with("no-op exit detected"),
+        "success sidecar must suppress no-op rewrite, got: {}",
+        persisted.summary
+    );
+    assert_eq!(result.exit_code, 0);
+}
+
+#[tokio::test]
+async fn no_op_gate_still_triggers_when_result_sidecar_reports_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+    write_result_sidecar(
+        &session_dir,
+        r#"[result]
+status = "failure"
+summary = "not done"
+"#,
+    );
+
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        false,
+        true,
+    );
+    let mut result = build_test_result("I'll start by exploring the codebase.");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 1);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(1));
+    assert!(
+        persisted.summary.starts_with("no-op exit detected"),
+        "failure sidecar must not suppress no-op rewrite, got: {}",
+        persisted.summary
     );
 }
 
