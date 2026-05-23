@@ -2,11 +2,11 @@
 //!
 //! Two-tier strategy:
 //! - Small files (<32KB): chars / 3 heuristic (Chinese-friendly, fast)
-//! - Large files (>=32KB): precise count via tokuin's OpenAI tokenizer
+//! - Large files (>=32KB): conservative count via tokuin (max of OpenAI BPE + chars/3)
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tokuin::tokenizers::{OpenAITokenizer, Tokenizer};
+use tokuin::tokenizers::{ConservativeTokenizer, Tokenizer};
 
 /// File size threshold for switching from heuristic to precise tokenization.
 const PRECISE_THRESHOLD: u64 = 32_768;
@@ -41,9 +41,9 @@ pub fn estimate_tokens_heuristic(content: &str) -> usize {
     char_count / 3
 }
 
-/// Precise token estimate using tokuin's OpenAI BPE tokenizer.
+/// Conservative token estimate using tokuin (max of OpenAI BPE + chars/3).
 fn estimate_tokens_precise(content: &str) -> Result<usize> {
-    let tokenizer = OpenAITokenizer::new("gpt-4")
+    let tokenizer = ConservativeTokenizer::new("gpt-4o")
         .map_err(|e| anyhow::anyhow!("Failed to create tokenizer: {e}"))?;
     let count = tokenizer
         .count_tokens(content)
