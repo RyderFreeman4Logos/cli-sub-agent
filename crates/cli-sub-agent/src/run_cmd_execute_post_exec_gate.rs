@@ -30,20 +30,64 @@ fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
 fn post_exec_gate_requires_changes(
     project_root: &Path,
     skip_on_no_changes: bool,
+    session_id: Option<&str>,
     changed_paths: Option<&[String]>,
 ) -> Result<bool> {
     if !skip_on_no_changes || !crate::run_cmd::is_git_worktree(project_root) {
         return Ok(true);
     }
 
+    let start_head = session_id.and_then(|id| session_start_head(project_root, id));
     if let Some(paths) = changed_paths {
-        return Ok(!paths.is_empty());
+        if !paths.is_empty() {
+            return Ok(true);
+        }
+        return git_head_changed_since(project_root, start_head.as_deref());
     }
+
+    if git_head_changed_since(project_root, start_head.as_deref())? {
+        return Ok(true);
+    }
+    git_worktree_has_status_changes(project_root)
+}
+
+fn session_start_head(project_root: &Path, session_id: &str) -> Option<String> {
+    csa_session::load_session(project_root, session_id)
+        .ok()
+        .and_then(|session| session.git_head_at_creation)
+        .filter(|head| !head.trim().is_empty())
+}
+
+fn git_head_changed_since(project_root: &Path, start_head: Option<&str>) -> Result<bool> {
+    let Some(start_head) = start_head.map(str::trim).filter(|head| !head.is_empty()) else {
+        return Ok(false);
+    };
 
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(project_root)
-        .args(["status", "--porcelain"])
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to inspect git HEAD for post-exec gate in {}",
+                project_root.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        return Ok(true);
+    }
+
+    let current_head = String::from_utf8_lossy(&output.stdout);
+    Ok(current_head.trim() != start_head)
+}
+
+fn git_worktree_has_status_changes(project_root: &Path) -> Result<bool> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["status", "--porcelain=v1", "--untracked-files=all"])
         .output()
         .with_context(|| {
             format!(
@@ -144,6 +188,7 @@ where
     if !post_exec_gate_requires_changes(
         project_root,
         gate_config.skip_on_no_changes,
+        session_id,
         changed_paths,
     )? {
         return Ok(PostExecGateOutcome::Skipped);

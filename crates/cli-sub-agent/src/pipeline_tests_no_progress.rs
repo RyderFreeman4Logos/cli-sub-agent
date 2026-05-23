@@ -55,6 +55,12 @@ fn build_codex_executor() -> Executor {
     }
 }
 
+fn write_result_sidecar(session_dir: &std::path::Path, contents: &str) {
+    let path = session_dir.join(csa_session::CONTRACT_RESULT_ARTIFACT_PATH);
+    std::fs::create_dir_all(path.parent().expect("sidecar parent")).expect("create output dir");
+    std::fs::write(path, contents).expect("write result sidecar");
+}
+
 fn run_git(repo: &std::path::Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .args(args)
@@ -90,7 +96,7 @@ fn setup_session_repo(
 }
 
 #[tokio::test]
-async fn run_success_with_no_git_progress_is_marked_no_progress() {
+async fn run_success_with_no_git_progress_and_tool_calls_remains_success() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let (project_root, mut session) = setup_session_repo(&tmp);
@@ -101,6 +107,76 @@ async fn run_success_with_no_git_progress_is_marked_no_progress() {
     let hooks_config = csa_hooks::HooksConfig::default();
     let start = chrono::Utc::now() - chrono::Duration::seconds(360);
     let ctx = build_test_ctx(&executor, session_dir, &project_root, start, &hooks_config);
+    let mut result = build_test_result("Completed successfully.");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(&project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(0));
+    assert_eq!(result.exit_code, 0, "tool exit code must remain unchanged");
+    let reloaded = load_session(&project_root, &session.meta_session_id).expect("load session");
+    assert_ne!(reloaded.termination_reason.as_deref(), Some("no_progress"));
+}
+
+#[tokio::test]
+async fn run_success_with_success_sidecar_and_no_git_progress_remains_success() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let (project_root, mut session) = setup_session_repo(&tmp);
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session.meta_session_id).expect("dir");
+    write_result_sidecar(
+        &session_dir,
+        r#"[result]
+status = "success"
+summary = "external orchestration passed"
+"#,
+    );
+
+    let executor = build_codex_executor();
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let mut ctx = build_test_ctx(&executor, session_dir, &project_root, start, &hooks_config);
+    ctx.has_tool_calls = false;
+    let mut result = build_test_result("External orchestration passed.");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(&project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(0));
+    assert!(
+        !persisted
+            .summary
+            .starts_with("tool exited successfully but produced no changes"),
+        "success sidecar must suppress no-progress classification, got: {}",
+        persisted.summary
+    );
+    assert_eq!(result.exit_code, 0);
+}
+
+#[tokio::test]
+async fn run_success_with_low_evidence_no_git_progress_is_marked_no_progress() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let (project_root, mut session) = setup_session_repo(&tmp);
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session.meta_session_id).expect("dir");
+
+    let executor = build_codex_executor();
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let mut ctx = build_test_ctx(&executor, session_dir, &project_root, start, &hooks_config);
+    ctx.has_tool_calls = false;
     let mut result = build_test_result("Completed successfully.");
 
     process_execution_result(ctx, &mut session, &mut result)
