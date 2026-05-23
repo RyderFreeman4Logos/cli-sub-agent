@@ -37,26 +37,33 @@ fn post_exec_gate_requires_changes(
     }
 
     if let Some(paths) = changed_paths {
-        return Ok(!paths.is_empty());
+        if paths.is_empty() {
+            return Ok(false);
+        }
+        return git_diff_has_changes(project_root);
     }
 
+    git_diff_has_changes(project_root)
+}
+
+fn git_diff_has_changes(project_root: &Path) -> Result<bool> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(project_root)
-        .args(["status", "--porcelain"])
+        .args(["diff", "--quiet", "HEAD", "--"])
         .output()
         .with_context(|| {
             format!(
-                "failed to inspect git status for post-exec gate in {}",
+                "failed to inspect git diff for post-exec gate in {}",
                 project_root.display()
             )
         })?;
 
-    if !output.status.success() {
-        return Ok(true);
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => Ok(true),
     }
-
-    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
 pub(super) fn execute_post_exec_gate_command(

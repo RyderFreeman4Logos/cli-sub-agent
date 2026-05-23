@@ -278,6 +278,11 @@ pub(crate) async fn process_execution_result(
     }
     if result.exit_code == 0
         && ctx.task_type == Some("run")
+        && !result_sidecar::status_is_success(&ctx.session_dir)
+        && session.turn_count <= 1
+        && !ctx.has_tool_calls
+        && ctx.changed_paths.is_empty()
+        && elapsed_secs < NO_OP_ELAPSED_THRESHOLD_SECS
         && let Err(err) = progress::maybe_mark_no_progress_session(
             ctx.project_root,
             session,

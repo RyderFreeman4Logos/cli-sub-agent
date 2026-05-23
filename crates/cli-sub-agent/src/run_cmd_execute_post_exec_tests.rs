@@ -212,9 +212,41 @@ async fn post_exec_gate_skips_when_dirty_worktree_is_pre_existing() {
 }
 
 #[tokio::test]
+async fn post_exec_gate_skips_when_changed_paths_have_no_tracked_diff() {
+    let project_dir = tempdir().unwrap();
+    init_clean_git_repo(project_dir.path());
+    std::fs::create_dir(project_dir.path().join("just-temp")).unwrap();
+    std::fs::write(
+        project_dir.path().join("just-temp").join("stderr.log"),
+        "ice\n",
+    )
+    .unwrap();
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths = vec!["just-temp/stderr.log".to_string()];
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Run external test orchestration",
+        Some("01TESTPOSTEXECGATEARTIFACT00"),
+        Some(&config),
+        Some(&changed_paths),
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async move {
+                panic!("runner must not execute when changed paths have no tracked diff");
+            })
+        },
+    )
+    .await
+    .expect("untracked test artifacts should skip gate");
+
+    assert_eq!(outcome, PostExecGateOutcome::Skipped);
+}
+
+#[tokio::test]
 async fn post_exec_gate_runs_when_session_introduced_changes() {
     let project_dir = tempdir().unwrap();
     init_clean_git_repo(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
 
     let calls = Arc::new(Mutex::new(Vec::new()));
     let config = project_config_with_gate(PostExecGateConfig::default());
