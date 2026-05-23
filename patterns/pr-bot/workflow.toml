@@ -276,6 +276,12 @@ name = "PR_BOT_WAIT_SCRIPT"
 name = "PR_NUM"
 
 [[workflow.variables]]
+name = "PR_RECORD"
+
+[[workflow.variables]]
+name = "PR_STATE"
+
+[[workflow.variables]]
 name = "PR_TITLE"
 
 [[workflow.variables]]
@@ -408,6 +414,9 @@ name = "WAIT_SLEEP_PID"
 name = "WORKFLOW_BRANCH"
 
 [[workflow.variables]]
+name = "_SYNC_BRANCH"
+
+[[workflow.variables]]
 name = "attempt"
 
 [[workflow.variables]]
@@ -420,7 +429,16 @@ name = "latest_bot_comment_json"
 name = "latest_trigger_ts"
 
 [[workflow.variables]]
+name = "pr_merged_at"
+
+[[workflow.variables]]
 name = "pr_num"
+
+[[workflow.variables]]
+name = "pr_record"
+
+[[workflow.variables]]
+name = "pr_state"
 
 [[workflow.variables]]
 name = "quota_body"
@@ -642,12 +660,15 @@ prompt = '''
   `ERROR: Local review found unresolved issues. Fix them before PR creation.`
 - FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
 
-PR lookup is strictly owner-aware: query `--head "${WORKFLOW_BRANCH}"`,
-then verify returned rows by `headRepositoryOwner.login` and `headRefName`.
+PR lookup is strictly owner-aware: try `gh pr view "${WORKFLOW_BRANCH}"`,
+then fall back to querying `--head "${WORKFLOW_BRANCH}"` with `--state all`;
+verify returned rows by `baseRefName`, `headRepositoryOwner.login`, and
+`headRefName`.
 Never rely on `--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}"`; `gh pr list --head`
 accepts a branch name only. If `gh pr create`
 reports `a pull request for branch ... already exists`, re-resolve via the same
-owner-aware lookup and reuse the existing PR.
+owner-aware lookup and reuse the existing PR. If the existing PR is already
+merged, mark `MERGE_COMPLETED=true` and continue directly to post-merge sync.
 
 ```bash
 # --- Precondition gate: review must be complete ---
@@ -679,21 +700,48 @@ SOURCE_OWNER="$(
 if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
-resolve_branch_pr() {
-  local lookup status pr_num
+resolve_branch_pr_record() {
+  local lookup status pr_num pr_state pr_merged_at
+  lookup="$(
+    gh pr view "${WORKFLOW_BRANCH}" \
+      --repo "${REPO_SLUG}" \
+      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt \
+      2>/dev/null \
+    | jq -r \
+        --arg base "${DEFAULT_BRANCH}" \
+        --arg branch "${WORKFLOW_BRANCH}" \
+        --arg owner "${SOURCE_OWNER}" \
+        'if (.baseRefName == $base and .headRefName == $branch and .headRepositoryOwner.login == $owner) then
+           "found\t\(.number)\t\(.state)\t\(.mergedAt // "")"
+         else
+           "missing"
+         end' \
+      2>/dev/null \
+      || printf 'missing\n'
+  )"
+  status="${lookup%%$'\t'*}"
+  if [ "${status}" = "found" ]; then
+    printf '%s\n' "${lookup#*$'\t'}"
+    return 0
+  fi
+
   lookup="$(
     gh pr list \
       --repo "${REPO_SLUG}" \
       --base "${DEFAULT_BRANCH}" \
-      --state open \
+      --state all \
       --head "${WORKFLOW_BRANCH}" \
-      --json number,headRefName,headRepositoryOwner \
+      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt \
       2>/dev/null \
     | jq -r \
+        --arg base "${DEFAULT_BRANCH}" \
         --arg branch "${WORKFLOW_BRANCH}" \
         --arg owner "${SOURCE_OWNER}" \
-        '[.[] | select(.headRefName == $branch and .headRepositoryOwner.login == $owner) | .number] as $matches
-         | if ($matches | length) == 1 then "found\t\($matches[0])"
+        '[.[] | select(.baseRefName == $base and .headRefName == $branch and .headRepositoryOwner.login == $owner)] as $matches
+         | [$matches[] | select(.state == "OPEN")] as $open
+         | if ($open | length) == 1 then "found\t\($open[0].number)\t\($open[0].state)\t\($open[0].mergedAt // "")"
+           elif ($open | length) > 1 then "ambiguous\t\($open | length)"
+           elif ($matches | length) == 1 then "found\t\($matches[0].number)\t\($matches[0].state)\t\($matches[0].mergedAt // "")"
            elif ($matches | length) == 0 then "missing"
            else "ambiguous\t\($matches | length)"
            end' \
@@ -703,26 +751,30 @@ resolve_branch_pr() {
   status="${lookup%%$'\t'*}"
   if [ "${status}" = "found" ]; then
     pr_num="${lookup#*$'\t'}"
-    printf '%s\n' "${pr_num}"
+    pr_state="${pr_num#*$'\t'}"
+    pr_num="${pr_num%%$'\t'*}"
+    pr_merged_at="${pr_state#*$'\t'}"
+    pr_state="${pr_state%%$'\t'*}"
+    printf '%s\t%s\t%s\n' "${pr_num}" "${pr_state}" "${pr_merged_at}"
     return 0
   elif [ "${status}" = "missing" ]; then
     return 2
   else
-    echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
+    echo "ERROR: Multiple PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH} targeting ${DEFAULT_BRANCH}. Resolve ambiguity manually." >&2
     return 1
   fi
 }
 
-resolve_branch_pr_with_retry() {
-  local attempt pr_num rc
+resolve_branch_pr_record_with_retry() {
+  local attempt pr_record rc
   rc=2
   for attempt in 1 2 3 4 5; do
     set +e
-    pr_num="$(resolve_branch_pr)"
+    pr_record="$(resolve_branch_pr_record)"
     rc=$?
     set -e
-    if [ "${rc}" = "0" ] && [ -n "${pr_num}" ]; then
-      printf '%s\n' "${pr_num}"
+    if [ "${rc}" = "0" ] && [ -n "${pr_record}" ]; then
+      printf '%s\n' "${pr_record}"
       return 0
     fi
     if [ "${rc}" = "1" ]; then
@@ -735,12 +787,41 @@ resolve_branch_pr_with_retry() {
   return "${rc}"
 }
 
+handle_resolved_pr_record() {
+  PR_NUM="${PR_RECORD%%$'\t'*}"
+  PR_STATE="${PR_RECORD#*$'\t'}"
+  PR_STATE="${PR_STATE%%$'\t'*}"
+  case "${PR_STATE}" in
+    OPEN)
+      echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+      ;;
+    MERGED)
+      echo "PR #${PR_NUM} for branch ${WORKFLOW_BRANCH} is already merged; marking workflow complete."
+      MERGE_COMPLETED=true
+      REPO="${REPO_SLUG}"
+      echo "CSA_VAR:PR_NUM=$PR_NUM"
+      echo "CSA_VAR:REPO=$REPO"
+      echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+      echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR already merged" required=false -->'
+      exit 0
+      ;;
+    CLOSED)
+      echo "ERROR: PR #${PR_NUM} for ${SOURCE_OWNER}:${WORKFLOW_BRANCH} is closed but not merged. Reopen it or push a new branch before rerunning pr-bot." >&2
+      exit 1
+      ;;
+    *)
+      echo "ERROR: PR #${PR_NUM} has unexpected state '${PR_STATE}'." >&2
+      exit 1
+      ;;
+  esac
+}
+
 set +e
-PR_NUM="$(resolve_branch_pr)"
+PR_RECORD="$(resolve_branch_pr_record)"
 FIND_RC=$?
 set -e
-if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-  echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+if [ "${FIND_RC}" = "0" ] && [ -n "${PR_RECORD}" ]; then
+  handle_resolved_pr_record
 elif [ "${FIND_RC}" = "1" ]; then
   exit 1
 else
@@ -752,13 +833,13 @@ else
     if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
       echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
       set +e
-      PR_NUM="$(resolve_branch_pr_with_retry)"
+      PR_RECORD="$(resolve_branch_pr_record_with_retry)"
       FIND_RC=$?
       set -e
-      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-        echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_RECORD}" ]; then
+        handle_resolved_pr_record
       else
-        echo "ERROR: gh pr create reports PR exists but resolve_branch_pr could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
+        echo "ERROR: gh pr create reports PR exists but resolve_branch_pr_record could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
         exit 1
       fi
     else
@@ -768,13 +849,14 @@ else
   fi
   if [ "${CREATE_RC}" = "0" ]; then
     set +e
-    PR_NUM="$(resolve_branch_pr_with_retry)"
+    PR_RECORD="$(resolve_branch_pr_record_with_retry)"
     FIND_RC=$?
     set -e
-    if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
+    if [ "${FIND_RC}" != "0" ] || [ -z "${PR_RECORD}" ]; then
       echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
       exit 1
     fi
+    handle_resolved_pr_record
   fi
 fi
 if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
@@ -1003,6 +1085,7 @@ If `CLOUD_BOT` is `false`:
   - Otherwise run full `csa review --branch "${DEFAULT_BRANCH}"`.
 - Route to Step 6a (Merge Without Bot) after supplementary local review gate passes.'''
 on_fail = "abort"
+condition = "!(${MERGE_COMPLETED})"
 
 [[workflow.steps]]
 id = 7
@@ -1453,7 +1536,7 @@ echo "CSA_VAR:CLOUD_BOT_SKIP_REASON=${CLOUD_BOT_SKIP_REASON}"
 echo "CSA_VAR:MERGE_WITHOUT_BOT_REASON_KIND=${MERGE_WITHOUT_BOT_REASON_KIND}"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && (!(${BOT_UNAVAILABLE}))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && (!(${BOT_UNAVAILABLE})))"
 
 [[workflow.steps]]
 id = 8
@@ -1470,7 +1553,7 @@ user must:
 1. Configure the cloud bot (follow the bot's instructions)
 2. Re-run `pr-bot` after configuration is complete"""
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && (${BOT_NEEDS_SETUP})"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && (${BOT_NEEDS_SETUP}))"
 
 [[workflow.steps]]
 id = 9
@@ -1532,7 +1615,7 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && (${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES}))"
 
 [[workflow.steps]]
 id = 10
@@ -1599,7 +1682,7 @@ echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=true"
 echo "CSA_VAR:COMMENT_IS_STALE=false"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES})))"
 
 [[workflow.steps]]
 id = 11
@@ -1626,7 +1709,7 @@ fi
 echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
 ```'''
 on_fail = "skip"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES})))"
 
 [[workflow.steps]]
 id = 12
@@ -1638,7 +1721,7 @@ prompt = """
 > Orchestrator receives the verdict and posts audit trail to PR."""
 tier = "tier-4-critical"
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
 
 [[workflow.steps]]
 id = 13
@@ -1646,7 +1729,7 @@ title = "Include debate"
 tool = "weave"
 prompt = "debate"
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
 
 [[workflow.steps]]
 id = 14
@@ -1736,7 +1819,7 @@ case "${VERDICT}" in
 esac
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
 
 [[workflow.steps]]
 id = 15
@@ -1752,7 +1835,7 @@ non-false-positive). Fetch the comment body via
 `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`, apply the fix,
 and commit it."""
 tier = "tier-4-critical"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))))"
 
 [workflow.steps.on_fail]
 retry = 2
@@ -1886,7 +1969,7 @@ echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 
 Loop back to Step 5 (delegated wait gate).'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES}))"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && (${BOT_HAS_ISSUES})))"
 
 [[workflow.steps]]
 id = 17
@@ -2152,7 +2235,7 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 18
@@ -2163,7 +2246,7 @@ No issues found by bot. Proceed to merge.
 This step only runs when the cloud bot is enabled, reachable, has reported no
 issues, and the review loop has not hit the round limit."""
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 19
@@ -2205,7 +2288,7 @@ fi
 bash "${REBASE_SCRIPT}"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED}) && (${FIXES_ACCUMULATED})"
+condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED}) && (${FIXES_ACCUMULATED}))"
 
 [[workflow.steps]]
 id = 20
@@ -2308,7 +2391,7 @@ echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
-condition = "!(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES}))"
+condition = "(!(${MERGE_COMPLETED})) && (!(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES})))"
 
 [[workflow.steps]]
 id = 21
@@ -2329,7 +2412,7 @@ CSA_SKIP_REVIEW_CHECK_REASON="pr-bot push clean branch for PR" \
 gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```'''
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED}))"
+condition = "(!(${MERGE_COMPLETED})) && ((!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})))"
 
 [[workflow.steps]]
 id = 22
@@ -2385,7 +2468,7 @@ echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED}))"
+condition = "(!(${MERGE_COMPLETED})) && ((!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})))"
 
 [[workflow.steps]]
 id = 23
@@ -2441,7 +2524,7 @@ echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})))"
+condition = "(!(${MERGE_COMPLETED})) && ((!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED}))))"
 
 [[workflow.steps]]
 id = 24

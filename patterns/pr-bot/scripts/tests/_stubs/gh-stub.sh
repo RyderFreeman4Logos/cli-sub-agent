@@ -37,6 +37,7 @@ arg_value() {
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   head_arg="$(arg_value "--head" "$@")"
   base_arg="$(arg_value "--base" "$@")"
+  state_arg="$(arg_value "--state" "$@")"
   json_arg="$(arg_value "--json" "$@")"
   if [ "${head_arg}" != "${expected_list_head}" ]; then
     echo "unexpected --head: ${head_arg}" >&2
@@ -46,7 +47,11 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
     echo "unexpected --base: ${base_arg}" >&2
     exit 1
   fi
-  if [ "${json_arg}" != "number,headRefName,headRepositoryOwner" ]; then
+  if [ "${state_arg}" != "all" ]; then
+    echo "unexpected --state: ${state_arg}" >&2
+    exit 1
+  fi
+  if [ "${json_arg}" != "number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt" ]; then
     echo "unexpected --json: ${json_arg}" >&2
     exit 1
   fi
@@ -55,43 +60,89 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   case "${scenario}" in
     create-success)
       if [ "${list_call}" -ge 2 ]; then
-        printf '[{"number":101,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+        printf '[{"number":101,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
       else
         printf '[]\n'
       fi
       ;;
     preexisting)
-      printf '[{"number":202,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      printf '[{"number":202,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
       ;;
     missed-already-exists)
       if [ "${list_call}" -ge 2 ]; then
-        printf '[{"number":303,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+        printf '[{"number":303,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
       else
         printf '[]\n'
       fi
       ;;
     stale-already-exists)
       if [ "${list_call}" -ge 3 ]; then
-        printf '[{"number":808,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+        printf '[{"number":808,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
       else
         printf '[]\n'
       fi
       ;;
     ambiguous)
-      printf '[{"number":404,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}},{"number":405,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      printf '[{"number":404,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null},{"number":405,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
       ;;
     cross-owner)
       if [ "${list_call}" -ge 2 ]; then
-        printf '[{"number":101,"headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"}}]\n'
+        printf '[{"number":101,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
       else
-        printf '[{"number":606,"headRefName":"fix/1171","headRepositoryOwner":{"login":"other-owner"}}]\n'
+        printf '[{"number":606,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"other-owner"},"state":"OPEN","mergedAt":null}]\n'
       fi
       ;;
     quoted-branch)
-      printf '[{"number":707,"headRefName":"feat/has\\"quote","headRepositoryOwner":{"login":"test-owner"}}]\n'
+      printf '[{"number":707,"baseRefName":"main","headRefName":"feat/has\\"quote","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
+      ;;
+    merged)
+      printf '[{"number":909,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"MERGED","mergedAt":"2026-05-22T21:19:08Z"}]\n'
+      ;;
+    closed)
+      printf '[{"number":410,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"CLOSED","mergedAt":null}]\n'
       ;;
     *)
       echo "unknown GH_STUB_SCENARIO: ${scenario}" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
+  branch_arg="${3:-}"
+  json_arg="$(arg_value "--json" "$@")"
+  if [ "${branch_arg}" != "${expected_list_head}" ]; then
+    echo "unexpected pr view branch: ${branch_arg}" >&2
+    exit 1
+  fi
+  if [ "${json_arg}" != "number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt" ]; then
+    echo "unexpected pr view --json: ${json_arg}" >&2
+    exit 1
+  fi
+
+  view_call="$(count_call pr-view)"
+  case "${scenario}" in
+    preexisting)
+      printf '{"number":202,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n'
+      ;;
+    merged)
+      printf '{"number":909,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"MERGED","mergedAt":"2026-05-22T21:19:08Z"}\n'
+      ;;
+    closed)
+      printf '{"number":410,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"CLOSED","mergedAt":null}\n'
+      ;;
+    create-success)
+      if [ -f "${state_dir}/pr-create-count" ] && [ "${view_call}" -ge 2 ]; then
+        printf '{"number":101,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n'
+      else
+        exit 1
+      fi
+      ;;
+    quoted-branch)
+      printf '{"number":707,"baseRefName":"main","headRefName":"feat/has\\"quote","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n'
+      ;;
+    *)
       exit 1
       ;;
   esac
@@ -118,7 +169,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
       echo "a pull request for branch \"test-owner:fix/1171\" into branch \"main\" already exists" >&2
       exit 1
       ;;
-    preexisting|ambiguous|quoted-branch)
+    preexisting|ambiguous|quoted-branch|merged|closed)
       echo "gh pr create should not be called for scenario ${scenario}" >&2
       exit 1
       ;;

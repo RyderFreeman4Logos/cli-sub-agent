@@ -98,6 +98,9 @@ run_case() {
   if [ "${expected_rc}" = "0" ]; then
     grep -q "CSA_VAR:PR_NUM=${expected_pr}" "${stdout_file}"
   fi
+  if [ "${scenario}" = "merged" ]; then
+    grep -q "CSA_VAR:MERGE_COMPLETED=true" "${stdout_file}"
+  fi
   if [ -n "${expected_error}" ]; then
     grep -q "${expected_error}" "${stderr_file}"
   fi
@@ -106,10 +109,12 @@ run_case() {
 run_case "branch-unpushed-create" "false" "create-success" "0" "101" "1"
 run_case "branch-pushed-create" "true" "create-success" "0" "101" "1"
 run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0"
+run_case "lookup-hits-merged-noop" "true" "merged" "0" "909" "0"
 run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
 run_case "create-already-exists-reresolve" "true" "missed-already-exists" "0" "303" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "stale-list-create-race-recovery" "true" "stale-already-exists" "0" "808" "1" "PR already exists for test-owner:fix/1171; re-resolving"
-run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple open PRs found for test-owner:fix/1171"
+run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple PRs found for test-owner:fix/1171"
+run_case "closed-pr-fail-clear" "true" "closed" "1" "" "0" "is closed but not merged"
 run_case "quoted-branch-reuse" "true" "quoted-branch" "0" "707" "0" "" 'feat/has"quote'
 
 echo "ensure-pr Step 5 tests: PASS"

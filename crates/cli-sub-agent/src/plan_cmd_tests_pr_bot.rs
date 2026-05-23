@@ -253,12 +253,12 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
     let workflow = pr_bot_artifact_text("patterns/pr-bot/workflow.toml");
     let step5 = extract_pr_bot_step_prompt(&workflow, 5, "patterns/pr-bot/workflow.toml");
     let resolve_branch_pr_start = step5
-        .find("resolve_branch_pr() {")
-        .expect("Step 5 must define resolve_branch_pr");
+        .find("resolve_branch_pr_record() {")
+        .expect("Step 5 must define resolve_branch_pr_record");
     let resolve_branch_pr_end = step5[resolve_branch_pr_start..]
-        .find("\n}\n\nresolve_branch_pr_with_retry()")
+        .find("\n}\n\nresolve_branch_pr_record_with_retry()")
         .map(|offset| resolve_branch_pr_start + offset)
-        .expect("Step 5 must close resolve_branch_pr before invoking it");
+        .expect("Step 5 must close resolve_branch_pr_record before invoking it");
     let resolve_branch_pr = &step5[resolve_branch_pr_start..resolve_branch_pr_end];
 
     assert!(
@@ -267,12 +267,20 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
     );
 
     assert!(
-        step5.contains("--json number,headRefName,headRepositoryOwner"),
-        "Step 5 must request head owner metadata for client-side PR owner verification"
+        step5.contains(r#"gh pr view "${WORKFLOW_BRANCH}""#),
+        "Step 5 must first try gh pr view for the current branch"
+    );
+    assert!(
+        step5.contains("--json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt"),
+        "Step 5 must request base, head owner, state, and merge metadata for PR verification"
     );
     assert!(
         resolve_branch_pr.contains(r#"--head "${WORKFLOW_BRANCH}""#),
         "Step 5 must query gh pr list with branch-only --head"
+    );
+    assert!(
+        resolve_branch_pr.contains("--state all"),
+        "Step 5 must include merged and closed PRs when resolving existing branch PRs"
     );
     assert!(
         !resolve_branch_pr.contains(r#"--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}""#),
@@ -285,9 +293,10 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
         "Step 5 jq filter must bind head branch and owner as jq data"
     );
     assert!(
-        resolve_branch_pr.contains(".headRefName == $branch")
+        resolve_branch_pr.contains(".baseRefName == $base")
+            && resolve_branch_pr.contains(".headRefName == $branch")
             && resolve_branch_pr.contains(".headRepositoryOwner.login == $owner"),
-        "Step 5 jq filter must strictly match both bound head branch and head owner"
+        "Step 5 jq filter must strictly match bound base branch, head branch, and head owner"
     );
     assert!(
         !resolve_branch_pr.contains(r#"--jq ".[] | select(.headRefName == \"${WORKFLOW_BRANCH}\""#),
@@ -309,12 +318,16 @@ fn pr_bot_step5_pr_lookup_is_owner_strict_and_idempotent() {
         "Step 5 must recover from gh pr create reporting that the PR already exists"
     );
     assert!(
-        step5.contains("resolve_branch_pr_with_retry() {"),
+        step5.contains("MERGE_COMPLETED=true"),
+        "Step 5 must mark the workflow complete when the existing branch PR is already merged"
+    );
+    assert!(
+        step5.contains("resolve_branch_pr_record_with_retry() {"),
         "Step 5 must define one shared retry helper for stale gh pr list results"
     );
     assert!(
         step5
-            .matches(r#"PR_NUM="$(resolve_branch_pr_with_retry)""#)
+            .matches(r#"PR_RECORD="$(resolve_branch_pr_record_with_retry)""#)
             .count()
             == 2,
         "Step 5 must use the shared retry helper in both create-race and create-success paths"

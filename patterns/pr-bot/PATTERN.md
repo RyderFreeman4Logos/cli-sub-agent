@@ -211,12 +211,15 @@ OnFail: abort
   `ERROR: Local review found unresolved issues. Fix them before PR creation.`
 - FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
 
-PR lookup is strictly owner-aware: query `--head "${WORKFLOW_BRANCH}"`,
-then verify returned rows by `headRepositoryOwner.login` and `headRefName`.
+PR lookup is strictly owner-aware: try `gh pr view "${WORKFLOW_BRANCH}"`,
+then fall back to querying `--head "${WORKFLOW_BRANCH}"` with `--state all`;
+verify returned rows by `baseRefName`, `headRepositoryOwner.login`, and
+`headRefName`.
 Never rely on `--head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}"`; `gh pr list --head`
 accepts a branch name only. If `gh pr create`
 reports `a pull request for branch ... already exists`, re-resolve via the same
-owner-aware lookup and reuse the existing PR.
+owner-aware lookup and reuse the existing PR. If the existing PR is already
+merged, mark `MERGE_COMPLETED=true` and continue directly to post-merge sync.
 
 ```bash
 # --- Precondition gate: review must be complete ---
@@ -248,21 +251,48 @@ SOURCE_OWNER="$(
 if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
-resolve_branch_pr() {
-  local lookup status pr_num
+resolve_branch_pr_record() {
+  local lookup status pr_num pr_state pr_merged_at
+  lookup="$(
+    gh pr view "${WORKFLOW_BRANCH}" \
+      --repo "${REPO_SLUG}" \
+      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt \
+      2>/dev/null \
+    | jq -r \
+        --arg base "${DEFAULT_BRANCH}" \
+        --arg branch "${WORKFLOW_BRANCH}" \
+        --arg owner "${SOURCE_OWNER}" \
+        'if (.baseRefName == $base and .headRefName == $branch and .headRepositoryOwner.login == $owner) then
+           "found\t\(.number)\t\(.state)\t\(.mergedAt // "")"
+         else
+           "missing"
+         end' \
+      2>/dev/null \
+      || printf 'missing\n'
+  )"
+  status="${lookup%%$'\t'*}"
+  if [ "${status}" = "found" ]; then
+    printf '%s\n' "${lookup#*$'\t'}"
+    return 0
+  fi
+
   lookup="$(
     gh pr list \
       --repo "${REPO_SLUG}" \
       --base "${DEFAULT_BRANCH}" \
-      --state open \
+      --state all \
       --head "${WORKFLOW_BRANCH}" \
-      --json number,headRefName,headRepositoryOwner \
+      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt \
       2>/dev/null \
     | jq -r \
+        --arg base "${DEFAULT_BRANCH}" \
         --arg branch "${WORKFLOW_BRANCH}" \
         --arg owner "${SOURCE_OWNER}" \
-        '[.[] | select(.headRefName == $branch and .headRepositoryOwner.login == $owner) | .number] as $matches
-         | if ($matches | length) == 1 then "found\t\($matches[0])"
+        '[.[] | select(.baseRefName == $base and .headRefName == $branch and .headRepositoryOwner.login == $owner)] as $matches
+         | [$matches[] | select(.state == "OPEN")] as $open
+         | if ($open | length) == 1 then "found\t\($open[0].number)\t\($open[0].state)\t\($open[0].mergedAt // "")"
+           elif ($open | length) > 1 then "ambiguous\t\($open | length)"
+           elif ($matches | length) == 1 then "found\t\($matches[0].number)\t\($matches[0].state)\t\($matches[0].mergedAt // "")"
            elif ($matches | length) == 0 then "missing"
            else "ambiguous\t\($matches | length)"
            end' \
@@ -272,26 +302,30 @@ resolve_branch_pr() {
   status="${lookup%%$'\t'*}"
   if [ "${status}" = "found" ]; then
     pr_num="${lookup#*$'\t'}"
-    printf '%s\n' "${pr_num}"
+    pr_state="${pr_num#*$'\t'}"
+    pr_num="${pr_num%%$'\t'*}"
+    pr_merged_at="${pr_state#*$'\t'}"
+    pr_state="${pr_state%%$'\t'*}"
+    printf '%s\t%s\t%s\n' "${pr_num}" "${pr_state}" "${pr_merged_at}"
     return 0
   elif [ "${status}" = "missing" ]; then
     return 2
   else
-    echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
+    echo "ERROR: Multiple PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH} targeting ${DEFAULT_BRANCH}. Resolve ambiguity manually." >&2
     return 1
   fi
 }
 
-resolve_branch_pr_with_retry() {
-  local attempt pr_num rc
+resolve_branch_pr_record_with_retry() {
+  local attempt pr_record rc
   rc=2
   for attempt in 1 2 3 4 5; do
     set +e
-    pr_num="$(resolve_branch_pr)"
+    pr_record="$(resolve_branch_pr_record)"
     rc=$?
     set -e
-    if [ "${rc}" = "0" ] && [ -n "${pr_num}" ]; then
-      printf '%s\n' "${pr_num}"
+    if [ "${rc}" = "0" ] && [ -n "${pr_record}" ]; then
+      printf '%s\n' "${pr_record}"
       return 0
     fi
     if [ "${rc}" = "1" ]; then
@@ -304,12 +338,41 @@ resolve_branch_pr_with_retry() {
   return "${rc}"
 }
 
+handle_resolved_pr_record() {
+  PR_NUM="${PR_RECORD%%$'\t'*}"
+  PR_STATE="${PR_RECORD#*$'\t'}"
+  PR_STATE="${PR_STATE%%$'\t'*}"
+  case "${PR_STATE}" in
+    OPEN)
+      echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+      ;;
+    MERGED)
+      echo "PR #${PR_NUM} for branch ${WORKFLOW_BRANCH} is already merged; marking workflow complete."
+      MERGE_COMPLETED=true
+      REPO="${REPO_SLUG}"
+      echo "CSA_VAR:PR_NUM=$PR_NUM"
+      echo "CSA_VAR:REPO=$REPO"
+      echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+      echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR already merged" required=false -->'
+      exit 0
+      ;;
+    CLOSED)
+      echo "ERROR: PR #${PR_NUM} for ${SOURCE_OWNER}:${WORKFLOW_BRANCH} is closed but not merged. Reopen it or push a new branch before rerunning pr-bot." >&2
+      exit 1
+      ;;
+    *)
+      echo "ERROR: PR #${PR_NUM} has unexpected state '${PR_STATE}'." >&2
+      exit 1
+      ;;
+  esac
+}
+
 set +e
-PR_NUM="$(resolve_branch_pr)"
+PR_RECORD="$(resolve_branch_pr_record)"
 FIND_RC=$?
 set -e
-if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-  echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+if [ "${FIND_RC}" = "0" ] && [ -n "${PR_RECORD}" ]; then
+  handle_resolved_pr_record
 elif [ "${FIND_RC}" = "1" ]; then
   exit 1
 else
@@ -321,13 +384,13 @@ else
     if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
       echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
       set +e
-      PR_NUM="$(resolve_branch_pr_with_retry)"
+      PR_RECORD="$(resolve_branch_pr_record_with_retry)"
       FIND_RC=$?
       set -e
-      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_NUM}" ]; then
-        echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+      if [ "${FIND_RC}" = "0" ] && [ -n "${PR_RECORD}" ]; then
+        handle_resolved_pr_record
       else
-        echo "ERROR: gh pr create reports PR exists but resolve_branch_pr could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
+        echo "ERROR: gh pr create reports PR exists but resolve_branch_pr_record could not resolve it (rc=${FIND_RC}). Check fork ownership and branch ${WORKFLOW_BRANCH}." >&2
         exit 1
       fi
     else
@@ -337,13 +400,14 @@ else
   fi
   if [ "${CREATE_RC}" = "0" ]; then
     set +e
-    PR_NUM="$(resolve_branch_pr_with_retry)"
+    PR_RECORD="$(resolve_branch_pr_record_with_retry)"
     FIND_RC=$?
     set -e
-    if [ "${FIND_RC}" != "0" ] || [ -z "${PR_NUM}" ]; then
+    if [ "${FIND_RC}" != "0" ] || [ -z "${PR_RECORD}" ]; then
       echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting \"${DEFAULT_BRANCH}\"." >&2
       exit 1
     fi
+    handle_resolved_pr_record
   fi
 fi
 if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
@@ -355,6 +419,8 @@ echo "CSA_VAR:PR_NUM=$PR_NUM"
 echo "CSA_VAR:REPO=$REPO"
 echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" required=true -->'
 ```
+
+## IF !(${MERGE_COMPLETED})
 
 ## Step 4a: Check Cloud Bot Configuration
 
@@ -2024,6 +2090,8 @@ MERGE_COMPLETED=true
 echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
+
+## ENDIF
 
 ## ENDIF
 
