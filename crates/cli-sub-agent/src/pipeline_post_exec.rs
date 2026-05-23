@@ -31,6 +31,8 @@ const OUTPUT_LOG_TAIL_READ_BYTES: u64 = 8 * 1024;
 const NO_OP_ELAPSED_THRESHOLD_SECS: i64 = 60;
 #[path = "pipeline_post_exec_progress.rs"]
 mod progress;
+#[path = "pipeline_post_exec_result_sidecar.rs"]
+mod result_sidecar;
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
     pub executor: &'a Executor,
@@ -221,6 +223,7 @@ pub(crate) async fn process_execution_result(
     if ctx.sa_mode
         && ctx.task_type.is_none_or(|t| t == "run")
         && result.exit_code == 0
+        && !result_sidecar::status_is_success(&ctx.session_dir)
         && session.turn_count <= 1
         && !ctx.has_tool_calls
         && ctx.changed_paths.is_empty()
