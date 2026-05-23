@@ -334,6 +334,25 @@ fn test_gemini_invalid_api_key_advances_to_next_model() {
 }
 
 #[test]
+fn test_gemini_api_key_not_found_json_400_advances_to_next_model() {
+    let detected = detect_rate_limit(
+        "gemini-cli",
+        r#"Error when talking to Gemini API: _ApiError: {"error":{"message":"API Key not found","code":400,"status":"INVALID_ARGUMENT"}}"#,
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    )
+    .expect("Gemini API key-not-found 400 should classify");
+    assert_eq!(detected.reason, "API key not found");
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
+    assert_eq!(
+        detected.model_spec.as_deref(),
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
+    );
+}
+
+#[test]
 fn test_http_403_advances_to_next_model() {
     let detected =
         detect_rate_limit("codex", "HTTP 403 Forbidden", "", 1, None).expect("403 should classify");

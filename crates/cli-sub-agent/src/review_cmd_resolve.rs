@@ -178,7 +178,7 @@ pub(crate) fn resolve_review_selection(
             return Ok(ResolvedReviewSelection {
                 tool: resolution.tool,
                 model_spec: Some(resolution.model_spec),
-                tier_filter: Some(TierFilter::whitelist([tool.as_str().to_string()])),
+                tier_filter: Some(TierFilter::all()),
             });
         }
 
