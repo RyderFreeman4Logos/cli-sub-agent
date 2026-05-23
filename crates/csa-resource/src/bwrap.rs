@@ -87,13 +87,12 @@ impl BwrapCommandBuilder {
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
 
-        // Writable bind mounts (after tmpfs). File paths under /tmp only need
-        // parent dirs; creating the file path as a dir breaks bwrap file binds.
+        // Bind after tmpfs. /tmp itself is an explicit host tmpdir grant.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
             let s = path.to_string_lossy();
             if path == tmp_prefix {
-                continue;
+                cmd.args(["--bind", &s, &s]);
             } else if path.starts_with(tmp_prefix) {
                 if let Some(parent) = path.parent()
                     && parent != tmp_prefix
@@ -752,10 +751,8 @@ mod tests {
     }
 
     #[test]
-    fn test_bwrap_bare_tmp_is_not_bind_mounted() {
-        // writable_paths = ["/tmp"] should NOT produce --bind /tmp /tmp,
-        // because --tmpfs /tmp already makes /tmp writable.  Bind-mounting
-        // host /tmp would leak host temp files into the sandbox.
+    fn test_bwrap_bare_tmp_is_bind_mounted_when_explicitly_writable() {
+        // /tmp is an explicit config grant, not a request for empty tmpfs.
         let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
         builder.with_writable_path(Path::new("/tmp"));
         let cmd = builder.build();
@@ -767,13 +764,17 @@ mod tests {
             "--tmpfs /tmp must be present; args: {args:?}"
         );
 
-        // --bind /tmp /tmp must NOT exist
-        let has_bind_tmp = args
+        let tmpfs_pos = args
+            .windows(2)
+            .position(|w| w[0] == "--tmpfs" && w[1] == "/tmp")
+            .expect("--tmpfs /tmp must be present");
+        let bind_tmp_pos = args
             .windows(3)
-            .any(|w| w[0] == "--bind" && w[1] == "/tmp" && w[2] == "/tmp");
+            .position(|w| w[0] == "--bind" && w[1] == "/tmp" && w[2] == "/tmp")
+            .expect("--bind /tmp /tmp must be present");
         assert!(
-            !has_bind_tmp,
-            "bare /tmp must NOT be --bind mounted (would expose host /tmp); args: {args:?}"
+            tmpfs_pos < bind_tmp_pos,
+            "--bind /tmp /tmp must come after --tmpfs /tmp; args: {args:?}"
         );
     }
 
