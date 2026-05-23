@@ -315,7 +315,7 @@ impl IsolationPlanBuilder {
                     let claude_dir = home.join(".claude");
                     let claude_state_file = home.join(".claude.json");
                     add_dir_or_creatable_parent(&mut self.writable_paths, &claude_dir);
-                    add_dir_or_creatable_parent(&mut self.writable_paths, &claude_state_file);
+                    self.writable_paths.push(claude_state_file);
                 }
                 "gemini-cli" => [".gemini", ".config/gemini-cli"]
                     .into_iter()
