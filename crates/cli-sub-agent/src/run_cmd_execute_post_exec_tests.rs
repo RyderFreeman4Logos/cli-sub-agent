@@ -1,6 +1,7 @@
 use super::{
     PostExecGateCommandOutcome, PostExecGateOutcome, maybe_run_post_exec_gate_with_runner,
 };
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{PostExecGateConfig, ProjectConfig, ProjectMeta, ResourcesConfig, RunConfig};
 use csa_session::create_session_fresh;
 use std::collections::HashMap;
@@ -85,6 +86,7 @@ fn create_session_at_current_head(project_root: &Path) -> String {
 #[tokio::test]
 async fn post_exec_gate_passes_when_command_succeeds() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
 
@@ -123,6 +125,7 @@ async fn post_exec_gate_passes_when_command_succeeds() {
 #[tokio::test]
 async fn post_exec_gate_failure_returns_structured_diagnostic() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
 
@@ -155,6 +158,7 @@ async fn post_exec_gate_failure_returns_structured_diagnostic() {
 #[tokio::test]
 async fn post_exec_gate_skips_when_worktree_is_clean() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
 
     let config = project_config_with_gate(PostExecGateConfig::default());
@@ -179,6 +183,7 @@ async fn post_exec_gate_skips_when_worktree_is_clean() {
 #[tokio::test]
 async fn post_exec_gate_skips_review_and_debate_prompts() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
 
@@ -206,6 +211,7 @@ async fn post_exec_gate_skips_review_and_debate_prompts() {
 #[tokio::test]
 async fn post_exec_gate_skips_when_dirty_worktree_is_pre_existing() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::write(
         project_dir.path().join("tracked.txt"),
@@ -236,6 +242,7 @@ async fn post_exec_gate_skips_when_dirty_worktree_is_pre_existing() {
 #[tokio::test]
 async fn post_exec_gate_runs_when_changed_paths_are_non_empty() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::create_dir(project_dir.path().join("just-temp")).unwrap();
     std::fs::write(
@@ -276,6 +283,7 @@ async fn post_exec_gate_runs_when_changed_paths_are_non_empty() {
 #[tokio::test]
 async fn post_exec_gate_runs_when_session_introduced_changes() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
 
@@ -311,6 +319,7 @@ async fn post_exec_gate_runs_when_session_introduced_changes() {
 #[tokio::test]
 async fn post_exec_gate_runs_when_session_committed_changes() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     let session_id = create_session_at_current_head(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "committed\n").unwrap();
@@ -349,6 +358,7 @@ async fn post_exec_gate_runs_when_session_committed_changes() {
 #[tokio::test]
 async fn post_exec_gate_runs_when_untracked_source_exists_without_changed_paths() {
     let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     std::fs::write(
         project_dir.path().join("new_source.rs"),
