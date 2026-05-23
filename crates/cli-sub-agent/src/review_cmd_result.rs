@@ -50,6 +50,21 @@ fn exit_code_from_decision(decision: ReviewDecision) -> i32 {
     }
 }
 
+fn explicit_review_decision_for_execution(
+    raw_output: &str,
+    exit_code: i32,
+    summary_fallback: Option<&str>,
+) -> Option<ReviewDecision> {
+    let review_text = extract_review_text(raw_output).unwrap_or_else(|| raw_output.to_string());
+    if contains_explicit_verdict_token(&review_text) {
+        return Some(parse_review_decision(&review_text, exit_code));
+    }
+
+    summary_fallback
+        .filter(|summary| contains_explicit_verdict_token(summary))
+        .map(|summary| parse_review_decision(summary, 0))
+}
+
 pub(super) struct SingleReviewResolution {
     pub sanitized: String,
     pub empty_output: bool,
@@ -106,7 +121,15 @@ pub(super) fn resolve_single_review_result(
             "Tool diagnostic detected in review output (review may be degraded)");
     }
 
-    let decision = if let Some(forced) = result.forced_decision {
+    let explicit_decision = explicit_review_decision_for_execution(
+        &result.execution.execution.output,
+        result.execution.execution.exit_code,
+        load_summary_fallback(project_root, &result.execution.meta_session_id).as_deref(),
+    );
+
+    let decision = if let Some(decision) = explicit_decision {
+        decision
+    } else if let Some(forced) = result.forced_decision {
         forced
     } else if transient_unavailable_reason.is_some() {
         ReviewDecision::Unavailable
@@ -161,23 +184,32 @@ pub(super) fn build_reviewer_outcome(
         );
     }
 
+    let explicit_decision = explicit_review_decision_for_execution(
+        &result.execution.output,
+        result.execution.exit_code,
+        None,
+    );
+    let decision = if let Some(decision) = explicit_decision {
+        decision
+    } else if let Some(forced) = session_result.forced_decision {
+        forced
+    } else if transient_unavailable_reason.is_some() {
+        ReviewDecision::Unavailable
+    } else if auth_prompt_failure || empty {
+        ReviewDecision::Uncertain
+    } else {
+        parse_review_decision_for_execution(
+            &result.execution.output,
+            result.execution.exit_code,
+            None,
+        )
+    };
+
     Ok(ReviewerOutcome {
         reviewer_index,
         tool: reviewer_tool,
         session_id: session_result.execution.meta_session_id.clone(),
-        verdict: verdict_from_decision(if let Some(forced) = session_result.forced_decision {
-            forced
-        } else if transient_unavailable_reason.is_some() {
-            ReviewDecision::Unavailable
-        } else if auth_prompt_failure || empty {
-            ReviewDecision::Uncertain
-        } else {
-            parse_review_decision_for_execution(
-                &result.execution.output,
-                result.execution.exit_code,
-                None,
-            )
-        }),
+        verdict: verdict_from_decision(decision),
         output: if auth_prompt_failure {
             AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
         } else if forced_unavailable {
@@ -193,19 +225,7 @@ pub(super) fn build_reviewer_outcome(
         } else {
             sanitize_review_output(&result.execution.output)
         },
-        exit_code: exit_code_from_decision(if let Some(forced) = session_result.forced_decision {
-            forced
-        } else if transient_unavailable_reason.is_some() {
-            ReviewDecision::Unavailable
-        } else if auth_prompt_failure || empty {
-            ReviewDecision::Uncertain
-        } else {
-            parse_review_decision_for_execution(
-                &result.execution.output,
-                result.execution.exit_code,
-                None,
-            )
-        }),
+        exit_code: exit_code_from_decision(decision),
         diagnostic: diagnostic
             .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
             .or_else(|| transient_unavailable_reason.clone()),
@@ -263,12 +283,16 @@ fn parse_review_decision_for_execution(
     exit_code: i32,
     summary_fallback: Option<&str>,
 ) -> ReviewDecision {
-    let review_text = extract_review_text(raw_output).unwrap_or_else(|| raw_output.to_string());
-    if !contains_explicit_verdict_token(&review_text)
-        && let Some(summary) = summary_fallback
+    if let Some(decision) =
+        explicit_review_decision_for_execution(raw_output, exit_code, summary_fallback)
     {
+        return decision;
+    }
+    if let Some(summary) = summary_fallback {
         return parse_review_decision(summary, 0);
     }
+
+    let review_text = extract_review_text(raw_output).unwrap_or_else(|| raw_output.to_string());
     parse_review_decision(&review_text, exit_code)
 }
 
@@ -483,5 +507,32 @@ mod tests {
 
         assert_eq!(reviewer.verdict, SKIP);
         assert_eq!(reviewer.exit_code, 1);
+    }
+
+    #[test]
+    fn forced_unavailable_preserves_explicit_pass_verdict() {
+        let mut result = outcome(
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\
+             <!-- CSA:SECTION:details -->\nfindings = []\n<!-- CSA:SECTION:details:END -->",
+            1,
+        );
+        result.forced_decision = Some(ReviewDecision::Unavailable);
+        result.failure_reason =
+            Some("claude-code post-review state write failed: EROFS ~/.claude.json".to_string());
+
+        let resolved = resolve_single_review_result(
+            &result,
+            ToolName::ClaudeCode,
+            "uncommitted",
+            Path::new("."),
+        );
+        assert_eq!(resolved.decision, ReviewDecision::Pass);
+        assert_eq!(resolved.verdict, CLEAN);
+        assert_eq!(resolved.effective_exit_code, 0);
+
+        let reviewer =
+            build_reviewer_outcome(0, ToolName::ClaudeCode, &result).expect("reviewer outcome");
+        assert_eq!(reviewer.verdict, CLEAN);
+        assert_eq!(reviewer.exit_code, 0);
     }
 }

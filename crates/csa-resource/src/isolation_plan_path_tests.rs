@@ -128,6 +128,12 @@ fn test_claude_tool_defaults_precreate_claude_dir_for_session_env() {
         .expect("should succeed");
 
     let claude_dir = home.join(".claude");
+    let claude_state_file = home.join(".claude.json");
     assert!(claude_dir.is_dir());
+    assert!(
+        !claude_state_file.is_dir(),
+        ".claude.json must remain a file path, not a pre-created directory"
+    );
     assert!(plan.writable_paths.contains(&claude_dir));
+    assert!(plan.writable_paths.contains(&claude_state_file));
 }
