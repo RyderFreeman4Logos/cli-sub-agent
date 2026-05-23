@@ -27,9 +27,17 @@ fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
     prompt.starts_with("# REVIEW:") || prompt.starts_with("# DEBATE:")
 }
 
-fn post_exec_gate_requires_changes(project_root: &Path, skip_on_no_changes: bool) -> Result<bool> {
+fn post_exec_gate_requires_changes(
+    project_root: &Path,
+    skip_on_no_changes: bool,
+    changed_paths: Option<&[String]>,
+) -> Result<bool> {
     if !skip_on_no_changes || !crate::run_cmd::is_git_worktree(project_root) {
         return Ok(true);
+    }
+
+    if let Some(paths) = changed_paths {
+        return Ok(!paths.is_empty());
     }
 
     let output = std::process::Command::new("git")
@@ -119,6 +127,7 @@ pub(super) async fn maybe_run_post_exec_gate_with_runner<F>(
     prompt_text: &str,
     session_id: Option<&str>,
     config: Option<&ProjectConfig>,
+    changed_paths: Option<&[String]>,
     runner: F,
 ) -> Result<PostExecGateOutcome>
 where
@@ -132,7 +141,11 @@ where
         return Ok(PostExecGateOutcome::Skipped);
     }
 
-    if !post_exec_gate_requires_changes(project_root, gate_config.skip_on_no_changes)? {
+    if !post_exec_gate_requires_changes(
+        project_root,
+        gate_config.skip_on_no_changes,
+        changed_paths,
+    )? {
         return Ok(PostExecGateOutcome::Skipped);
     }
 

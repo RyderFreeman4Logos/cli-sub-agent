@@ -370,6 +370,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                             meta_session_id: extract_meta_session_id_from_error(&err)
                                 .unwrap_or_else(|| "unknown".to_string()),
                             provider_session_id: None,
+                            changed_paths: None,
                         },
                         persistable_session_id: extract_meta_session_id_from_error(&err),
                         executed_tool: *attempt_tool,

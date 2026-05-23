@@ -464,6 +464,8 @@ pub(crate) struct SessionExecutionResult {
     pub execution: ExecutionResult,
     pub meta_session_id: String,
     pub provider_session_id: Option<String>,
+    /// Paths changed by this session when git snapshots were available.
+    pub changed_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -433,11 +433,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     // Check git status for both commit_guard and hook changed_paths variable.
     let is_git = crate::run_cmd::is_git_worktree(project_root);
     let inside_git_worktree = commit_guard_enabled && is_git;
-    let pre_run_workspace = if is_git {
-        crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
-    } else {
-        None
-    };
+    let capture_snapshot = session_exec_audit::capture_git_workspace_snapshot_if_needed;
+    let pre_run_workspace = capture_snapshot(is_git, project_root, require_commit_on_mutation);
     let tool_state =
         ensure_tool_state_initialized(&mut session, executor, &resolved_provider_session_id)
             .await?;
@@ -699,11 +696,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         );
     }
     // Post-run git snapshot for commit guard + changed_paths hook vars.
-    let post_run_workspace = if is_git {
-        crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
-    } else {
-        None
-    };
+    let post_run_workspace = capture_snapshot(is_git, project_root, require_commit_on_mutation);
     let pre_fingerprints = pre_run_workspace
         .as_ref()
         .map(session_exec_audit::snapshot_to_fingerprints);
@@ -716,7 +709,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         pre_fingerprints.as_ref(),
         post_fingerprints.as_ref(),
     );
-
+    let snapshots_available = pre_run_workspace.is_some() && post_run_workspace.is_some();
     if commit_guard_enabled {
         let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
             pre_run_workspace.as_ref(),
@@ -772,7 +765,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         provider_session_id: provider_session_id.clone(),
         events_count,
         transcript_artifacts,
-        changed_paths,
+        changed_paths: changed_paths.clone(),
         pre_exec_snapshot,
         has_tool_calls: transport_result.metadata.has_tool_calls
             || transport_result.metadata.has_execute_tool_calls,
@@ -796,5 +789,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         execution: result,
         meta_session_id: session.meta_session_id.clone(),
         provider_session_id,
+        changed_paths: snapshots_available.then_some(changed_paths),
     })
 }
