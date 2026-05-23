@@ -16,7 +16,10 @@ use crate::pipeline;
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
 
 pub(super) enum AttemptExecution {
-    Finished(Result<csa_process::ExecutionResult, anyhow::Error>),
+    Finished {
+        result: Result<csa_process::ExecutionResult, anyhow::Error>,
+        changed_paths: Option<Vec<String>>,
+    },
     Exit(i32),
     TimedOut,
 }
@@ -58,7 +61,10 @@ pub(super) async fn run_ephemeral_with_timeout(
     )
     .await
     {
-        Ok(result) => AttemptExecution::Finished(result),
+        Ok(result) => AttemptExecution::Finished {
+            result,
+            changed_paths: None,
+        },
         Err(_) => AttemptExecution::TimedOut,
     };
     Ok(execution)
@@ -73,8 +79,8 @@ pub(super) async fn run_ephemeral_without_timeout(
         _temp_dir.path(),
         request.project_root.display()
     );
-    Ok(AttemptExecution::Finished(
-        request
+    Ok(AttemptExecution::Finished {
+        result: request
             .executor
             .execute_in(
                 request.effective_prompt,
@@ -85,7 +91,8 @@ pub(super) async fn run_ephemeral_without_timeout(
                 direct_entry_resolved_timeout(request.initial_response_timeout_seconds),
             )
             .await,
-    ))
+        changed_paths: None,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -298,7 +305,10 @@ async fn execute_persistent(
     {
         Ok(session_result) => {
             *executed_session_id = Some(session_result.meta_session_id);
-            AttemptExecution::Finished(Ok(session_result.execution))
+            AttemptExecution::Finished {
+                result: Ok(session_result.execution),
+                changed_paths: session_result.changed_paths,
+            }
         }
         Err(e) => {
             let error_msg = e.to_string();
@@ -315,7 +325,10 @@ async fn execute_persistent(
                 println!("{}", serde_json::to_string_pretty(&json_error)?);
                 AttemptExecution::Exit(1)
             } else {
-                AttemptExecution::Finished(Err(e))
+                AttemptExecution::Finished {
+                    result: Err(e),
+                    changed_paths: None,
+                }
             }
         }
     };

@@ -90,7 +90,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut vcs_probe_cache = crate::run_helpers_branch_guard::VcsProbeCache::default();
     let enforce_tier =
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
-    let result = loop {
+    let (result, changed_paths) = loop {
         attempts += 1;
         let mut fresh_spawn_preflight_override = false;
 
@@ -450,7 +450,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             .await
         }?;
 
-        let exec_result = match attempt_execution {
+        let (exec_result, exec_changed_paths) = match attempt_execution {
             AttemptExecution::TimedOut => {
                 let timeout_resume_session = executed_session_id
                     .clone()
@@ -478,8 +478,14 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 return Ok(RunLoopCompletion::Exit(exit_code));
             }
             AttemptExecution::Exit(exit_code) => return Ok(RunLoopCompletion::Exit(exit_code)),
-            AttemptExecution::Finished(Ok(result)) => result,
-            AttemptExecution::Finished(Err(e)) => {
+            AttemptExecution::Finished {
+                result: Ok(result),
+                changed_paths: attempt_changed_paths,
+            } => (result, attempt_changed_paths),
+            AttemptExecution::Finished {
+                result: Err(e),
+                changed_paths: _,
+            } => {
                 if let Some(timeout_secs) =
                     run_error_timeout_seconds(&e, request.run_timeout_seconds)
                 {
@@ -686,7 +692,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         }
 
         if is_post_run_commit_policy_block(&exec_result.summary) {
-            break exec_result;
+            break (exec_result, exec_changed_paths);
         }
 
         match evaluate_rate_limit_failover(
@@ -730,13 +736,14 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 );
                 continue;
             }
-            _ => break exec_result,
+            _ => break (exec_result, exec_changed_paths),
         }
     };
     Ok(RunLoopCompletion::Completed(Box::new(RunLoopOutcome {
         result,
         current_tool,
         executed_session_id,
+        changed_paths,
         fork_resolution,
         fallback_chain,
     })))

@@ -73,6 +73,7 @@ async fn post_exec_gate_passes_when_command_succeeds() {
         "Implement the fix in tracked.txt",
         Some("01TESTPOSTEXECGATEPASS0000000"),
         Some(&config),
+        None,
         {
             let calls = Arc::clone(&calls);
             move |command, cwd, timeout_seconds| {
@@ -112,6 +113,7 @@ async fn post_exec_gate_failure_returns_structured_diagnostic() {
         "Implement the fix in tracked.txt",
         Some("01TESTPOSTEXECGATEFAIL0000000"),
         Some(&config),
+        None,
         |_command, _cwd, _timeout_seconds| {
             Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
         },
@@ -139,6 +141,7 @@ async fn post_exec_gate_skips_when_worktree_is_clean() {
         "Implement the fix in tracked.txt",
         Some("01TESTPOSTEXECGATESKIP0000000"),
         Some(&config),
+        None,
         |_command, _cwd, _timeout_seconds| {
             Box::pin(async move {
                 panic!("runner must not execute when worktree is clean");
@@ -164,6 +167,7 @@ async fn post_exec_gate_skips_review_and_debate_prompts() {
             prompt,
             Some("01TESTPOSTEXECGATEREVIEW00000"),
             Some(&config),
+            None,
             |_command, _cwd, _timeout_seconds| {
                 Box::pin(async move {
                     panic!("runner must not execute for review/debate prompts");
@@ -175,4 +179,68 @@ async fn post_exec_gate_skips_review_and_debate_prompts() {
 
         assert_eq!(outcome, PostExecGateOutcome::Skipped);
     }
+}
+
+#[tokio::test]
+async fn post_exec_gate_skips_when_dirty_worktree_is_pre_existing() {
+    let project_dir = tempdir().unwrap();
+    init_clean_git_repo(project_dir.path());
+    std::fs::write(
+        project_dir.path().join("tracked.txt"),
+        "pre-existing dirty\n",
+    )
+    .unwrap();
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths: Vec<String> = Vec::new();
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Read files and write external test results",
+        Some("01TESTPOSTEXECGATEPREEXIST000"),
+        Some(&config),
+        Some(&changed_paths),
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async move {
+                panic!("runner must not execute when this session changed no paths");
+            })
+        },
+    )
+    .await
+    .expect("pre-existing dirty worktree should skip gate when delta is empty");
+
+    assert_eq!(outcome, PostExecGateOutcome::Skipped);
+}
+
+#[tokio::test]
+async fn post_exec_gate_runs_when_session_introduced_changes() {
+    let project_dir = tempdir().unwrap();
+    init_clean_git_repo(project_dir.path());
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Implement the fix in tracked.txt",
+        Some("01TESTPOSTEXECGATEDELTA00000"),
+        Some(&config),
+        Some(&changed_paths),
+        {
+            let calls = Arc::clone(&calls);
+            move |command, cwd, timeout_seconds| {
+                let calls = Arc::clone(&calls);
+                let command = command.to_string();
+                let cwd = cwd.to_path_buf();
+                Box::pin(async move {
+                    calls.lock().unwrap().push((command, cwd, timeout_seconds));
+                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                })
+            }
+        },
+    )
+    .await
+    .expect("session-introduced changes should run gate");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
+    assert_eq!(calls.lock().unwrap().len(), 1);
 }

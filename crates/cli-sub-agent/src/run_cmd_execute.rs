@@ -602,6 +602,7 @@ pub(crate) async fn handle_run(
     let result = loop_outcome.result;
     let current_tool = loop_outcome.current_tool;
     let executed_session_id = loop_outcome.executed_session_id;
+    let changed_paths = loop_outcome.changed_paths;
     let fork_resolution = loop_outcome.fork_resolution;
 
     if result.exit_code == 0 {
@@ -613,6 +614,7 @@ pub(crate) async fn handle_run(
             &gate_prompt_text,
             executed_session_id.as_deref(),
             config.as_ref(),
+            changed_paths.as_deref(),
             execute_post_exec_gate_command,
         )
         .await

@@ -332,6 +332,7 @@ mod tests {
                 },
                 meta_session_id: "01TESTRESULT".to_string(),
                 provider_session_id: None,
+                changed_paths: None,
             },
             persistable_session_id: Some("01TESTRESULT".to_string()),
             executed_tool: ToolName::Codex,

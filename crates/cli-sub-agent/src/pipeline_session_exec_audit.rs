@@ -11,6 +11,15 @@ pub(super) fn snapshot_to_fingerprints(
     }
 }
 
+pub(super) fn capture_git_workspace_snapshot_if_needed(
+    is_git: bool,
+    project_root: &Path,
+    deep_fingerprint: bool,
+) -> Option<crate::run_cmd::GitWorkspaceSnapshot> {
+    is_git
+        .then(|| crate::run_cmd::capture_git_workspace_snapshot(project_root, deep_fingerprint))?
+}
+
 pub(super) fn capture_pre_execution_snapshot(
     project_root: &Path,
 ) -> Option<crate::pipeline_post_exec::PreExecutionSnapshot> {
