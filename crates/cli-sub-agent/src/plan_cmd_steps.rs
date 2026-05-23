@@ -11,6 +11,7 @@ use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
 use csa_hooks::format_next_step_directive;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
+use weave::parser::WorkspaceAccess;
 
 use super::plan_cmd_assignment::{
     extract_output_assignment_markers, should_inject_assignment_markers,
@@ -210,6 +211,10 @@ pub(crate) fn resolve_step_tool(
     }
 
     Ok(StepTarget::csa(ToolName::Codex, None))
+}
+
+pub(crate) fn step_readonly_project_root(step: &PlanStep) -> bool {
+    matches!(step.workspace_access, Some(WorkspaceAccess::ReadOnly))
 }
 
 fn parse_tool_name(tool: &str) -> Result<ToolName> {
@@ -640,6 +645,7 @@ pub(crate) async fn execute_step_with_workflow(
                 tier_name,
             } => {
                 let prompt = csa_prompt.as_deref().unwrap_or_default();
+                let readonly_project_root = step_readonly_project_root(step);
                 execute_csa_step_with_tier_failover(
                     &label,
                     prompt,
@@ -648,6 +654,7 @@ pub(crate) async fn execute_step_with_workflow(
                         initial_model_spec: model_spec.as_deref(),
                         tier_name: tier_name.as_deref(),
                         forwarded_session: csa_session.as_deref(),
+                        readonly_project_root,
                     },
                     step_ctx,
                     start,

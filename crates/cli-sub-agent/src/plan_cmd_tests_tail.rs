@@ -18,6 +18,7 @@ async fn execute_step_skips_when_condition_is_false() {
         condition: Some("${SOME_VAR}".into()),
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -42,6 +43,7 @@ async fn execute_step_runs_when_condition_is_true() {
         condition: Some("${FLAG}".into()),
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let mut vars = HashMap::new();
     vars.insert("FLAG".into(), "yes".into());
@@ -68,6 +70,7 @@ async fn execute_step_skips_loop_with_nonzero_exit() {
             max_iterations: 10,
         }),
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -89,6 +92,7 @@ async fn execute_step_skips_weave_include() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -115,6 +119,7 @@ async fn execute_step_bash_runs_code_block() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -176,6 +181,7 @@ async fn execute_plan_stops_for_await_user() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -188,6 +194,7 @@ async fn execute_plan_stops_for_await_user() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -478,6 +485,7 @@ async fn execute_plan_skips_false_condition_cleanly() {
                 condition: Some("${FLAG}".into()),
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -490,6 +498,7 @@ async fn execute_plan_skips_false_condition_cleanly() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -529,6 +538,7 @@ async fn execute_plan_runs_true_condition_steps() {
             condition: Some("${FLAG}".into()),
             loop_var: None,
             session: None,
+            workspace_access: None,
         }],
     };
     let mut vars = HashMap::new();
@@ -563,6 +573,7 @@ async fn execute_plan_allows_prefixed_marker_to_drive_next_condition() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -575,6 +586,7 @@ async fn execute_plan_allows_prefixed_marker_to_drive_next_condition() {
                 condition: Some("${FLAG}".into()),
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -617,6 +629,7 @@ async fn execute_plan_does_not_inject_markers_from_failed_steps() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -629,6 +642,7 @@ async fn execute_plan_does_not_inject_markers_from_failed_steps() {
                 condition: Some("${FLAG}".into()),
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };

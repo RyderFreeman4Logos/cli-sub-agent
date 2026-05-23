@@ -69,6 +69,7 @@ breaks prompt-guard propagation.
 ### Step-by-Step
 
 1. **Phase 1 -- RECON** (4 parallel CSA calls, tier-1):
+   - RECON CSA calls are read-only by contract: workflow steps MUST set `workspace_access = "read-only"`, which plan execution maps to a read-only project-root sandbox, and each RECON prompt MUST explicitly prohibit file edits or git-state writes.
    - **Dimension 1 (Structure)**: Analyze codebase structure relevant to the feature (files, types, dependencies, entry points).
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.

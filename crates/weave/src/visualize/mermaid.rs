@@ -132,6 +132,7 @@ No tests available.
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             }],
         };
 

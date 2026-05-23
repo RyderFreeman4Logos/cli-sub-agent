@@ -47,6 +47,7 @@ async fn execute_plan_chunked_single_step() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -59,6 +60,7 @@ async fn execute_plan_chunked_single_step() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -107,6 +109,7 @@ async fn execute_plan_chunked_resume() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -119,6 +122,7 @@ async fn execute_plan_chunked_resume() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 3,
@@ -131,6 +135,7 @@ async fn execute_plan_chunked_resume() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -252,6 +257,7 @@ async fn execute_plan_chunked_skips_condition_false_and_runs_next() {
                 condition: Some("${NONEXISTENT}".into()),
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -264,6 +270,7 @@ async fn execute_plan_chunked_skips_condition_false_and_runs_next() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -319,6 +326,7 @@ async fn execute_plan_chunked_resume_skips_condition_false_no_infinite_loop() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -331,6 +339,7 @@ async fn execute_plan_chunked_resume_skips_condition_false_no_infinite_loop() {
                 condition: Some("${NONEXISTENT}".into()),
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 3,
@@ -343,6 +352,7 @@ async fn execute_plan_chunked_resume_skips_condition_false_no_infinite_loop() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };

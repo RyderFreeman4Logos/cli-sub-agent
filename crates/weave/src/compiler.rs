@@ -8,7 +8,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
-use crate::parser::{Block, SkillDocument};
+use crate::parser::{Block, SkillDocument, WorkspaceAccess};
 
 // ---------------------------------------------------------------------------
 // Plan types
@@ -45,6 +45,8 @@ pub struct PlanStep {
     pub loop_var: Option<LoopSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_access: Option<WorkspaceAccess>,
 }
 
 /// How to handle a step failure.
@@ -122,6 +124,11 @@ static CONDITION_HINT_RE: LazyLock<Regex> =
 /// Matches a `Session: <id|template>` line at the start of a step body.
 static SESSION_HINT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^Session:\s*(.+)\s*$").expect("valid regex"));
+
+/// Matches a `Workspace Access: read-only|mutating` line at the start of a step body.
+static WORKSPACE_ACCESS_HINT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^Workspace\s+Access:\s*(read-only|mutating)\s*$").expect("valid regex")
+});
 
 /// Matches a `MaxIterations: <n>` line at the start of a step body (FOR loops).
 static MAXITER_HINT_RE: LazyLock<Regex> =
@@ -251,6 +258,7 @@ struct StepHints {
     tool: Option<String>,
     tier: Option<String>,
     session: Option<String>,
+    workspace_access: Option<WorkspaceAccess>,
     on_fail: FailAction,
     condition: Option<String>,
     max_iterations: Option<u32>,
@@ -268,6 +276,7 @@ fn extract_hints(body: &str) -> StepHints {
     let mut tool = None;
     let mut tier = None;
     let mut session = None;
+    let mut workspace_access = None;
     let mut on_fail = FailAction::Abort;
     let mut condition = None;
     let mut max_iterations = None;
@@ -297,6 +306,10 @@ fn extract_hints(body: &str) -> StepHints {
                 session = Some(caps[1].trim().to_string());
                 continue;
             }
+            if let Some(caps) = WORKSPACE_ACCESS_HINT_RE.captures(line) {
+                workspace_access = Some(parse_workspace_access(caps[1].trim()));
+                continue;
+            }
             if let Some(caps) = MAXITER_HINT_RE.captures(line) {
                 max_iterations = caps[1].parse().ok();
                 continue;
@@ -316,10 +329,19 @@ fn extract_hints(body: &str) -> StepHints {
         tool,
         tier,
         session,
+        workspace_access,
         on_fail,
         condition,
         max_iterations,
         prompt,
+    }
+}
+
+fn parse_workspace_access(value: &str) -> WorkspaceAccess {
+    if value.eq_ignore_ascii_case("read-only") {
+        WorkspaceAccess::ReadOnly
+    } else {
+        WorkspaceAccess::Mutating
     }
 }
 
@@ -376,6 +398,7 @@ fn compile_step(title: &str, body: &str, variables: &[String], ctx: &mut Compile
         condition: hints.condition,
         loop_var: None,
         session: hints.session,
+        workspace_access: hints.workspace_access,
     });
     Ok(())
 }
@@ -412,6 +435,7 @@ fn compile_if(
             condition: Some(condition.to_string()),
             loop_var: None,
             session: None,
+            workspace_access: None,
         });
     }
 
@@ -503,6 +527,7 @@ fn compile_include(path: &str, ctx: &mut CompileCtx) {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     });
 }
 
@@ -581,6 +606,10 @@ pub fn plan_from_toml(toml_str: &str) -> Result<ExecutionPlan> {
 #[cfg(test)]
 #[path = "compiler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compiler_workspace_access_tests.rs"]
+mod workspace_access_tests;
 
 #[cfg(test)]
 #[path = "compiler_literal_tests.rs"]
