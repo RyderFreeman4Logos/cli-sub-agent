@@ -2,6 +2,7 @@ use super::{
     PostExecGateCommandOutcome, PostExecGateOutcome, maybe_run_post_exec_gate_with_runner,
 };
 use csa_config::{PostExecGateConfig, ProjectConfig, ProjectMeta, ResourcesConfig, RunConfig};
+use csa_session::create_session_fresh;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -58,6 +59,27 @@ fn init_clean_git_repo(project_root: &Path) {
     std::fs::write(project_root.join("tracked.txt"), "initial\n").expect("write tracked file");
     run(&["add", "tracked.txt"]);
     run(&["commit", "-m", "initial"]);
+}
+
+fn run_git(project_root: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git command failed: {:?}", args);
+}
+
+fn create_session_at_current_head(project_root: &Path) -> String {
+    create_session_fresh(
+        project_root,
+        Some("post-exec gate test"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session")
+    .meta_session_id
 }
 
 #[tokio::test]
@@ -212,7 +234,7 @@ async fn post_exec_gate_skips_when_dirty_worktree_is_pre_existing() {
 }
 
 #[tokio::test]
-async fn post_exec_gate_skips_when_changed_paths_have_no_tracked_diff() {
+async fn post_exec_gate_runs_when_changed_paths_are_non_empty() {
     let project_dir = tempdir().unwrap();
     init_clean_git_repo(project_dir.path());
     std::fs::create_dir(project_dir.path().join("just-temp")).unwrap();
@@ -222,6 +244,7 @@ async fn post_exec_gate_skips_when_changed_paths_have_no_tracked_diff() {
     )
     .unwrap();
 
+    let calls = Arc::new(Mutex::new(Vec::new()));
     let config = project_config_with_gate(PostExecGateConfig::default());
     let changed_paths = vec!["just-temp/stderr.log".to_string()];
     let outcome = maybe_run_post_exec_gate_with_runner(
@@ -230,16 +253,24 @@ async fn post_exec_gate_skips_when_changed_paths_have_no_tracked_diff() {
         Some("01TESTPOSTEXECGATEARTIFACT00"),
         Some(&config),
         Some(&changed_paths),
-        |_command, _cwd, _timeout_seconds| {
-            Box::pin(async move {
-                panic!("runner must not execute when changed paths have no tracked diff");
-            })
+        {
+            let calls = Arc::clone(&calls);
+            move |command, cwd, timeout_seconds| {
+                let calls = Arc::clone(&calls);
+                let command = command.to_string();
+                let cwd = cwd.to_path_buf();
+                Box::pin(async move {
+                    calls.lock().unwrap().push((command, cwd, timeout_seconds));
+                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                })
+            }
         },
     )
     .await
-    .expect("untracked test artifacts should skip gate");
+    .expect("explicit changed paths should run gate");
 
-    assert_eq!(outcome, PostExecGateOutcome::Skipped);
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
+    assert_eq!(calls.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -272,6 +303,82 @@ async fn post_exec_gate_runs_when_session_introduced_changes() {
     )
     .await
     .expect("session-introduced changes should run gate");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
+    assert_eq!(calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn post_exec_gate_runs_when_session_committed_changes() {
+    let project_dir = tempdir().unwrap();
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "committed\n").unwrap();
+    run_git(project_dir.path(), &["add", "tracked.txt"]);
+    run_git(project_dir.path(), &["commit", "-m", "change tracked"]);
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths: Vec<String> = Vec::new();
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Implement and commit the fix",
+        Some(&session_id),
+        Some(&config),
+        Some(&changed_paths),
+        {
+            let calls = Arc::clone(&calls);
+            move |command, cwd, timeout_seconds| {
+                let calls = Arc::clone(&calls);
+                let command = command.to_string();
+                let cwd = cwd.to_path_buf();
+                Box::pin(async move {
+                    calls.lock().unwrap().push((command, cwd, timeout_seconds));
+                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                })
+            }
+        },
+    )
+    .await
+    .expect("committed session changes should run gate");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
+    assert_eq!(calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn post_exec_gate_runs_when_untracked_source_exists_without_changed_paths() {
+    let project_dir = tempdir().unwrap();
+    init_clean_git_repo(project_dir.path());
+    std::fs::write(
+        project_dir.path().join("new_source.rs"),
+        "fn new_source() {}\n",
+    )
+    .unwrap();
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Create a new Rust source file",
+        Some("01TESTPOSTEXECGATEUNTRACKED"),
+        Some(&config),
+        None,
+        {
+            let calls = Arc::clone(&calls);
+            move |command, cwd, timeout_seconds| {
+                let calls = Arc::clone(&calls);
+                let command = command.to_string();
+                let cwd = cwd.to_path_buf();
+                Box::pin(async move {
+                    calls.lock().unwrap().push((command, cwd, timeout_seconds));
+                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                })
+            }
+        },
+    )
+    .await
+    .expect("untracked source changes should run gate");
 
     assert_eq!(outcome, PostExecGateOutcome::Passed);
     assert_eq!(calls.lock().unwrap().len(), 1);

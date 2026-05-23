@@ -14,8 +14,9 @@ use super::attempt_exec::{
     run_ephemeral_without_timeout, run_persistent_with_timeout, run_persistent_without_timeout,
 };
 use super::attempt_support::{
-    allow_cross_tool_failover, build_failover_context_addendum,
-    persist_fork_timeout_result_if_missing, resolve_attempt_initial_response_timeout_seconds,
+    allow_cross_tool_failover, build_failover_context_addendum, merge_retry_changed_paths,
+    merge_run_loop_changed_paths, persist_fork_timeout_result_if_missing,
+    resolve_attempt_initial_response_timeout_seconds,
 };
 use super::policy::is_post_run_commit_policy_block;
 use super::resume::{
@@ -91,6 +92,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let enforce_tier =
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
     let mut accumulated_changed_paths: Vec<String> = Vec::new();
+    let mut all_attempt_change_snapshots_available = true;
     let (result, changed_paths) = loop {
         attempts += 1;
         let mut fresh_spawn_preflight_override = false;
@@ -668,9 +670,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 &tried_tools,
             )
         {
-            if let Some(paths) = exec_changed_paths {
-                accumulated_changed_paths.extend(paths);
-            }
+            merge_retry_changed_paths(
+                &mut accumulated_changed_paths,
+                &mut all_attempt_change_snapshots_available,
+                exec_changed_paths,
+            );
             runtime_fallback_attempts += 1;
             warn!(
                 from = %tool_name_str,
@@ -723,9 +727,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 new_tool,
                 new_model_spec,
             } => {
-                if let Some(paths) = exec_changed_paths {
-                    accumulated_changed_paths.extend(paths);
-                }
+                merge_retry_changed_paths(
+                    &mut accumulated_changed_paths,
+                    &mut all_attempt_change_snapshots_available,
+                    exec_changed_paths,
+                );
                 // Build xurl context recovery addendum so the failover
                 // tool can retrieve the original session's conversation.
                 failover_context_addendum =
@@ -746,19 +752,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             _ => break (exec_result, exec_changed_paths),
         }
     };
-    let changed_paths = {
-        let mut merged = accumulated_changed_paths;
-        if let Some(final_paths) = changed_paths {
-            merged.extend(final_paths);
-        }
-        if merged.is_empty() {
-            None
-        } else {
-            merged.sort();
-            merged.dedup();
-            Some(merged)
-        }
-    };
+    let changed_paths = merge_run_loop_changed_paths(
+        accumulated_changed_paths,
+        all_attempt_change_snapshots_available,
+        changed_paths,
+    );
     Ok(RunLoopCompletion::Completed(Box::new(RunLoopOutcome {
         result,
         current_tool,

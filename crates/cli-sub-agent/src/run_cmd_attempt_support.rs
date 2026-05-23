@@ -70,6 +70,36 @@ pub(crate) fn build_failover_context_addendum(
     ))
 }
 
+pub(crate) fn merge_retry_changed_paths(
+    accumulated_changed_paths: &mut Vec<String>,
+    all_attempt_change_snapshots_available: &mut bool,
+    attempt_changed_paths: Option<Vec<String>>,
+) {
+    match attempt_changed_paths {
+        Some(paths) => accumulated_changed_paths.extend(paths),
+        None => *all_attempt_change_snapshots_available = false,
+    }
+}
+
+pub(crate) fn merge_run_loop_changed_paths(
+    mut accumulated_changed_paths: Vec<String>,
+    mut all_attempt_change_snapshots_available: bool,
+    final_changed_paths: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match final_changed_paths {
+        Some(paths) => accumulated_changed_paths.extend(paths),
+        None => all_attempt_change_snapshots_available = false,
+    }
+
+    if !all_attempt_change_snapshots_available {
+        return None;
+    }
+
+    accumulated_changed_paths.sort();
+    accumulated_changed_paths.dedup();
+    Some(accumulated_changed_paths)
+}
+
 pub(crate) fn persist_fork_timeout_result_if_missing(
     project_root: &Path,
     is_fork: bool,
@@ -95,4 +125,38 @@ pub(crate) fn persist_fork_timeout_result_if_missing(
         execution_start_time,
         &err,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_run_loop_changed_paths;
+
+    #[test]
+    fn merge_run_loop_changed_paths_preserves_known_empty_delta() {
+        let merged = merge_run_loop_changed_paths(Vec::new(), true, Some(Vec::new()));
+
+        assert_eq!(merged, Some(Vec::new()));
+    }
+
+    #[test]
+    fn merge_run_loop_changed_paths_returns_unknown_when_any_snapshot_is_missing() {
+        let merged =
+            merge_run_loop_changed_paths(vec!["src/lib.rs".to_string()], false, Some(vec![]));
+
+        assert_eq!(merged, None);
+    }
+
+    #[test]
+    fn merge_run_loop_changed_paths_deduplicates_known_paths() {
+        let merged = merge_run_loop_changed_paths(
+            vec!["src/lib.rs".to_string()],
+            true,
+            Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+        );
+
+        assert_eq!(
+            merged,
+            Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()])
+        );
+    }
 }
