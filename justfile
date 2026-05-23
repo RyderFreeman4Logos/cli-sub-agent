@@ -28,6 +28,11 @@ _check_writable path attempted:
     path="{{path}}"
     attempted="{{attempted}}"
     resolved_path="$(readlink -f "$path" 2>/dev/null || printf '%s' "$path")"
+    # When path is a symlink, ensure the resolved destination directory exists
+    if [ -L "$path" ]; then
+        symlink_target="$(readlink "$path")"
+        mkdir -p "$symlink_target" 2>/dev/null || true
+    fi
     mkdir -p "$path" 2>/dev/null || true
     probe="$path/.csa-write-probe.$$"
     if touch "$probe" >/dev/null 2>&1; then
