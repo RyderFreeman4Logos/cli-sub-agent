@@ -67,6 +67,30 @@ Why this is the canonical LLM-friendly form:
 
 Default to this form unless the user explicitly asks for tier-based routing or a different tool.
 
+## Prompt Crafting (How to Write Better CSA Prompts)
+
+Full guide: `references/prompt-crafting-guide.md` (load on demand).
+
+**Quick checklist for every CSA dispatch prompt:**
+
+1. **Objective**: State what to accomplish in 1-2 sentences (not "fix bugs")
+2. **Context**: Issue description, file paths, prior findings (do NOT pre-fetch file contents)
+3. **Boundaries**: What to change vs what to leave alone; negative constraints as guardrails
+4. **Output format**: Commit conventions, expected deliverables
+5. **Verification**: "Run just pre-commit before committing" or equivalent check
+
+**Three agentic anchors** (add to every prompt for ~20% task completion improvement):
+- Persistence: "Keep working until fully resolved"
+- Tool-calling: "Use tools to verify — do not guess"
+- Planning: "Plan before each action, reflect after each result"
+
+**Key principles:**
+- Positive instructions first, negative constraints as guardrails
+- Match style to model: prescriptive for Codex, outcome-oriented for Claude
+- Do NOT add "think step by step" for reasoning models (o1/o3) — redundant and harmful
+- 3 diverse examples > 20 edge-case bullet points
+- Critical constraints need defense in depth: prompt + sandbox + verification
+
 ## When NOT to Use CSA
 
 CSA session spawn has a fixed cold-start cost (~10K-60K tokens for rules/context ingestion).
