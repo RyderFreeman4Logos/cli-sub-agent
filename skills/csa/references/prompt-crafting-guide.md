@@ -212,6 +212,55 @@ When defining CSA-dispatched tools or writing prompts that reference tools:
 - Use semantically meaningful identifiers (not UUIDs)
 - Include 1-3 realistic usage examples for complex tools
 
+## Module Token Budget
+
+Per-file token budgets are an engineering constraint, not a style preference.
+
+### Quantitative Basis
+
+| Fact | Value | Source |
+|------|-------|--------|
+| Context rot onset | ~50K tokens (200K window) | Chroma Research 2025 |
+| Reliable utilization | 50-65% of window | Chroma Research 2025 |
+| System overhead (rules/tools/memory/skills) | 50-70K tokens | Measured |
+| 1000 lines of code | ~10,000 tokens | Wire Blog 2025 |
+| AI defect risk increase (code health < 9.0) | >= 30% | Borg & Tornhill 2025 |
+| CLAUDE.md compliance drop | > 200 lines | DEV Community 2026 |
+| AI token waste on locating vs solving | 80% on locating | Nesler 2025 |
+
+### The 8K Budget
+
+CSA enforces a per-file target of 8K tokens (pre-commit gate). Rationale:
+- 200K window - 60K overhead = 140K effective. Multi-turn tool calls halve
+  that to ~70K working context. At 8K per file, an agent can hold ~8 files
+  simultaneously with room for reasoning.
+- 8K tokens ≈ 800 lines of Rust. Aligns with CSA's existing 800-line soft
+  module limit and clippy cognitive_complexity thresholds.
+
+Files exceeding 8K tokens are blocked by pre-commit. Exempted files (test,
+generated, macro-heavy) still produce a WARNING.
+
+### Interface-First Interaction
+
+Interface documentation is 10x more token-efficient than source code.
+When interacting with modules outside your current scope:
+
+1. **First**: Use gitnexus_query/gitnexus_context or LSP to understand the API
+2. **Second**: Read doc comments and type signatures
+3. **Last resort**: Read implementation source (only when docs are insufficient)
+
+This is enforced by AGENTS.md Rule 063 (interface-first).
+
+### When to Split vs Exempt
+
+**Split when**: file has high token count AND high cognitive complexity.
+Pure data definitions (structs, enums, match tables) with low complexity
+are acceptable at higher token counts.
+
+**Exempt when**: test files (`cfg(test)`), generated code, parser combinators,
+macro definitions. These have inherently high token density but splitting
+reduces readability.
+
 ## Sources
 
 Anthropic: Claude 4 Best Practices, Context Engineering for Agents,
