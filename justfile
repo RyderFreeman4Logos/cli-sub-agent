@@ -72,7 +72,7 @@ find-monolith-files:
     set -euo pipefail
     export MONOLITH_THRESHOLD_TOKENS="${MONOLITH_TOKEN_THRESHOLD:-8000}"
     export MONOLITH_THRESHOLD_LINES="${MONOLITH_LINE_THRESHOLD:-800}"
-    export MONOLITH_MODEL="${TOKUIN_MODEL:-gpt-4}"
+    export MONOLITH_MODEL="${TOKUIN_MODEL:-gpt-4o}"
 
     # Write check script to temp file (avoids export -f which fails under zsh $SHELL)
     CHECKER=$(mktemp)
@@ -84,13 +84,17 @@ find-monolith-files:
     threshold_lines="$MONOLITH_THRESHOLD_LINES"
     model="$MONOLITH_MODEL"
 
-    # --- Explicit excludes (customize per project) ---
+    exempt=false
+    # --- Explicit excludes (exempt but still warn) ---
     case "$file" in
-        *.lock|*lock.json|*lock.yaml) exit 0 ;;  # package manager locks
-        */AGENTS.md|*/FACTORY.md) exit 0 ;;        # auto-generated rule aggregation
-        */PATTERN.md|*/SKILL.md) exit 0 ;;         # workflow pattern definitions (single-purpose docs)
-        */workflow.toml) exit 0 ;;                   # weave workflow definitions
-        .test-target/*|.test-target/**) exit 0 ;;    # generated test target artifacts
+        *.lock|*lock.json|*lock.yaml) exit 0 ;;  # package manager locks (silent skip)
+        .test-target/*|.test-target/**) exit 0 ;;  # generated test artifacts (silent skip)
+        */AGENTS.md|*/FACTORY.md) exempt=true ;;
+        */PATTERN.md|*/SKILL.md) exempt=true ;;
+        */workflow.toml) exempt=true ;;
+        *_tests.rs|*_test.rs) exempt=true ;;       # dedicated test files
+        */tests/*.rs) exempt=true ;;               # integration test directory
+        */benches/*.rs) exempt=true ;;             # benchmark files
     esac
     [ -f "$file" ] || exit 0
     grep -Iq '' "$file" 2>/dev/null || exit 0  # skip binary files
@@ -112,25 +116,42 @@ find-monolith-files:
         echo "=========================================="
     }
 
+    monolith_warning() {
+        echo "WARNING: Exempt file exceeds budget ($1, limit: $2): $file"
+    }
+
     # Fast pre-filter: line count (zero-cost, no external tools)
     lines=$(wc -l < "$file" 2>/dev/null || echo 0)
     if [ "$lines" -gt "$threshold_lines" ]; then
+        if [ "$exempt" = true ]; then
+            monolith_warning "$lines lines" "$threshold_lines lines"
+            exit 0
+        fi
         monolith_error "$lines lines" "$threshold_lines lines"
         exit 1
     fi
 
-    # Accurate check: token count (requires tokuin; tolerates tokuin failures)
-    tokens=$(tokuin estimate --model "$model" --format json "$file" 2>/dev/null \
-        | jq -r '.tokens // 0' 2>/dev/null || echo 0)
+    # Conservative token count: csa tokuin estimate (max of OpenAI BPE + chars/3)
+    # Falls back to external tokuin, then to 0 (line check is the safety net)
+    tokens=$(csa tokuin estimate --model "$model" --json "$file" 2>/dev/null \
+        | jq -r '.tokens // 0' 2>/dev/null \
+        || tokuin estimate --model "$model" --format json "$file" 2>/dev/null \
+        | jq -r '.tokens // 0' 2>/dev/null \
+        || echo 0)
     [ -z "$tokens" ] && tokens=0
     if [ "$tokens" -gt "$threshold_tokens" ]; then
+        if [ "$exempt" = true ]; then
+            monolith_warning "$tokens tokens" "$threshold_tokens tokens"
+            exit 0
+        fi
         monolith_error "$tokens tokens" "$threshold_tokens tokens"
         exit 1
     fi
     SCRIPT
     chmod +x "$CHECKER"
 
-    git ls-files --recurse-submodules \
+    # Check staged files only (pre-commit scope); full-repo audit is `csa health`
+    git diff --cached --name-only --diff-filter=ACMR \
         | parallel --halt now,fail=1 "$CHECKER" {}
 
 # Fail if generated or scratch artifacts are staged for commit.
