@@ -236,6 +236,27 @@ Apply these dimensions in all review passes in addition to the general checklist
 - `unknown` focus:
   - apply only the general-purpose checklist in this protocol (no framework-specific expansion)
 
+### Deslop Dimension (all languages)
+
+Detect AI-generated code redundancy patterns. Severity: LOW-MEDIUM (advisory).
+
+- **Narration comments**: comments that restate what the code does ("increment the counter",
+  "return the result") rather than explaining WHY. Well-named identifiers make these redundant.
+- **Defensive over-handling**: try/catch or error handling around infallible operations,
+  `.unwrap_or_default()` on values that are always `Some`/`Ok`.
+- **Over-nesting**: deeply nested if/match that could be flattened with early returns or
+  guard clauses. 3+ nesting levels is a signal.
+- **Redundant type annotations**: explicit types where the compiler can infer them
+  (`let x: Vec<String> = Vec::new()` → `let x = Vec::<String>::new()`).
+- **Duplicated logic**: copy-pasted blocks that should be a shared helper or extracted function.
+- **Verbose error messages**: error strings that duplicate the context already in the call stack
+  or the error type itself.
+- **Premature abstraction**: helper functions called from exactly one site, trait impls for
+  a single concrete type, generic parameters used with only one concrete type.
+
+Report deslop findings as LOW severity unless they significantly inflate module token count
+(approaching or exceeding 8K tokens), in which case use MEDIUM.
+
 ### Pass 1: Broad Issue Discovery (maximize recall)
 Scan all changed code for:
 - Correctness issues
