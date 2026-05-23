@@ -139,6 +139,7 @@ async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
 
     let vars = HashMap::new();
@@ -415,6 +416,7 @@ async fn commit_workflow_test_gate_aborts_before_following_steps() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -427,6 +429,7 @@ async fn commit_workflow_test_gate_aborts_before_following_steps() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };

@@ -148,6 +148,7 @@ mod tests {
                     condition: None,
                     loop_var: None,
                     session: None,
+                    workspace_access: None,
                 },
                 PlanStep {
                     id: 2,
@@ -160,6 +161,7 @@ mod tests {
                     condition: Some("has_tests".to_string()),
                     loop_var: None,
                     session: None,
+                    workspace_access: None,
                 },
                 PlanStep {
                     id: 3,
@@ -176,6 +178,7 @@ mod tests {
                         max_iterations: 10,
                     }),
                     session: None,
+                    workspace_access: None,
                 },
             ],
         }

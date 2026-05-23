@@ -23,6 +23,7 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
 

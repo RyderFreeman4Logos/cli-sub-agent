@@ -29,6 +29,7 @@ fn resolve_step_tool_all_explicit_tools() {
             condition: None,
             loop_var: None,
             session: None,
+            workspace_access: None,
         };
         let target = resolve_step_tool(&step, None, None, None).unwrap();
         if expect_direct_bash {
@@ -83,6 +84,7 @@ async fn execute_step_tool_override_replaces_csa_tool() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     // Even with tool_override=claude-code, bash step must still run as bash
@@ -116,6 +118,7 @@ async fn execute_step_note_skips_without_dispatch() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
 
@@ -140,6 +143,7 @@ async fn execute_step_manual_returns_resumable_handoff() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
 
@@ -177,6 +181,7 @@ async fn execute_step_await_user_returns_instructions() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
 
@@ -215,6 +220,7 @@ fn tool_override_clears_model_spec() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let target = resolve_step_tool(&step, None, None, None).unwrap();
     // Without override: should be CsaTool with codex
@@ -265,6 +271,7 @@ fn tool_override_does_not_affect_weave_include() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let target = resolve_step_tool(&step, None, None, None).unwrap();
     // Simulate override: WeaveInclude must pass through unchanged
@@ -342,6 +349,7 @@ async fn execute_step_bash_captures_stdout_in_output() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
@@ -373,6 +381,7 @@ async fn execute_plan_injects_step_output_variables() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -385,6 +394,7 @@ async fn execute_plan_injects_step_output_variables() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -424,6 +434,7 @@ async fn execute_plan_skipped_step_injects_empty_output() {
                 condition: Some("${NEVER_SET}".into()),
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -436,6 +447,7 @@ async fn execute_plan_skipped_step_injects_empty_output() {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     };
@@ -473,6 +485,7 @@ async fn execute_step_csa_empty_prompt_warns_without_panic() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let vars = HashMap::new();
     let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
@@ -502,6 +515,7 @@ fn resolve_step_tool_respects_tool_override() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
 
     // Without override: should resolve to gemini-cli as specified in step.tool
@@ -541,6 +555,7 @@ fn resolve_step_tool_respects_model_spec_override() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
 
     let tool_override = ToolName::Codex;

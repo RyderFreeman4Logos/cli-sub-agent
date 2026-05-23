@@ -179,9 +179,12 @@ echo "Chinese (Simplified)"
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
-Note: RECON steps are read-only (`workspace_access = "read-only"`); auto-routing is safe here because no tool writes files, so `allow_edit` restrictions do not apply. Any tool in the tier can explore.
+Workspace Access: read-only
+Note: RECON steps are sandboxed read-only (`workspace_access = "read-only"` maps to `readonly_project_root`) and prompt-constrained; auto-routing is safe because any tool in the tier can explore without editing.
 
 Analyze codebase structure relevant to ${FEATURE}.
+
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
 
 CONSTRAINT ANCHOR: The user prompt above may specify target crates, key files, integration points, or architectural approach. If so, these are HARD CONSTRAINTS — start exploration from the specified files/modules and expand outward only as needed. Do NOT explore unrelated crates as primary targets. If the user specified key files, those MUST appear in your report.
 
@@ -193,9 +196,12 @@ Working directory: ${CWD}
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
-Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
+Workspace Access: read-only
+Note: RECON is sandboxed read-only and prompt-constrained; any tier tool can explore without editing.
 
 Find existing patterns or similar features to ${FEATURE} in this codebase.
+
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
 
 CONSTRAINT ANCHOR: If the user prompt specifies an architectural approach or target crate, pattern discovery MUST be scoped to that context first. Do NOT let codebase pattern matching override the user's explicit requirements. Report patterns that SUPPORT the user's specified approach, not patterns that suggest a different approach.
 
@@ -207,9 +213,12 @@ Working directory: ${CWD}
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
-Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
+Workspace Access: read-only
+Note: RECON is sandboxed read-only and prompt-constrained; any tier tool can explore without editing.
 
 Identify constraints and risks for implementing ${FEATURE}.
+
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
 
 CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, specific modules), evaluate constraints WITHIN that scope. Flag risks that affect the user's specified approach, not risks that argue for a different approach.
 
@@ -221,9 +230,12 @@ Working directory: ${CWD}
 Tool: csa
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
-Note: RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
+Workspace Access: read-only
+Note: RECON is sandboxed read-only and prompt-constrained; any tier tool can explore without editing.
 
 Identify the semantic invariants and concurrency assumptions for ${FEATURE}.
+
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
 
 CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, specific modules), evaluate invariants and concurrency semantics WITHIN that scope. Do NOT invent a different design just to simplify the invariant story.
 

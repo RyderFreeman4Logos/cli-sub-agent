@@ -19,6 +19,7 @@ fn manual_handoff_plan() -> ExecutionPlan {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
             PlanStep {
                 id: 2,
@@ -31,6 +32,7 @@ fn manual_handoff_plan() -> ExecutionPlan {
                 condition: None,
                 loop_var: None,
                 session: None,
+                workspace_access: None,
             },
         ],
     }

@@ -249,12 +249,14 @@ workspace_access = "read-only"
 prompt = """
 Analyze codebase structure relevant to ${FEATURE}.
 
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
+
 CONSTRAINT ANCHOR: The user prompt above may specify target crates, key files, integration points, or architectural approach. If so, these are HARD CONSTRAINTS — start exploration from the specified files/modules and expand outward only as needed. Do NOT explore unrelated crates as primary targets. If the user specified key files, those MUST appear in your report.
 
 Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
 Working directory: ${CWD}"""
-# RECON steps are read-only (workspace_access = "read-only"); auto-routing is safe here because
-# no tool writes files, so allow_edit restrictions do not apply. Any tool in the tier can explore.
+# RECON steps are sandboxed read-only (workspace_access = "read-only" maps to
+# readonly_project_root) and the prompt repeats the no-edit contract for defense in depth.
 tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
@@ -267,11 +269,13 @@ workspace_access = "read-only"
 prompt = """
 Find existing patterns or similar features to ${FEATURE} in this codebase.
 
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
+
 CONSTRAINT ANCHOR: If the user prompt specifies an architectural approach or target crate, pattern discovery MUST be scoped to that context first. Do NOT let codebase pattern matching override the user's explicit requirements. Report patterns that SUPPORT the user's specified approach, not patterns that suggest a different approach.
 
 Report: file paths with approach, reusable components, conventions to follow.
 Working directory: ${CWD}"""
-# RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
+# RECON is sandboxed read-only and prompt-constrained; any tier tool can explore without editing.
 tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
@@ -284,11 +288,13 @@ workspace_access = "read-only"
 prompt = """
 Identify constraints and risks for implementing ${FEATURE}.
 
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
+
 CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, specific modules), evaluate constraints WITHIN that scope. Flag risks that affect the user's specified approach, not risks that argue for a different approach.
 
 Report: potential breaking changes, security considerations, performance, compatibility.
 Working directory: ${CWD}"""
-# RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
+# RECON is sandboxed read-only and prompt-constrained; any tier tool can explore without editing.
 tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"
@@ -301,6 +307,8 @@ workspace_access = "read-only"
 prompt = """
 Identify the semantic invariants and concurrency assumptions for ${FEATURE}.
 
+READ-ONLY RECON: This step is analysis only. Do NOT edit, create, delete, move, format, or otherwise modify any file. Do NOT run commands that write to the repository or git state. If you find a needed fix, report it only.
+
 CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, specific modules), evaluate invariants and concurrency semantics WITHIN that scope. Do NOT invent a different design just to simplify the invariant story.
 
 Report using these keys:
@@ -309,7 +317,7 @@ Report using these keys:
 - `concurrency_model`: who else can write to the files/state this touches, plus the failure / rollback model for each important step
 
 Working directory: ${CWD}"""
-# RECON is read-only; auto-routing is safe — any tier tool can explore without editing.
+# RECON is sandboxed read-only and prompt-constrained; any tier tool can explore without editing.
 tier = "${RECON_TIER}"
 on_fail = "abort"
 session = "${STEP_1_OUTPUT}"

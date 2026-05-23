@@ -78,7 +78,7 @@ pub struct AgentConfig {
 }
 
 /// Whether a skill is read-only or allowed to mutate the workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceAccess {
     ReadOnly,

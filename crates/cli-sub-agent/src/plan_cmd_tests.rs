@@ -1,6 +1,8 @@
 use super::*;
+use crate::plan_cmd::plan_cmd_steps::step_readonly_project_root;
 use std::collections::{HashMap, HashSet};
 use weave::compiler::{FailAction, PlanStep, VariableDecl};
+use weave::parser::WorkspaceAccess;
 
 #[test]
 fn safe_plan_name_normalizes_non_alphanumeric_characters() {
@@ -485,6 +487,7 @@ fn should_inject_assignment_markers_only_for_bash_steps() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let codex_step = PlanStep {
         id: 2,
@@ -497,6 +500,7 @@ fn should_inject_assignment_markers_only_for_bash_steps() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let tier_only_step = PlanStep {
         id: 3,
@@ -509,11 +513,37 @@ fn should_inject_assignment_markers_only_for_bash_steps() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
 
     assert!(should_inject_assignment_markers(&bash_step));
     assert!(!should_inject_assignment_markers(&codex_step));
     assert!(!should_inject_assignment_markers(&tier_only_step));
+}
+
+#[test]
+fn step_readonly_project_root_follows_workspace_access_contract() {
+    let mut step = PlanStep {
+        id: 1,
+        title: "recon".into(),
+        tool: Some("csa".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+        workspace_access: Some(WorkspaceAccess::ReadOnly),
+    };
+
+    assert!(step_readonly_project_root(&step));
+
+    step.workspace_access = Some(WorkspaceAccess::Mutating);
+    assert!(!step_readonly_project_root(&step));
+
+    step.workspace_access = None;
+    assert!(!step_readonly_project_root(&step));
 }
 
 #[test]
@@ -559,6 +589,7 @@ fn resolve_step_tool_explicit_bash_returns_direct_bash() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(
@@ -580,6 +611,7 @@ fn resolve_step_tool_explicit_codex() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(
@@ -604,6 +636,7 @@ fn resolve_step_tool_fallback_no_config() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(
@@ -628,6 +661,7 @@ fn resolve_step_tool_weave_returns_include_marker() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     let target = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(target, StepTarget::WeaveInclude));
@@ -646,6 +680,7 @@ fn resolve_step_tool_unknown_tool_errors() {
         condition: None,
         loop_var: None,
         session: None,
+        workspace_access: None,
     };
     assert!(resolve_step_tool(&step, None, None, None).is_err());
 }

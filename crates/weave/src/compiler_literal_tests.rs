@@ -78,6 +78,7 @@ fn test_prompt_with_triple_quote_fallback() {
             condition: None,
             loop_var: None,
             session: None,
+            workspace_access: None,
         }],
     };
 

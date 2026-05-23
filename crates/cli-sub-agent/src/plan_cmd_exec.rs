@@ -61,6 +61,7 @@ pub(super) struct CsaStepExecutionOptions<'a> {
     pub(super) model_spec: Option<&'a str>,
     pub(super) forwarded_session: Option<&'a str>,
     pub(super) no_fs_sandbox: bool,
+    pub(super) readonly_project_root: bool,
 }
 
 pub(super) async fn run_with_heartbeat<F, T>(
@@ -294,9 +295,9 @@ pub(super) async fn execute_csa_step(
             ParentSessionSource::ExplicitOnly,
             SessionCreationMode::FreshChild,
             options.no_fs_sandbox,
-            false, // readonly_project_root
-            &[],   // extra_writable
-            &[],   // extra_readable
+            options.readonly_project_root,
+            &[], // extra_writable
+            &[], // extra_readable
         )
     };
     let result = match execute_once(session_arg.clone()).await {

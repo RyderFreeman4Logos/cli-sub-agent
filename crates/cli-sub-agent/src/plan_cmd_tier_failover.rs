@@ -19,6 +19,7 @@ pub(super) struct TierFailoverParams<'a> {
     pub(super) initial_model_spec: Option<&'a str>,
     pub(super) tier_name: Option<&'a str>,
     pub(super) forwarded_session: Option<&'a str>,
+    pub(super) readonly_project_root: bool,
 }
 
 /// Execute a CSA step with tier-level failover.
@@ -80,6 +81,7 @@ pub(super) async fn execute_csa_step_with_tier_failover(
                         params.forwarded_session
                     },
                     no_fs_sandbox: step_ctx.no_fs_sandbox,
+                    readonly_project_root: params.readonly_project_root,
                 },
             ),
             step_started_at,
