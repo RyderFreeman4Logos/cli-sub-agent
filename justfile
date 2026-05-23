@@ -95,6 +95,7 @@ find-monolith-files:
         *_tests.rs|*_test.rs) exempt=true ;;       # dedicated test files
         */tests/*.rs) exempt=true ;;               # integration test directory
         */benches/*.rs) exempt=true ;;             # benchmark files
+        */config.rs|*/global.rs) exempt=true ;;    # config definition files (high token density, low complexity)
     esac
     [ -f "$file" ] || exit 0
     grep -Iq '' "$file" 2>/dev/null || exit 0  # skip binary files

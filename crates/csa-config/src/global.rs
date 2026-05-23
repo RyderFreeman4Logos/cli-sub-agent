@@ -415,11 +415,10 @@ impl ReviewConfig {
 
     /// Returns the effective gate steps, preferring `gate_commands` over legacy
     /// `gate_command`. If both are empty, returns an empty vec.
+    /// Always appends the L4 token-budget gate if the script exists.
     pub fn effective_gate_steps(&self) -> Vec<GateStep> {
-        if !self.gate_commands.is_empty() {
-            let mut steps = self.gate_commands.clone();
-            steps.sort_by_key(|s| s.level);
-            steps
+        let mut steps = if !self.gate_commands.is_empty() {
+            self.gate_commands.clone()
         } else if let Some(cmd) = &self.gate_command {
             vec![GateStep {
                 name: "legacy-gate".to_string(),
@@ -428,7 +427,19 @@ impl ReviewConfig {
             }]
         } else {
             Vec::new()
+        };
+
+        let token_script = std::path::Path::new("scripts/hooks/token-budget-gate.sh");
+        if token_script.exists() && !steps.iter().any(|s| s.name == "token-budget") {
+            steps.push(GateStep {
+                name: "token-budget".to_string(),
+                command: token_script.display().to_string(),
+                level: 4,
+            });
         }
+
+        steps.sort_by_key(|s| s.level);
+        steps
     }
 
     /// Default gate timeout in seconds.
