@@ -24,6 +24,9 @@ pub use cli_review::*;
 #[path = "cli_tokuin.rs"]
 mod cli_tokuin;
 pub use cli_tokuin::*;
+#[path = "cli_health.rs"]
+mod cli_health;
+pub use cli_health::*;
 #[path = "cli_xurl.rs"]
 mod cli_xurl;
 pub use cli_xurl::*;
@@ -65,13 +68,10 @@ pub struct Cli {
 pub enum Commands {
     /// Execute a task using a specific AI tool
     Run {
-        /// Tool selection: auto (default), any-available, or specific tool name.
-        /// A specific --tool disables failover by default; add --allow-fallback to keep tier failover.
-        /// Combine with --tier to use that tier's model/thinking for the selected tool.
-        /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
+        /// Tool selection: auto, any-available, or a specific tool.
         #[arg(long)]
         tool: Option<ToolArg>,
-        /// Intent-based auto-routing through `[tier_mapping]` or a tier selector while keeping tool choice automatic.
+        /// Auto-route via `[tier_mapping]` while keeping tool choice automatic.
         #[arg(long, value_name = "INTENT", conflicts_with = "tier")]
         auto_route: Option<String>,
         /// Difficulty label looked up in `[tier_mapping]` when no explicit tier/model-spec is set.
@@ -80,8 +80,7 @@ pub enum Commands {
         /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
         #[arg(long)]
         skill: Option<String>,
-        /// Autonomous mode flag (REQUIRED for root callers). Enables prompt-guard safety mechanisms.
-        /// Auto-detected for CSA-spawned children (`CSA_DEPTH` + `CSA_INTERNAL_INVOCATION`).
+        /// Autonomous mode flag for prompt-guard safety.
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
@@ -92,8 +91,7 @@ pub enum Commands {
         /// Task prompt (flag form; same as the positional prompt)
         #[arg(long = "prompt", value_name = "PROMPT", conflicts_with_all = ["prompt", "prompt_file"])]
         prompt_flag: Option<String>,
-        /// Read prompt from a file (bypasses shell quoting issues with complex prompts).
-        /// Use `-` or `/dev/stdin` to read the prompt from stdin (heredoc or pipe).
+        /// Read prompt from a file; use `-` or `/dev/stdin` for stdin.
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         prompt_file: Option<PathBuf>,
         /// Prepend summary/details/findings from a prior review session into the employee prompt
@@ -111,20 +109,16 @@ pub enum Commands {
         /// Fork the most recent session for this project
         #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "fork_from_caller", "ephemeral"])]
         fork_last: bool,
-        /// Fork from the auto-detected caller's Claude conversation (CSA-lite, #1432).
-        /// Reads `CLAUDE_SESSION_ID` or the most recent Claude thread on disk,
-        /// extracts a budgeted conversation prefix, and seeds the new session with it.
+        /// Fork from the auto-detected caller's Claude conversation.
         #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "fork_last", "ephemeral"])]
         fork_from_caller: bool,
         /// Human-readable description for a new session
         #[arg(short, long)]
         description: Option<String>,
-        /// Fork-call mode: fork a session, execute task, return only the ReturnPacket.
-        /// Incompatible with --session, --last, --ephemeral.
+        /// Fork-call mode: fork a session and return only the ReturnPacket.
         #[arg(long, conflicts_with_all = ["session", "last", "ephemeral"])]
         fork_call: bool,
         /// Session to return results to after fork-call completion.
-        /// Values: "last" (most recent session), "auto" (auto-detect parent), or a session ID.
         #[arg(
             long,
             requires = "fork_call",
@@ -138,15 +132,13 @@ pub enum Commands {
         /// Ephemeral session (no session persistence, auto-cleanup; tool runs in project dir)
         #[arg(long, conflicts_with = "session")]
         ephemeral: bool,
-        /// Allow working on the base branch (main/dev) without requiring a feature branch.
-        /// Use for read-only tasks or when you explicitly accept the risk.
+        /// Allow working on the base branch (main/dev).
         #[arg(long, alias = "allow-base-branch-commit")]
         allow_base_branch_working: bool,
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,
-        /// Exact `tool/provider/model/thinking` selector for a single fixed model choice.
-        /// Implicitly bypasses tier whitelist; no need to pair with --force-ignore-tier-setting.
+        /// Exact `tool/provider/model/thinking` selector.
         #[arg(long, value_parser = parse_model_spec_arg)]
         model_spec: Option<String>,
         /// Override tool default model (opaque string, passed through to tool)
@@ -169,7 +161,7 @@ pub enum Commands {
         #[arg(long)]
         allow_fallback: bool,
 
-        /// Disable all retry/failover paths (cross-tool 429, ACP crash, Gemini rate-limit). Pair with --model-spec to fail fast.
+        /// Disable retry/failover paths.
         #[arg(long)]
         no_failover: bool,
 
@@ -185,9 +177,7 @@ pub enum Commands {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         idle_timeout: Option<u64>,
 
-        /// Shorter timeout for first response from backend tool.
-        /// Overrides config `resources.initial_response_timeout_seconds`.
-        /// Set to 0 to disable.
+        /// Override first-response timeout; set 0 to disable.
         #[arg(long, value_parser = clap::value_parser!(u64))]
         initial_response_timeout: Option<u64>,
 
@@ -238,7 +228,7 @@ pub enum Commands {
         /// Expose extra host paths to the filesystem sandbox as read-only binds.
         #[arg(long = "extra-readable", value_delimiter = ',', value_name = "PATH")]
         extra_readable: Vec<PathBuf>,
-        /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
+        /// Deprecated no-op; daemon mode is the default.
         #[arg(long, hide = true)]
         daemon: bool,
 
@@ -246,11 +236,11 @@ pub enum Commands {
         #[arg(long)]
         no_daemon: bool,
 
-        /// Internal flag: this process IS the daemon child. Skip re-spawning.
+        /// Internal daemon-child marker.
         #[arg(long, hide = true)]
         daemon_child: bool,
 
-        /// Internal: pre-assigned session ID from daemon parent
+        /// Internal session ID from daemon parent.
         #[arg(long, hide = true)]
         session_id: Option<String>,
     },
@@ -286,11 +276,6 @@ pub enum Commands {
     },
 
     /// Initialize project configuration (.csa/config.toml)
-    ///
-    /// By default, creates a minimal config with only [project] metadata.
-    /// Tools, tiers, and resources inherit from the global config or built-in
-    /// defaults.  Use --full to auto-detect tools and generate tier configs.
-    /// Use --template to write a fully-commented reference config.
     Init {
         /// Non-interactive mode
         #[arg(long)]
@@ -441,6 +426,9 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: TokuinCommands,
     },
+
+    /// Analyze workspace token health
+    Health(HealthArgs),
 
     /// Query AI tool conversation threads via xurl
     Xurl {

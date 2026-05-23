@@ -312,6 +312,7 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
 
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    std::fs::write(project_dir.path().join(".claude.json"), "{}\n").unwrap();
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
 

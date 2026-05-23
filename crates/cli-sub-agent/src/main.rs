@@ -111,14 +111,15 @@ include!("review_cmd_exact_tests.rs");
 include!("review_round10_exact_tests.rs");
 #[cfg(test)]
 include!("debate_cmd_exact_tests.rs");
-
 use cli::{
     Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, SetupCommands, TiersCommands,
-    TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl, validate_command_args,
+    TodoCommands, TodoRefCommands, validate_command_args,
 };
 use csa_core::types::OutputFormat;
+#[cfg(test)]
+use main_bootstrap::should_attempt_auto_weave_upgrade;
 use main_bootstrap::{
-    link_bug_class_pipeline, resolve_effective_min_timeout, should_attempt_auto_weave_upgrade,
+    link_bug_class_pipeline, maybe_auto_weave_upgrade, resolve_effective_min_timeout,
 };
 use sa_mode::apply_sa_mode_prompt_guard;
 
@@ -128,12 +129,7 @@ mod sa_mode;
 #[cfg(test)]
 pub(crate) use sa_mode::validate_sa_mode;
 
-/// Report a daemon command error to stderr while the daemon guard still holds
-/// fd 2 open, then return an exit code.
-///
-/// Without this, `?`-propagated errors would drop the guard (closing fd 2)
-/// *before* `main()` could print the error via `eprintln!`, causing EBADF →
-/// double-panic → process abort (issue #574).
+/// Report daemon errors before dropping the stderr guard (issue #574).
 fn report_daemon_error_or_exit_code(
     result: Result<i32>,
     daemon_guard: &mut run_cmd_daemon::DaemonChildGuard,
@@ -141,13 +137,11 @@ fn report_daemon_error_or_exit_code(
     match result {
         Ok(code) => code,
         Err(err) => {
-            // fd 2 is still the pipe write-end (guard is alive), so eprintln! works.
             eprintln!("{}", error_report::render_user_facing_error(&err));
             if let Some(hint) = error_hints::suggest_fix(&err) {
                 eprintln!();
                 eprintln!("{hint}");
             }
-            // Finalize the guard explicitly so stderr.log captures the error above.
             daemon_guard.finalize();
             exit_current_process(1);
         }
@@ -226,61 +220,7 @@ async fn run() -> Result<()> {
         }
     }
 
-    // Auto weave upgrade (if configured via [execution] auto_weave_upgrade = true).
-    // ProjectConfig::load already deep-merges global config, so only fall back to
-    // raw GlobalConfig when no merged config exists at all.
-    // Guard: only run when weave.lock exists (skip non-weave directories).
-    {
-        let has_weave_lock = std::env::current_dir()
-            .map(|cwd| cwd.join("weave.lock").exists())
-            .unwrap_or(false);
-
-        let auto_upgrade = has_weave_lock
-            && should_attempt_auto_weave_upgrade(&command)
-            && std::env::current_dir()
-                .ok()
-                .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
-                .map(|cfg| cfg.execution.auto_weave_upgrade)
-                .unwrap_or_else(|| {
-                    csa_config::GlobalConfig::load()
-                        .map(|g| g.execution.auto_weave_upgrade)
-                        .unwrap_or(false)
-                });
-
-        if auto_upgrade {
-            let mut success = false;
-            let mut delay = std::time::Duration::from_secs(1);
-
-            for attempt in 0..3 {
-                let result = tokio::process::Command::new("weave")
-                    .arg("upgrade")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .await;
-
-                let ok = result.as_ref().map(|s| s.success()).unwrap_or(false);
-                if ok {
-                    success = true;
-                    break;
-                }
-                if attempt < 2 {
-                    tracing::debug!(
-                        "weave upgrade attempt {attempt} failed, retrying in {delay:?}"
-                    );
-                    tokio::time::sleep(delay).await;
-                    delay *= 2;
-                }
-            }
-
-            if !success {
-                tracing::debug!(
-                    "auto weave upgrade failed after 3 attempts (non-fatal). \
-                     Disable with [execution] auto_weave_upgrade = false"
-                );
-            }
-        }
-    }
+    maybe_auto_weave_upgrade(&command).await;
 
     let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
     if !legacy_xdg_paths.is_empty() {
@@ -790,8 +730,9 @@ async fn run() -> Result<()> {
             );
             exit_current_process(exit_code);
         }
-        Commands::Tokuin { cmd } => handle_tokuin(cmd)?,
-        Commands::Xurl { cmd } => handle_xurl(cmd)?,
+        Commands::Tokuin { cmd } => cli::handle_tokuin(cmd)?,
+        Commands::Health(args) => cli::handle_health(args)?,
+        Commands::Xurl { cmd } => cli::handle_xurl(cmd)?,
         Commands::Recall(args) => recall_cmd::handle_recall(args.cmd)?,
         Commands::Hooks { cmd } => hooks_cmd::handle_hooks(cmd)?,
     }

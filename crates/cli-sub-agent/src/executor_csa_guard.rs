@@ -23,6 +23,7 @@ const EXECUTOR_SAFE_CSA_COMMAND_PREFIXES: &[&[&str]] = &[
     &["todo", "find"],
     &["tokuin", "estimate"],
     &["tokuin", "models"],
+    &["health"],
     &["config", "get"],
     &["config", "show"],
 ];
@@ -83,6 +84,7 @@ fn command_prefix(command: &Commands) -> Vec<&'static str> {
         Commands::Tokuin {
             cmd: TokuinCommands::Models,
         } => vec!["tokuin", "models"],
+        Commands::Health(_) => vec!["health"],
         Commands::Hunt(_) => vec!["hunt"],
         Commands::Arch(_) => vec!["arch"],
         Commands::Triage(_) => vec!["triage"],
@@ -177,6 +179,7 @@ mod tests {
             &["tokuin", "estimate"][..],
             &["config", "get"][..],
             &["config", "show"][..],
+            &["health"][..],
         ] {
             assert!(
                 is_safe_prefix(prefix),

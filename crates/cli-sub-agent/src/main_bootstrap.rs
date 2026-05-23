@@ -43,6 +43,56 @@ pub(crate) fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
     }
 }
 
+pub(crate) async fn maybe_auto_weave_upgrade(command: &Commands) {
+    let has_weave_lock = std::env::current_dir()
+        .map(|cwd| cwd.join("weave.lock").exists())
+        .unwrap_or(false);
+
+    let auto_upgrade = has_weave_lock
+        && should_attempt_auto_weave_upgrade(command)
+        && std::env::current_dir()
+            .ok()
+            .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
+            .map(|cfg| cfg.execution.auto_weave_upgrade)
+            .unwrap_or_else(|| {
+                csa_config::GlobalConfig::load()
+                    .map(|g| g.execution.auto_weave_upgrade)
+                    .unwrap_or(false)
+            });
+
+    if auto_upgrade {
+        let mut success = false;
+        let mut delay = std::time::Duration::from_secs(1);
+
+        for attempt in 0..3 {
+            let result = tokio::process::Command::new("weave")
+                .arg("upgrade")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+
+            let ok = result.as_ref().map(|s| s.success()).unwrap_or(false);
+            if ok {
+                success = true;
+                break;
+            }
+            if attempt < 2 {
+                tracing::debug!("weave upgrade attempt {attempt} failed, retrying in {delay:?}");
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+        }
+
+        if !success {
+            tracing::debug!(
+                "auto weave upgrade failed after 3 attempts (non-fatal). \
+                 Disable with [execution] auto_weave_upgrade = false"
+            );
+        }
+    }
+}
+
 pub(crate) fn link_bug_class_pipeline() {
     let _ = crate::bug_class::BugClassCandidate::aggregate_from_review_artifacts(&[]);
     crate::bug_class::link_bug_class_pipeline_symbols();
