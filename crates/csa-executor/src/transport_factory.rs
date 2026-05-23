@@ -15,9 +15,9 @@ pub enum TransportMode {
     Acp,
     OpenaiCompat,
     /// Experimental: tmux-backed interactive transport for claude-code.
-    /// Claude runs inside a detached tmux session; prompt delivery is via
-    /// `tmux load-buffer`/`paste-buffer`; output is read from the JSONL
-    /// conversation log.
+    /// Claude runs inside a detached tmux session; the prompt is written to a
+    /// temp file and tmux receives only a short file-read instruction; output
+    /// is read from the JSONL conversation log.
     Tmux,
 }
 

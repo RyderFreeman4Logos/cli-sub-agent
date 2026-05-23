@@ -14,7 +14,8 @@
 //! 2. Spawn `tmux new-session -d -s csa-<ULID> -- /path/to/claude --dangerously-skip-permissions`
 //!    with `CSA_SESSION_DIR` and `CSA_RESULT_TOML_PATH_CONTRACT` env vars injected
 //! 3. Wait for Claude TUI readiness (poll tmux pane for `❯` prompt)
-//! 4. Send prompt: `tmux load-buffer` → `paste-buffer` → `send-keys Enter`
+//! 4. Write prompt to a temp file, then send a short file-read instruction
+//!    through tmux
 //! 5. Discover new JSONL: diff snapshot to find newly created `.jsonl` file
 //! 6. Tail JSONL until `type=system subtype=turn_duration` marker
 //! 7. Read output: prefer `output/result.toml` (if child wrote it), fall back to JSONL text
@@ -58,10 +59,12 @@ const SESSION_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Kills the tmux session on Drop so no orphan sessions are left behind.
 struct TmuxCleanupGuard {
     session_name: String,
+    prompt_file_path: PathBuf,
 }
 
 impl Drop for TmuxCleanupGuard {
     fn drop(&mut self) {
+        remove_prompt_file(&self.prompt_file_path);
         let _ = Command::new("tmux")
             .args(["kill-session", "-t", &self.session_name])
             .stdout(Stdio::null())
@@ -164,20 +167,68 @@ use jsonl::{validate_jsonl_schema, watch_jsonl_for_turn};
 
 // ── Prompt delivery ───────────────────────────────────────────────────────────
 
-/// Deliver `prompt` to the tmux session via load-buffer / paste-buffer / Enter.
+/// Return the temp-file path used to hand a prompt to Claude Code.
+fn prompt_file_path_for_session(session_name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("csa-prompt-{session_name}.md"))
+}
+
+fn write_prompt_file(prompt_file_path: &Path, prompt: &str) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut file = options
+        .open(prompt_file_path)
+        .with_context(|| format!("creating tmux prompt file {}", prompt_file_path.display()))?;
+    use std::io::Write;
+    file.write_all(prompt.as_bytes())
+        .with_context(|| format!("writing tmux prompt file {}", prompt_file_path.display()))?;
+    Ok(())
+}
+
+fn remove_prompt_file(prompt_file_path: &Path) {
+    if let Err(e) = fs::remove_file(prompt_file_path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            error = %e,
+            path = %prompt_file_path.display(),
+            "tmux transport: failed to remove prompt file"
+        );
+    }
+}
+
+fn prompt_file_instruction(prompt_file_path: &Path) -> String {
+    format!(
+        "Read and execute the prompt in this file: {}\n\
+         Treat the file contents as the full user request, and do not summarize the file first.",
+        prompt_file_path.display()
+    )
+}
+
+/// Deliver `prompt` to the tmux session by writing it to `prompt_file_path`,
+/// then submitting a short instruction that references the file.
 ///
-/// This is safer than `send-keys` for prompts containing special characters,
-/// shell metacharacters, multi-byte UTF-8, or large payloads.
+/// This avoids tmux input-buffer limits and keeps prompt escaping out of the
+/// interactive transport path.
 ///
 /// A delay between paste-buffer and Enter is required because Claude Code's
 /// TUI uses bracketed-paste mode: the paste event must finish processing before
 /// Enter can submit the message.
-async fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
+async fn deliver_prompt(session_name: &str, prompt: &str, prompt_file_path: &Path) -> Result<()> {
+    write_prompt_file(prompt_file_path, prompt)?;
+    let instruction = prompt_file_instruction(prompt_file_path);
+
     // Use a named buffer (session_name) to avoid cross-session races when
     // multiple CSA tmux sessions run concurrently.
     let buffer_name = session_name;
 
-    // load-buffer reads from stdin; pipe the raw prompt text in.
+    // load-buffer reads from stdin; pipe only the short file instruction in.
     let mut load = Command::new("tmux")
         .args(["load-buffer", "-b", buffer_name, "-"])
         .stdin(Stdio::piped())
@@ -190,7 +241,7 @@ async fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
         use std::io::Write;
         let mut stdin = stdin;
         stdin
-            .write_all(prompt.as_bytes())
+            .write_all(instruction.as_bytes())
             .context("writing prompt to tmux load-buffer stdin")?;
     }
     let status = load.wait().context("tmux load-buffer wait")?;
@@ -210,13 +261,7 @@ async fn deliver_prompt(session_name: &str, prompt: &str) -> Result<()> {
     }
 
     // Wait for Claude Code's TUI to finish processing the bracketed paste.
-    // Large prompts (>10K chars) need more time for the TUI to render.
-    let paste_settle = if prompt.len() > 10_000 {
-        Duration::from_millis(1000)
-    } else {
-        Duration::from_millis(200)
-    };
-    sleep(paste_settle).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Send Enter to submit the prompt.
     let status = Command::new("tmux")
@@ -428,6 +473,7 @@ impl TmuxTransport {
         session: Option<&MetaSessionState>,
     ) -> Result<TransportResult> {
         let session_name = Self::session_name();
+        let prompt_file_path = prompt_file_path_for_session(&session_name);
         tracing::debug!(
             session = %session_name,
             work_dir = %work_dir.display(),
@@ -513,21 +559,24 @@ impl TmuxTransport {
         // RAII guard: kills the session when this function exits (normal or panic).
         let _guard = TmuxCleanupGuard {
             session_name: session_name.clone(),
+            prompt_file_path: prompt_file_path.clone(),
         };
 
         Self::wait_for_readiness(&session_name).await?;
         tracing::debug!(session = %session_name, "tmux transport: Claude ready");
 
-        deliver_prompt(&session_name, prompt).await?;
+        deliver_prompt(&session_name, prompt, &prompt_file_path).await?;
         tracing::debug!(
             session = %session_name,
             prompt_len = prompt.len(),
+            prompt_file = %prompt_file_path.display(),
             "tmux transport: prompt delivered"
         );
 
         // JSONL is created after Claude processes the first prompt.
         let (jsonl_path, provider_session_id) =
             discover_new_jsonl(&jsonl_dir, &before_snapshot).await?;
+        remove_prompt_file(&prompt_file_path);
         tracing::debug!(
             jsonl = %jsonl_path.display(),
             session_id = %provider_session_id,

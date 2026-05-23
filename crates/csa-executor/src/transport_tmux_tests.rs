@@ -356,6 +356,78 @@ async fn discover_new_jsonl_times_out_when_no_new_file() {
     );
 }
 
+// ── prompt-file delivery ─────────────────────────────────────────────────
+
+#[test]
+fn prompt_file_path_uses_session_scoped_temp_file() {
+    let path = prompt_file_path_for_session("csa-01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+    assert_eq!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("csa-prompt-csa-01ARZ3NDEKTSV4RRFFQ69G5FAV.md")
+    );
+    assert!(path.starts_with(std::env::temp_dir()));
+}
+
+#[test]
+fn prompt_file_instruction_references_file_without_embedding_prompt() {
+    let tmp = TempDir::new().unwrap();
+    let prompt_file = tmp.path().join("prompt.md");
+    let long_prompt = "x".repeat(64 * 1024);
+
+    let instruction = prompt_file_instruction(&prompt_file);
+
+    assert!(instruction.contains(&prompt_file.display().to_string()));
+    assert!(!instruction.contains(&long_prompt));
+    assert!(
+        instruction.len() < 512,
+        "file instruction should stay short, got {} bytes",
+        instruction.len()
+    );
+}
+
+#[test]
+fn write_prompt_file_persists_full_prompt_once() {
+    let tmp = TempDir::new().unwrap();
+    let prompt_file = tmp.path().join("prompt.md");
+    let prompt = "full prompt\nwith shell chars: $HOME && $(rm -rf nope)\n";
+
+    write_prompt_file(&prompt_file, prompt).unwrap();
+
+    assert_eq!(fs::read_to_string(&prompt_file).unwrap(), prompt);
+    let err = write_prompt_file(&prompt_file, "second write").unwrap_err();
+    assert!(
+        err.to_string().contains("creating tmux prompt file"),
+        "expected create_new failure context, got: {err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn write_prompt_file_uses_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let prompt_file = tmp.path().join("prompt.md");
+
+    write_prompt_file(&prompt_file, "secret prompt").unwrap();
+
+    let mode = fs::metadata(&prompt_file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn remove_prompt_file_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let prompt_file = tmp.path().join("prompt.md");
+    fs::write(&prompt_file, "prompt").unwrap();
+
+    remove_prompt_file(&prompt_file);
+    remove_prompt_file(&prompt_file);
+
+    assert!(!prompt_file.exists());
+}
+
 // ── try_read_contract_result ─────────────────────────────────────────────
 
 #[test]
