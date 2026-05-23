@@ -285,6 +285,12 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: false,
             },
             FailoverPattern {
+                pattern: "api key not found",
+                reason: "API key not found",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
                 pattern: "_apierror: {\"error\":\"invalid api key\"}",
                 reason: "Invalid API key",
                 advance_to_next_model: true,

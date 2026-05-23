@@ -204,6 +204,43 @@ fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
 }
 
 #[test]
+fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
+    let _tool_availability = assume_tier_tools_available();
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_tier(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["gemini-cli", "codex"],
+    );
+    let selection = resolve_review_selection(
+        Some(ToolName::GeminiCli),
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    )
+    .expect("tool+tier should resolve requested review tool");
+
+    assert_eq!(selection.tool, ToolName::GeminiCli);
+    assert_eq!(
+        selection.model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
+    );
+    assert_eq!(
+        selection.tier_filter,
+        Some(crate::tier_model_fallback::TierFilter::All),
+        "explicit review --tool chooses the first attempt but must not whitelist away tier fallback"
+    );
+}
+
+#[test]
 fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
