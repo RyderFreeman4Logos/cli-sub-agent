@@ -29,12 +29,12 @@ pub fn handle_tokuin(cmd: TokuinCommands) -> Result<()> {
 }
 
 fn handle_estimate(file: PathBuf, model: String, json: bool) -> Result<()> {
-    use tokuin::tokenizers::{OpenAITokenizer, Tokenizer};
+    use tokuin::tokenizers::{ConservativeTokenizer, Tokenizer};
 
     let content = std::fs::read_to_string(&file)
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
-    let tokenizer = OpenAITokenizer::new(&model)
+    let tokenizer = ConservativeTokenizer::new(&model)
         .map_err(|e| anyhow::anyhow!("Failed to create tokenizer for model '{model}': {e}"))?;
 
     let tokens = tokenizer

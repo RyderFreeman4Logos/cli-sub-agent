@@ -66,5 +66,5 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/ZhangHanDong/agent-teams-rs.git",
     "https://github.com/Xuanwo/xurl.git",
-    "https://github.com/nooscraft/tokuin.git",
+    "https://github.com/RyderFreeman4Logos/tokuin.git",
 ]
