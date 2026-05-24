@@ -508,6 +508,14 @@ fn write_standalone_consensus_review_artifacts_skips_synthetic_unavailable_carri
             diagnostic: None,
         },
     ];
+    let synthetic_dir = csa_session::get_session_dir(&project, "reviewer-1-unavailable").unwrap();
+    fs::create_dir_all(synthetic_dir.join("output"))
+        .expect("synthetic sidecar output dir should be created");
+    fs::write(
+        synthetic_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("synthetic sidecar findings should be written");
 
     let ctx = MultiReviewerConsensusArtifacts {
         project_root: &project,
@@ -533,7 +541,6 @@ fn write_standalone_consensus_review_artifacts_skips_synthetic_unavailable_carri
     assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
     assert_eq!(meta.verdict, crate::review_consensus::CLEAN);
 
-    let synthetic_dir = csa_session::get_session_dir(&project, "reviewer-1-unavailable").unwrap();
     assert!(!synthetic_dir.join("review_meta.json").exists());
 }
 

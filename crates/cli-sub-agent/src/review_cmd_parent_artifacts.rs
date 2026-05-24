@@ -221,7 +221,9 @@ fn resolve_standalone_consensus_carrier<'a>(
     for outcome in ctx.outcomes {
         let session_dir = csa_session::get_session_dir(ctx.project_root, &outcome.session_id)
             .with_context(|| format!("failed to resolve session dir for {}", outcome.session_id))?;
-        if session_dir.is_dir() {
+        if session_dir.is_dir()
+            && csa_session::load_session(ctx.project_root, &outcome.session_id).is_ok()
+        {
             return Ok(Some((outcome, session_dir)));
         }
     }
