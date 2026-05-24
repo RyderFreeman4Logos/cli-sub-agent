@@ -170,7 +170,7 @@ fn write_multi_reviewer_parent_artifacts_accepts_reviewer_contract_artifact() {
 }
 
 #[test]
-fn write_multi_reviewer_parent_artifacts_empty_findings_override_fail_consensus() {
+fn write_multi_reviewer_parent_artifacts_preserves_has_issues_consensus_with_empty_findings() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
     let session_dir = temp.path().display().to_string();
@@ -237,8 +237,8 @@ fn write_multi_reviewer_parent_artifacts_empty_findings_override_fail_consensus(
             .expect("review-verdict.json should exist"),
     )
     .expect("review verdict should parse");
-    assert_eq!(verdict.decision, ReviewDecision::Pass);
-    assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
     assert!(verdict.severity_counts.values().all(|count| *count == 0));
 
     let findings_toml: FindingsFile = toml::from_str(
@@ -249,7 +249,7 @@ fn write_multi_reviewer_parent_artifacts_empty_findings_override_fail_consensus(
     assert!(
         fs::read_to_string(output_dir.join("summary.md"))
             .expect("summary should exist")
-            .starts_with("Final verdict: CLEAN")
+            .starts_with("Final verdict: HAS_ISSUES")
     );
 
     let written_meta: csa_session::state::ReviewSessionMeta = serde_json::from_str(
@@ -257,9 +257,9 @@ fn write_multi_reviewer_parent_artifacts_empty_findings_override_fail_consensus(
             .expect("review_meta.json should exist"),
     )
     .expect("review meta should parse");
-    assert_eq!(written_meta.decision, ReviewDecision::Pass.as_str());
-    assert_eq!(written_meta.verdict, crate::review_consensus::CLEAN);
-    assert_eq!(written_meta.exit_code, 0);
+    assert_eq!(written_meta.decision, ReviewDecision::Fail.as_str());
+    assert_eq!(written_meta.verdict, crate::review_consensus::HAS_ISSUES);
+    assert_eq!(written_meta.exit_code, 1);
 }
 
 #[test]

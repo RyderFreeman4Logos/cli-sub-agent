@@ -325,7 +325,7 @@ fn parent_artifact_for_decision(
     artifact: &ReviewArtifact,
     parent_decision: ReviewDecision,
 ) -> ReviewArtifact {
-    if !parent_decision.is_clean() {
+    if parent_decision != ReviewDecision::Pass {
         return artifact.clone();
     }
 
@@ -357,6 +357,9 @@ fn parent_review_decision(
         ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain);
     if consensus_decision == ReviewDecision::Pass {
         return ReviewDecision::Pass;
+    }
+    if consensus_decision == ReviewDecision::Fail {
+        return ReviewDecision::Fail;
     }
     if artifact
         .findings
