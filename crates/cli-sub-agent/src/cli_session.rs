@@ -275,6 +275,15 @@ pub enum SessionCommands {
         #[arg(long)]
         memory_warn_mb: Option<u64>,
 
+        /// Print the full stdout.log content instead of the compact result summary.
+        /// Also enabled when CSA_WAIT_VERBOSE=1 is set.
+        #[arg(long)]
+        verbose: bool,
+
+        /// Print the compact result summary as JSON.
+        #[arg(long, conflicts_with = "verbose")]
+        json: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
