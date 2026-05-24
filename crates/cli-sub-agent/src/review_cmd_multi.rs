@@ -8,8 +8,8 @@ use tracing::{error, warn};
 use crate::cli::ReviewArgs;
 use crate::pipeline::resolve_effective_initial_response_timeout_for_tool;
 use crate::review_consensus::{
-    CLEAN, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
-    consensus_verdict, parse_consensus_strategy, resolve_consensus,
+    CLEAN, UNAVAILABLE, agreement_level, build_multi_reviewer_instruction,
+    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, resolve_consensus,
 };
 use crate::review_routing::ReviewRoutingMetadata;
 
@@ -185,19 +185,14 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
 
     let responses: Vec<AgentResponse> = outcomes
         .iter()
-        .map(|o| AgentResponse {
-            agent: format!("reviewer-{}:{}", o.reviewer_index + 1, o.tool.as_str()),
-            content: o.verdict.to_string(),
-            weight: 1.0,
-            timed_out: false,
-        })
+        .map(consensus_response_from_outcome)
         .collect();
 
     let consensus_result = resolve_consensus(consensus_strategy, &responses);
     let all_reviewers_unavailable = !outcomes.is_empty()
         && outcomes
             .iter()
-            .all(|outcome| outcome.verdict == crate::review_consensus::UNAVAILABLE);
+            .all(|outcome| outcome.verdict == UNAVAILABLE);
     let final_verdict = if all_reviewers_unavailable {
         crate::review_consensus::UNAVAILABLE
     } else {
@@ -263,6 +258,19 @@ pub(super) fn warn_if_fast_mode_has_no_codex_reviewer(
         eprintln!(
             "warning: --fast-but-more-cost only affects codex; no codex review attempt is in the resolved candidate set."
         );
+    }
+}
+
+fn consensus_response_from_outcome(outcome: &ReviewerOutcome) -> AgentResponse {
+    AgentResponse {
+        agent: format!(
+            "reviewer-{}:{}",
+            outcome.reviewer_index + 1,
+            outcome.tool.as_str()
+        ),
+        content: outcome.verdict.to_string(),
+        weight: 1.0,
+        timed_out: outcome.verdict == UNAVAILABLE,
     }
 }
 
@@ -360,5 +368,50 @@ fn synthesize_unavailable_outcomes(
             *reviewer_tool,
             format!("reviewer timed out after {}s", timeout.as_secs()),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::review_consensus::HAS_ISSUES;
+    use csa_core::consensus::ConsensusStrategy;
+
+    fn outcome(reviewer_index: usize, verdict: &'static str) -> ReviewerOutcome {
+        ReviewerOutcome {
+            reviewer_index,
+            tool: ToolName::Codex,
+            session_id: format!("01TESTREVIEWER{reviewer_index:012}"),
+            output: verdict.to_string(),
+            exit_code: if verdict == CLEAN { 0 } else { 1 },
+            verdict,
+            diagnostic: None,
+        }
+    }
+
+    #[test]
+    fn unavailable_outcomes_do_not_vote_against_clean_consensus() {
+        let outcomes = vec![outcome(0, UNAVAILABLE), outcome(1, CLEAN)];
+        let responses: Vec<AgentResponse> = outcomes
+            .iter()
+            .map(consensus_response_from_outcome)
+            .collect();
+        let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
+
+        assert_eq!(consensus.decision.as_deref(), Some(CLEAN));
+        assert_eq!(consensus_verdict(&consensus), CLEAN);
+    }
+
+    #[test]
+    fn unavailable_outcomes_do_not_hide_has_issues_consensus() {
+        let outcomes = vec![outcome(0, UNAVAILABLE), outcome(1, HAS_ISSUES)];
+        let responses: Vec<AgentResponse> = outcomes
+            .iter()
+            .map(consensus_response_from_outcome)
+            .collect();
+        let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
+
+        assert_eq!(consensus.decision.as_deref(), Some(HAS_ISSUES));
+        assert_eq!(consensus_verdict(&consensus), HAS_ISSUES);
     }
 }
