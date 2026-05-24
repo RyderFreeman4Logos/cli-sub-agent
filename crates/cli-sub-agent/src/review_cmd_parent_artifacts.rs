@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
 use csa_core::types::ReviewDecision;
-use csa_session::review_artifact::{Finding, ReviewArtifact, Severity};
+use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{
     FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact,
@@ -109,12 +109,13 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     let parent_decision =
         parent_review_decision(&consolidated, final_verdict, all_reviewers_unavailable);
     let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
-    write_consolidated_artifact(&consolidated, &session_dir)?;
-    write_parent_findings_toml(&session_dir, &consolidated)?;
+    let parent_artifact = parent_artifact_for_decision(&consolidated, parent_decision);
+    write_consolidated_artifact(&parent_artifact, &session_dir)?;
+    write_parent_findings_toml(&session_dir, &parent_artifact)?;
     write_parent_review_verdict(
         &session_dir,
         &session_id,
-        &consolidated,
+        &parent_artifact,
         parent_decision,
         &parent_verdict,
     )?;
@@ -318,6 +319,30 @@ fn write_parent_review_verdict(
     );
     write_review_verdict(session_dir, &verdict)
         .context("failed to write parent output/review-verdict.json")
+}
+
+fn parent_artifact_for_decision(
+    artifact: &ReviewArtifact,
+    parent_decision: ReviewDecision,
+) -> ReviewArtifact {
+    if !parent_decision.is_clean() {
+        return artifact.clone();
+    }
+
+    let findings: Vec<Finding> = artifact
+        .findings
+        .iter()
+        .filter(|finding| !is_blocking_severity(&finding.severity))
+        .cloned()
+        .collect();
+    ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: artifact.review_mode.clone(),
+        schema_version: artifact.schema_version.clone(),
+        session_id: artifact.session_id.clone(),
+        timestamp: artifact.timestamp,
+    }
 }
 
 fn parent_review_decision(

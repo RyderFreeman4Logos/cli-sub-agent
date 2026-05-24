@@ -378,6 +378,24 @@ fn write_multi_reviewer_parent_artifacts_preserves_clean_consensus_with_minority
     .expect("review verdict should parse");
     assert_eq!(verdict.decision, ReviewDecision::Pass);
     assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+
+    let parent_findings: FindingsFile = toml::from_str(
+        &fs::read_to_string(temp.path().join("output").join("findings.toml"))
+            .expect("findings.toml should exist"),
+    )
+    .expect("findings.toml should parse");
+    assert!(parent_findings.findings.is_empty());
+
+    let parent_artifact: ReviewArtifact = serde_json::from_str(
+        &fs::read_to_string(
+            temp.path()
+                .join(crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE),
+        )
+        .expect("review-findings-consolidated.json should exist"),
+    )
+    .expect("review-findings-consolidated.json should parse");
+    assert!(parent_artifact.findings.is_empty());
 }
 
 #[test]

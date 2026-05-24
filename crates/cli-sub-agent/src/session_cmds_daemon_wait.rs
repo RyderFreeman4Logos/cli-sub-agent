@@ -1,5 +1,6 @@
 use super::*;
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
 #[path = "session_cmds_daemon_wait_lock.rs"]
 mod lock;
@@ -22,6 +23,7 @@ const SESSION_WAIT_KV_WARM_EXIT_CODE: i32 = 0;
 /// daemon is no longer alive and no result.toml was produced.
 const SESSION_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
 const SESSION_WAIT_MEMORY_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+const WAIT_OUTPUT_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WaitLoopTiming {
@@ -410,8 +412,13 @@ fn stream_wait_output(session_dir: &std::path::Path) -> Result<bool> {
     if !stdout_log.is_file() {
         return Ok(false);
     }
-    let raw = std::fs::read(&stdout_log)?;
-    let Some(rendered) = crate::codex_transcript_filter::render_codex_or_plain_output(&raw) else {
+    let log = read_wait_output_log(&stdout_log)?;
+    if log.truncated {
+        eprintln!(
+            "[csa] stdout.log exceeded {WAIT_OUTPUT_MAX_BYTES} bytes; showing bounded tail output"
+        );
+    }
+    let Some(rendered) = render_wait_output_log(&log.raw, log.truncated) else {
         return Ok(false);
     };
     let mut stdout = std::io::stdout().lock();
@@ -419,6 +426,102 @@ fn stream_wait_output(session_dir: &std::path::Path) -> Result<bool> {
     let bytes = rendered.len() as u64;
     stdout.flush()?;
     Ok(bytes > 0)
+}
+
+struct WaitOutputLog {
+    raw: Vec<u8>,
+    truncated: bool,
+}
+
+fn read_wait_output_log(stdout_log: &Path) -> Result<WaitOutputLog> {
+    let mut file = File::open(stdout_log)?;
+    let len = file.metadata()?.len();
+    if len <= WAIT_OUTPUT_MAX_BYTES {
+        let mut raw = Vec::with_capacity(len as usize);
+        file.read_to_end(&mut raw)?;
+        return Ok(WaitOutputLog {
+            raw,
+            truncated: false,
+        });
+    }
+
+    let start = len - WAIT_OUTPUT_MAX_BYTES;
+    file.seek(SeekFrom::Start(start))?;
+    let mut reader = BufReader::new(file);
+    discard_partial_line_if_needed(&mut reader, stdout_log, start)?;
+    let mut raw = Vec::with_capacity(WAIT_OUTPUT_MAX_BYTES as usize);
+    reader.take(WAIT_OUTPUT_MAX_BYTES).read_to_end(&mut raw)?;
+    Ok(WaitOutputLog {
+        raw,
+        truncated: true,
+    })
+}
+
+fn discard_partial_line_if_needed(
+    reader: &mut BufReader<File>,
+    stdout_log: &Path,
+    start: u64,
+) -> Result<()> {
+    if start == 0 {
+        return Ok(());
+    }
+    let mut boundary = File::open(stdout_log)?;
+    boundary.seek(SeekFrom::Start(start - 1))?;
+    let mut previous = [0_u8; 1];
+    boundary.read_exact(&mut previous)?;
+    if previous[0] == b'\n' {
+        return Ok(());
+    }
+    let mut discarded = Vec::new();
+    reader.read_until(b'\n', &mut discarded)?;
+    Ok(())
+}
+
+fn render_wait_output_log(raw: &[u8], truncated: bool) -> Option<String> {
+    if truncated {
+        let raw_text = String::from_utf8_lossy(raw);
+        return crate::codex_transcript_filter::extract_codex_json_event_text(raw_text.as_ref())
+            .or_else(|| crate::codex_transcript_filter::render_codex_or_plain_output(raw));
+    }
+    crate::codex_transcript_filter::render_codex_or_plain_output(raw)
+}
+
+#[cfg(test)]
+mod wait_output_tests {
+    use super::{WAIT_OUTPUT_MAX_BYTES, read_wait_output_log, render_wait_output_log};
+
+    #[test]
+    fn read_wait_output_log_tails_large_stdout_without_loading_prefix() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let stdout_log = temp.path().join("stdout.log");
+        let prefix = vec![b'a'; WAIT_OUTPUT_MAX_BYTES as usize];
+        let suffix = b"\nfinal visible line\n";
+        let mut content = prefix;
+        content.extend_from_slice(suffix);
+        std::fs::write(&stdout_log, content).expect("stdout log should be written");
+
+        let log = read_wait_output_log(&stdout_log).expect("stdout log should be read");
+
+        assert!(log.truncated);
+        assert!(log.raw.len() <= WAIT_OUTPUT_MAX_BYTES as usize);
+        let rendered = String::from_utf8(log.raw).expect("tail should be valid utf-8");
+        assert_eq!(rendered, "final visible line\n");
+    }
+
+    #[test]
+    fn render_truncated_codex_json_tail_filters_agent_messages() {
+        let raw = [
+            r#"{"type":"item.completed","item":{"type":"tool_result","text":"hidden shell output"}}"#,
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"visible summary"}}"#,
+        ]
+        .join("\n");
+
+        let rendered = render_wait_output_log(raw.as_bytes(), true)
+            .expect("truncated codex transcript should render");
+
+        assert_eq!(rendered, "visible summary");
+        assert!(!rendered.contains("hidden shell output"));
+    }
 }
 
 fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
