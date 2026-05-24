@@ -328,6 +328,11 @@ fn parent_review_decision(
     if all_reviewers_unavailable {
         return ReviewDecision::Unavailable;
     }
+    let consensus_decision =
+        ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain);
+    if consensus_decision == ReviewDecision::Pass {
+        return ReviewDecision::Pass;
+    }
     if artifact
         .findings
         .iter()
@@ -343,7 +348,7 @@ fn parent_review_decision(
     {
         return ReviewDecision::Pass;
     }
-    ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain)
+    consensus_decision
 }
 
 fn is_blocking_severity(severity: &Severity) -> bool {

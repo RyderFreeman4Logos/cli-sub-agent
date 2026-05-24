@@ -1,6 +1,7 @@
 use super::{
     MultiReviewerConsensusArtifacts, parent_consensus_review_meta,
-    write_multi_reviewer_parent_artifacts, write_standalone_consensus_review_artifacts,
+    write_multi_reviewer_consensus_artifacts, write_multi_reviewer_parent_artifacts,
+    write_standalone_consensus_review_artifacts,
 };
 use crate::review_consensus::UNAVAILABLE;
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
@@ -291,6 +292,92 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
     .expect("review verdict should parse");
     assert_eq!(verdict.decision, ReviewDecision::Unavailable);
     assert_eq!(verdict.verdict_legacy, UNAVAILABLE);
+}
+
+#[test]
+fn write_multi_reviewer_parent_artifacts_preserves_clean_consensus_with_minority_findings() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    let reviewer_dir = temp.path().join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let findings = vec![Finding {
+        severity: Severity::High,
+        fid: "FID-1".to_string(),
+        file: "src/lib.rs".to_string(),
+        line: Some(7),
+        rule_id: "rule.review.minority-finding".to_string(),
+        summary: "minority reviewer finding".to_string(),
+        engine: "reviewer".to_string(),
+    }];
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&ReviewArtifact {
+            severity_summary: SeveritySummary::from_findings(&findings),
+            findings,
+            review_mode: Some("diff".to_string()),
+            schema_version: "1.0".to_string(),
+            session_id: "01CHILDSESSION0000000000000".to_string(),
+            timestamp: chrono::Utc::now(),
+        })
+        .expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+
+    let outcomes = vec![
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 0,
+            tool: ToolName::Codex,
+            session_id: "01CHILDSESSION0000000000000".to_string(),
+            output: "Reviewer found an issue.".to_string(),
+            exit_code: 1,
+            verdict: crate::review_consensus::HAS_ISSUES,
+            diagnostic: None,
+        },
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 1,
+            tool: ToolName::GeminiCli,
+            session_id: "01CLEANREVIEWER00000000000".to_string(),
+            output: "Reviewer was clean.".to_string(),
+            exit_code: 0,
+            verdict: crate::review_consensus::CLEAN,
+            diagnostic: None,
+        },
+    ];
+    let ctx = MultiReviewerConsensusArtifacts {
+        project_root: temp.path(),
+        reviewers: 2,
+        outcomes: &outcomes,
+        final_verdict: crate::review_consensus::CLEAN,
+        all_reviewers_unavailable: false,
+        head_sha: "abcdef1234567890",
+        scope: "range:main...HEAD",
+        review_iterations: 2,
+        diff_fingerprint: Some("sha256:test".to_string()),
+    };
+
+    write_multi_reviewer_consensus_artifacts(ctx)
+        .expect("parent consensus artifacts should be produced");
+
+    let written_meta: csa_session::state::ReviewSessionMeta =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("review_meta.json")).unwrap())
+            .expect("review meta should parse");
+    assert_eq!(written_meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(written_meta.verdict, crate::review_consensus::CLEAN);
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
 }
 
 #[test]
