@@ -28,7 +28,6 @@ const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-bot";
-pub(crate) use wait::handle_session_wait_with_memory_warn;
 #[cfg(test)]
 pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
@@ -36,6 +35,7 @@ pub(crate) use wait::{
     handle_session_wait_with_hooks_and_sampler, synthesized_wait_next_step,
     try_acquire_session_wait_lock,
 };
+pub(crate) use wait::{SessionWaitOutputMode, handle_session_wait_with_options};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AttachPrimaryOutput {

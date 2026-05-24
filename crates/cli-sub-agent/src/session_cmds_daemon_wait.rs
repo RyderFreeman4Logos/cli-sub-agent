@@ -1,6 +1,4 @@
 use super::*;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
 #[path = "session_cmds_daemon_wait_lock.rs"]
 mod lock;
@@ -8,9 +6,12 @@ mod lock;
 mod next_step;
 #[path = "session_cmds_daemon_wait_result.rs"]
 mod result_loader;
+#[path = "session_cmds_daemon_wait_summary.rs"]
+mod summary;
 pub(crate) use lock::try_acquire_session_wait_lock;
 pub(crate) use next_step::synthesized_wait_next_step;
 use result_loader::{load_completed_daemon_result_with_fallback, refresh_result_for_wait};
+use summary::emit_wait_terminal_output;
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
@@ -23,7 +24,25 @@ const SESSION_WAIT_KV_WARM_EXIT_CODE: i32 = 0;
 /// daemon is no longer alive and no result.toml was produced.
 const SESSION_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
 const SESSION_WAIT_MEMORY_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
-const WAIT_OUTPUT_MAX_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionWaitOutputMode {
+    CompactText,
+    CompactJson,
+    Verbose,
+}
+
+impl SessionWaitOutputMode {
+    pub(crate) fn from_flags(verbose: bool, json: bool) -> Self {
+        if verbose || std::env::var("CSA_WAIT_VERBOSE").is_ok_and(|value| value == "1") {
+            return Self::Verbose;
+        }
+        if json {
+            return Self::CompactJson;
+        }
+        Self::CompactText
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WaitLoopTiming {
@@ -57,6 +76,12 @@ impl WaitBehavior {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WaitExecutionOptions {
+    behavior: WaitBehavior,
+    output_mode: SessionWaitOutputMode,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WaitReconciliationOutcome {
     pub(crate) result_became_available: bool,
@@ -75,16 +100,34 @@ pub(crate) fn handle_session_wait(
     handle_session_wait_with_memory_warn(session, cd, wait_timeout_secs, None)
 }
 
+#[cfg(test)]
 pub(crate) fn handle_session_wait_with_memory_warn(
     session: String,
     cd: Option<String>,
     wait_timeout_secs: u64,
     memory_warn_mb: Option<u64>,
 ) -> Result<i32> {
-    handle_session_wait_with_hooks(
+    handle_session_wait_with_options(
+        session,
+        cd,
+        wait_timeout_secs,
+        memory_warn_mb,
+        SessionWaitOutputMode::from_flags(false, false),
+    )
+}
+
+pub(crate) fn handle_session_wait_with_options(
+    session: String,
+    cd: Option<String>,
+    wait_timeout_secs: u64,
+    memory_warn_mb: Option<u64>,
+    output_mode: SessionWaitOutputMode,
+) -> Result<i32> {
+    handle_session_wait_with_hooks_output_mode(
         session,
         cd,
         WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
+        output_mode,
         |project_root, session_id, trigger| {
             let reconciled = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
                 project_root,
@@ -100,10 +143,33 @@ pub(crate) fn handle_session_wait_with_memory_warn(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn handle_session_wait_with_hooks<R, E>(
     session: String,
     cd: Option<String>,
     wait_behavior: WaitBehavior,
+    reconcile_dead_active_session: R,
+    emit_completion_signal: E,
+) -> Result<i32>
+where
+    R: for<'a, 'b, 'c> FnMut(&'a Path, &'b str, &'c str) -> Result<WaitReconciliationOutcome>,
+    E: for<'a, 'b> FnMut(&'a str, &'b str, i32, bool, bool),
+{
+    handle_session_wait_with_hooks_output_mode(
+        session,
+        cd,
+        wait_behavior,
+        SessionWaitOutputMode::from_flags(false, false),
+        reconcile_dead_active_session,
+        emit_completion_signal,
+    )
+}
+
+fn handle_session_wait_with_hooks_output_mode<R, E>(
+    session: String,
+    cd: Option<String>,
+    wait_behavior: WaitBehavior,
+    output_mode: SessionWaitOutputMode,
     mut reconcile_dead_active_session: R,
     mut emit_completion_signal: E,
 ) -> Result<i32>
@@ -112,10 +178,13 @@ where
     E: for<'a, 'b> FnMut(&'a str, &'b str, i32, bool, bool),
 {
     let mut cached_memory_sampler: Option<csa_session::SessionTreeMemorySampler> = None;
-    handle_session_wait_with_hooks_and_sampler(
+    handle_session_wait_with_hooks_and_sampler_output_mode(
         session,
         cd,
-        wait_behavior,
+        WaitExecutionOptions {
+            behavior: wait_behavior,
+            output_mode,
+        },
         &mut reconcile_dead_active_session,
         &mut emit_completion_signal,
         |project_root, session_id| {
@@ -134,10 +203,40 @@ where
     )
 }
 
+#[cfg(test)]
 pub(crate) fn handle_session_wait_with_hooks_and_sampler<R, E, S, M>(
     session: String,
     cd: Option<String>,
     wait_behavior: WaitBehavior,
+    reconcile_dead_active_session: R,
+    emit_completion_signal: E,
+    sample_session_tree_rss_mb: S,
+    emit_memory_warn_marker: M,
+) -> Result<i32>
+where
+    R: FnMut(&Path, &str, &str) -> Result<WaitReconciliationOutcome>,
+    E: FnMut(&str, &str, i32, bool, bool),
+    S: FnMut(&Path, &str) -> std::io::Result<u64>,
+    M: FnMut(&str, u64, u64),
+{
+    handle_session_wait_with_hooks_and_sampler_output_mode(
+        session,
+        cd,
+        WaitExecutionOptions {
+            behavior: wait_behavior,
+            output_mode: SessionWaitOutputMode::from_flags(false, false),
+        },
+        reconcile_dead_active_session,
+        emit_completion_signal,
+        sample_session_tree_rss_mb,
+        emit_memory_warn_marker,
+    )
+}
+
+fn handle_session_wait_with_hooks_and_sampler_output_mode<R, E, S, M>(
+    session: String,
+    cd: Option<String>,
+    wait_options: WaitExecutionOptions,
     mut reconcile_dead_active_session: R,
     mut emit_completion_signal: E,
     mut sample_session_tree_rss_mb: S,
@@ -172,9 +271,12 @@ where
     let is_cross_project = resolved.foreign_project_root.is_some();
 
     let start = std::time::Instant::now();
-    let memory_warn_mb = wait_behavior.memory_warn_mb.filter(|limit| *limit > 0);
+    let memory_warn_mb = wait_options
+        .behavior
+        .memory_warn_mb
+        .filter(|limit| *limit > 0);
     let mut next_memory_sample_at =
-        memory_warn_mb.map(|_| start + wait_behavior.timing.memory_sample_interval);
+        memory_warn_mb.map(|_| start + wait_options.behavior.timing.memory_sample_interval);
 
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
@@ -224,7 +326,12 @@ where
                     )?;
                 }
             }
-            let streamed_output = stream_wait_output(&session_dir)?;
+            let streamed_output = emit_wait_terminal_output(
+                &session_dir,
+                &resolved.session_id,
+                loaded_result.as_ref(),
+                wait_options.output_mode,
+            )?;
             emit_wait_next_step_if_needed(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, loaded_result.as_ref());
@@ -245,7 +352,12 @@ where
             &session_dir,
             is_cross_project,
         )? {
-            let streamed_output = stream_wait_output(&session_dir)?;
+            let streamed_output = emit_wait_terminal_output(
+                &session_dir,
+                &resolved.session_id,
+                Some(&result),
+                wait_options.output_mode,
+            )?;
             emit_wait_next_step_if_needed(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
@@ -271,7 +383,12 @@ where
                 is_cross_project,
             )?
         {
-            let streamed_output = stream_wait_output(&session_dir)?;
+            let streamed_output = emit_wait_terminal_output(
+                &session_dir,
+                &resolved.session_id,
+                Some(&result),
+                wait_options.output_mode,
+            )?;
             emit_wait_next_step_if_needed(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
@@ -299,7 +416,12 @@ where
                 &session_dir,
                 is_cross_project,
             )? {
-                let streamed_output = stream_wait_output(&session_dir)?;
+                let streamed_output = emit_wait_terminal_output(
+                    &session_dir,
+                    &resolved.session_id,
+                    Some(&result),
+                    wait_options.output_mode,
+                )?;
                 emit_wait_next_step_if_needed(&session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
@@ -340,7 +462,8 @@ where
                         return Ok(SESSION_WAIT_MEMORY_WARN_EXIT_CODE);
                     }
                     next_memory_sample_at = Some(
-                        std::time::Instant::now() + wait_behavior.timing.memory_sample_interval,
+                        std::time::Instant::now()
+                            + wait_options.behavior.timing.memory_sample_interval,
                     );
                 }
                 Err(err) => {
@@ -351,14 +474,15 @@ where
                     );
                     next_memory_sample_at = (err.kind() != std::io::ErrorKind::Unsupported)
                         .then_some(
-                            std::time::Instant::now() + wait_behavior.timing.memory_sample_interval,
+                            std::time::Instant::now()
+                                + wait_options.behavior.timing.memory_sample_interval,
                         );
                 }
             }
         }
 
         let elapsed = start.elapsed().as_secs();
-        if elapsed >= wait_behavior.wait_timeout_secs {
+        if elapsed >= wait_options.behavior.wait_timeout_secs {
             let cd_arg = cd
                 .as_ref()
                 .map(|path| format!(" --cd '{}'", path))
@@ -369,7 +493,7 @@ where
                 // KV-warm exit: session still alive at the wait cap. See #1439.
                 eprintln!(
                     "Session {} still running after {}s wait cap; returning so caller can warm its KV cache before re-waiting.",
-                    resolved.session_id, wait_behavior.wait_timeout_secs,
+                    resolved.session_id, wait_options.behavior.wait_timeout_secs,
                 );
                 eprintln!(
                     "<!-- CSA:SESSION_WAIT_KV_WARM session={} status=alive elapsed={}s action=re-wait cmd=\"csa session wait --session {}{}\" -->",
@@ -394,7 +518,7 @@ where
             // Defensive: daemon gone with no result.toml (rare; earlier loop branches usually exit-1 first).
             eprintln!(
                 "Timeout: session {} did not complete within {}s and no live daemon process remains.",
-                resolved.session_id, wait_behavior.wait_timeout_secs,
+                resolved.session_id, wait_options.behavior.wait_timeout_secs,
             );
             eprintln!(
                 "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s status=dead cmd=\"csa session result --session {}{}\" -->",
@@ -403,127 +527,9 @@ where
             return Ok(SESSION_WAIT_TIMEOUT_EXIT_CODE);
         }
 
-        std::thread::sleep(wait_behavior.timing.poll_interval);
+        std::thread::sleep(wait_options.behavior.timing.poll_interval);
     }
 }
-
-fn stream_wait_output(session_dir: &std::path::Path) -> Result<bool> {
-    let stdout_log = session_dir.join("stdout.log");
-    if !stdout_log.is_file() {
-        return Ok(false);
-    }
-    let log = read_wait_output_log(&stdout_log)?;
-    if log.truncated {
-        eprintln!(
-            "[csa] stdout.log exceeded {WAIT_OUTPUT_MAX_BYTES} bytes; showing bounded tail output"
-        );
-    }
-    let Some(rendered) = render_wait_output_log(&log.raw, log.truncated) else {
-        return Ok(false);
-    };
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(rendered.as_bytes())?;
-    let bytes = rendered.len() as u64;
-    stdout.flush()?;
-    Ok(bytes > 0)
-}
-
-struct WaitOutputLog {
-    raw: Vec<u8>,
-    truncated: bool,
-}
-
-fn read_wait_output_log(stdout_log: &Path) -> Result<WaitOutputLog> {
-    let mut file = File::open(stdout_log)?;
-    let len = file.metadata()?.len();
-    if len <= WAIT_OUTPUT_MAX_BYTES {
-        let mut raw = Vec::with_capacity(len as usize);
-        file.read_to_end(&mut raw)?;
-        return Ok(WaitOutputLog {
-            raw,
-            truncated: false,
-        });
-    }
-
-    let start = len - WAIT_OUTPUT_MAX_BYTES;
-    file.seek(SeekFrom::Start(start))?;
-    let mut reader = BufReader::new(file);
-    discard_partial_line_if_needed(&mut reader, stdout_log, start)?;
-    let mut raw = Vec::with_capacity(WAIT_OUTPUT_MAX_BYTES as usize);
-    reader.take(WAIT_OUTPUT_MAX_BYTES).read_to_end(&mut raw)?;
-    Ok(WaitOutputLog {
-        raw,
-        truncated: true,
-    })
-}
-
-fn discard_partial_line_if_needed(
-    reader: &mut BufReader<File>,
-    stdout_log: &Path,
-    start: u64,
-) -> Result<()> {
-    if start == 0 {
-        return Ok(());
-    }
-    let mut boundary = File::open(stdout_log)?;
-    boundary.seek(SeekFrom::Start(start - 1))?;
-    let mut previous = [0_u8; 1];
-    boundary.read_exact(&mut previous)?;
-    if previous[0] == b'\n' {
-        return Ok(());
-    }
-    let mut discarded = Vec::new();
-    reader.read_until(b'\n', &mut discarded)?;
-    Ok(())
-}
-
-fn render_wait_output_log(raw: &[u8], truncated: bool) -> Option<String> {
-    if truncated {
-        let raw_text = String::from_utf8_lossy(raw);
-        return crate::codex_transcript_filter::extract_codex_json_event_text(raw_text.as_ref())
-            .or_else(|| crate::codex_transcript_filter::render_codex_or_plain_output(raw));
-    }
-    crate::codex_transcript_filter::render_codex_or_plain_output(raw)
-}
-
-#[cfg(test)]
-mod wait_output_tests {
-    use super::{WAIT_OUTPUT_MAX_BYTES, read_wait_output_log, render_wait_output_log};
-
-    #[test]
-    fn read_wait_output_log_tails_large_stdout_without_loading_prefix() {
-        let temp = tempfile::tempdir().expect("tempdir should be created");
-        let stdout_log = temp.path().join("stdout.log");
-        let prefix = vec![b'a'; WAIT_OUTPUT_MAX_BYTES as usize];
-        let suffix = b"\nfinal visible line\n";
-        let mut content = prefix;
-        content.extend_from_slice(suffix);
-        std::fs::write(&stdout_log, content).expect("stdout log should be written");
-
-        let log = read_wait_output_log(&stdout_log).expect("stdout log should be read");
-
-        assert!(log.truncated);
-        assert!(log.raw.len() <= WAIT_OUTPUT_MAX_BYTES as usize);
-        let rendered = String::from_utf8(log.raw).expect("tail should be valid utf-8");
-        assert_eq!(rendered, "final visible line\n");
-    }
-
-    #[test]
-    fn render_truncated_codex_json_tail_filters_agent_messages() {
-        let raw = [
-            r#"{"type":"item.completed","item":{"type":"tool_result","text":"hidden shell output"}}"#,
-            r#"{"type":"item.completed","item":{"type":"agent_message","text":"visible summary"}}"#,
-        ]
-        .join("\n");
-
-        let rendered = render_wait_output_log(raw.as_bytes(), true)
-            .expect("truncated codex transcript should render");
-
-        assert_eq!(rendered, "visible summary");
-        assert!(!rendered.contains("hidden shell output"));
-    }
-}
-
 fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
     if let Some(directive) = synthesized_wait_next_step(session_dir)? {
         println!("{directive}");
@@ -569,13 +575,15 @@ fn emit_wait_completion_signal(
     status: &str,
     exit_code: i32,
     synthetic: bool,
-    _mirror_to_stdout: bool,
+    mirror_to_stdout: bool,
 ) {
     let signal = format!(
         "<!-- CSA:SESSION_WAIT_COMPLETED session={} status={} exit={} synthetic={} -->",
         session_id, status, exit_code, synthetic
     );
-    println!("{signal}");
+    if mirror_to_stdout {
+        println!("{signal}");
+    }
     eprintln!("{signal}");
     eprintln!(
         "<!-- CSA:CALLER_HINT action=\"next_session\" \

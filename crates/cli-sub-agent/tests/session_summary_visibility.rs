@@ -98,10 +98,12 @@ fn assert_subcommand_surfaces_summary_for_session(
         .expect("run csa session command");
 
     assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
     assert!(
-        stderr.contains(PRE_EXEC_SUMMARY),
-        "stderr should surface result.toml summary, got: {stderr}"
+        combined.contains(PRE_EXEC_SUMMARY),
+        "session command should surface result.toml summary, got stdout={stdout} stderr={stderr}"
     );
 }
 
@@ -130,6 +132,139 @@ fn session_wait_surfaces_result_summary_when_only_output_log_has_content() {
     .expect("write output log");
 
     assert_subcommand_surfaces_summary_for_session(tmp.path(), &project, "wait", &session_id);
+}
+
+#[test]
+#[serial]
+fn session_wait_default_bounds_output_and_hides_stdout_log() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), "wait-bounded-output");
+    std::fs::write(
+        session_dir.join("stdout.log"),
+        format!("verbose-only {}\n", "x".repeat(10_000)),
+    )
+    .expect("write large stdout log");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "wait",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session wait");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let total_len = output.stdout.len() + output.stderr.len();
+    assert!(
+        total_len <= 2048,
+        "wait output should be bounded to 2KB, got {total_len} bytes: stdout={stdout} stderr={stderr}"
+    );
+    assert!(stdout.contains("Session:"));
+    assert!(stdout.contains("Status: failure"));
+    assert!(stdout.contains("Exit code: 1"));
+    assert!(stdout.contains("Tool: codex"));
+    assert!(stdout.contains(PRE_EXEC_SUMMARY));
+    assert!(!stdout.contains("verbose-only"));
+}
+
+#[test]
+#[serial]
+fn session_wait_verbose_streams_stdout_log() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), "wait-verbose-output");
+    std::fs::write(session_dir.join("stdout.log"), "verbose visible\n").expect("write stdout log");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "wait",
+            "--verbose",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session wait --verbose");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("verbose visible"),
+        "verbose wait should stream stdout.log, got: {stdout}"
+    );
+}
+
+#[test]
+#[serial]
+fn session_wait_env_verbose_streams_stdout_log() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), "wait-env-verbose-output");
+    std::fs::write(session_dir.join("stdout.log"), "env verbose visible\n")
+        .expect("write stdout log");
+    let _verbose_guard = EnvVarGuard::set("CSA_WAIT_VERBOSE", "1");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "wait",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session wait with env verbose");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("env verbose visible"),
+        "CSA_WAIT_VERBOSE=1 should stream stdout.log, got: {stdout}"
+    );
+}
+
+#[test]
+#[serial]
+fn session_wait_json_outputs_parseable_summary() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, _) = create_empty_output_failure_session(tmp.path(), "wait-json");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "wait",
+            "--json",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session wait --json");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let summary: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|err| panic!("stdout should be JSON: {err}; stdout={stdout}"));
+    assert_eq!(summary["session_id"], session_id);
+    assert_eq!(summary["status"], "failure");
+    assert_eq!(summary["exit_code"], 1);
+    assert_eq!(summary["tool"], "codex");
+    assert_eq!(summary["summary"], PRE_EXEC_SUMMARY);
 }
 
 #[test]

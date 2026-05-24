@@ -155,17 +155,21 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             session_id,
             session,
             memory_warn_mb,
+            verbose,
+            json,
             cd,
         } => {
             let sid = resolve_session_id(session_id, session)?;
             let wait_timeout = resolve_daemon_wait_timeout(cd.as_deref());
             let resolved_memory_warn_mb =
                 resolve_session_wait_memory_warn_mb(memory_warn_mb, cd.as_deref());
-            let exit_code = session_cmds::handle_session_wait_with_memory_warn(
+            let output_mode = session_cmds::SessionWaitOutputMode::from_flags(verbose, json);
+            let exit_code = session_cmds::handle_session_wait_with_options(
                 sid,
                 cd,
                 wait_timeout,
                 resolved_memory_warn_mb,
+                output_mode,
             )?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
