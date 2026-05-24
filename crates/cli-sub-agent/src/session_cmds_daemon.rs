@@ -6,7 +6,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use csa_session::state::ReviewSessionMeta;
 use csa_session::{get_session_dir, load_output_index};
 use serde::{Deserialize, Serialize};
 

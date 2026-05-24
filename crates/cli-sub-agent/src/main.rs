@@ -11,6 +11,7 @@ mod caller_hints_tests;
 mod checklist_cmd;
 mod claude_sub_agent_cmd;
 mod cli;
+mod codex_transcript_filter;
 mod config_cmds;
 mod debate_cmd;
 mod debate_cmd_output;

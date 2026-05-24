@@ -1,7 +1,15 @@
 use super::*;
-use std::fs;
-use std::io::{Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::io::Write;
+
+#[path = "session_cmds_daemon_wait_lock.rs"]
+mod lock;
+#[path = "session_cmds_daemon_wait_next_step.rs"]
+mod next_step;
+#[path = "session_cmds_daemon_wait_result.rs"]
+mod result_loader;
+pub(crate) use lock::try_acquire_session_wait_lock;
+pub(crate) use next_step::synthesized_wait_next_step;
+use result_loader::{load_completed_daemon_result_with_fallback, refresh_result_for_wait};
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
@@ -51,133 +59,6 @@ impl WaitBehavior {
 pub(crate) struct WaitReconciliationOutcome {
     pub(crate) result_became_available: bool,
     pub(crate) synthetic: bool,
-}
-
-pub(crate) struct SessionWaitLock {
-    file: std::fs::File,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-struct SessionWaitLockDiagnostic {
-    pid: u32,
-}
-
-impl Drop for SessionWaitLock {
-    fn drop(&mut self) {
-        // SAFETY: `self.file` owns a valid fd for the lock file.
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
-    }
-}
-
-pub(crate) fn try_acquire_session_wait_lock(session_dir: &Path) -> Result<Option<SessionWaitLock>> {
-    let lock_path = session_dir.join(".wait.lock");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
-
-    if try_flock_session_wait_file(&file)? {
-        write_session_wait_lock_diagnostic(&mut file)?;
-        return Ok(Some(SessionWaitLock { file }));
-    }
-
-    if lock_file_has_dead_wait_pid(&lock_path)?
-        && let Some(lock) = recover_stale_session_wait_lock(&lock_path)?
-    {
-        return Ok(Some(lock));
-    }
-
-    Ok(None)
-}
-
-fn try_flock_session_wait_file(file: &std::fs::File) -> Result<bool> {
-    // SAFETY: `file` owns a valid fd and `LOCK_EX | LOCK_NB` is a standard
-    // non-blocking advisory exclusive lock request.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc == 0 {
-        return Ok(true);
-    }
-
-    let err = std::io::Error::last_os_error();
-    if matches!(
-        err.raw_os_error(),
-        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-    ) {
-        return Ok(false);
-    }
-
-    Err(err.into())
-}
-
-fn write_session_wait_lock_diagnostic(file: &mut std::fs::File) -> Result<()> {
-    let diagnostic = SessionWaitLockDiagnostic {
-        pid: std::process::id(),
-    };
-    let json = serde_json::to_string(&diagnostic)?;
-
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(json.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.flush()?;
-    Ok(())
-}
-
-fn lock_file_has_dead_wait_pid(lock_path: &Path) -> Result<bool> {
-    let contents = match fs::read_to_string(lock_path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => return Err(err.into()),
-    };
-    let Ok(diagnostic) = serde_json::from_str::<SessionWaitLockDiagnostic>(&contents) else {
-        return Ok(false);
-    };
-
-    Ok(!is_session_wait_lock_pid_alive(diagnostic.pid))
-}
-
-fn is_session_wait_lock_pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-
-    // SAFETY: kill(pid, 0) is a standard POSIX liveness probe and does not send
-    // a signal. EPERM still means a process exists but is not signalable by us.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return true;
-    }
-
-    !matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(code) if code == libc::ESRCH
-    )
-}
-
-fn recover_stale_session_wait_lock(lock_path: &Path) -> Result<Option<SessionWaitLock>> {
-    match fs::remove_file(lock_path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err.into()),
-    }
-
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_path)?;
-
-    if !try_flock_session_wait_file(&file)? {
-        return Ok(None);
-    }
-
-    write_session_wait_lock_diagnostic(&mut file)?;
-    Ok(Some(SessionWaitLock { file }))
 }
 
 /// Wait for a daemon session to reach a terminal result and daemon exit.
@@ -529,71 +410,15 @@ fn stream_wait_output(session_dir: &std::path::Path) -> Result<bool> {
     if !stdout_log.is_file() {
         return Ok(false);
     }
-
-    let mut file = std::fs::File::open(&stdout_log)?;
+    let raw = std::fs::read(&stdout_log)?;
+    let Some(rendered) = crate::codex_transcript_filter::render_codex_or_plain_output(&raw) else {
+        return Ok(false);
+    };
     let mut stdout = std::io::stdout().lock();
-    let bytes = std::io::copy(&mut file, &mut stdout)?;
+    stdout.write_all(rendered.as_bytes())?;
+    let bytes = rendered.len() as u64;
     stdout.flush()?;
     Ok(bytes > 0)
-}
-
-pub(crate) fn synthesized_wait_next_step(session_dir: &Path) -> Result<Option<String>> {
-    let stdout_path = session_dir.join("stdout.log");
-    if let Ok(stdout) = fs::read_to_string(&stdout_path)
-        && csa_hooks::parse_next_step_directive(&stdout).is_some()
-    {
-        return Ok(None);
-    }
-
-    let unpushed_commits_path = session_dir.join("output").join("unpushed_commits.json");
-    if unpushed_commits_path.is_file() {
-        match fs::read_to_string(&unpushed_commits_path) {
-            Ok(contents) => {
-                match serde_json::from_str::<UnpushedCommitsRecoveryPacket>(&contents) {
-                    Ok(recovery) if !recovery.recovery_command.trim().is_empty() => {
-                        return Ok(Some(csa_hooks::format_next_step_directive(
-                            &recovery.recovery_command,
-                            true,
-                        )));
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::warn!(
-                            sidecar_path = %unpushed_commits_path.display(),
-                            error = %err,
-                            "Ignoring malformed unpushed commit recovery sidecar while synthesizing wait next-step"
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                tracing::debug!(
-                    sidecar_path = %unpushed_commits_path.display(),
-                    error = %err,
-                    "Ignoring unreadable unpushed commit recovery sidecar while synthesizing wait next-step"
-                );
-            }
-        }
-    }
-
-    let review_meta_path = session_dir.join("review_meta.json");
-    if !review_meta_path.is_file() {
-        return Ok(None);
-    }
-
-    let review_meta: ReviewSessionMeta =
-        serde_json::from_str(&fs::read_to_string(review_meta_path)?)?;
-    if review_meta.decision != "pass" {
-        return Ok(None);
-    }
-    if !(review_meta.scope.starts_with("base:") || review_meta.scope.starts_with("range:")) {
-        return Ok(None);
-    }
-
-    Ok(Some(csa_hooks::format_next_step_directive(
-        POST_REVIEW_PR_BOT_CMD,
-        true,
-    )))
 }
 
 fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
@@ -634,135 +459,6 @@ fn terminal_result_wait_exit_code(status: &str, exit_code: i32) -> i32 {
     } else {
         SESSION_WAIT_FAILURE_EXIT_CODE
     }
-}
-
-fn load_completed_daemon_result(
-    project_root: &std::path::Path,
-    session_id: &str,
-    session_dir: &std::path::Path,
-) -> Result<Option<csa_session::SessionResult>> {
-    let daemon_alive_at_refresh_start = session_has_terminal_process(session_dir);
-    let result =
-        match crate::session_observability::refresh_and_repair_result(project_root, session_id) {
-            Ok(Some(result)) => result,
-            Ok(None) => return Ok(None),
-            Err(err) if daemon_alive_at_refresh_start => {
-                tracing::debug!(
-                    session_id,
-                    error = %err,
-                    "Ignoring transient result refresh failure while daemon is still alive"
-                );
-                return Ok(None);
-            }
-            Err(err) => return Err(err),
-        };
-
-    if session_has_terminal_process(session_dir) {
-        return Ok(None);
-    }
-    Ok(Some(result))
-}
-
-/// Refresh result via session_dir for cross-project sessions or via project_root otherwise.
-fn refresh_result_for_wait(
-    project_root: &std::path::Path,
-    session_id: &str,
-    session_dir: &std::path::Path,
-    is_cross_project: bool,
-) -> Result<Option<csa_session::SessionResult>> {
-    if is_cross_project {
-        crate::session_observability::refresh_and_repair_result_from_dir(session_dir)
-    } else {
-        crate::session_observability::refresh_and_repair_result(project_root, session_id)
-    }
-}
-
-/// Load completed daemon result, adapting for cross-project sessions.
-fn load_completed_daemon_result_adaptive(
-    project_root: &std::path::Path,
-    session_id: &str,
-    session_dir: &std::path::Path,
-    is_cross_project: bool,
-) -> Result<Option<csa_session::SessionResult>> {
-    if is_cross_project {
-        let daemon_alive_at_refresh_start = session_has_terminal_process(session_dir);
-        let result = match crate::session_observability::refresh_and_repair_result_from_dir(
-            session_dir,
-        ) {
-            Ok(Some(result)) => result,
-            Ok(None) => return Ok(None),
-            Err(err) if daemon_alive_at_refresh_start => {
-                tracing::debug!(
-                    session_id,
-                    error = %err,
-                    "Ignoring transient result refresh failure (cross-project) while daemon is still alive"
-                );
-                return Ok(None);
-            }
-            Err(err) => return Err(err),
-        };
-        if session_has_terminal_process(session_dir) {
-            return Ok(None);
-        }
-        Ok(Some(result))
-    } else {
-        load_completed_daemon_result(project_root, session_id, session_dir)
-    }
-}
-
-/// Check for result.toml in the output/ subdirectory as fallback completion detection.
-/// This handles cases where the session completed and wrote output/result.toml but
-/// the main result.toml wasn't created (e.g., when state.toml turn_count stays 0).
-fn load_output_result_fallback(
-    session_dir: &std::path::Path,
-) -> Result<Option<csa_session::SessionResult>> {
-    let output_result_path = session_dir
-        .join("output")
-        .join(csa_session::result::RESULT_FILE_NAME);
-    if !output_result_path.is_file() {
-        return Ok(None);
-    }
-
-    tracing::debug!(
-        path = %output_result_path.display(),
-        "Found output/result.toml as fallback completion signal"
-    );
-
-    let contents = fs::read_to_string(&output_result_path)?;
-    let result: csa_session::SessionResult = toml::from_str(&contents)?;
-    Ok(Some(result))
-}
-
-/// Enhanced version of load_completed_daemon_result_with_fallback that includes
-/// fallback check for output/result.toml when main result.toml doesn't exist.
-fn load_completed_daemon_result_with_fallback(
-    project_root: &std::path::Path,
-    session_id: &str,
-    session_dir: &std::path::Path,
-    is_cross_project: bool,
-) -> Result<Option<csa_session::SessionResult>> {
-    // First try the normal result loading path
-    if let Some(result) = load_completed_daemon_result_adaptive(
-        project_root,
-        session_id,
-        session_dir,
-        is_cross_project,
-    )? {
-        return Ok(Some(result));
-    }
-
-    // If no main result found and daemon is not alive, check output/result.toml as fallback
-    if !session_has_terminal_process(session_dir)
-        && let Some(output_result) = load_output_result_fallback(session_dir)?
-    {
-        tracing::info!(
-            session_id,
-            "Session completion detected via output/result.toml fallback"
-        );
-        return Ok(Some(output_result));
-    }
-
-    Ok(None)
 }
 
 fn emit_wait_completion_signal(
