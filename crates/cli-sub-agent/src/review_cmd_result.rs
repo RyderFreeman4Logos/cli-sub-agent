@@ -256,7 +256,6 @@ fn tool_unavailable_failure_reason(
         result.primary_failure.as_deref(),
         Some(result.execution.execution.summary.as_str()),
         Some(result.execution.execution.stderr_output.as_str()),
-        Some(result.execution.execution.output.as_str()),
         result.status_reason.as_deref(),
     ];
 
@@ -481,6 +480,23 @@ details: [{"reason":"API_KEY_INVALID","domain":"googleapis.com"}]"#
         assert_eq!(resolved.verdict, UNAVAILABLE);
         assert_eq!(resolved.effective_exit_code, 1);
         assert!(resolved.sanitized.contains("Review unavailable:"));
+    }
+
+    #[test]
+    fn build_reviewer_outcome_does_not_mark_review_prose_quota_mentions_unavailable() {
+        let reviewer = build_reviewer_outcome(
+            0,
+            ToolName::Codex,
+            &outcome(
+                "Substantive review finding: quota handling drops errors but no explicit verdict.",
+                1,
+            ),
+        )
+        .expect("reviewer outcome");
+
+        assert_ne!(reviewer.verdict, UNAVAILABLE);
+        assert!(!reviewer.output.contains("Review unavailable:"));
+        assert!(reviewer.diagnostic.is_none());
     }
 
     #[test]

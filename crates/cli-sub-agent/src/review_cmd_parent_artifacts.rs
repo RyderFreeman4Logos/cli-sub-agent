@@ -393,9 +393,6 @@ fn parent_review_decision(
     }
     let consensus_decision =
         ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain);
-    if consensus_decision == ReviewDecision::Pass {
-        return ReviewDecision::Pass;
-    }
     if consensus_decision == ReviewDecision::Fail {
         return ReviewDecision::Fail;
     }
@@ -405,6 +402,9 @@ fn parent_review_decision(
         .any(|finding| is_blocking_severity(&finding.severity))
     {
         return ReviewDecision::Fail;
+    }
+    if consensus_decision == ReviewDecision::Pass {
+        return ReviewDecision::Pass;
     }
     if artifact.findings.is_empty()
         || artifact

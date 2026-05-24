@@ -108,6 +108,80 @@ fn write_multi_reviewer_parent_artifacts_writes_output_sidecars() {
 }
 
 #[test]
+fn write_multi_reviewer_parent_artifacts_preserves_blocking_findings_on_clean_consensus() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    let reviewer_dir = temp.path().join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let findings = vec![Finding {
+        severity: Severity::High,
+        fid: "CLEAN-BLOCKING-FID".to_string(),
+        file: "src/lib.rs".to_string(),
+        line: Some(13),
+        rule_id: "rule.review.clean-consensus-blocking".to_string(),
+        summary: "blocking finding must not disappear".to_string(),
+        engine: "reviewer".to_string(),
+    }];
+    let artifact = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: "01CHILDSESSION0000000000000".to_string(),
+        timestamp: chrono::Utc::now(),
+    };
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+
+    let outcomes = vec![super::super::output::ReviewerOutcome {
+        reviewer_index: 0,
+        tool: ToolName::Codex,
+        session_id: "01CHILDSESSION0000000000000".to_string(),
+        output: "Reviewer reported a blocking artifact.".to_string(),
+        exit_code: 0,
+        verdict: crate::review_consensus::CLEAN,
+        diagnostic: None,
+    }];
+
+    write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        1,
+        &outcomes,
+        crate::review_consensus::CLEAN,
+        false,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    let output_dir = temp.path().join("output");
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(output_dir.join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
+    assert_eq!(verdict.severity_counts[&Severity::High], 1);
+
+    let findings_toml: FindingsFile = toml::from_str(
+        &fs::read_to_string(output_dir.join("findings.toml")).expect("findings.toml should exist"),
+    )
+    .expect("findings.toml should parse");
+    assert_eq!(findings_toml.findings.len(), 1);
+    assert_eq!(findings_toml.findings[0].id, "CLEAN-BLOCKING-FID");
+}
+
+#[test]
 fn write_multi_reviewer_parent_artifacts_accepts_reviewer_contract_artifact() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
