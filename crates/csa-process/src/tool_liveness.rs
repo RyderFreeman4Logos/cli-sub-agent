@@ -293,9 +293,11 @@ fn process_matches_session_context(pid: u32, tool_name: Option<&str>, session_di
         return false;
     };
     let session_id = session_dir.file_name().and_then(|name| name.to_str());
+    let session_path = session_dir.to_string_lossy();
 
     tool_name.is_some_and(|tool| cmdline.contains(tool))
         || session_id.is_some_and(|id| cmdline.contains(id))
+        || cmdline.contains(session_path.as_ref())
 }
 
 #[cfg(target_os = "linux")]
