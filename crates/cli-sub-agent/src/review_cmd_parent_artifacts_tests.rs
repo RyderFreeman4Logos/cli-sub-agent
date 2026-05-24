@@ -447,7 +447,7 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
 }
 
 #[test]
-fn write_multi_reviewer_parent_artifacts_preserves_clean_consensus_with_minority_findings() {
+fn write_multi_reviewer_consensus_artifacts_preserves_blocking_findings_on_clean_consensus() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
     let session_dir = temp.path().display().to_string();
@@ -520,24 +520,25 @@ fn write_multi_reviewer_parent_artifacts_preserves_clean_consensus_with_minority
     let written_meta: csa_session::state::ReviewSessionMeta =
         serde_json::from_str(&fs::read_to_string(temp.path().join("review_meta.json")).unwrap())
             .expect("review meta should parse");
-    assert_eq!(written_meta.decision, ReviewDecision::Pass.as_str());
-    assert_eq!(written_meta.verdict, crate::review_consensus::CLEAN);
+    assert_eq!(written_meta.decision, ReviewDecision::Fail.as_str());
+    assert_eq!(written_meta.verdict, crate::review_consensus::HAS_ISSUES);
 
     let verdict: ReviewVerdictArtifact = serde_json::from_str(
         &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
             .expect("review-verdict.json should exist"),
     )
     .expect("review verdict should parse");
-    assert_eq!(verdict.decision, ReviewDecision::Pass);
-    assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
-    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
+    assert_eq!(verdict.severity_counts[&Severity::High], 1);
 
     let parent_findings: FindingsFile = toml::from_str(
         &fs::read_to_string(temp.path().join("output").join("findings.toml"))
             .expect("findings.toml should exist"),
     )
     .expect("findings.toml should parse");
-    assert!(parent_findings.findings.is_empty());
+    assert_eq!(parent_findings.findings.len(), 1);
+    assert_eq!(parent_findings.findings[0].id, "FID-1");
 
     let parent_artifact: ReviewArtifact = serde_json::from_str(
         &fs::read_to_string(
@@ -547,7 +548,8 @@ fn write_multi_reviewer_parent_artifacts_preserves_clean_consensus_with_minority
         .expect("review-findings-consolidated.json should exist"),
     )
     .expect("review-findings-consolidated.json should parse");
-    assert!(parent_artifact.findings.is_empty());
+    assert_eq!(parent_artifact.findings.len(), 1);
+    assert_eq!(parent_artifact.findings[0].fid, "FID-1");
 }
 
 #[test]
