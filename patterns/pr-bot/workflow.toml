@@ -1756,7 +1756,37 @@ tool = "csa"
 prompt = """
 > **Layer**: 1 (CSA debate) -- Layer 0 dispatches to `csa debate`, which
 > internally spawns Layer 2 independent models for adversarial evaluation.
-> Orchestrator receives the verdict and posts audit trail to PR."""
+> Orchestrator receives the verdict and posts audit trail to PR.
+
+Arbitrate the current cloud-bot review comment for PR `${PR_NUM}` in
+`${REPO}`.
+
+Use the current comment metadata exported by Step 7:
+- `CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}`
+- `COMMENT_PATH=${COMMENT_PATH}`
+- `COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}`
+
+Fetch the review comment body yourself:
+- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
+
+MUST use independent model arbitration. NEVER dismiss bot comments using only
+your own reasoning.
+
+Emit structured output for the caller:
+- `VERDICT: DISMISSED|CONFIRMED`
+- `RATIONALE: ...`
+- `PR_COMMENT_START` / `PR_COMMENT_END`
+- For `DISMISSED`, the comment body must include:
+  `**Local arbitration result: DISMISSED.**`, `## Participants`,
+  `## Bot Concern`, `## Debate Summary`, `## Conclusion`, and
+  `CSA session ID: ...`
+
+Emit each marker exactly once, in the order shown, and do not repeat the
+format description in the answer.
+
+If the finding is valid, emit `VERDICT: CONFIRMED`. If it is not a real issue,
+emit `VERDICT: DISMISSED` and include the full explanatory PR comment between
+the PR comment markers."""
 tier = "tier-4-critical"
 on_fail = "abort"
 condition = "(!(${MERGE_COMPLETED})) && ((${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
@@ -1787,7 +1817,7 @@ Parse the structured debate result from Step 8.
 
 ```bash
 set -euo pipefail
-DEBATE_OUTPUT="${STEP_11_OUTPUT}"
+DEBATE_OUTPUT="${STEP_12_OUTPUT}"
 VERDICT_COUNT="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
     | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \

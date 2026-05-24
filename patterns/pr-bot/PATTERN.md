@@ -1306,6 +1306,20 @@ echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
 Tool: csa
 Tier: tier-4-critical
 
+Arbitrate the current cloud-bot review comment for PR `${PR_NUM}` in
+`${REPO}`.
+
+Use the current comment metadata exported by Step 7:
+- `CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}`
+- `COMMENT_PATH=${COMMENT_PATH}`
+- `COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}`
+
+Fetch the review comment body yourself:
+- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
+
+MUST use independent model arbitration. NEVER dismiss bot comments using only
+your own reasoning.
+
 ## INCLUDE debate
 
 MUST use independent model for arbitration.
@@ -1332,14 +1346,6 @@ must include the debate result and the specific rationale (e.g.,
 'Pre-production: breaking API changes are acceptable per versioning rule 019').
 FORBIDDEN: dismissing findings without an explanatory PR comment.
 
-Use the current comment metadata exported by Step 7:
-- `CURRENT_COMMENT_ID`
-- `COMMENT_PATH`
-- `COMMENT_TIMESTAMP`
-
-The debate sub-agent MUST fetch the review comment body itself:
-- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
-
 ## Step 8a: Post Debate Audit Trail Comment
 
 > **Layer**: 0 (Orchestrator) -- explicit bash step that posts the PR comment
@@ -1357,7 +1363,7 @@ Parse the structured debate result from Step 8.
 
 ```bash
 set -euo pipefail
-DEBATE_OUTPUT="${STEP_11_OUTPUT}"
+DEBATE_OUTPUT="${STEP_12_OUTPUT}"
 VERDICT_COUNT="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
     | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \

@@ -54,6 +54,67 @@ fn dev2merge_workflow_marks_mktsk_step_manual() {
     assert_eq!(mktsk_step.tool.as_deref(), Some("manual"));
 }
 
+#[test]
+fn pr_bot_debate_audit_reads_step12_output_and_prompt_has_comment_context() {
+    let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    let step12 = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Arbitrate via Debate")
+        .expect("missing pr-bot debate step");
+    let step14 = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Step 8a: Post Debate Audit Trail Comment")
+        .expect("missing pr-bot audit trail step");
+
+    for required in [
+        "CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}",
+        "COMMENT_PATH=${COMMENT_PATH}",
+        "COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}",
+        "gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}",
+        "VERDICT: DISMISSED|CONFIRMED",
+        "PR_COMMENT_START",
+        "PR_COMMENT_END",
+    ] {
+        assert!(
+            step12.prompt.contains(required),
+            "pr-bot debate step must pass required arbitration context or output contract: {required}"
+        );
+    }
+
+    assert!(
+        step14
+            .prompt
+            .contains(r#"DEBATE_OUTPUT="${STEP_12_OUTPUT}""#),
+        "audit trail step must parse the actual debate step output"
+    );
+    assert!(
+        !step14
+            .prompt
+            .contains(r#"DEBATE_OUTPUT="${STEP_11_OUTPUT}""#),
+        "audit trail step must not parse the staleness-filter output"
+    );
+
+    let pattern = std::fs::read_to_string(workspace_root().join("patterns/pr-bot/PATTERN.md"))
+        .expect("read pr-bot pattern");
+    for required in [
+        "CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}",
+        "COMMENT_PATH=${COMMENT_PATH}",
+        "COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}",
+        "gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}",
+        "DEBATE_OUTPUT=\"${STEP_12_OUTPUT}\"",
+    ] {
+        assert!(
+            pattern.contains(required),
+            "PATTERN.md must stay synced with debate audit workflow contract: {required}"
+        );
+    }
+}
+
 // #1118 part A ────────────────────────────────────────────────────────────────
 //
 // Step 7 (`Plan with mktd`) must wrap the inner `csa plan run` invocation
