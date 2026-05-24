@@ -2,16 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
-use csa_executor::ModelSpec;
 use csa_hooks::format_next_step_directive;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
-use weave::parser::WorkspaceAccess;
 
 use super::plan_cmd_assignment::{
     extract_output_assignment_markers, should_inject_assignment_markers,
@@ -28,44 +26,9 @@ use super::{
     substitute_vars,
 };
 
-/// Resolved execution target for a plan step.
-/// Keeps direct shell execution separate from AI dispatch so `tool = "bash"` never falls through.
-pub(crate) enum StepTarget {
-    /// Execute bash code block directly via `tokio::process::Command`.
-    DirectBash,
-    /// Skip this step (compile-time INCLUDE directive from weave).
-    WeaveInclude,
-    /// Non-executable note for human-facing workflow context.
-    Note,
-    /// Manual action that must be handled by the orchestrator, not CSA.
-    Manual,
-    /// Stop the workflow and wait for explicit user action before any rerun.
-    AwaitUser,
-    /// Dispatch to an AI tool via CSA infrastructure.
-    CsaTool {
-        tool_name: ToolName,
-        model_spec: Option<String>,
-        tier_name: Option<String>,
-    },
-}
-
-impl StepTarget {
-    fn csa(tool: ToolName, spec: Option<String>) -> Self {
-        Self::CsaTool {
-            tool_name: tool,
-            model_spec: spec,
-            tier_name: None,
-        }
-    }
-
-    fn csa_with_tier(tool: ToolName, spec: Option<String>, tier: String) -> Self {
-        Self::CsaTool {
-            tool_name: tool,
-            model_spec: spec,
-            tier_name: Some(tier),
-        }
-    }
-}
+#[path = "plan_cmd_step_target.rs"]
+mod step_target;
+pub(crate) use step_target::{StepTarget, resolve_step_tool, step_readonly_project_root};
 
 /// Result of executing a single step.
 #[derive(Serialize, Deserialize)]
@@ -102,130 +65,6 @@ pub(crate) struct StepExecutionContext<'a> {
     pub(crate) tool_override: Option<&'a ToolName>,
     pub(crate) model_spec_override: Option<&'a String>,
     pub(crate) no_fs_sandbox: bool,
-}
-
-/// Resolve a step target from its annotations and config.
-/// Order: CLI overrides, explicit `step.tool`, then `step.tier`, then configured default or codex fallback.
-pub(crate) fn resolve_step_tool(
-    step: &PlanStep,
-    config: Option<&ProjectConfig>,
-    tool_override: Option<&ToolName>,
-    model_spec_override: Option<&String>,
-) -> Result<StepTarget> {
-    // 0. CLI overrides only apply to CSA-dispatched steps. Deterministic
-    // workflow directives must remain deterministic even when --tool is set.
-    let explicit_tool = step.tool.as_deref().map(str::to_ascii_lowercase);
-    if let Some(tool) = tool_override
-        && !matches!(
-            explicit_tool.as_deref(),
-            Some("bash" | "note" | "manual" | "await-user" | "weave")
-        )
-    {
-        return Ok(StepTarget::csa(*tool, model_spec_override.cloned()));
-    }
-
-    // 1. Explicit tool annotation
-    if let Some(tool_lower) = explicit_tool {
-        match tool_lower.as_str() {
-            "bash" => return Ok(StepTarget::DirectBash),
-            "note" => return Ok(StepTarget::Note),
-            "manual" => return Ok(StepTarget::Manual),
-            "await-user" => return Ok(StepTarget::AwaitUser),
-            "gemini-cli" => return Ok(StepTarget::csa(ToolName::GeminiCli, None)),
-            "antigravity-cli" => return Ok(StepTarget::csa(ToolName::AntigravityCli, None)),
-            "opencode" => return Ok(StepTarget::csa(ToolName::Opencode, None)),
-            "codex" => return Ok(StepTarget::csa(ToolName::Codex, None)),
-            "claude-code" => return Ok(StepTarget::csa(ToolName::ClaudeCode, None)),
-            // "csa": use step.tier if present, else default tier from config
-            "csa" => {
-                if let Some(cfg) = config {
-                    // Respect step.tier when tool=csa (P2 fix: don't ignore tier)
-                    if let Some(ref tier_name) = step.tier
-                        && let Some(tier) = cfg.tiers.get(tier_name)
-                    {
-                        for model_spec_str in &tier.models {
-                            let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
-                            if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
-                                let tool = parse_tool_name(parts[0])?;
-                                return Ok(StepTarget::csa_with_tier(
-                                    tool,
-                                    Some(model_spec_str.clone()),
-                                    tier_name.clone(),
-                                ));
-                            }
-                        }
-                    }
-                    // Fallback: default tier
-                    if let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default") {
-                        let spec = ModelSpec::parse(&model_spec)?;
-                        let tool = parse_tool_name(&spec.tool)?;
-                        return Ok(StepTarget::csa(tool, Some(model_spec)));
-                    }
-                }
-                // Last resort: codex
-                return Ok(StepTarget::csa(ToolName::Codex, None));
-            }
-            // "weave" = compile-time INCLUDE directive, skip at runtime
-            "weave" => return Ok(StepTarget::WeaveInclude),
-            other => bail!(
-                "Unknown tool '{}' in step {} ('{}'). Known: bash, note, manual, await-user, gemini-cli, opencode, codex, claude-code, csa, weave",
-                other,
-                step.id,
-                step.title
-            ),
-        }
-    }
-
-    // 2. Tier annotation -> look up in config
-    if let Some(ref tier_name) = step.tier {
-        if let Some(cfg) = config {
-            if let Some(tier) = cfg.tiers.get(tier_name) {
-                // Find first enabled tool in this tier
-                for model_spec_str in &tier.models {
-                    let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
-                    if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
-                        let tool = parse_tool_name(parts[0])?;
-                        return Ok(StepTarget::csa_with_tier(
-                            tool,
-                            Some(model_spec_str.clone()),
-                            tier_name.clone(),
-                        ));
-                    }
-                }
-            }
-            warn!(
-                "Tier '{}' not found or no enabled tools; falling back to codex for step {}",
-                tier_name, step.id
-            );
-        }
-        return Ok(StepTarget::csa(ToolName::Codex, None));
-    }
-
-    // 3. Fallback: use default tool from config, or codex
-    if let Some(cfg) = config
-        && let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default")
-    {
-        let spec = ModelSpec::parse(&model_spec)?;
-        let tool = parse_tool_name(&spec.tool)?;
-        return Ok(StepTarget::csa(tool, Some(model_spec)));
-    }
-
-    Ok(StepTarget::csa(ToolName::Codex, None))
-}
-
-pub(crate) fn step_readonly_project_root(step: &PlanStep) -> bool {
-    matches!(step.workspace_access, Some(WorkspaceAccess::ReadOnly))
-}
-
-fn parse_tool_name(tool: &str) -> Result<ToolName> {
-    match tool {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
-        "opencode" => Ok(ToolName::Opencode),
-        "codex" => Ok(ToolName::Codex),
-        "claude-code" => Ok(ToolName::ClaudeCode),
-        "antigravity-cli" => Ok(ToolName::AntigravityCli),
-        other => bail!("Unknown tool: {other}"),
-    }
 }
 
 pub(super) async fn execute_plan_with_journal(
@@ -276,7 +115,11 @@ pub(super) async fn execute_plan_with_journal(
             },
         )
         .await;
-        let orchestrator_handoff = orchestrator_handoff_mode(step);
+        let orchestrator_handoff = if result.skipped {
+            None
+        } else {
+            orchestrator_handoff_mode(step)
+        };
         let is_failure = !result.skipped && result.exit_code != 0;
 
         // Inject step output for subsequent steps (successful steps only).
@@ -497,7 +340,7 @@ pub(crate) async fn execute_step_with_workflow(
                 );
                 StepTarget::CsaTool {
                     tool_name: *override_tool,
-                    model_spec: None,
+                    model_spec: step_ctx.model_spec_override.cloned(),
                     tier_name: None,
                 }
             }

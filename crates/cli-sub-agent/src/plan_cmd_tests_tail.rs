@@ -228,6 +228,71 @@ async fn execute_plan_stops_for_await_user() {
     assert!(!tmp.path().join("should-not-run").exists());
 }
 
+#[tokio::test]
+async fn execute_plan_continues_after_skipped_await_user_step() {
+    let plan = ExecutionPlan {
+        name: "skip-await-user".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "skipped-setup".into(),
+                tool: Some("await-user".into()),
+                prompt: "Only wait when setup is missing.".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: Some("${BOT_NEEDS_SETUP}".into()),
+                loop_var: None,
+                session: None,
+                workspace_access: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "should-run".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\ntouch should-run\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+                workspace_access: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    let journal_path = tmp.path().join("skip-await-user.journal.json");
+    std::fs::write(&workflow_path, "[workflow]\nname='skip-await-user'\n").unwrap();
+    let completed = std::collections::HashSet::new();
+    let mut journal = PlanRunJournal::new("skip-await-user", &workflow_path, vars.clone());
+    let mut run_ctx = PlanRunContext {
+        project_root: tmp.path(),
+        workflow_path: &workflow_path,
+        config: None,
+        tool_override: None,
+        model_spec_override: None,
+        journal: &mut journal,
+        journal_path: Some(&journal_path),
+        resume_completed_steps: &completed,
+        chunked: false,
+        no_fs_sandbox: false,
+    };
+
+    let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
+        .await
+        .expect("skipped await-user should not stop workflow");
+
+    assert_eq!(results.len(), 2);
+    assert!(results[0].skipped);
+    assert_eq!(journal.status, "running");
+    assert!(tmp.path().join("should-run").exists());
+}
+
 fn install_fake_gh(bin_dir: &Path) -> PathBuf {
     let capture_path = bin_dir.join("gh-capture.md");
     let gh_path = bin_dir.join("gh");
