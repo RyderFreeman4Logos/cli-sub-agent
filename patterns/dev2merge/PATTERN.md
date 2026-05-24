@@ -373,6 +373,8 @@ OnFail: abort
 
 Cumulative review covering all commits since the default branch.
 Sets REVIEW_COMPLETED=true as gate for push step.
+REVIEW_COMPLETED is declared in workflow variables so CSA_VAR injection survives
+into Step 12.
 
 ```bash
 set -euo pipefail
