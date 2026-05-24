@@ -31,6 +31,14 @@ if [ "${CSA_SKIP_REVIEW_CHECK:-0}" = "1" ]; then
   exit 0
 fi
 
+# CSA-managed executors run their own review gates in the workflow. Skipping
+# here prevents pre-push from recursively spawning csa review inside csa.
+CSA_DEPTH_VALUE="${CSA_DEPTH:-0}"
+if [ -n "${CSA_SESSION_ID:-}" ] || [[ "${CSA_DEPTH_VALUE}" =~ ^[0-9]+$ && "${CSA_DEPTH_VALUE}" -gt 0 ]]; then
+  echo "pre-push: Review gate skipped inside CSA executor session; CSA workflow owns review enforcement."
+  exit 0
+fi
+
 # Skip if not in a csa-managed project
 if ! command -v csa >/dev/null 2>&1; then
   exit 0
