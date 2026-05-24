@@ -588,6 +588,55 @@ fn check_verdict_rejects_stale_head() {
 }
 
 #[test]
+fn check_verdict_explicit_session_does_not_fallback_to_stale_pass() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let branch = "feature";
+    let head_sha = "abc1234567890";
+    let stale_pass = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    let explicit_fail = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Fail,
+        "REVISE",
+    );
+    set_review_timestamp(&project, &explicit_fail, 10);
+    set_review_timestamp(&project, &stale_pass, 20);
+
+    let explicit = check_review_verdict_for_session(
+        &project,
+        &explicit_fail,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+    )
+    .unwrap();
+    assert!(
+        explicit.is_none(),
+        "explicit failed session must not fall back to another PASS session"
+    );
+
+    let scanned =
+        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
+            .unwrap()
+            .expect("target scan should still find stale pass");
+    assert_eq!(scanned.session_id, stale_pass);
+}
+
+#[test]
 fn check_verdict_uses_requested_range_scope() {
     let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
     let temp = setup_git_repo();

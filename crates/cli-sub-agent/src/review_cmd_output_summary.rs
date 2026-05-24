@@ -9,6 +9,7 @@ use super::{derive_review_result_summary, has_structured_review_content, sanitiz
 
 pub(crate) fn is_edit_restriction_summary(summary: &str) -> bool {
     summary.starts_with(super::EDIT_RESTRICTION_SUMMARY_PREFIX)
+        || summary.starts_with("Write restriction violated:")
 }
 
 pub(crate) fn truncate_review_result_summary(line: &str) -> String {
@@ -127,4 +128,19 @@ pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -
     .map_err(|error| anyhow::anyhow!("write {}: {error}", index_path.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_edit_restriction_summary;
+
+    #[test]
+    fn edit_restriction_summary_accepts_new_file_write_guard() {
+        assert!(is_edit_restriction_summary(
+            "Write restriction violated: blocked creation of 1 new file(s)"
+        ));
+        assert!(is_edit_restriction_summary(
+            "Edit restriction violated: blocked edits outside allowed files"
+        ));
+    }
 }

@@ -35,13 +35,26 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
 
     let diff_fingerprint = super::execute::compute_diff_fingerprint(project_root, &required_scope);
 
-    match check_review_verdict_for_target(
-        project_root,
-        &branch,
-        &head_sha,
-        &required_scope,
-        diff_fingerprint.as_deref(),
-    ) {
+    let verdict_match = if let Some(session) = args.session.as_deref() {
+        check_review_verdict_for_session(
+            project_root,
+            session,
+            &branch,
+            &head_sha,
+            &required_scope,
+            diff_fingerprint.as_deref(),
+        )
+    } else {
+        check_review_verdict_for_target(
+            project_root,
+            &branch,
+            &head_sha,
+            &required_scope,
+            diff_fingerprint.as_deref(),
+        )
+    };
+
+    match verdict_match {
         Ok(Some(found)) => {
             println!(
                 "Review verdict check passed: session {} has PASS/CLEAN for {} at {} ({})",
@@ -63,6 +76,86 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
         }
         Err(error) => Err(error),
     }
+}
+
+pub(crate) fn check_review_verdict_for_session(
+    project_root: &Path,
+    session_prefix: &str,
+    branch: &str,
+    head_sha: &str,
+    required_scope: &str,
+    expected_diff_fingerprint: Option<&str>,
+) -> Result<Option<ReviewVerdictMatch>> {
+    let resolved =
+        crate::session_cmds::resolve_session_prefix_with_fallback(project_root, session_prefix)?;
+    let session_dir = resolved.sessions_dir.join(&resolved.session_id);
+    let session = read_session_state(&session_dir)?;
+    debug!(
+        project_root = %project_root.display(),
+        session_id = %resolved.session_id,
+        branch,
+        head_sha,
+        required_scope,
+        ?expected_diff_fingerprint,
+        "Checking explicit review verdict session"
+    );
+
+    if !session_matches_branch(&session, branch) {
+        debug!(
+            session_id = %resolved.session_id,
+            session_branch = ?session_branch(&session),
+            expected_branch = branch,
+            "Explicit review verdict session did not match branch"
+        );
+        return Ok(None);
+    }
+
+    let Some(meta) = read_review_meta(&session_dir)? else {
+        debug!(
+            session_id = %resolved.session_id,
+            session_dir = %session_dir.display(),
+            "Explicit review verdict session is missing review_meta.json"
+        );
+        return Ok(None);
+    };
+
+    if meta.head_sha != head_sha || meta.scope != required_scope {
+        debug!(
+            session_id = %resolved.session_id,
+            meta_head_sha = %meta.head_sha,
+            expected_head_sha = head_sha,
+            meta_scope = %meta.scope,
+            expected_scope = required_scope,
+            "Explicit review verdict session did not match head SHA or scope"
+        );
+        return Ok(None);
+    }
+
+    if !diff_fingerprint_matches(&meta, expected_diff_fingerprint) {
+        debug!(
+            session_id = %resolved.session_id,
+            meta_diff_fingerprint = ?meta.diff_fingerprint,
+            ?expected_diff_fingerprint,
+            "Explicit review verdict session did not match diff fingerprint"
+        );
+        return Ok(None);
+    }
+
+    if !review_meta_or_artifact_is_pass(&session_dir, &meta)? {
+        debug!(
+            session_id = %resolved.session_id,
+            decision = %meta.decision,
+            verdict = %meta.verdict,
+            "Explicit review verdict session is not PASS/CLEAN"
+        );
+        return Ok(None);
+    }
+
+    Ok(Some(ReviewVerdictMatch {
+        session_id: meta.session_id,
+        scope: meta.scope,
+        head_sha: meta.head_sha,
+    }))
 }
 
 pub(crate) fn check_review_verdict_for_target(
@@ -189,6 +282,15 @@ pub(crate) fn check_review_verdict_for_target(
         scope: latest.scope,
         head_sha: latest.head_sha,
     }))
+}
+
+fn read_session_state(session_dir: &Path) -> Result<MetaSessionState> {
+    let path = session_dir.join("state.toml");
+    let raw =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let state =
+        toml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(state)
 }
 
 struct ReviewVerdictCandidate {
