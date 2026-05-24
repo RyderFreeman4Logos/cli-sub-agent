@@ -5,18 +5,18 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use csa_session::SessionArtifact;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::debate_cmd::DebateMode;
 
 const DEBATE_VERDICT_REL_PATH: &str = "output/debate-verdict.json";
 const DEBATE_TRANSCRIPT_REL_PATH: &str = "output/debate-transcript.md";
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct DebateVerdict {
-    verdict: String,
+    pub(crate) verdict: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    decision: Option<String>,
+    pub(crate) decision: Option<String>,
     confidence: String,
     summary: String,
     key_points: Vec<String>,

@@ -24,7 +24,7 @@ use csa_session::state::ReviewSessionMeta;
 use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
 mod output;
-use output::is_worktree_submodule;
+use output::{is_worktree_submodule, persist_review_result_exit_code};
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]
@@ -371,11 +371,15 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             timestamp: chrono::Utc::now(),
             diff_fingerprint,
         };
-        persist_review_sidecars_if_session_exists(
+        let persisted_verdict_exit_code = persist_review_sidecars_if_session_exists(
             &project_root,
             &review_meta,
             result.persistable_session_id.as_deref(),
         );
+        let effective_exit_code = persisted_verdict_exit_code.unwrap_or(effective_exit_code);
+        if let Some(session_id) = result.persistable_session_id.as_deref() {
+            persist_review_result_exit_code(&project_root, session_id, effective_exit_code);
+        }
         if verdict != CLEAN {
             dirty_tree::maybe_emit_dirty_tree_hint(
                 &project_root,

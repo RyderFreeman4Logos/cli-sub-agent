@@ -249,6 +249,34 @@ fn persist_verdict_refreshes_on_fix_reuse_session() {
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
 }
 
+#[test]
+fn persist_review_sidecars_returns_fail_exit_for_has_issues_artifact() {
+    let project_dir = exact_test_setup_git_repo();
+    let _state_home = test_env_lock::ScopedTestEnvVar::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let session_id = "01TESTVERDICTFAIL000000000";
+    let session_dir = csa_session::get_session_dir(project_dir.path(), session_id)
+        .expect("resolve session dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    let mut meta = exact_test_make_review_meta(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    meta.status_reason = Some("test_blocking_verdict".to_string());
+
+    let persisted_exit_code = review_cmd::persist_review_sidecars_if_session_exists(
+        project_dir.path(),
+        &meta,
+        Some(session_id),
+    );
+
+    assert_eq!(persisted_exit_code, Some(1));
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: csa_session::ReviewVerdictArtifact =
+        serde_json::from_str(&std::fs::read_to_string(&verdict_path).unwrap()).unwrap();
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
@@ -435,11 +463,12 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
     if verdict_path.exists() {
         std::fs::remove_file(&verdict_path).unwrap();
     }
-    review_cmd::persist_review_sidecars_if_session_exists(
+    let persisted_exit_code = review_cmd::persist_review_sidecars_if_session_exists(
         project_dir.path(),
         &meta,
         result.persistable_session_id.as_deref(),
     );
+    assert_eq!(persisted_exit_code, Some(0));
     let artifact: csa_session::ReviewVerdictArtifact =
         serde_json::from_str(&std::fs::read_to_string(&verdict_path).unwrap()).unwrap();
     assert_eq!(artifact.routed_to, result.routed_to);
@@ -488,11 +517,9 @@ async fn execute_review_unavailable_does_not_persist_session_artifacts() {
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
     };
-    review_cmd::persist_review_sidecars_if_session_exists(
-        project_dir.path(),
-        &meta,
-        None,
-    );
+    let persisted_exit_code =
+        review_cmd::persist_review_sidecars_if_session_exists(project_dir.path(), &meta, None);
+    assert_eq!(persisted_exit_code, None);
 
     let unknown_output = csa_session::get_session_root(project_dir.path())
         .unwrap()

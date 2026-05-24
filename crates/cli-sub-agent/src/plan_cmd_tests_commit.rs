@@ -376,6 +376,29 @@ fn commit_workflow_followup_step_hints_match_renumbered_pattern() {
     }
 }
 
+#[test]
+fn commit_workflow_step20_requires_head_to_change_after_git_commit() {
+    let commit_pattern =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/PATTERN.md")).unwrap();
+    let commit_workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/commit/workflow.toml")).unwrap();
+
+    for content in [&commit_pattern, &commit_workflow] {
+        assert!(
+            content.contains("HEAD_BEFORE_COMMIT=\"$(git rev-parse HEAD)\""),
+            "commit step must record HEAD before git commit"
+        );
+        assert!(
+            content.contains("HEAD_AFTER_COMMIT=\"$(git rev-parse HEAD)\""),
+            "commit step must record HEAD after git commit"
+        );
+        assert!(
+            content.contains("git commit reported success but HEAD did not change"),
+            "commit step must fail if hooks or commit plumbing leave HEAD unchanged"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn commit_workflow_test_gate_aborts_before_following_steps() {

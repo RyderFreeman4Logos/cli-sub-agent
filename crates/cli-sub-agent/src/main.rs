@@ -107,6 +107,7 @@ mod todo_errors_cmd;
 mod todo_ref_cmd;
 mod tool_version;
 mod triage_cmd;
+mod verdict_exit_code;
 #[cfg(test)]
 include!("review_cmd_exact_tests.rs");
 #[cfg(test)]

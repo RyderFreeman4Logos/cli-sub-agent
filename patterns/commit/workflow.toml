@@ -553,7 +553,13 @@ if [ -n "${UNSTAGED_BEFORE_COMMIT}" ]; then
 fi
 
 trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
+HEAD_BEFORE_COMMIT="$(git rev-parse HEAD)"
 git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
+HEAD_AFTER_COMMIT="$(git rev-parse HEAD)"
+if [ "${HEAD_AFTER_COMMIT}" = "${HEAD_BEFORE_COMMIT}" ]; then
+  echo "ERROR: git commit reported success but HEAD did not change; treating as commit failure." >&2
+  exit 1
+fi
 echo '<!-- CSA:NEXT_STEP cmd="cumulative branch review (Step 21) or publish" required=true -->'
 ```"""
 on_fail = "abort"

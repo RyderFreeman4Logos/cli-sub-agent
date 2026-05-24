@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::Result;
 use csa_core::types::{OutputFormat, ToolName};
@@ -6,8 +6,8 @@ use tracing::warn;
 
 use super::{DebateMode, render_debate_cli_output};
 use crate::debate_cmd_output::{
-    DebateOutputHeader, DebateSummary, append_debate_artifacts_to_result, extract_debate_summary,
-    persist_debate_output_artifacts, render_debate_output,
+    DebateOutputHeader, DebateSummary, DebateVerdict, append_debate_artifacts_to_result,
+    extract_debate_summary, persist_debate_output_artifacts, render_debate_output,
 };
 use crate::tier_model_fallback::{
     TierAttemptFailure, format_all_models_failed_reason, persist_fallback_result_fields,
@@ -56,7 +56,7 @@ pub(crate) fn finalize_debate_outcome(
     execution: Option<crate::pipeline::SessionExecutionResult>,
     context: DebateFinalizeContext<'_>,
 ) -> Result<FinalizedDebateOutcome> {
-    let (exit_code, meta_session_id, persisted_session_id, output, debate_summary) =
+    let (_exit_code, meta_session_id, persisted_session_id, output, debate_summary) =
         match (context.all_tier_models_failed, execution) {
             (true, Some(execution)) => {
                 let persisted_session_id = resolve_persisted_debate_session_id(
@@ -134,11 +134,17 @@ pub(crate) fn finalize_debate_outcome(
             (false, None) => unreachable!("debate tier candidate list is never empty"),
         };
 
-    if let Some(session_id) = persisted_session_id.as_deref() {
+    let final_exit_code = if let Some(session_id) = persisted_session_id.as_deref() {
         let session_dir = csa_session::get_session_dir(project_root, session_id)?;
         let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
+        let artifact_exit_code = persisted_debate_verdict_exit_code(&session_dir);
         append_debate_artifacts_to_result(project_root, session_id, &artifacts, &debate_summary)?;
-        persist_debate_exit_code(project_root, session_id, exit_code, &debate_summary.summary)?;
+        persist_debate_exit_code(
+            project_root,
+            session_id,
+            artifact_exit_code,
+            &debate_summary.summary,
+        )?;
         if let (Some(original_tool), Some(fallback_tool)) =
             (context.original_tool, context.fallback_tool)
         {
@@ -150,7 +156,10 @@ pub(crate) fn finalize_debate_outcome(
                 context.fallback_reason,
             );
         }
-    }
+        artifact_exit_code
+    } else {
+        crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE
+    };
 
     let rendered_output = render_debate_cli_output(
         output_format,
@@ -160,9 +169,40 @@ pub(crate) fn finalize_debate_outcome(
         context.output_header,
     )?;
     Ok(FinalizedDebateOutcome {
-        exit_code,
+        exit_code: final_exit_code,
         rendered_output,
     })
+}
+
+fn persisted_debate_verdict_exit_code(session_dir: &Path) -> i32 {
+    let verdict_path = session_dir.join("output").join("debate-verdict.json");
+    let raw = match fs::read_to_string(&verdict_path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            warn!(
+                path = %verdict_path.display(),
+                error = %error,
+                "Missing or unreadable debate verdict artifact; treating as infrastructure failure"
+            );
+            return crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE;
+        }
+    };
+    let artifact = match serde_json::from_str::<DebateVerdict>(&raw) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            warn!(
+                path = %verdict_path.display(),
+                error = %error,
+                "Invalid debate verdict artifact; treating as infrastructure failure"
+            );
+            return crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE;
+        }
+    };
+
+    crate::verdict_exit_code::exit_code_from_debate_verdict(
+        artifact.verdict.as_str(),
+        artifact.decision.as_deref(),
+    )
 }
 
 fn output_has_explicit_debate_verdict(output: &str) -> bool {

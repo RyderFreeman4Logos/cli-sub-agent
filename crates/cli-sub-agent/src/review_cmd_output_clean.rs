@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use anyhow::Result;
 
-use super::extract_review_text;
+use super::text::extract_review_text;
 
 pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();

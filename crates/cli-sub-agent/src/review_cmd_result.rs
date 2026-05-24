@@ -46,16 +46,6 @@ fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
     }
 }
 
-fn exit_code_from_decision(decision: ReviewDecision) -> i32 {
-    match decision {
-        ReviewDecision::Pass => 0,
-        ReviewDecision::Fail
-        | ReviewDecision::Skip
-        | ReviewDecision::Uncertain
-        | ReviewDecision::Unavailable => 1,
-    }
-}
-
 fn explicit_review_decision_for_execution(
     raw_output: &str,
     exit_code: i32,
@@ -149,7 +139,7 @@ pub(super) fn resolve_single_review_result(
         )
     };
     let verdict = verdict_from_decision(decision);
-    let effective_exit_code = exit_code_from_decision(decision);
+    let effective_exit_code = crate::verdict_exit_code::exit_code_from_review_decision(decision);
 
     SingleReviewResolution {
         sanitized,
@@ -230,7 +220,7 @@ pub(super) fn build_reviewer_outcome(
         } else {
             sanitize_review_output(&result.execution.output)
         },
-        exit_code: exit_code_from_decision(decision),
+        exit_code: crate::verdict_exit_code::exit_code_from_review_decision(decision),
         diagnostic: diagnostic
             .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
             .or_else(|| tool_unavailable_reason.clone()),
@@ -357,7 +347,9 @@ pub(super) fn build_unavailable_reviewer_outcome(
         tool: reviewer_tool,
         session_id: format!("reviewer-{}-unavailable", reviewer_index + 1),
         output: format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n"),
-        exit_code: 1,
+        exit_code: crate::verdict_exit_code::exit_code_from_review_decision(
+            ReviewDecision::Unavailable,
+        ),
         verdict: UNAVAILABLE,
         diagnostic: Some(reason),
     }
