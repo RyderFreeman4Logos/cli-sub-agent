@@ -231,6 +231,7 @@ if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
 fi
 
 set -euo pipefail
+PR_WAS_EXISTING=false
 
 # --- Early-push detection: warn if branch was already pushed before review ---
 if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
@@ -352,6 +353,7 @@ handle_resolved_pr_record() {
       REPO="${REPO_SLUG}"
       echo "CSA_VAR:PR_NUM=$PR_NUM"
       echo "CSA_VAR:REPO=$REPO"
+      echo "CSA_VAR:PR_WAS_EXISTING=true"
       echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
       echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR already merged" required=false -->'
       exit 0
@@ -372,6 +374,7 @@ PR_RECORD="$(resolve_branch_pr_record)"
 FIND_RC=$?
 set -e
 if [ "${FIND_RC}" = "0" ] && [ -n "${PR_RECORD}" ]; then
+  PR_WAS_EXISTING=true
   handle_resolved_pr_record
 elif [ "${FIND_RC}" = "1" ]; then
   exit 1
@@ -383,6 +386,7 @@ else
   if [ "${CREATE_RC}" != "0" ]; then
     if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
       echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
+      PR_WAS_EXISTING=true
       set +e
       PR_RECORD="$(resolve_branch_pr_record_with_retry)"
       FIND_RC=$?
@@ -417,6 +421,7 @@ fi
 REPO="${REPO_SLUG}"
 echo "CSA_VAR:PR_NUM=$PR_NUM"
 echo "CSA_VAR:REPO=$REPO"
+echo "CSA_VAR:PR_WAS_EXISTING=$PR_WAS_EXISTING"
 echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" required=true -->'
 ```
 
@@ -653,6 +658,8 @@ Condition: !(${BOT_UNAVAILABLE})
 Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
 - **Round 0** (initial PR creation): follows `cloud_bot_trigger` config
   ("comment" posts `@bot review`, "auto" skips trigger since bot auto-reviews).
+- **Round 0 + existing PR**: auto mode posts an explicit retrigger command,
+  because a reused PR with later pushes may not receive a fresh auto-review.
 - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
@@ -691,7 +698,7 @@ BOT_REUSED_REVIEW_ID=""
 # --- Detect whether current HEAD already has a reusable bot review ---
 query_latest_current_head_trigger_ts() {
   gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
-    | jq -r '[.[] | .[] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
+    | jq -r '[.[] | .[] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:existing:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
 }
 
 query_reusable_current_head_review_record() {
@@ -727,6 +734,7 @@ TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Round-aware trigger logic (#506):
 # - Round 0 (initial PR creation) + auto: bot auto-reviews on push, skip trigger
+# - Round 0 (existing PR) + auto: explicitly request a current-HEAD review
 # - Round 1+ (after fix push): bot does NOT auto-review on force-push,
 #   MUST explicitly trigger re-review regardless of cloud_bot_trigger setting
 if [ "${REVIEW_ROUND}" -gt 0 ]; then
@@ -736,6 +744,16 @@ if [ "${REVIEW_ROUND}" -gt 0 ]; then
 <!-- csa-retrigger:round${REVIEW_ROUND}:${CURRENT_SHA}:${TRIGGER_TS} -->"
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
   echo "Round ${REVIEW_ROUND}: Triggered re-review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA}."
+  WAIT_BASE_TS="${TRIGGER_TS}"
+elif [ "${CLOUD_BOT_TRIGGER}" = "auto" ] && [ "${PR_WAS_EXISTING:-false}" = "true" ]; then
+  # Existing PRs may not receive a fresh auto-review for later pushes; request
+  # an explicit current-HEAD review instead of waiting for a signal that may
+  # never be scheduled.
+  TRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
+
+<!-- csa-retrigger:existing:${CURRENT_SHA}:${TRIGGER_TS} -->"
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
+  echo "Existing PR with auto trigger: requested explicit re-review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA}."
   WAIT_BASE_TS="${TRIGGER_TS}"
 elif [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
   # Round 0 + comment mode: trigger via @mention
