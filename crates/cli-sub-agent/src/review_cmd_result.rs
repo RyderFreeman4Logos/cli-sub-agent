@@ -21,10 +21,12 @@ const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAu
 const AUTH_PROMPT_DIAGNOSTIC: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced";
 const REVIEW_UNAVAILABLE_PREFIX: &str = "Review unavailable: ";
-const TRANSIENT_GEMINI_FAILURE_PATTERNS: &[&str] = &[
+const TRANSIENT_TOOL_FAILURE_PATTERNS: &[&str] = &[
     "retrydelayms",
     "rate limit",
     "rate_limit",
+    "usage limit",
+    "monthly usage limit",
     "overloaded",
     "temporarily unavailable",
     "503",
@@ -83,7 +85,7 @@ pub(super) fn resolve_single_review_result(
     let auth_prompt_failure =
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
     let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
-    let transient_unavailable_reason = transient_gemini_failure_reason(result, tool);
+    let transient_unavailable_reason = transient_tool_failure_reason(result, tool);
     let sanitized = if auth_prompt_failure {
         AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
     } else if forced_unavailable {
@@ -167,8 +169,7 @@ pub(super) fn build_reviewer_outcome(
         session_result.forced_decision,
         Some(ReviewDecision::Unavailable)
     );
-    let transient_unavailable_reason =
-        transient_gemini_failure_reason(session_result, reviewer_tool);
+    let transient_unavailable_reason = transient_tool_failure_reason(session_result, reviewer_tool);
     let empty = !auth_prompt_failure
         && !forced_unavailable
         && transient_unavailable_reason.is_none()
@@ -232,11 +233,17 @@ pub(super) fn build_reviewer_outcome(
     })
 }
 
-fn transient_gemini_failure_reason(
+fn transient_tool_failure_reason(
     result: &ReviewExecutionOutcome,
     tool: ToolName,
 ) -> Option<String> {
-    if tool != ToolName::GeminiCli || result.execution.execution.exit_code == 0 {
+    if result.execution.execution.exit_code == 0 {
+        return None;
+    }
+    if extract_review_text(&result.execution.execution.output)
+        .as_deref()
+        .is_some_and(contains_explicit_verdict_token)
+    {
         return None;
     }
 
@@ -252,18 +259,19 @@ fn transient_gemini_failure_reason(
     fields
         .into_iter()
         .flatten()
-        .find(|text| contains_transient_gemini_failure_pattern(text))
+        .find(|text| contains_transient_tool_failure_pattern(text))
         .map(|text| {
             format!(
-                "gemini-cli transient failure: {}",
+                "{} transient failure: {}",
+                tool.as_str(),
                 truncate_single_line(text, 240)
             )
         })
 }
 
-fn contains_transient_gemini_failure_pattern(text: &str) -> bool {
+fn contains_transient_tool_failure_pattern(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    TRANSIENT_GEMINI_FAILURE_PATTERNS
+    TRANSIENT_TOOL_FAILURE_PATTERNS
         .iter()
         .chain(RATE_LIMIT_PATTERNS.iter())
         .any(|pattern| lower.contains(pattern))
@@ -403,6 +411,47 @@ mod tests {
         assert_eq!(resolved.effective_exit_code, 1);
         assert!(resolved.sanitized.contains("Review unavailable:"));
         assert!(resolved.sanitized.contains("retryDelayMs: undefined"));
+    }
+
+    #[test]
+    fn build_reviewer_outcome_maps_quota_limited_tool_to_unavailable() {
+        let mut result = outcome(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day"}}"#,
+            1,
+        );
+        result.execution.execution.summary =
+            r#"{"api_error_status":429,"result":"You've hit your org's monthly usage limit"}"#
+                .to_string();
+
+        let reviewer =
+            build_reviewer_outcome(0, ToolName::Codex, &result).expect("reviewer outcome");
+
+        assert_eq!(reviewer.verdict, UNAVAILABLE);
+        assert_eq!(reviewer.exit_code, 1);
+        assert!(reviewer.output.contains("Review unavailable:"));
+        assert!(
+            reviewer
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("monthly usage limit"))
+        );
+    }
+
+    #[test]
+    fn transient_tool_failure_does_not_override_explicit_fail_verdict() {
+        let reviewer = build_reviewer_outcome(
+            0,
+            ToolName::Codex,
+            &outcome(
+                "<!-- CSA:SECTION:summary -->\nFAIL\n<!-- CSA:SECTION:summary:END -->\n\
+                 <!-- CSA:SECTION:details -->\nA real finding mentions rate limit handling.\n<!-- CSA:SECTION:details:END -->",
+                1,
+            ),
+        )
+        .expect("reviewer outcome");
+
+        assert_eq!(reviewer.verdict, HAS_ISSUES);
+        assert!(!reviewer.output.contains("Review unavailable:"));
     }
 
     #[test]
