@@ -840,8 +840,19 @@ if [ ! -s "${OUTPUT_FILE}" ]; then
     kill "${POLL_PID}" 2>/dev/null || true
     wait "${POLL_PID}" 2>/dev/null || true
   fi
-  printf '{"status":"timeout","pr":%s,"elapsed_seconds":%s}\n' \
-    "${PR_NUM}" "${WAIT_ELAPSED_SECS}" > "${OUTPUT_FILE}.tmp"
+  jq -n \
+    --argjson pr "${PR_NUM}" \
+    --argjson elapsed "${WAIT_ELAPSED_SECS}" \
+    --argjson timeout "${CLOUD_BOT_POLL_MAX_SECONDS}" \
+    --argjson interval "${INTERVAL}" \
+    --arg repo "${REPO}" \
+    --arg bot_login "${CLOUD_BOT_LOGIN}" \
+    --arg bot_name "${CLOUD_BOT_NAME}" \
+    --arg push_sha "${CURRENT_SHA}" \
+    --arg window_start "${WAIT_BASE_TS}" \
+    --arg result_file "${OUTPUT_FILE}" \
+    '{status:"timeout", pr:$pr, repo:$repo, elapsed_seconds:$elapsed, timeout_seconds:$timeout, interval_seconds:$interval, bot:{login:$bot_login, name:$bot_name}, push_sha:$push_sha, window_start:$window_start, result_file:$result_file}' \
+    > "${OUTPUT_FILE}.tmp"
   mv "${OUTPUT_FILE}.tmp" "${OUTPUT_FILE}"
 fi
 

@@ -260,7 +260,14 @@ timeout_json="$(
   jq -n \
     --argjson pr "${PR_NUMBER}" \
     --argjson elapsed "${TIMEOUT_SEC}" \
-    '{status:"timeout", pr:$pr, elapsed_seconds:$elapsed}'
+    --argjson timeout "${TIMEOUT_SEC}" \
+    --argjson interval "${INTERVAL_SEC}" \
+    --arg repo "${REPO}" \
+    --arg bot_login "${BOT_LOGIN}" \
+    --arg bot_name "${BOT_NAME}" \
+    --arg push_sha "${PUSH_SHA}" \
+    --arg window_start "${WINDOW_START}" \
+    '{status:"timeout", pr:$pr, repo:$repo, elapsed_seconds:$elapsed, timeout_seconds:$timeout, interval_seconds:$interval, bot:{login:$bot_login, name:$bot_name}, push_sha:$push_sha, window_start:$window_start}'
 )"
 write_output "${timeout_json}"
 exit 1
