@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -38,12 +37,6 @@ pub(crate) fn try_acquire_session_wait_lock(session_dir: &Path) -> Result<Option
         return Ok(Some(SessionWaitLock { file }));
     }
 
-    if lock_file_has_dead_wait_pid(&lock_path)?
-        && let Some(lock) = recover_stale_session_wait_lock(&lock_path)?
-    {
-        return Ok(Some(lock));
-    }
-
     Ok(None)
 }
 
@@ -78,57 +71,4 @@ fn write_session_wait_lock_diagnostic(file: &mut std::fs::File) -> Result<()> {
     file.write_all(b"\n")?;
     file.flush()?;
     Ok(())
-}
-
-fn lock_file_has_dead_wait_pid(lock_path: &Path) -> Result<bool> {
-    let contents = match fs::read_to_string(lock_path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => return Err(err.into()),
-    };
-    let Ok(diagnostic) = serde_json::from_str::<SessionWaitLockDiagnostic>(&contents) else {
-        return Ok(false);
-    };
-
-    Ok(!is_session_wait_lock_pid_alive(diagnostic.pid))
-}
-
-fn is_session_wait_lock_pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-
-    // SAFETY: kill(pid, 0) is a standard POSIX liveness probe and does not send
-    // a signal. EPERM still means a process exists but is not signalable by us.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return true;
-    }
-
-    !matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(code) if code == libc::ESRCH
-    )
-}
-
-fn recover_stale_session_wait_lock(lock_path: &Path) -> Result<Option<SessionWaitLock>> {
-    match fs::remove_file(lock_path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err.into()),
-    }
-
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_path)?;
-
-    if !try_flock_session_wait_file(&file)? {
-        return Ok(None);
-    }
-
-    write_session_wait_lock_diagnostic(&mut file)?;
-    Ok(Some(SessionWaitLock { file }))
 }
