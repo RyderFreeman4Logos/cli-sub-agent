@@ -92,6 +92,7 @@ mod skill_dispatch;
 mod skill_repo;
 mod skill_resolver;
 mod skill_run_cmd;
+mod stdout_write;
 #[cfg(any(feature = "parallel-tasks", test))]
 pub mod task_lock;
 #[cfg(test)]
