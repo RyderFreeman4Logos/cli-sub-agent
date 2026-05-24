@@ -165,6 +165,16 @@ pub(crate) fn check_review_verdict_for_target(
     required_scope: &str,
     expected_diff_fingerprint: Option<&str>,
 ) -> Result<Option<ReviewVerdictMatch>> {
+    if let Some(found) = check_review_verdict_marker(
+        project_root,
+        branch,
+        head_sha,
+        required_scope,
+        expected_diff_fingerprint,
+    )? {
+        return Ok(Some(found));
+    }
+
     let session_root = csa_session::get_session_root(project_root).with_context(|| {
         format!(
             "failed to resolve CSA session root for {}",
@@ -281,6 +291,109 @@ pub(crate) fn check_review_verdict_for_target(
         session_id: latest.session_id,
         scope: latest.scope,
         head_sha: latest.head_sha,
+    }))
+}
+
+fn check_review_verdict_marker(
+    project_root: &Path,
+    branch: &str,
+    head_sha: &str,
+    required_scope: &str,
+    expected_diff_fingerprint: Option<&str>,
+) -> Result<Option<ReviewVerdictMatch>> {
+    let Some(marker) = crate::review_gate::read_review_gate_marker(project_root, branch, head_sha)
+    else {
+        return Ok(None);
+    };
+    debug!(
+        session_id = %marker.session_id,
+        marker_branch = %marker.branch,
+        expected_branch = branch,
+        marker_head_sha = %marker.head_sha,
+        expected_head_sha = head_sha,
+        marker_scope = %marker.scope,
+        expected_scope = required_scope,
+        marker_verdict = %marker.verdict,
+        marker_timestamp = %marker.timestamp,
+        "Checking review verdict marker"
+    );
+
+    if marker.branch != branch
+        || marker.head_sha != head_sha
+        || marker.scope != required_scope
+        || !verdict_token_is_pass(&marker.verdict)
+    {
+        debug!(
+            session_id = %marker.session_id,
+            "Review verdict marker is stale for requested target"
+        );
+        return Ok(None);
+    }
+
+    let session_root = csa_session::get_session_root(project_root).with_context(|| {
+        format!(
+            "failed to resolve CSA session root for {}",
+            project_root.display()
+        )
+    })?;
+    let session_dir = session_root.join("sessions").join(&marker.session_id);
+    if !session_dir.exists() {
+        debug!(
+            session_id = %marker.session_id,
+            session_dir = %session_dir.display(),
+            "Review verdict marker points to missing session"
+        );
+        return Ok(None);
+    }
+
+    let Some(meta) = read_review_meta(&session_dir)? else {
+        debug!(
+            session_id = %marker.session_id,
+            session_dir = %session_dir.display(),
+            "Review verdict marker session is missing review_meta.json"
+        );
+        return Ok(None);
+    };
+    if meta.head_sha != head_sha || meta.scope != required_scope {
+        debug!(
+            session_id = %marker.session_id,
+            meta_head_sha = %meta.head_sha,
+            expected_head_sha = head_sha,
+            meta_scope = %meta.scope,
+            expected_scope = required_scope,
+            "Review verdict marker session did not match head SHA or scope"
+        );
+        return Ok(None);
+    }
+    if !diff_fingerprint_matches(&meta, expected_diff_fingerprint) {
+        debug!(
+            session_id = %marker.session_id,
+            meta_diff_fingerprint = ?meta.diff_fingerprint,
+            ?expected_diff_fingerprint,
+            "Review verdict marker session did not match diff fingerprint"
+        );
+        return Ok(None);
+    }
+    if !review_meta_or_artifact_is_pass(&session_dir, &meta)? {
+        debug!(
+            session_id = %marker.session_id,
+            decision = %meta.decision,
+            verdict = %meta.verdict,
+            "Review verdict marker session is not PASS/CLEAN"
+        );
+        return Ok(None);
+    }
+
+    debug!(
+        session_id = %meta.session_id,
+        scope = %meta.scope,
+        head_sha = %meta.head_sha,
+        "Review verdict marker matched PASS/CLEAN session"
+    );
+    Ok(Some(ReviewVerdictMatch {
+        session_id: meta.session_id,
+        scope: meta.scope,
+        head_sha: meta.head_sha,
     }))
 }
 

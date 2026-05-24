@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use serde::Deserialize;
 use tracing::{debug, warn};
 
 /// Number of characters from HEAD SHA used in the marker filename.
@@ -26,6 +27,22 @@ const GATE_DIR: &str = ".csa/state/review-gate";
 /// Statistics returned by [`gc_review_gate_markers`].
 pub(crate) struct GcReviewGateStats {
     pub markers_removed: u64,
+}
+
+/// Parsed review-gate marker content.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ReviewGateMarker {
+    pub session_id: String,
+    pub timestamp: String,
+    pub branch: String,
+    pub head_sha: String,
+    pub scope: String,
+    #[serde(default = "default_marker_verdict")]
+    pub verdict: String,
+}
+
+fn default_marker_verdict() -> String {
+    "CLEAN".to_string()
 }
 
 /// Return the review-gate directory for the given project root.
@@ -62,8 +79,45 @@ pub(crate) fn marker_path(project_root: &Path, branch: &str, head_sha: &str) -> 
 fn marker_toml(session_id: &str, branch: &str, head_sha: &str, scope: &str) -> String {
     let ts = Utc::now().to_rfc3339();
     format!(
-        "session_id = {session_id:?}\ntimestamp = {ts:?}\nbranch = {branch:?}\nhead_sha = {head_sha:?}\nscope = {scope:?}\n"
+        "session_id = {session_id:?}\ntimestamp = {ts:?}\nbranch = {branch:?}\nhead_sha = {head_sha:?}\nscope = {scope:?}\nverdict = \"CLEAN\"\n"
     )
+}
+
+/// Read the deterministic marker for the current branch and commit.
+///
+/// Best-effort: corrupt or unreadable markers are treated as absent so callers
+/// can fall back to the slower session scan.
+pub(crate) fn read_review_gate_marker(
+    project_root: &Path,
+    branch: &str,
+    head_sha: &str,
+) -> Option<ReviewGateMarker> {
+    let path = marker_path(project_root, branch, head_sha);
+    if !path.exists() {
+        return None;
+    }
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to read review-gate marker; falling back to session scan"
+            );
+            return None;
+        }
+    };
+    match toml::from_str(&raw) {
+        Ok(marker) => Some(marker),
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to parse review-gate marker; falling back to session scan"
+            );
+            None
+        }
+    }
 }
 
 /// Write a review-gate marker for a passing review.
@@ -319,6 +373,15 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("SID001"));
         assert!(content.contains("range:main...HEAD"));
+        assert!(content.contains("verdict = \"CLEAN\""));
+        let marker = read_review_gate_marker(project_root, "feat/test", "abc1234567890")
+            .expect("marker should parse");
+        assert_eq!(marker.session_id, "SID001");
+        assert_eq!(marker.branch, "feat/test");
+        assert_eq!(marker.head_sha, "abc1234567890");
+        assert_eq!(marker.scope, "range:main...HEAD");
+        assert_eq!(marker.verdict, "CLEAN");
+        assert!(!marker.timestamp.is_empty());
     }
 
     #[test]

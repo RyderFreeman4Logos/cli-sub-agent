@@ -117,6 +117,15 @@ fn set_task_type(project_root: &Path, session_id: &str, task_type: &str) {
     csa_session::save_session(&session).expect("save session");
 }
 
+fn set_session_branch(project_root: &Path, session_id: &str, branch: &str) {
+    let mut session = csa_session::load_session(project_root, session_id).expect("load session");
+    session.branch = Some(branch.to_string());
+    if let Some(identity) = session.vcs_identity.as_mut() {
+        identity.ref_name = Some(branch.to_string());
+    }
+    csa_session::save_session(&session).expect("save session");
+}
+
 fn set_review_diff_fingerprint(
     project_root: &Path,
     session_id: &str,
@@ -203,6 +212,41 @@ fn check_verdict_finds_pass_for_current_branch_head_and_full_diff() {
     )
     .unwrap()
     .expect("expected matching verdict");
+    assert_eq!(found.session_id, session_id);
+}
+
+#[test]
+fn check_verdict_reads_review_marker_before_session_scan() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let branch = "feature";
+    let head_sha = "abcdef1234567890";
+    let session_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    crate::review_gate::write_review_gate_marker(
+        &project,
+        branch,
+        head_sha,
+        &session_id,
+        REQUIRED_FULL_DIFF_SCOPE,
+    );
+
+    set_session_branch(&project, &session_id, "other-branch");
+
+    let found =
+        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
+            .unwrap()
+            .expect("marker should identify the matching verdict session");
     assert_eq!(found.session_id, session_id);
 }
 
