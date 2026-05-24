@@ -2,10 +2,9 @@ use crate::cli::ReviewArgs;
 use crate::pipeline::resolve_effective_initial_response_timeout_for_tool;
 #[cfg(test)]
 use crate::pipeline::resolve_initial_response_timeout_for_tool;
-use crate::review_consensus::{
-    CLEAN, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
-    consensus_verdict, parse_consensus_strategy, resolve_consensus,
-};
+use crate::review_consensus::CLEAN;
+#[cfg(test)]
+use crate::review_consensus::{consensus_strategy_label, parse_consensus_strategy};
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
 use crate::review_context::resolve_review_context;
@@ -18,16 +17,14 @@ use anyhow::Result;
 use csa_config::GlobalConfig;
 #[cfg(test)]
 use csa_config::ProjectConfig;
-use csa_core::consensus::AgentResponse;
 use csa_core::types::ReviewDecision;
 #[cfg(test)]
 use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
-use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
 mod output;
-use output::{is_worktree_submodule, print_reviewer_outcomes};
+use output::is_worktree_submodule;
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]
@@ -42,6 +39,8 @@ mod findings_toml;
 mod fix;
 #[path = "review_cmd_flow.rs"]
 mod flow;
+#[path = "review_cmd_gate.rs"]
+mod gate;
 #[path = "review_cmd_mempal.rs"]
 mod mempal;
 #[path = "review_cmd_multi.rs"]
@@ -85,9 +84,9 @@ use resolve::{
     review_scope_allows_auto_discovery, validate_review_direct_tool_tier_restriction,
     verify_review_skill_available,
 };
-use result_handling::{build_reviewer_outcome, resolve_single_review_result};
+use result_handling::resolve_single_review_result;
 #[rustfmt::skip]
-use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count, resolve_multi_reviewer_pool };
+use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count };
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
@@ -118,105 +117,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
     }
-    let gate_summary = {
-        let gate_steps = global_config.review.effective_gate_steps();
-        let gate_timeout = config
-            .as_ref()
-            .and_then(|c| c.review.as_ref())
-            .map(|r| r.gate_timeout_secs)
-            .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
-        let gate_mode = &global_config.review.gate_mode;
-        if gate_steps.is_empty() {
-            let gate_command = config
-                .as_ref()
-                .and_then(|c| c.review.as_ref())
-                .and_then(|r| r.gate_command.as_deref());
-            let gate_result = crate::pipeline::gate::evaluate_quality_gate(
-                &project_root,
-                gate_command,
-                gate_timeout,
-                gate_mode,
-            )
-            .await?;
-
-            if gate_result.skipped {
-                debug!(
-                    reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
-                    "Quality gate skipped"
-                );
-                None
-            } else if !gate_result.passed() {
-                match gate_mode {
-                    csa_config::GateMode::Monitor => {
-                        warn!(
-                            command = %gate_result.command,
-                            exit_code = ?gate_result.exit_code,
-                            "Quality gate failed (monitor mode — continuing with review)"
-                        );
-                        None
-                    }
-                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
-                        let mut msg = format!(
-                            "Pre-review quality gate failed (mode={gate_mode:?}).\n\
-                             Command: {}\nExit code: {:?}",
-                            gate_result.command, gate_result.exit_code
-                        );
-                        if !gate_result.stdout.is_empty() {
-                            msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
-                        }
-                        if !gate_result.stderr.is_empty() {
-                            msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
-                        }
-                        anyhow::bail!(msg);
-                    }
-                }
-            } else {
-                debug!(command = %gate_result.command, "Quality gate passed");
-                None
-            }
-        } else {
-            let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
-                &project_root,
-                &gate_steps,
-                gate_timeout,
-                gate_mode,
-            )
-            .await?;
-
-            let summary = pipeline_result.summary_for_review();
-            if !pipeline_result.passed {
-                match gate_mode {
-                    csa_config::GateMode::Monitor => {
-                        warn!("Quality gate pipeline failed (monitor mode — continuing)");
-                        Some(summary)
-                    }
-                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
-                        let failed = pipeline_result.failed_step.as_deref().unwrap_or("unknown");
-                        // Include gate output in error for diagnostics
-                        let mut msg = format!(
-                            "Pre-review quality gate pipeline FAILED at step: {failed}\n\
-                             (mode={gate_mode:?})\n"
-                        );
-                        for step in &pipeline_result.steps {
-                            if !step.passed() {
-                                msg.push_str(&format!(
-                                    "\nL{} {} ({}): exit {:?}",
-                                    step.level, step.name, step.command, step.exit_code
-                                ));
-                                if !step.stderr.is_empty() {
-                                    msg.push_str(&format!("\n  stderr: {}", step.stderr));
-                                }
-                            }
-                        }
-                        anyhow::bail!(msg);
-                    }
-                }
-            } else {
-                debug!("Quality gate pipeline passed");
-                Some(summary)
-            }
-        }
-    };
+    let gate_summary =
+        gate::run_pre_review_quality_gate(&project_root, config.as_ref(), &global_config).await?;
 
     let scope = derive_scope_for_project(&args, &project_root);
     let mode = if args.fix {
@@ -595,204 +497,27 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
         return fix_exit_code;
     }
-    if args.fix {
-        anyhow::bail!("--fix is not supported when --reviewers > 1");
-    }
-    if args.session.is_some() {
-        anyhow::bail!("--session is only supported when --reviewers=1");
-    }
-
-    let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
-    let reviewer_pool = resolve_multi_reviewer_pool(
+    multi::run_multi_reviewer_review(multi::MultiReviewerReviewContext {
+        args: &args,
         reviewers,
-        explicit_review_tool(&args),
         tool,
-        resolved_tier_name.as_deref(),
-        config.as_ref(),
-        &global_config,
-    )?;
-    let reviewer_tools = reviewer_pool.reviewer_tools;
-    let reviewer_tool_plan = reviewer_tools.clone();
-    let tier_reviewer_specs = reviewer_pool.tier_reviewer_specs;
-    multi::warn_if_fast_mode_has_no_codex_reviewer(
-        args.fast_but_more_cost,
-        &reviewer_tool_plan,
-        &tier_reviewer_specs,
-    );
-
-    let mut join_set = JoinSet::new();
-    for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
-        let reviewer_prompt = build_multi_reviewer_instruction(
-            &prompt,
-            reviewer_index + 1,
-            reviewer_tool,
-            &project_root,
-            prior_rounds_section.as_deref(),
-        );
-        let reviewer_model = review_model.clone();
-        let reviewer_project_root = project_root.clone();
-        let reviewer_config = config.clone();
-        let reviewer_global = global_config.clone();
-        let reviewer_pre_session_hook = pre_session_hook.clone();
-        let reviewer_description = format!(
-            "review[{}]: {}",
-            reviewer_index + 1,
-            crate::run_helpers::truncate_prompt(&scope, 80)
-        );
-        let reviewer_routing = review_routing.clone();
-
-        let reviewer_force_override = args.force_override_user_config;
-        let reviewer_force_ignore_tier = args.force_ignore_tier_setting;
-        let reviewer_no_failover = args.no_failover;
-        let reviewer_fast_but_more_cost = args.fast_but_more_cost;
-        let reviewer_no_fs_sandbox = args.no_fs_sandbox;
-        let reviewer_extra_writable = args.extra_writable.clone();
-        let reviewer_extra_readable = args.extra_readable.clone();
-        // Keep every reviewer on the resolved tier when possible by binding
-        // each tool to its tier model spec. Fall back to the primary spec only
-        // when we only have a single tier-resolved reviewer tool.
-        let reviewer_model_spec = tier_reviewer_specs
-            .iter()
-            .find(|resolution| resolution.tool == reviewer_tool)
-            .map(|resolution| resolution.model_spec.clone())
-            .or_else(|| {
-                if reviewer_tool == tool {
-                    resolved_model_spec.clone()
-                } else {
-                    None
-                }
-            });
-        let reviewer_tier_name = resolved_tier_name.clone();
-        let reviewer_thinking = review_thinking.clone();
-        let reviewer_initial_response_timeout_seconds =
-            resolve_effective_initial_response_timeout_for_tool(
-                reviewer_config.as_ref(),
-                args.initial_response_timeout,
-                args.idle_timeout,
-                args.timeout,
-                reviewer_tool.as_str(),
-            );
-        join_set.spawn(async move {
-            let session_result = execute_review_with_tier_filter(
-                reviewer_tool,
-                reviewer_prompt,
-                None,
-                reviewer_model,
-                reviewer_model_spec,
-                reviewer_tier_name,
-                false,
-                None,
-                reviewer_thinking,
-                reviewer_description,
-                &reviewer_project_root,
-                reviewer_config.as_ref(),
-                &reviewer_global,
-                reviewer_pre_session_hook,
-                reviewer_routing,
-                stream_mode,
-                idle_timeout_seconds,
-                reviewer_initial_response_timeout_seconds,
-                reviewer_force_override,
-                reviewer_force_ignore_tier,
-                reviewer_no_failover,
-                reviewer_fast_but_more_cost,
-                false,
-                reviewer_no_fs_sandbox,
-                readonly_project_root,
-                &reviewer_extra_writable,
-                &reviewer_extra_readable,
-            )
-            .await?;
-            build_reviewer_outcome(reviewer_index, reviewer_tool, &session_result)
-        });
-    }
-
-    let outcomes =
-        multi::collect_reviewer_outcomes(&mut join_set, &reviewer_tool_plan, args.timeout).await?;
-
-    let review_iterations = outcomes
-        .first()
-        .map(|outcome| resolve_review_iterations(&project_root, &outcome.session_id))
-        .unwrap_or(1);
-    let head_sha = csa_session::detect_git_head(&project_root).unwrap_or_default();
-    let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
-    multi::persist_multi_review_sidecars(
-        &project_root,
-        &scope,
-        &outcomes,
-        &head_sha,
-        review_iterations,
-        diff_fingerprint.clone(),
-    );
-
-    let responses: Vec<AgentResponse> = outcomes
-        .iter()
-        .map(|o| AgentResponse {
-            agent: format!("reviewer-{}:{}", o.reviewer_index + 1, o.tool.as_str()),
-            content: o.verdict.to_string(),
-            weight: 1.0,
-            timed_out: false,
-        })
-        .collect();
-
-    let consensus_result = resolve_consensus(consensus_strategy, &responses);
-    let all_reviewers_unavailable = !outcomes.is_empty()
-        && outcomes
-            .iter()
-            .all(|outcome| outcome.verdict == crate::review_consensus::UNAVAILABLE);
-    let final_verdict = if all_reviewers_unavailable {
-        crate::review_consensus::UNAVAILABLE
-    } else {
-        consensus_verdict(&consensus_result)
-    };
-    let agreement = agreement_level(&consensus_result);
-    let final_review_meta = parent_artifacts::parent_consensus_review_meta(
-        &head_sha,
-        &scope,
-        final_verdict,
-        review_iterations,
-        diff_fingerprint.clone(),
-    );
-
-    if let Err(err) = parent_artifacts::write_multi_reviewer_parent_artifacts(
-        &project_root,
-        reviewers,
-        &outcomes,
-        final_verdict,
-        all_reviewers_unavailable,
-        final_review_meta.as_ref(),
-    ) {
-        warn!(
-            error = %err,
-            "Failed to write parent multi-reviewer artifacts (continuing)"
-        );
-    }
-
-    print_reviewer_outcomes(&outcomes);
-
-    println!(
-        "===== Consensus =====\nstrategy: {}\nconsensus_reached: {}\nagreement_level: {:.0}%\nfinal_decision: {final_verdict}\nindividual_verdicts:",
-        consensus_strategy_label(consensus_result.strategy_used),
-        consensus_result.consensus_reached,
-        agreement * 100.0,
-    );
-    for o in &outcomes {
-        println!(
-            "- reviewer {} ({}) => {}",
-            o.reviewer_index + 1,
-            o.tool,
-            o.verdict
-        );
-    }
-
-    let review_session_ids = outcomes
-        .iter()
-        .map(|outcome| outcome.session_id.clone())
-        .collect::<Vec<_>>();
-    // Parent artifacts resolve their target session dir directly from the same
-    // environment contract used for consolidated findings/verdict sidecars.
-    maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
-    Ok(if final_verdict == CLEAN { 0 } else { 1 })
+        prompt: &prompt,
+        scope: &scope,
+        project_root: &project_root,
+        config: &config,
+        global_config: &global_config,
+        pre_session_hook: pre_session_hook.clone(),
+        review_routing,
+        review_model,
+        resolved_model_spec,
+        resolved_tier_name,
+        review_thinking,
+        stream_mode,
+        idle_timeout_seconds,
+        readonly_project_root,
+        prior_rounds_section: prior_rounds_section.as_deref(),
+    })
+    .await
 }
 
 #[cfg(test)]
