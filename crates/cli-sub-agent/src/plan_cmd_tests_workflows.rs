@@ -55,6 +55,36 @@ fn dev2merge_workflow_marks_mktsk_step_manual() {
 }
 
 #[test]
+fn mktd_light_mode_skips_recon_dimensions() {
+    let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    for step_id in 3..=6 {
+        let step = plan
+            .steps
+            .iter()
+            .find(|step| step.id == step_id)
+            .unwrap_or_else(|| panic!("missing mktd RECON step {step_id}"));
+        assert_eq!(
+            step.condition.as_deref(),
+            Some("!(${INTENSITY_IS_LIGHT})"),
+            "mktd light mode must skip RECON step {step_id}"
+        );
+    }
+
+    let pattern = std::fs::read_to_string(workspace_root().join("patterns/mktd/PATTERN.md"))
+        .expect("read mktd pattern");
+    assert_eq!(
+        pattern
+            .matches("Condition: !(${INTENSITY_IS_LIGHT})")
+            .count(),
+        4,
+        "PATTERN.md must stay synced with workflow RECON conditions"
+    );
+}
+
+#[test]
 fn pr_bot_debate_audit_reads_step12_output_and_prompt_has_comment_context() {
     let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();

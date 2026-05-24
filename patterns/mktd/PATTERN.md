@@ -177,6 +177,7 @@ echo "Chinese (Simplified)"
 ## Step 2: Phase 1 — RECON Dimension 1 (Structure)
 
 Tool: csa
+Condition: !(${INTENSITY_IS_LIGHT})
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
 Workspace Access: read-only
@@ -194,6 +195,7 @@ Working directory: ${CWD}
 ## Step 3: Phase 1 — RECON Dimension 2 (Patterns)
 
 Tool: csa
+Condition: !(${INTENSITY_IS_LIGHT})
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
 Workspace Access: read-only
@@ -211,6 +213,7 @@ Working directory: ${CWD}
 ## Step 4: Phase 1 — RECON Dimension 3 (Constraints)
 
 Tool: csa
+Condition: !(${INTENSITY_IS_LIGHT})
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
 Workspace Access: read-only
@@ -228,6 +231,7 @@ Working directory: ${CWD}
 ## Step 4a: Phase 1 — RECON Dimension 4 (Semantic Invariants)
 
 Tool: csa
+Condition: !(${INTENSITY_IS_LIGHT})
 Session: ${STEP_1_OUTPUT}
 Tier: ${RECON_TIER}
 Workspace Access: read-only

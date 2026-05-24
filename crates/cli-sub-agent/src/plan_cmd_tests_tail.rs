@@ -5,6 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use weave::compiler::{FailAction, PlanStep, VariableDecl, plan_from_toml};
 
+#[path = "plan_cmd_tests_step_failure.rs"]
+mod tests_step_failure;
+
 #[tokio::test]
 async fn execute_step_skips_when_condition_is_false() {
     let step = PlanStep {
