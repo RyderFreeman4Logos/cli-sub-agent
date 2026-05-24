@@ -170,6 +170,84 @@ fn write_multi_reviewer_parent_artifacts_accepts_reviewer_contract_artifact() {
 }
 
 #[test]
+fn write_multi_reviewer_parent_artifacts_reads_child_session_reviewer_artifacts() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).expect("project dir should be created");
+    let parent_dir = temp.path().join("parent-session");
+    fs::create_dir_all(&parent_dir).expect("parent session dir should be created");
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &parent_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    let child = csa_session::create_session_fresh(
+        &project,
+        Some("review[1]: range:main...HEAD"),
+        None,
+        None,
+    )
+    .expect("child reviewer session should be created");
+    let child_id = child.meta_session_id.clone();
+    let child_dir = csa_session::get_session_dir(&project, &child_id).unwrap();
+    let reviewer_dir = child_dir.join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let findings = vec![Finding {
+        severity: Severity::High,
+        fid: "CHILD-FID".to_string(),
+        file: "src/lib.rs".to_string(),
+        line: Some(11),
+        rule_id: "rule.child-artifact".to_string(),
+        summary: "child artifact finding".to_string(),
+        engine: "reviewer".to_string(),
+    }];
+    let artifact = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: child_id.clone(),
+        timestamp: chrono::Utc::now(),
+    };
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+
+    let outcomes = vec![super::super::output::ReviewerOutcome {
+        reviewer_index: 0,
+        tool: ToolName::Codex,
+        session_id: child_id,
+        output: "Reviewer found an issue.".to_string(),
+        exit_code: 1,
+        verdict: crate::review_consensus::HAS_ISSUES,
+        diagnostic: None,
+    }];
+
+    write_multi_reviewer_parent_artifacts(
+        &project,
+        1,
+        &outcomes,
+        crate::review_consensus::HAS_ISSUES,
+        false,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    let parent_findings: FindingsFile = toml::from_str(
+        &fs::read_to_string(parent_dir.join("output").join("findings.toml"))
+            .expect("findings.toml should exist"),
+    )
+    .expect("findings.toml should parse");
+    assert_eq!(parent_findings.findings.len(), 1);
+    assert_eq!(parent_findings.findings[0].id, "CHILD-FID");
+}
+
+#[test]
 fn write_multi_reviewer_parent_artifacts_preserves_has_issues_consensus_with_empty_findings() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
@@ -471,6 +549,88 @@ fn write_standalone_consensus_review_artifacts_updates_carrier_session() {
             .expect("summary should exist")
             .contains("Final verdict: CLEAN")
     );
+}
+
+#[test]
+fn write_standalone_consensus_review_artifacts_preserves_child_findings() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).expect("project dir should be created");
+    let carrier = csa_session::create_session_fresh(
+        &project,
+        Some("review[1]: range:main...HEAD"),
+        None,
+        None,
+    )
+    .expect("carrier session should be created");
+    let carrier_id = carrier.meta_session_id.clone();
+    let carrier_dir = csa_session::get_session_dir(&project, &carrier_id).unwrap();
+    let reviewer_dir = carrier_dir.join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let findings = vec![Finding {
+        severity: Severity::High,
+        fid: "STANDALONE-FID".to_string(),
+        file: "src/lib.rs".to_string(),
+        line: Some(13),
+        rule_id: "rule.standalone-artifact".to_string(),
+        summary: "standalone artifact finding".to_string(),
+        engine: "reviewer".to_string(),
+    }];
+    let artifact = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: carrier_id.clone(),
+        timestamp: chrono::Utc::now(),
+    };
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+    let outcomes = vec![super::super::output::ReviewerOutcome {
+        reviewer_index: 0,
+        tool: ToolName::Codex,
+        session_id: carrier_id.clone(),
+        output: "Reviewer found an issue.".to_string(),
+        exit_code: 1,
+        verdict: crate::review_consensus::HAS_ISSUES,
+        diagnostic: None,
+    }];
+    let ctx = MultiReviewerConsensusArtifacts {
+        project_root: &project,
+        reviewers: 1,
+        outcomes: &outcomes,
+        final_verdict: crate::review_consensus::HAS_ISSUES,
+        all_reviewers_unavailable: false,
+        head_sha: "abcdef1234567890",
+        scope: "range:main...HEAD",
+        review_iterations: 1,
+        diff_fingerprint: Some("sha256:test".to_string()),
+    };
+
+    let written = write_standalone_consensus_review_artifacts(&ctx)
+        .expect("standalone consensus artifacts should be written");
+
+    assert_eq!(written.as_deref(), Some(carrier_id.as_str()));
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(carrier_dir.join("output").join("review-verdict.json"))
+            .expect("review verdict should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+
+    let findings_toml: FindingsFile = toml::from_str(
+        &fs::read_to_string(carrier_dir.join("output").join("findings.toml"))
+            .expect("findings.toml should exist"),
+    )
+    .expect("findings.toml should parse");
+    assert_eq!(findings_toml.findings.len(), 1);
+    assert_eq!(findings_toml.findings[0].id, "STANDALONE-FID");
 }
 
 #[test]

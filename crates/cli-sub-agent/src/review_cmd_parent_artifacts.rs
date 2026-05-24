@@ -72,23 +72,41 @@ fn parse_reviewer_artifact(path: &Path, content: &str) -> Result<ReviewArtifact>
 }
 
 fn load_multi_reviewer_artifacts(
+    project_root: &Path,
     output_dir: &Path,
     reviewers: usize,
+    outcomes: &[ReviewerOutcome],
 ) -> Result<Vec<ReviewArtifact>> {
     let mut reviewer_artifacts = Vec::new();
     for reviewer_index in 1..=reviewers {
-        let artifact_path = output_dir
-            .join(format!("reviewer-{reviewer_index}"))
-            .join("review-findings.json");
-
-        if !artifact_path.exists() {
-            continue;
+        let mut artifact_paths = vec![
+            output_dir
+                .join(format!("reviewer-{reviewer_index}"))
+                .join("review-findings.json"),
+        ];
+        if let Some(outcome) = outcomes
+            .iter()
+            .find(|outcome| outcome.reviewer_index + 1 == reviewer_index)
+            && let Ok(session_dir) = csa_session::get_session_dir(project_root, &outcome.session_id)
+        {
+            artifact_paths.push(
+                session_dir
+                    .join(format!("reviewer-{reviewer_index}"))
+                    .join("review-findings.json"),
+            );
         }
 
-        let content = fs::read_to_string(&artifact_path)
-            .with_context(|| format!("failed to read {}", artifact_path.display()))?;
-        let artifact = parse_reviewer_artifact(&artifact_path, &content)?;
-        reviewer_artifacts.push(artifact);
+        for artifact_path in artifact_paths {
+            if !artifact_path.exists() {
+                continue;
+            }
+
+            let content = fs::read_to_string(&artifact_path)
+                .with_context(|| format!("failed to read {}", artifact_path.display()))?;
+            let artifact = parse_reviewer_artifact(&artifact_path, &content)?;
+            reviewer_artifacts.push(artifact);
+            break;
+        }
     }
     Ok(reviewer_artifacts)
 }
@@ -104,7 +122,8 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     let Some((session_dir, session_id)) = resolve_parent_session_env() else {
         return Ok(());
     };
-    let reviewer_artifacts = load_multi_reviewer_artifacts(&session_dir, reviewers)?;
+    let reviewer_artifacts =
+        load_multi_reviewer_artifacts(project_root, &session_dir, reviewers, outcomes)?;
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
     let parent_decision =
         parent_review_decision(&consolidated, final_verdict, all_reviewers_unavailable);
@@ -175,6 +194,12 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         consensus_review_decision(ctx.final_verdict)
     };
     let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
+    let reviewer_artifacts =
+        load_multi_reviewer_artifacts(ctx.project_root, &session_dir, ctx.reviewers, ctx.outcomes)?;
+    let consolidated = build_consolidated_artifact(reviewer_artifacts, &target.session_id);
+    let artifact = parent_artifact_for_decision(&consolidated, decision);
+    write_consolidated_artifact(&artifact, &session_dir)?;
+    write_parent_findings_toml(&session_dir, &artifact)?;
     let meta = ReviewSessionMeta {
         session_id: target.session_id.clone(),
         head_sha: ctx.head_sha.to_string(),
@@ -198,7 +223,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         target.session_id.clone(),
         decision,
         verdict,
-        &[],
+        &artifact.findings,
         Vec::new(),
     );
     write_review_verdict(&session_dir, &verdict_artifact)
