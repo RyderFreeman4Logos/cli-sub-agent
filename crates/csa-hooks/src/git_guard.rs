@@ -107,18 +107,51 @@ if [ "${BLOCK_HOOKS_PATH_OVERRIDE}" = "true" ]; then
   exit 1
 fi
 
+EXPECT_COMMIT_VALUE=""
 for arg in "$@"; do
+  if [ -n "${EXPECT_COMMIT_VALUE}" ]; then
+    EXPECT_COMMIT_VALUE=""
+    continue
+  fi
+
   case "${arg}" in
     --no-verify|--no-verify=*)
       echo "BLOCKED: CSA git guard prohibits git commit --no-verify." >&2
       exit 1
       ;;
+    --)
+      break
+      ;;
+    --author|--cleanup|--date|--file|--fixup|--message|--pathspec-from-file|--reuse-message|--reedit-message|--squash|--template|--trailer)
+      EXPECT_COMMIT_VALUE="commit-option"
+      continue
+      ;;
+    --author=*|--cleanup=*|--date=*|--file=*|--fixup=*|--message=*|--pathspec-from-file=*|--reuse-message=*|--reedit-message=*|--squash=*|--template=*|--trailer=*)
+      continue
+      ;;
     --*)
       ;;
-    -?*n*|-n)
-      # Git commit uses -n as the short form of --no-verify.
-      echo "BLOCKED: CSA git guard prohibits git commit -n/short -n combinations." >&2
-      exit 1
+    -*)
+      # Git commit uses -n as the short form of --no-verify. Short options that
+      # take values consume the rest of the cluster or the next argument, so a
+      # leading dash inside that value must not be parsed as another option.
+      short_options="${arg#-}"
+      while [ -n "${short_options}" ]; do
+        short_option="${short_options:0:1}"
+        short_options="${short_options:1}"
+        case "${short_option}" in
+          n)
+            echo "BLOCKED: CSA git guard prohibits git commit -n/short -n combinations." >&2
+            exit 1
+            ;;
+          C|F|c|m|t)
+            if [ -z "${short_options}" ]; then
+              EXPECT_COMMIT_VALUE="commit-option"
+            fi
+            break
+            ;;
+        esac
+      done
       ;;
   esac
 done
@@ -393,6 +426,86 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
             "commit --amend"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_allows_markdown_bullet_after_long_message_option() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().unwrap();
+        let wrapper = temp.path().join("git");
+        write_executable(&wrapper, git_wrapper_script());
+
+        let fake_git = temp.path().join("real-git");
+        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
+
+        let output = std::process::Command::new(&wrapper)
+            .arg("commit")
+            .arg("--message")
+            .arg("fix(batch): count read failures as skipped")
+            .arg("--message")
+            .arg("- **Design Intent**: count failed reads as skipped")
+            .env("CSA_REAL_GIT", &fake_git)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "commit --message fix(batch): count read failures as skipped --message - **Design Intent**: count failed reads as skipped"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_allows_leading_dash_after_short_message_option() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().unwrap();
+        let wrapper = temp.path().join("git");
+        write_executable(&wrapper, git_wrapper_script());
+
+        let fake_git = temp.path().join("real-git");
+        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
+
+        let output = std::process::Command::new(&wrapper)
+            .arg("commit")
+            .arg("-m")
+            .arg("- leading dash is message text")
+            .env("CSA_REAL_GIT", &fake_git)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "commit -m - leading dash is message text"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_allows_leading_dash_after_file_option() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().unwrap();
+        let wrapper = temp.path().join("git");
+        write_executable(&wrapper, git_wrapper_script());
+
+        let fake_git = temp.path().join("real-git");
+        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
+
+        let output = std::process::Command::new(&wrapper)
+            .arg("commit")
+            .arg("-F")
+            .arg("-")
+            .env("CSA_REAL_GIT", &fake_git)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "commit -F -"
         );
     }
 
