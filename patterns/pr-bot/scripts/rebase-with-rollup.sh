@@ -336,7 +336,7 @@ sleep "${BOT_SETTLE_SECS}"
 set +e
 LATE_ACTIONABLE_COUNT="$(
   gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-    | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+    | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
     2>/dev/null
 )"
 LATE_ACTIONABLE_RC=$?
