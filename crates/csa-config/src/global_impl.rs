@@ -147,6 +147,7 @@ impl GlobalConfig {
 
     fn sanitized(mut self, path: Option<&Path>) -> Self {
         self.kv_cache = self.kv_cache.sanitized(path);
+        self.filesystem_sandbox.sanitize_legacy_xdg_runtime_root();
         self
     }
 

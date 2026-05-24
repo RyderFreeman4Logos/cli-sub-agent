@@ -284,8 +284,9 @@ impl ProjectConfig {
             crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
                 .with_context(|| format!("Invalid config: {}", path.display()))?;
         }
-        let config: Self = toml::from_str(&content)
+        let mut config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
+        config.sanitize_filesystem_sandbox();
         crate::validate::validate_tool_transport_overrides(&config)?;
         Ok(Some(config))
     }
@@ -351,10 +352,27 @@ impl ProjectConfig {
 
         // Roundtrip through string for reliable deserialization
         let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;
-        let config: Self =
+        let mut config: Self =
             toml::from_str(&merged_str).context("Failed to deserialize merged config")?;
+        config.sanitize_filesystem_sandbox();
         crate::validate::validate_tool_transport_overrides(&config)?;
         Ok(Some(config))
+    }
+
+    fn sanitize_filesystem_sandbox(&mut self) {
+        self.filesystem_sandbox.sanitize_legacy_xdg_runtime_root();
+        for (tool, config) in &mut self.tools {
+            let Some(sandbox) = &mut config.filesystem_sandbox else {
+                continue;
+            };
+            let Some(paths) = sandbox.writable_paths.as_mut() else {
+                continue;
+            };
+            let context = format!("tools.{tool}.filesystem_sandbox.writable_paths");
+            crate::config_filesystem_sandbox::sanitize_legacy_xdg_runtime_root_paths(
+                paths, &context,
+            );
+        }
     }
 
     /// Path to user-level config for reads.
