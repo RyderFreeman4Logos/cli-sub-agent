@@ -23,7 +23,9 @@ use super::output::{
     print_reviewer_outcomes,
 };
 use super::prior_rounds::explicit_review_tool;
-use super::result_handling::{build_reviewer_outcome, build_unavailable_reviewer_outcome};
+use super::result_handling::{
+    build_reviewer_outcome, build_unavailable_reviewer_outcome, reviewer_unavailable_error_reason,
+};
 use super::reviewers::resolve_multi_reviewer_pool;
 use csa_session::state::ReviewSessionMeta;
 use std::path::Path;
@@ -131,7 +133,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let idle_timeout_seconds = ctx.idle_timeout_seconds;
         let readonly_project_root = ctx.readonly_project_root;
         join_set.spawn(async move {
-            let session_result = execute_review_with_tier_filter(
+            let session_result = match execute_review_with_tier_filter(
                 reviewer_tool,
                 reviewer_prompt,
                 None,
@@ -160,7 +162,26 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 &reviewer_extra_writable,
                 &reviewer_extra_readable,
             )
-            .await?;
+            .await
+            {
+                Ok(session_result) => session_result,
+                Err(err) => {
+                    if let Some(reason) = reviewer_unavailable_error_reason(&err, reviewer_tool) {
+                        warn!(
+                            reviewer = reviewer_index + 1,
+                            tool = %reviewer_tool,
+                            reason = %reason,
+                            "Reviewer unavailable; continuing multi-reviewer consensus"
+                        );
+                        return Ok(build_unavailable_reviewer_outcome(
+                            reviewer_index,
+                            reviewer_tool,
+                            reason,
+                        ));
+                    }
+                    return Err(err);
+                }
+            };
             build_reviewer_outcome(reviewer_index, reviewer_tool, &session_result)
         });
     }
@@ -413,5 +434,30 @@ mod tests {
 
         assert_eq!(consensus.decision.as_deref(), Some(HAS_ISSUES));
         assert_eq!(consensus_verdict(&consensus), HAS_ISSUES);
+    }
+
+    #[tokio::test]
+    async fn collect_reviewer_outcomes_waits_after_unavailable_reviewer() {
+        let mut join_set = JoinSet::new();
+        join_set.spawn(async {
+            Ok(build_unavailable_reviewer_outcome(
+                0,
+                ToolName::GeminiCli,
+                "gemini-cli tool failure: reason: QUOTA_EXHAUSTED",
+            ))
+        });
+        join_set.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Ok(outcome(1, CLEAN))
+        });
+
+        let outcomes =
+            collect_reviewer_outcomes(&mut join_set, &[ToolName::GeminiCli, ToolName::Codex], None)
+                .await
+                .expect("collect outcomes");
+
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].verdict, UNAVAILABLE);
+        assert_eq!(outcomes[1].verdict, CLEAN);
     }
 }
