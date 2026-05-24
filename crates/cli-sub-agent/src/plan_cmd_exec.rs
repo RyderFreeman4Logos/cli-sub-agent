@@ -105,6 +105,9 @@ pub(super) async fn execute_bash_step(
     if !stdout.is_empty() {
         eprint!("{stdout}");
     }
+    if !stderr_str.is_empty() {
+        eprint!("{stderr_str}");
+    }
     Ok(StepExecutionOutcome {
         exit_code: output.status.code().unwrap_or(1),
         output: stdout,
@@ -139,7 +142,7 @@ async fn spawn_bash(
         .env("CSA_INTERNAL_INVOCATION", "1")
         .current_dir(project_root)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::piped())
         .output()
         .await
 }

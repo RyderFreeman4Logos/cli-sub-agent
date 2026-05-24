@@ -39,7 +39,7 @@ Generate a structured TODO plan for a feature through five phases: parallel CSA 
 | Mode | Phases | Use Case |
 |------|--------|----------|
 | `full` | All phases including threat model + debate | Default: significant changes |
-| `light` | RECON → DRAFT → SPEC → SAVE → APPROVE (skips threat model, debate, revision) | Small changes (≤2 code files, <50 insertions) |
+| `light` | DRAFT → SPEC → SAVE → APPROVE (skips RECON, threat model, debate, revision) | Small changes (≤2 code files, <50 insertions) |
 
 Pass via `--var INTENSITY=light` when invoking the workflow. dev2merge auto-selects based on change size.
 
@@ -68,7 +68,7 @@ breaks prompt-guard propagation.
 
 ### Step-by-Step
 
-1. **Phase 1 -- RECON** (4 parallel CSA calls, tier-1):
+1. **Phase 1 -- RECON** *(skipped in light mode)* (4 parallel CSA calls, tier-1):
    - RECON CSA calls are read-only by contract: workflow steps MUST set `workspace_access = "read-only"`, which plan execution maps to a read-only project-root sandbox, and each RECON prompt MUST explicitly prohibit file edits or git-state writes.
    - **Dimension 1 (Structure)**: Analyze codebase structure relevant to the feature (files, types, dependencies, entry points).
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
@@ -82,7 +82,7 @@ breaks prompt-guard propagation.
    - No cross-crate dependency analysis needed
    This avoids the cold-start cost (~10K+ tokens per RECON session) for trivial changes. The orchestrator documents skipped RECON in the TODO draft with: `RECON: skipped (small task, context sufficient)`.
 2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> default Chinese (Simplified) when script is mixed/unknown -> fallback Chinese (Simplified) when `${FEATURE}` is empty. This language is captured as `${STEP_2_OUTPUT}`.
-3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_2_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
+3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_2_OUTPUT}`. In light mode, RECON findings are intentionally empty and the draft uses the supplied feature brief plus already-available context. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 4. **Phase 2.5 -- THREAT MODEL** *(skipped in light mode)*: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults), plus concurrency-specific failure modes: concurrent writers, TOCTOU / rollback / cleanup races, state-machine invariants under concurrent transitions, and file-write atomicity. If the task is a default-change task (changes a default value, default transport, default tool, default feature gate, or default config field), emit an `existing-config x upgrade-path` matrix covering legitimate pre-change user states, pre-change behavior, post-change behavior, and whether a gap exists. Each matrix row with `Gap = Yes` MUST be tagged `[Security]` or `[Compat]` and added as a Phase-2.5-generated TODO item. Non-default-change tasks skip the matrix.
 5. **Phase 3 -- DEBATE** *(skipped in light mode)*: Run explicit `csa debate` (uses global `[debate]` config) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`. The red-team MUST enumerate every TODO-plan assumption and construct a counterexample scenario for each.
 6. **Phase 3.5 -- DEBATE VALIDATION** *(skipped in light mode)*: Hard-fail if required evidence headers, mapped verdict (`READY|REVISE`), raw verdict (`APPROVE|REVISE|REJECT|UNKNOWN`), or confidence are missing.

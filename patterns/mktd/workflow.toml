@@ -245,6 +245,7 @@ on_fail = "abort"
 id = 3
 title = "Phase 1 — RECON Dimension 1 (Structure)"
 tool = "csa"
+condition = "!(${INTENSITY_IS_LIGHT})"
 workspace_access = "read-only"
 prompt = """
 Analyze codebase structure relevant to ${FEATURE}.
@@ -265,6 +266,7 @@ session = "${STEP_1_OUTPUT}"
 id = 4
 title = "Phase 1 — RECON Dimension 2 (Patterns)"
 tool = "csa"
+condition = "!(${INTENSITY_IS_LIGHT})"
 workspace_access = "read-only"
 prompt = """
 Find existing patterns or similar features to ${FEATURE} in this codebase.
@@ -284,6 +286,7 @@ session = "${STEP_1_OUTPUT}"
 id = 5
 title = "Phase 1 — RECON Dimension 3 (Constraints)"
 tool = "csa"
+condition = "!(${INTENSITY_IS_LIGHT})"
 workspace_access = "read-only"
 prompt = """
 Identify constraints and risks for implementing ${FEATURE}.
@@ -303,6 +306,7 @@ session = "${STEP_1_OUTPUT}"
 id = 6
 title = "Phase 1 — RECON Dimension 4 (Semantic Invariants)"
 tool = "csa"
+condition = "!(${INTENSITY_IS_LIGHT})"
 workspace_access = "read-only"
 prompt = """
 Identify the semantic invariants and concurrency assumptions for ${FEATURE}.

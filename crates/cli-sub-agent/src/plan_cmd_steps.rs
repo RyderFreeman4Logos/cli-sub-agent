@@ -26,6 +26,9 @@ use super::{
     substitute_vars,
 };
 
+const STEP_FAILURE_STDERR_TAIL_LINES: usize = 20;
+const STEP_FAILURE_STDERR_TAIL_MAX_CHARS: usize = 4000;
+
 #[path = "plan_cmd_step_target.rs"]
 mod step_target;
 pub(crate) use step_target::{StepTarget, resolve_step_tool, step_readonly_project_root};
@@ -459,7 +462,7 @@ pub(crate) async fn execute_step_with_workflow(
         _ => 1,
     };
 
-    let mut last_result = None;
+    let mut last_failure = None;
 
     for attempt in 1..=max_attempts {
         if attempt > 1 {
@@ -517,7 +520,7 @@ pub(crate) async fn execute_step_with_workflow(
                     exit_code: 1,
                     output: String::new(),
                     session_id: None,
-                    stderr: String::new(),
+                    stderr: format!("{err:#}"),
                 }
             }
         };
@@ -546,11 +549,19 @@ pub(crate) async fn execute_step_with_workflow(
             };
         }
 
-        last_result = Some(outcome.exit_code);
+        last_failure = Some(outcome);
     }
 
-    let exit_code = last_result.unwrap_or(1);
+    let exit_code = last_failure
+        .as_ref()
+        .map(|outcome| outcome.exit_code)
+        .unwrap_or(1);
     let duration = start.elapsed().as_secs_f64();
+    let failure_stderr = last_failure
+        .as_ref()
+        .map(|outcome| outcome.stderr.as_str())
+        .unwrap_or_default();
+    let failure_error = format_step_failure_error(exit_code, failure_stderr);
 
     // Handle on_fail
     match &step.on_fail {
@@ -566,7 +577,7 @@ pub(crate) async fn execute_step_with_workflow(
                 exit_code,
                 duration_secs: duration,
                 skipped: true,
-                error: Some(format!("Skipped after failure (exit code {exit_code})")),
+                error: Some(format!("Skipped after failure ({failure_error})")),
                 output: None,
                 session_id: None,
             }
@@ -584,7 +595,7 @@ pub(crate) async fn execute_step_with_workflow(
                 duration_secs: duration,
                 skipped: false,
                 error: Some(format!(
-                    "Delegate('{target}') not supported in v1; step failed with exit code {exit_code}"
+                    "Delegate('{target}') not supported in v1; step failed with {failure_error}"
                 )),
                 output: None,
                 session_id: None,
@@ -600,10 +611,45 @@ pub(crate) async fn execute_step_with_workflow(
                 exit_code,
                 duration_secs: duration,
                 skipped: false,
-                error: Some(format!("Exit code {exit_code}")),
+                error: Some(failure_error),
                 output: None,
                 session_id: None,
             }
         }
     }
+}
+
+fn format_step_failure_error(exit_code: i32, stderr: &str) -> String {
+    let mut error = format!("Exit code {exit_code}");
+    if let Some(stderr_tail) = stderr_tail(stderr) {
+        error.push_str(&format!(
+            "\nstderr (last {STEP_FAILURE_STDERR_TAIL_LINES} lines):\n{stderr_tail}"
+        ));
+    }
+    error
+}
+
+fn stderr_tail(stderr: &str) -> Option<String> {
+    let mut lines = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .rev()
+        .take(STEP_FAILURE_STDERR_TAIL_LINES)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    let mut tail = lines.join("\n");
+    if tail.len() > STEP_FAILURE_STDERR_TAIL_MAX_CHARS {
+        let keep_from = tail
+            .char_indices()
+            .rev()
+            .find_map(|(idx, _)| {
+                (tail.len() - idx <= STEP_FAILURE_STDERR_TAIL_MAX_CHARS).then_some(idx)
+            })
+            .unwrap_or(0);
+        tail = format!("...{}", &tail[keep_from..]);
+    }
+    Some(tail)
 }
