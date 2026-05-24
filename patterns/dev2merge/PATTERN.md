@@ -203,6 +203,7 @@ Even FAST_PATH runs cumulative review before push.
 set -euo pipefail
 bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}" -- \
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
+csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ```
@@ -380,6 +381,7 @@ into Step 12.
 set -euo pipefail
 bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}" -- \
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
+csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ```
@@ -443,7 +445,7 @@ review verdict for the full cumulative diff (`${DEFAULT_BRANCH}...HEAD`).
 
 ```bash
 set -euo pipefail
-csa review --check-verdict
+csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_VERDICT_CHECKED=true"
 echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 14)" required=true -->'
 ```

@@ -26,13 +26,25 @@ fn dev2merge_declares_review_completed_for_push_gate() {
             .any(|variable| variable.name == "REVIEW_COMPLETED"),
         "REVIEW_COMPLETED must be declared so CSA_VAR injection reaches the push gate"
     );
-    assert!(
-        plan.steps.iter().any(|step| {
-            step.title == "Pre-PR Cumulative Review Gate"
-                && step.prompt.contains("CSA_VAR:REVIEW_COMPLETED=true")
-        }),
-        "review gate must emit REVIEW_COMPLETED"
-    );
+    for title in ["FAST_PATH Pre-PR Review", "Pre-PR Cumulative Review Gate"] {
+        let review_step = plan
+            .steps
+            .iter()
+            .find(|step| step.title == title)
+            .unwrap_or_else(|| panic!("dev2merge must contain {title}"));
+        let verdict_check_index = review_step
+            .prompt
+            .find(r#"csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD""#)
+            .unwrap_or_else(|| panic!("{title} must check the full-diff verdict before push"));
+        let completed_marker_index = review_step
+            .prompt
+            .find("CSA_VAR:REVIEW_COMPLETED=true")
+            .unwrap_or_else(|| panic!("{title} must emit REVIEW_COMPLETED"));
+        assert!(
+            verdict_check_index < completed_marker_index,
+            "{title} must validate PASS/CLEAN before emitting REVIEW_COMPLETED"
+        );
+    }
     assert!(
         plan.steps.iter().any(|step| {
             step.title == "Push Gate" && step.prompt.contains("${REVIEW_COMPLETED:-}")
