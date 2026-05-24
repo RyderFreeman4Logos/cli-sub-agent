@@ -155,16 +155,16 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | **IF FAST_PATH** | | | |
 | 4 | Simplified Commit | `just test && git commit` | bash |
 | 5 | Version Bump | `just bump-patch` if needed | bash |
-| 6 | Pre-PR Review | `csa review --range` | bash |
+| 6 | Pre-PR Review | `csa review --range` then `csa review --check-verdict --range` | bash |
 | **ELSE (Full Pipeline)** | | | |
 | 7 | Plan with mktd | `csa plan run patterns/mktd/workflow.toml` | bash |
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly (TaskCreate/TaskUpdate) | main agent |
 | 9 | Version Bump | `just bump-patch` if needed | bash |
 | 10 | Self-Review Gate | Main agent checks and fixes the full branch diff before CSA review | main agent |
-| 11 | Pre-PR Cumulative Review Gate | `csa review --range ${DEFAULT_BRANCH}...HEAD` | bash |
+| 11 | Pre-PR Cumulative Review Gate | `csa review --range ${DEFAULT_BRANCH}...HEAD` then `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` | bash |
 | **ENDIF** | | | |
 | 12 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
-| 13 | Pre-PR Review Verdict Check | `csa review --check-verdict` requires PASS/CLEAN for `${DEFAULT_BRANCH}...HEAD` | bash |
+| 13 | Pre-PR Review Verdict Check | `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` requires PASS/CLEAN | bash |
 | 14 | Create or Reuse PR | `gh pr create` or reuse existing, outputs `PR_NUMBER`/`PR_URL` | bash |
 | 15 | pr-bot Hard Gate | **MANDATORY** — runs pr-bot (review + merge) | bash |
 | 16 | Post-Merge Sync | Verifies PR MERGED, then checkout and fast-forward the default branch | bash |
@@ -214,9 +214,9 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks via main agent.
 5. If FAST_PATH: simplified commit created with tests passing.
 6. Version bumped if needed.
-7. Pre-PR cumulative review passed (`REVIEW_COMPLETED=true`).
+7. Pre-PR cumulative review passed the PASS/CLEAN verdict check before setting `REVIEW_COMPLETED=true`.
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
-9. Pre-PR review verdict check passed (`csa review --check-verdict`).
+9. Pre-PR review verdict check passed (`csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD`).
 10. PR created or reused on GitHub targeting the default branch, `PR_NUMBER` and `PR_URL` resolved.
 11. pr-bot hard gate completed: either triggered `pr-bot` or detected an already-completed run for the same PR/HEAD.
 12. PR state verified as MERGED (defense in depth against skipped Step 15).

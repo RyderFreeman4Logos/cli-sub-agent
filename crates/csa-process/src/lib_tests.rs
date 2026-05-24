@@ -332,6 +332,25 @@ fn test_tool_liveness_true_for_live_pid_and_output_growth() {
     assert!(ToolLiveness::is_alive(tmp.path()));
 }
 
+#[cfg(unix)]
+#[test]
+fn test_tool_liveness_matches_daemon_pid_by_session_dir_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 30")
+        .arg("session-runner")
+        .arg(tmp.path())
+        .spawn()
+        .expect("spawn sleeper");
+    std::fs::write(tmp.path().join("daemon.pid"), child.id().to_string()).expect("write pid");
+
+    assert_eq!(ToolLiveness::live_process_pid(tmp.path()), Some(child.id()));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[test]
 fn test_tool_liveness_false_when_no_signals() {
     let tmp = tempfile::tempdir().expect("tempdir");

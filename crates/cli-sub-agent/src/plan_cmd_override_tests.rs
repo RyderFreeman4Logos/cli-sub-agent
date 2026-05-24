@@ -581,3 +581,77 @@ fn resolve_step_tool_respects_model_spec_override() {
         assert_eq!(model_spec, Some(model_spec_override));
     }
 }
+
+#[test]
+fn resolve_step_tool_model_spec_override_bypasses_step_tier() {
+    use super::plan_cmd_steps::resolve_step_tool;
+
+    let config: csa_config::ProjectConfig = toml::from_str(
+        r#"
+[tools.gemini-cli]
+enabled = true
+
+[tools.codex]
+enabled = true
+
+[tiers.review]
+description = "review"
+models = ["gemini-cli/google/gemini-2.5-pro/high"]
+"#,
+    )
+    .unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "tiered step".to_string(),
+        tool: None,
+        tier: Some("review".to_string()),
+        prompt: "test prompt".to_string(),
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+        workspace_access: None,
+    };
+    let model_spec_override = "codex/openai/gpt-5/high".to_string();
+
+    let target = resolve_step_tool(&step, Some(&config), None, Some(&model_spec_override))
+        .expect("model spec override should resolve");
+
+    match target {
+        StepTarget::CsaTool {
+            tool_name,
+            model_spec,
+            tier_name,
+        } => {
+            assert_eq!(tool_name, ToolName::Codex);
+            assert_eq!(model_spec, Some(model_spec_override));
+            assert_eq!(tier_name, None);
+        }
+        _ => panic!("expected CSA target"),
+    }
+}
+
+#[test]
+fn resolve_step_tool_model_spec_override_does_not_affect_bash() {
+    use super::plan_cmd_steps::resolve_step_tool;
+
+    let step = PlanStep {
+        id: 1,
+        title: "bash step".to_string(),
+        tool: Some("bash".to_string()),
+        tier: Some("review".to_string()),
+        prompt: "echo ok".to_string(),
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+        workspace_access: None,
+    };
+    let model_spec_override = "codex/openai/gpt-5/high".to_string();
+
+    let target = resolve_step_tool(&step, None, None, Some(&model_spec_override)).unwrap();
+
+    assert!(matches!(target, StepTarget::DirectBash));
+}

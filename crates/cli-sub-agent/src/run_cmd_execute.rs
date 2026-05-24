@@ -8,10 +8,9 @@ use std::time::Instant;
 use anyhow::Result;
 use tracing::{info, warn};
 
-use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
+use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::SessionLock;
 
-use crate::cli::ReturnTarget;
 use crate::pipeline;
 use crate::run_cmd_fork::try_auto_seed_fork;
 use crate::run_cmd_post::{
@@ -26,35 +25,29 @@ use crate::run_cmd_tool_selection::{
 mod post_exec_gate;
 #[path = "run_cmd_execute_routing.rs"]
 mod routing;
+#[path = "run_cmd_execute_cli_flags.rs"]
+mod run_cli_flags;
 #[path = "run_cmd_execute_context.rs"]
 mod run_context;
+#[path = "run_cmd_execute_tier_guard.rs"]
+mod tier_guard;
 use post_exec_gate::{execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner};
 use routing::{
     RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
     resolve_run_no_failover, resolve_run_tier_context,
 };
+use run_cli_flags::{
+    resolve_return_target, warn_deprecated_session_flags,
+    warn_if_fast_mode_has_no_codex_run_candidate,
+};
 use run_context::finalize_prompt_text;
+use tier_guard::{DirectToolTierGuardCtx, enforce_direct_tool_tier_guard};
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
     detect_effective_repo, find_recent_interrupted_skill_session, resolve_run_timeout_seconds,
     skill_session_description,
 };
-
-fn warn_if_fast_mode_has_no_codex_run_candidate(
-    fast_but_more_cost: bool,
-    initial_tool: ToolName,
-    runtime_fallback_candidates: &[ToolName],
-) {
-    if fast_but_more_cost
-        && initial_tool != ToolName::Codex
-        && !runtime_fallback_candidates.contains(&ToolName::Codex)
-    {
-        eprintln!(
-            "warning: --fast-but-more-cost only affects codex; no codex run attempt is in the resolved candidate set."
-        );
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
@@ -111,27 +104,8 @@ pub(crate) async fn handle_run(
         project_root.display()
     );
 
-    if last {
-        warn!("--last is deprecated: use --fork-last instead (fork-first architecture)");
-        eprintln!(
-            "warning: --last is deprecated and will be removed in a future release. Use --fork-last instead."
-        );
-    }
-    if session_arg.is_some() {
-        warn!("--session is deprecated: use --fork-from instead (fork-first architecture)");
-        eprintln!(
-            "warning: --session is deprecated and will be removed in a future release. Use --fork-from instead."
-        );
-    }
-
-    let return_target = if fork_call {
-        Some(match return_to.as_deref() {
-            Some(value) => crate::cli::parse_return_to(value)?,
-            None => ReturnTarget::Auto,
-        })
-    } else {
-        None
-    };
+    warn_deprecated_session_flags(last, session_arg.is_some());
+    let return_target = resolve_return_target(fork_call, return_to.as_deref())?;
 
     let mut is_fork = fork_from.is_some() || fork_last;
     let mut session_arg = if fork_last {
@@ -324,40 +298,20 @@ pub(crate) async fn handle_run(
     // Enforce tier routing: when tiers are configured, explicit --tool (any
     // value, including "auto") is blocked unless --tier is also specified or
     // --force-ignore-tier-setting is active.
-    let tiers_configured = config.as_ref().is_some_and(|c| !c.tiers.is_empty());
-    if user_explicit_tool
-        && tiers_configured
-        && effective_tier.is_none()
-        && !force_ignore_tier_setting
-        && !force
-    {
-        let cfg = config.as_ref().unwrap();
-        let tier_list: Vec<&str> = cfg.tiers.keys().map(|s| s.as_str()).collect();
-        let err = anyhow::anyhow!(
-            "Direct --tool is blocked when tiers are configured.\n\
-             Use --tier <name> or --auto-route <intent> to select tier-based routing, or \
-             --hint-difficulty <label> to route through [tier_mapping], or \
-             --force-ignore-tier-setting to bypass.\n\
-             Available tiers: {}",
-            tier_list.join(", ")
-        );
-        return Err(crate::session_guard::persist_pre_exec_error_result(
-            crate::session_guard::PreExecErrorCtx {
-                project_root: &project_root,
-                session_id: if is_fork {
-                    None
-                } else {
-                    session_arg.as_deref()
-                },
-                description: pre_exec_description,
-                parent: pre_exec_parent,
-                tool_name: explicit_tool_name,
-                task_type: Some("run"),
-                tier_name: effective_tier.as_deref(),
-                error: err,
-            },
-        ));
-    }
+    enforce_direct_tool_tier_guard(DirectToolTierGuardCtx {
+        config: config.as_ref(),
+        user_explicit_tool,
+        effective_tier: effective_tier.as_deref(),
+        model_spec: model_spec.as_deref(),
+        force_ignore_tier_setting,
+        force,
+        project_root: &project_root,
+        is_fork,
+        session_arg: session_arg.as_deref(),
+        pre_exec_description,
+        pre_exec_parent,
+        explicit_tool_name,
+    })?;
 
     crate::run_helpers::warn_if_tier_without_tool(tier.as_deref(), user_explicit_tool);
 

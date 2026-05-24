@@ -7,19 +7,18 @@
 /// line, indicating the worker detected a hard blocker (e.g. Bash unavailable
 /// due to EROFS, missing required tooling) and could not finish the task.
 pub(super) fn worker_output_indicates_blocked(output: &str, summary: &str) -> bool {
-    let summary_trimmed = summary.trim();
-    if summary_trimmed.eq_ignore_ascii_case("STATUS: BLOCKED")
-        || summary_trimmed
-            .to_ascii_uppercase()
-            .starts_with("STATUS: BLOCKED")
-    {
+    if line_indicates_blocked(summary) {
         return true;
     }
-    output.lines().any(|line| {
-        let t = line.trim();
-        t.eq_ignore_ascii_case("STATUS: BLOCKED")
-            || t.to_ascii_uppercase().starts_with("STATUS: BLOCKED")
-    })
+    output.lines().any(line_indicates_blocked)
+}
+
+fn line_indicates_blocked(line: &str) -> bool {
+    let trimmed = line.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    upper == "STATUS: BLOCKED"
+        || upper.starts_with("STATUS: BLOCKED")
+        || upper.starts_with("BLOCKED:")
 }
 
 #[cfg(test)]
@@ -68,5 +67,13 @@ mod tests {
     fn partial_match_not_triggered() {
         // "BLOCKED" alone (without STATUS: prefix) must not trigger
         assert!(!worker_output_indicates_blocked("BLOCKED", "BLOCKED"));
+    }
+
+    #[test]
+    fn blocked_colon_summary_detected() {
+        assert!(worker_output_indicates_blocked(
+            "",
+            "Blocked: commit was not created because the pre-commit hook failed"
+        ));
     }
 }

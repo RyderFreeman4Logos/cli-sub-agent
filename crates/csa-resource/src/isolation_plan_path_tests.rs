@@ -1,5 +1,6 @@
 use super::*;
 use std::ffi::OsString;
+use std::path::Path;
 
 struct ScopedEnvVar {
     key: &'static str,
@@ -86,6 +87,38 @@ fn test_resolve_writable_accepts_config_path_outside_default_roots() {
         .expect("config extra_writable outside default roots should be accepted");
 
     assert_eq!(resolved, vec![external.canonicalize().unwrap()]);
+}
+
+#[test]
+fn test_validate_writable_allows_xdg_runtime_child_but_rejects_root() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    let runtime_root = tmp.path().join("run/user/1001");
+    let runtime_child = runtime_root.join("just");
+    std::fs::create_dir_all(&project).expect("create project dir");
+    std::fs::create_dir_all(&runtime_child).expect("create runtime child dir");
+    let _runtime_env = ScopedEnvVar::set("XDG_RUNTIME_DIR", &runtime_root);
+
+    validate_writable_paths(std::slice::from_ref(&runtime_child), &project)
+        .expect("scoped XDG runtime child should be valid");
+
+    let err = validate_writable_paths(std::slice::from_ref(&runtime_root), &project)
+        .expect_err("XDG runtime root is too broad");
+    assert!(
+        err.to_string().contains("specific child directory"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_xdg_runtime_child_helper_keeps_run_user_scope_narrow() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _runtime_env = ScopedEnvVar::set("XDG_RUNTIME_DIR", "/run/user/1001");
+
+    assert!(is_xdg_runtime_child_path(Path::new("/run/user/1001/just")));
+    assert!(!is_xdg_runtime_child_path(Path::new("/run/user/1001")));
+    assert!(!is_xdg_runtime_child_path(Path::new("/run/user/1002/just")));
 }
 
 #[cfg(unix)]

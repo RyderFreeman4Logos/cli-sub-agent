@@ -1,13 +1,56 @@
 use super::*;
 use crate::plan_cmd::plan_cmd_steps::step_readonly_project_root;
 use std::collections::{HashMap, HashSet};
-use weave::compiler::{FailAction, PlanStep, VariableDecl};
+use std::path::Path;
+use weave::compiler::{FailAction, PlanStep, VariableDecl, plan_from_toml};
 use weave::parser::WorkspaceAccess;
 
 #[test]
 fn safe_plan_name_normalizes_non_alphanumeric_characters() {
     assert_eq!(safe_plan_name("Dev2Merge Workflow"), "dev2merge_workflow");
     assert_eq!(safe_plan_name("mktd@2026!"), "mktd_2026");
+}
+
+#[test]
+fn dev2merge_declares_review_completed_for_push_gate() {
+    let workflow_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("patterns/dev2merge/workflow.toml");
+    let workflow = std::fs::read_to_string(workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    assert!(
+        plan.variables
+            .iter()
+            .any(|variable| variable.name == "REVIEW_COMPLETED"),
+        "REVIEW_COMPLETED must be declared so CSA_VAR injection reaches the push gate"
+    );
+    for title in ["FAST_PATH Pre-PR Review", "Pre-PR Cumulative Review Gate"] {
+        let review_step = plan
+            .steps
+            .iter()
+            .find(|step| step.title == title)
+            .unwrap_or_else(|| panic!("dev2merge must contain {title}"));
+        let verdict_check_index = review_step
+            .prompt
+            .find(r#"csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD""#)
+            .unwrap_or_else(|| panic!("{title} must check the full-diff verdict before push"));
+        let completed_marker_index = review_step
+            .prompt
+            .find("CSA_VAR:REVIEW_COMPLETED=true")
+            .unwrap_or_else(|| panic!("{title} must emit REVIEW_COMPLETED"));
+        assert!(
+            verdict_check_index < completed_marker_index,
+            "{title} must validate PASS/CLEAN before emitting REVIEW_COMPLETED"
+        );
+    }
+    assert!(
+        plan.steps.iter().any(|step| {
+            step.title == "Push Gate" && step.prompt.contains("${REVIEW_COMPLETED:-}")
+        }),
+        "push gate must consume REVIEW_COMPLETED"
+    );
 }
 
 #[test]

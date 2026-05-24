@@ -231,6 +231,7 @@ if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
 fi
 
 set -euo pipefail
+PR_WAS_EXISTING=false
 
 # --- Early-push detection: warn if branch was already pushed before review ---
 if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
@@ -352,6 +353,7 @@ handle_resolved_pr_record() {
       REPO="${REPO_SLUG}"
       echo "CSA_VAR:PR_NUM=$PR_NUM"
       echo "CSA_VAR:REPO=$REPO"
+      echo "CSA_VAR:PR_WAS_EXISTING=true"
       echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
       echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR already merged" required=false -->'
       exit 0
@@ -372,6 +374,7 @@ PR_RECORD="$(resolve_branch_pr_record)"
 FIND_RC=$?
 set -e
 if [ "${FIND_RC}" = "0" ] && [ -n "${PR_RECORD}" ]; then
+  PR_WAS_EXISTING=true
   handle_resolved_pr_record
 elif [ "${FIND_RC}" = "1" ]; then
   exit 1
@@ -383,6 +386,7 @@ else
   if [ "${CREATE_RC}" != "0" ]; then
     if printf '%s' "${CREATE_OUTPUT}" | grep -qiE "a pull request for branch .* already exists"; then
       echo "INFO: PR already exists for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}; re-resolving." >&2
+      PR_WAS_EXISTING=true
       set +e
       PR_RECORD="$(resolve_branch_pr_record_with_retry)"
       FIND_RC=$?
@@ -417,6 +421,7 @@ fi
 REPO="${REPO_SLUG}"
 echo "CSA_VAR:PR_NUM=$PR_NUM"
 echo "CSA_VAR:REPO=$REPO"
+echo "CSA_VAR:PR_WAS_EXISTING=$PR_WAS_EXISTING"
 echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" required=true -->'
 ```
 
@@ -653,6 +658,8 @@ Condition: !(${BOT_UNAVAILABLE})
 Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
 - **Round 0** (initial PR creation): follows `cloud_bot_trigger` config
   ("comment" posts `@bot review`, "auto" skips trigger since bot auto-reviews).
+- **Round 0 + existing PR**: auto mode posts an explicit retrigger command,
+  because a reused PR with later pushes may not receive a fresh auto-review.
 - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
@@ -691,7 +698,7 @@ BOT_REUSED_REVIEW_ID=""
 # --- Detect whether current HEAD already has a reusable bot review ---
 query_latest_current_head_trigger_ts() {
   gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" 2>/dev/null \
-    | jq -r '[.[] | .[] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
+    | jq -r '[.[] | .[] | select((.body // "") | test("csa-trigger:'"${CURRENT_SHA}"':|csa-retrigger:round[0-9]+:'"${CURRENT_SHA}"':|csa-retrigger:existing:'"${CURRENT_SHA}"':|csa-retrigger:post-fix:'"${CURRENT_SHA}"':")) | .created_at] | sort | last // ""'
 }
 
 query_reusable_current_head_review_record() {
@@ -727,6 +734,7 @@ TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Round-aware trigger logic (#506):
 # - Round 0 (initial PR creation) + auto: bot auto-reviews on push, skip trigger
+# - Round 0 (existing PR) + auto: explicitly request a current-HEAD review
 # - Round 1+ (after fix push): bot does NOT auto-review on force-push,
 #   MUST explicitly trigger re-review regardless of cloud_bot_trigger setting
 if [ "${REVIEW_ROUND}" -gt 0 ]; then
@@ -736,6 +744,16 @@ if [ "${REVIEW_ROUND}" -gt 0 ]; then
 <!-- csa-retrigger:round${REVIEW_ROUND}:${CURRENT_SHA}:${TRIGGER_TS} -->"
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
   echo "Round ${REVIEW_ROUND}: Triggered re-review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA}."
+  WAIT_BASE_TS="${TRIGGER_TS}"
+elif [ "${CLOUD_BOT_TRIGGER}" = "auto" ] && [ "${PR_WAS_EXISTING:-false}" = "true" ]; then
+  # Existing PRs may not receive a fresh auto-review for later pushes; request
+  # an explicit current-HEAD review instead of waiting for a signal that may
+  # never be scheduled.
+  TRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
+
+<!-- csa-retrigger:existing:${CURRENT_SHA}:${TRIGGER_TS} -->"
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
+  echo "Existing PR with auto trigger: requested explicit re-review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA}."
   WAIT_BASE_TS="${TRIGGER_TS}"
 elif [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
   # Round 0 + comment mode: trigger via @mention
@@ -835,14 +853,31 @@ done
 
 WAIT_ELAPSED_SECS=$(( $(date +%s) - WAIT_STARTED_AT ))
 
-if [ ! -f "${OUTPUT_FILE}" ]; then
+if [ ! -s "${OUTPUT_FILE}" ]; then
   if kill -0 "${POLL_PID}" 2>/dev/null; then
     kill "${POLL_PID}" 2>/dev/null || true
     wait "${POLL_PID}" 2>/dev/null || true
   fi
-  printf '{"status":"timeout","pr":%s,"elapsed_seconds":%s}\n' \
-    "${PR_NUM}" "${WAIT_ELAPSED_SECS}" > "${OUTPUT_FILE}.tmp"
+  jq -n \
+    --argjson pr "${PR_NUM}" \
+    --argjson elapsed "${WAIT_ELAPSED_SECS}" \
+    --argjson timeout "${CLOUD_BOT_POLL_MAX_SECONDS}" \
+    --argjson interval "${INTERVAL}" \
+    --arg repo "${REPO}" \
+    --arg bot_login "${CLOUD_BOT_LOGIN}" \
+    --arg bot_name "${CLOUD_BOT_NAME}" \
+    --arg push_sha "${CURRENT_SHA}" \
+    --arg window_start "${WAIT_BASE_TS}" \
+    --arg result_file "${OUTPUT_FILE}" \
+    '{status:"timeout", pr:$pr, repo:$repo, elapsed_seconds:$elapsed, timeout_seconds:$timeout, interval_seconds:$interval, bot:{login:$bot_login, name:$bot_name}, push_sha:$push_sha, window_start:$window_start, result_file:$result_file}' \
+    > "${OUTPUT_FILE}.tmp"
   mv "${OUTPUT_FILE}.tmp" "${OUTPUT_FILE}"
+fi
+
+if ! jq empty "${OUTPUT_FILE}" >/dev/null 2>&1; then
+  echo "ERROR: Cloud bot polling helper produced invalid JSON after ${WAIT_ELAPSED_SECS}s." >&2
+  cat "${OUTPUT_FILE}" >&2 || true
+  exit 1
 fi
 
 POLL_RESULT_STATUS="$(jq -r '.status // empty' "${OUTPUT_FILE}")"
@@ -984,13 +1019,13 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     if [ "${reuse_existing_current_head_review}" = "true" ]; then
       ACTIONABLE_COMMENT_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
-          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     else
       ACTIONABLE_COMMENT_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     fi
@@ -1031,13 +1066,13 @@ if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
   if [ "${reuse_existing_current_head_review}" = "true" ]; then
     OTHER_BOT_COUNT="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
         2>/dev/null || echo "0"
     )"
   else
     OTHER_BOT_COUNT="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
         2>/dev/null || echo "0"
     )"
   fi
@@ -1198,13 +1233,13 @@ case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
     fi
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${BOT_REUSED_REVIEW_ID}/comments?per_page=100" \
-        | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
   current_sha_comments)
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.commit_id == "'"${CURRENT_SHA}"'" or .original_commit_id == "'"${CURRENT_SHA}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
   *)
@@ -1215,7 +1250,7 @@ case "${BOT_HAS_ISSUES_SOURCE:-current_window_comments}" in
     # Query from ANY bot (not just target) to also catch non-target bot findings
     COMMENT_RECORD="$(
       gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+        | jq -r '[.[] | .[] | select(.user.type == "Bot") | select(.created_at >= "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | sort_by(.created_at) | .[0] | select(. != null) | [(.id | tostring), (.path // ""), .created_at] | @tsv'
     )"
     ;;
 esac
@@ -1271,6 +1306,20 @@ echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
 Tool: csa
 Tier: tier-4-critical
 
+Arbitrate the current cloud-bot review comment for PR `${PR_NUM}` in
+`${REPO}`.
+
+Use the current comment metadata exported by Step 7:
+- `CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}`
+- `COMMENT_PATH=${COMMENT_PATH}`
+- `COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}`
+
+Fetch the review comment body yourself:
+- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
+
+MUST use independent model arbitration. NEVER dismiss bot comments using only
+your own reasoning.
+
 ## INCLUDE debate
 
 MUST use independent model for arbitration.
@@ -1297,14 +1346,6 @@ must include the debate result and the specific rationale (e.g.,
 'Pre-production: breaking API changes are acceptable per versioning rule 019').
 FORBIDDEN: dismissing findings without an explanatory PR comment.
 
-Use the current comment metadata exported by Step 7:
-- `CURRENT_COMMENT_ID`
-- `COMMENT_PATH`
-- `COMMENT_TIMESTAMP`
-
-The debate sub-agent MUST fetch the review comment body itself:
-- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
-
 ## Step 8a: Post Debate Audit Trail Comment
 
 > **Layer**: 0 (Orchestrator) -- explicit bash step that posts the PR comment
@@ -1322,7 +1363,7 @@ Parse the structured debate result from Step 8.
 
 ```bash
 set -euo pipefail
-DEBATE_OUTPUT="${STEP_11_OUTPUT}"
+DEBATE_OUTPUT="${STEP_12_OUTPUT}"
 VERDICT_COUNT="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
     | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
@@ -1751,13 +1792,13 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "true" ]; then
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${POST_FIX_REUSED_REVIEW_ID}/comments?per_page=100" \
-          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     else
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     fi

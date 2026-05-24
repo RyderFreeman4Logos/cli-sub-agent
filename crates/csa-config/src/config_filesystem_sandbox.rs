@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
+
+use crate::paths::{APP_NAME, LEGACY_APP_NAME};
 
 /// Filesystem sandbox configuration.
 ///
@@ -60,11 +62,124 @@ impl FilesystemSandboxConfig {
             && self.extra_readable.is_empty()
             && self.tool_writable_overrides.is_empty()
     }
+
+    /// Normalize legacy `XDG_RUNTIME_DIR` root writable entries to scoped child paths.
+    ///
+    /// The resource sandbox intentionally rejects writing to the entire runtime
+    /// directory. Older user configs may still contain that root path, so config
+    /// loading narrows it to known existing CSA-related children before runtime
+    /// validation sees it.
+    pub(crate) fn sanitize_legacy_xdg_runtime_root(&mut self) {
+        sanitize_legacy_xdg_runtime_root_paths(
+            &mut self.extra_writable,
+            "filesystem_sandbox.extra_writable",
+        );
+        for (tool, paths) in &mut self.tool_writable_overrides {
+            let context = format!("filesystem_sandbox.tool_writable_overrides.{tool}");
+            sanitize_legacy_xdg_runtime_root_paths(paths, &context);
+        }
+    }
+}
+
+pub(crate) fn sanitize_legacy_xdg_runtime_root_paths(paths: &mut Vec<PathBuf>, context: &str) {
+    let Some(runtime_root) = xdg_runtime_root() else {
+        return;
+    };
+    let replacements = scoped_runtime_replacements(&runtime_root);
+    let mut sanitized = Vec::with_capacity(paths.len().saturating_add(replacements.len()));
+    let mut changed = false;
+
+    for path in paths.drain(..) {
+        if is_runtime_root_entry(&path, &runtime_root) {
+            changed = true;
+            if replacements.is_empty() {
+                tracing::warn!(
+                    path = %path.display(),
+                    context,
+                    "Dropping legacy XDG_RUNTIME_DIR root writable path; no scoped runtime child exists"
+                );
+                continue;
+            }
+            tracing::warn!(
+                path = %path.display(),
+                replacement_count = replacements.len(),
+                context,
+                "Narrowing legacy XDG_RUNTIME_DIR root writable path to scoped child path(s)"
+            );
+            for replacement in &replacements {
+                push_unique_path(&mut sanitized, replacement.clone());
+            }
+        } else {
+            push_unique_path(&mut sanitized, path);
+        }
+    }
+
+    if changed {
+        *paths = sanitized;
+    }
+}
+
+fn xdg_runtime_root() -> Option<PathBuf> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+    if !runtime_dir.is_absolute() {
+        return None;
+    }
+    let runtime_dir = comparable_path(&runtime_dir);
+    if runtime_dir == Path::new("/") {
+        return None;
+    }
+    Some(runtime_dir)
+}
+
+fn scoped_runtime_replacements(runtime_root: &Path) -> Vec<PathBuf> {
+    [APP_NAME, LEGACY_APP_NAME, "just"]
+        .into_iter()
+        .map(|name| comparable_path(&runtime_root.join(name)))
+        .filter(|path| path.exists())
+        .fold(Vec::new(), |mut acc, path| {
+            push_unique_path(&mut acc, path);
+            acc
+        })
+}
+
+fn is_runtime_root_entry(path: &Path, runtime_root: &Path) -> bool {
+    path.is_absolute() && comparable_path(path) == runtime_root
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
+    let comparable_candidate = comparable_path(&candidate);
+    if paths
+        .iter()
+        .any(|existing| comparable_path(existing) == comparable_candidate)
+    {
+        return;
+    }
+    paths.push(candidate);
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path_components(path))
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir
+            | Component::Prefix(_)
+            | Component::RootDir
+            | Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::ffi::{OsStr, OsString};
 
     #[test]
     fn test_default_is_default() {
@@ -120,5 +235,71 @@ extra_readable = ["/tmp/foo.json"]
         .expect("deserialize");
 
         assert_eq!(decoded.extra_readable, vec![PathBuf::from("/tmp/foo.json")]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_sanitize_legacy_runtime_root_uses_existing_scoped_children() {
+        let runtime_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_root = runtime_dir.path();
+        let app_dir = runtime_root.join(APP_NAME);
+        let just_dir = runtime_root.join("just");
+        std::fs::create_dir_all(&app_dir).expect("create app dir");
+        std::fs::create_dir_all(&just_dir).expect("create just dir");
+        let _guard = ScopedEnvVar::set("XDG_RUNTIME_DIR", runtime_root.as_os_str());
+        let mut cfg = FilesystemSandboxConfig {
+            extra_writable: vec![runtime_root.to_path_buf(), app_dir.clone()],
+            tool_writable_overrides: HashMap::from([(
+                "codex".to_string(),
+                vec![runtime_root.to_path_buf()],
+            )]),
+            ..Default::default()
+        };
+
+        cfg.sanitize_legacy_xdg_runtime_root();
+
+        assert_eq!(cfg.extra_writable, vec![app_dir.clone(), just_dir.clone()]);
+        assert_eq!(
+            cfg.tool_writable_overrides.get("codex"),
+            Some(&vec![app_dir, just_dir])
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_sanitize_legacy_runtime_root_drops_root_without_scoped_child() {
+        let runtime_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_root = runtime_dir.path();
+        let other_path = PathBuf::from("/tmp/csa-cache");
+        let _guard = ScopedEnvVar::set("XDG_RUNTIME_DIR", runtime_root.as_os_str());
+        let mut paths = vec![runtime_root.to_path_buf(), other_path.clone()];
+
+        sanitize_legacy_xdg_runtime_root_paths(&mut paths, "test");
+
+        assert_eq!(paths, vec![other_path]);
+    }
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &OsStr) -> Self {
+            let original = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
     }
 }

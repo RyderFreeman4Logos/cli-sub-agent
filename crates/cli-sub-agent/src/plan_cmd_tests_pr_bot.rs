@@ -390,6 +390,14 @@ fn pr_bot_pattern_and_workflow_reuse_existing_current_head_reviews() {
             "{artifact} must persist the reused review id for later steps"
         );
         assert!(
+            text.contains("CSA_VAR:PR_WAS_EXISTING=$PR_WAS_EXISTING"),
+            "{artifact} must persist whether the PR already existed before this run"
+        );
+        assert!(
+            text.contains("csa-retrigger:existing:${CURRENT_SHA}"),
+            "{artifact} must explicitly retrigger cloud bot review for reused PRs in auto mode"
+        );
+        assert!(
             text.contains("CSA_VAR:BOT_HAS_ISSUES_SOURCE=${BOT_HAS_ISSUES_SOURCE}"),
             "{artifact} must persist the issue-source selector for later steps"
         );

@@ -11,6 +11,7 @@ mod caller_hints_tests;
 mod checklist_cmd;
 mod claude_sub_agent_cmd;
 mod cli;
+mod codex_transcript_filter;
 mod config_cmds;
 mod debate_cmd;
 mod debate_cmd_output;
@@ -91,6 +92,7 @@ mod skill_dispatch;
 mod skill_repo;
 mod skill_resolver;
 mod skill_run_cmd;
+mod stdout_write;
 #[cfg(any(feature = "parallel-tasks", test))]
 pub mod task_lock;
 #[cfg(test)]

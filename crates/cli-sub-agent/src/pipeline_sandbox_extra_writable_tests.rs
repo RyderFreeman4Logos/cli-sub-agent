@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
+
 use super::*;
 
 fn parse_project_config(toml_str: &str) -> csa_config::ProjectConfig {
@@ -320,5 +322,50 @@ enforcement_mode = "best-effort"
     assert!(
         matches!(result, SandboxResolution::RequiredButUnavailable(ref msg) if msg.contains("extra-writable")),
         "dangerous path in --extra-writable should be rejected"
+    );
+}
+
+#[test]
+fn test_extra_writable_accepts_scoped_xdg_runtime_child() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let runtime_root = project_root.path().join("run/user/1001");
+    let runtime_child = runtime_root.join("just");
+    std::fs::create_dir_all(&runtime_child).expect("create runtime child");
+    let _runtime_guard = ScopedEnvVarRestore::set("XDG_RUNTIME_DIR", &runtime_root);
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "codex",
+        "test-session",
+        project_root.path(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        std::slice::from_ref(&runtime_child),
+        &[],
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected scoped XDG runtime child extra_writable to be accepted");
+    };
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&runtime_child.canonicalize().unwrap()),
+        "scoped runtime child should be writable, got: {:?}",
+        sandbox.isolation_plan.writable_paths
     );
 }

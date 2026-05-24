@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
 use csa_core::types::ReviewDecision;
-use csa_session::review_artifact::{Finding, ReviewArtifact, Severity};
+use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{
     FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact,
@@ -18,6 +18,18 @@ use crate::review_consensus::{
 };
 
 use super::output::ReviewerOutcome;
+
+pub(super) struct MultiReviewerConsensusArtifacts<'a> {
+    pub(super) project_root: &'a Path,
+    pub(super) reviewers: usize,
+    pub(super) outcomes: &'a [ReviewerOutcome],
+    pub(super) final_verdict: &'a str,
+    pub(super) all_reviewers_unavailable: bool,
+    pub(super) head_sha: &'a str,
+    pub(super) scope: &'a str,
+    pub(super) review_iterations: u32,
+    pub(super) diff_fingerprint: Option<String>,
+}
 
 const CSA_DAEMON_SESSION_DIR_ENV_KEY: &str = "CSA_DAEMON_SESSION_DIR";
 const CSA_DAEMON_SESSION_ID_ENV_KEY: &str = "CSA_DAEMON_SESSION_ID";
@@ -60,23 +72,41 @@ fn parse_reviewer_artifact(path: &Path, content: &str) -> Result<ReviewArtifact>
 }
 
 fn load_multi_reviewer_artifacts(
+    project_root: &Path,
     output_dir: &Path,
     reviewers: usize,
+    outcomes: &[ReviewerOutcome],
 ) -> Result<Vec<ReviewArtifact>> {
     let mut reviewer_artifacts = Vec::new();
     for reviewer_index in 1..=reviewers {
-        let artifact_path = output_dir
-            .join(format!("reviewer-{reviewer_index}"))
-            .join("review-findings.json");
-
-        if !artifact_path.exists() {
-            continue;
+        let mut artifact_paths = vec![
+            output_dir
+                .join(format!("reviewer-{reviewer_index}"))
+                .join("review-findings.json"),
+        ];
+        if let Some(outcome) = outcomes
+            .iter()
+            .find(|outcome| outcome.reviewer_index + 1 == reviewer_index)
+            && let Ok(session_dir) = csa_session::get_session_dir(project_root, &outcome.session_id)
+        {
+            artifact_paths.push(
+                session_dir
+                    .join(format!("reviewer-{reviewer_index}"))
+                    .join("review-findings.json"),
+            );
         }
 
-        let content = fs::read_to_string(&artifact_path)
-            .with_context(|| format!("failed to read {}", artifact_path.display()))?;
-        let artifact = parse_reviewer_artifact(&artifact_path, &content)?;
-        reviewer_artifacts.push(artifact);
+        for artifact_path in artifact_paths {
+            if !artifact_path.exists() {
+                continue;
+            }
+
+            let content = fs::read_to_string(&artifact_path)
+                .with_context(|| format!("failed to read {}", artifact_path.display()))?;
+            let artifact = parse_reviewer_artifact(&artifact_path, &content)?;
+            reviewer_artifacts.push(artifact);
+            break;
+        }
     }
     Ok(reviewer_artifacts)
 }
@@ -92,17 +122,19 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     let Some((session_dir, session_id)) = resolve_parent_session_env() else {
         return Ok(());
     };
-    let reviewer_artifacts = load_multi_reviewer_artifacts(&session_dir, reviewers)?;
+    let reviewer_artifacts =
+        load_multi_reviewer_artifacts(project_root, &session_dir, reviewers, outcomes)?;
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
     let parent_decision =
         parent_review_decision(&consolidated, final_verdict, all_reviewers_unavailable);
     let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
-    write_consolidated_artifact(&consolidated, &session_dir)?;
-    write_parent_findings_toml(&session_dir, &consolidated)?;
+    let parent_artifact = parent_artifact_for_decision(&consolidated, parent_decision);
+    write_consolidated_artifact(&parent_artifact, &session_dir)?;
+    write_parent_findings_toml(&session_dir, &parent_artifact)?;
     write_parent_review_verdict(
         &session_dir,
         &session_id,
-        &consolidated,
+        &parent_artifact,
         parent_decision,
         &parent_verdict,
     )?;
@@ -124,6 +156,103 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     write_parent_review_summary(&session_dir, outcomes, &parent_verdict)?;
     write_parent_review_details(&session_dir, outcomes)?;
     Ok(())
+}
+
+pub(super) fn write_multi_reviewer_consensus_artifacts(
+    ctx: MultiReviewerConsensusArtifacts<'_>,
+) -> Result<()> {
+    let final_review_meta = parent_consensus_review_meta(
+        ctx.head_sha,
+        ctx.scope,
+        ctx.final_verdict,
+        ctx.review_iterations,
+        ctx.diff_fingerprint.clone(),
+    );
+    write_multi_reviewer_parent_artifacts(
+        ctx.project_root,
+        ctx.reviewers,
+        ctx.outcomes,
+        ctx.final_verdict,
+        ctx.all_reviewers_unavailable,
+        final_review_meta.as_ref(),
+    )?;
+    if final_review_meta.is_none() {
+        write_standalone_consensus_review_artifacts(&ctx)?;
+    }
+    Ok(())
+}
+
+pub(super) fn write_standalone_consensus_review_artifacts(
+    ctx: &MultiReviewerConsensusArtifacts<'_>,
+) -> Result<Option<String>> {
+    let Some((target, session_dir)) = resolve_standalone_consensus_carrier(ctx)? else {
+        return Ok(None);
+    };
+    let reviewer_artifacts =
+        load_multi_reviewer_artifacts(ctx.project_root, &session_dir, ctx.reviewers, ctx.outcomes)?;
+    let consolidated = build_consolidated_artifact(reviewer_artifacts, &target.session_id);
+    let decision = parent_review_decision(
+        &consolidated,
+        ctx.final_verdict,
+        ctx.all_reviewers_unavailable,
+    );
+    let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
+    let artifact = parent_artifact_for_decision(&consolidated, decision);
+    write_consolidated_artifact(&artifact, &session_dir)?;
+    write_parent_findings_toml(&session_dir, &artifact)?;
+    let meta = ReviewSessionMeta {
+        session_id: target.session_id.clone(),
+        head_sha: ctx.head_sha.to_string(),
+        decision: decision.as_str().to_string(),
+        verdict: verdict.clone(),
+        status_reason: None,
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
+        tool: "consensus".to_string(),
+        scope: ctx.scope.to_string(),
+        exit_code: if decision.is_clean() { 0 } else { 1 },
+        fix_attempted: false,
+        fix_rounds: 0,
+        review_iterations: ctx.review_iterations,
+        timestamp: chrono::Utc::now(),
+        diff_fingerprint: ctx.diff_fingerprint.clone(),
+    };
+    write_review_meta(&session_dir, &meta).context("failed to write consensus review_meta.json")?;
+    let verdict_artifact = ReviewVerdictArtifact::from_parts(
+        target.session_id.clone(),
+        decision,
+        verdict,
+        &artifact.findings,
+        Vec::new(),
+    );
+    write_review_verdict(&session_dir, &verdict_artifact)
+        .context("failed to write consensus output/review-verdict.json")?;
+    write_parent_review_summary(&session_dir, ctx.outcomes, &meta.verdict)?;
+    write_parent_review_details(&session_dir, ctx.outcomes)?;
+    crate::review_gate::maybe_write_gate_marker_for_clean(
+        ctx.project_root,
+        &meta.head_sha,
+        &meta.verdict,
+        Some(&target.session_id),
+        &meta.scope,
+    );
+    Ok(Some(target.session_id.clone()))
+}
+
+fn resolve_standalone_consensus_carrier<'a>(
+    ctx: &'a MultiReviewerConsensusArtifacts<'_>,
+) -> Result<Option<(&'a ReviewerOutcome, PathBuf)>> {
+    for outcome in ctx.outcomes {
+        let session_dir = csa_session::get_session_dir(ctx.project_root, &outcome.session_id)
+            .with_context(|| format!("failed to resolve session dir for {}", outcome.session_id))?;
+        if session_dir.is_dir()
+            && csa_session::load_session(ctx.project_root, &outcome.session_id).is_ok()
+        {
+            return Ok(Some((outcome, session_dir)));
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn parent_consensus_review_meta(
@@ -230,6 +359,30 @@ fn write_parent_review_verdict(
         .context("failed to write parent output/review-verdict.json")
 }
 
+fn parent_artifact_for_decision(
+    artifact: &ReviewArtifact,
+    parent_decision: ReviewDecision,
+) -> ReviewArtifact {
+    if parent_decision != ReviewDecision::Pass {
+        return artifact.clone();
+    }
+
+    let findings: Vec<Finding> = artifact
+        .findings
+        .iter()
+        .filter(|finding| !is_blocking_severity(&finding.severity))
+        .cloned()
+        .collect();
+    ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: artifact.review_mode.clone(),
+        schema_version: artifact.schema_version.clone(),
+        session_id: artifact.session_id.clone(),
+        timestamp: artifact.timestamp,
+    }
+}
+
 fn parent_review_decision(
     artifact: &ReviewArtifact,
     final_verdict: &str,
@@ -238,12 +391,20 @@ fn parent_review_decision(
     if all_reviewers_unavailable {
         return ReviewDecision::Unavailable;
     }
+    let consensus_decision =
+        ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain);
+    if consensus_decision == ReviewDecision::Fail {
+        return ReviewDecision::Fail;
+    }
     if artifact
         .findings
         .iter()
         .any(|finding| is_blocking_severity(&finding.severity))
     {
         return ReviewDecision::Fail;
+    }
+    if consensus_decision == ReviewDecision::Pass {
+        return ReviewDecision::Pass;
     }
     if artifact.findings.is_empty()
         || artifact
@@ -253,7 +414,7 @@ fn parent_review_decision(
     {
         return ReviewDecision::Pass;
     }
-    ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain)
+    consensus_decision
 }
 
 fn is_blocking_severity(severity: &Severity) -> bool {
@@ -326,385 +487,5 @@ fn write_parent_review_details(session_dir: &Path, outcomes: &[ReviewerOutcome])
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{parent_consensus_review_meta, write_multi_reviewer_parent_artifacts};
-    use crate::review_consensus::UNAVAILABLE;
-    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
-    use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
-    use csa_core::types::{ReviewDecision, ToolName};
-    use csa_session::review_artifact::{
-        Finding, FindingsFile, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary,
-    };
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn write_multi_reviewer_parent_artifacts_writes_output_sidecars() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let temp = tempdir().expect("tempdir should be created");
-        let session_dir = temp.path().display().to_string();
-        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
-        let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
-        let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
-
-        let reviewer_dir = temp.path().join("reviewer-1");
-        fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
-        let findings = vec![Finding {
-            severity: Severity::High,
-            fid: "FID-1".to_string(),
-            file: "src/lib.rs".to_string(),
-            line: Some(7),
-            rule_id: "rule.review.parent-sidecars".to_string(),
-            summary: "parent sidecar finding".to_string(),
-            engine: "reviewer".to_string(),
-        }];
-        let artifact = ReviewArtifact {
-            severity_summary: SeveritySummary::from_findings(&findings),
-            findings,
-            review_mode: Some("diff".to_string()),
-            schema_version: "1.0".to_string(),
-            session_id: "01CHILDSESSION0000000000000".to_string(),
-            timestamp: chrono::Utc::now(),
-        };
-        fs::write(
-            reviewer_dir.join("review-findings.json"),
-            serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
-        )
-        .expect("review artifact should be written");
-
-        let outcomes = vec![
-            super::super::output::ReviewerOutcome {
-                reviewer_index: 0,
-                tool: ToolName::Codex,
-                session_id: "01CHILDSESSION0000000000000".to_string(),
-                output: "Reviewer details".to_string(),
-                exit_code: 1,
-                verdict: crate::review_consensus::HAS_ISSUES,
-                diagnostic: None,
-            },
-            super::super::output::ReviewerOutcome {
-                reviewer_index: 1,
-                tool: ToolName::GeminiCli,
-                session_id: "reviewer-2-unavailable".to_string(),
-                output: "Review unavailable: reviewer timed out after 1800s\n".to_string(),
-                exit_code: 1,
-                verdict: UNAVAILABLE,
-                diagnostic: Some("reviewer timed out after 1800s".to_string()),
-            },
-        ];
-
-        write_multi_reviewer_parent_artifacts(
-            temp.path(),
-            2,
-            &outcomes,
-            crate::review_consensus::HAS_ISSUES,
-            false,
-            None,
-        )
-        .expect("parent artifacts should be produced");
-
-        let output_dir = temp.path().join("output");
-        let findings_toml: FindingsFile = toml::from_str(
-            &fs::read_to_string(output_dir.join("findings.toml"))
-                .expect("findings.toml should exist"),
-        )
-        .expect("findings.toml should parse");
-        assert_eq!(findings_toml.findings.len(), 1);
-        assert_eq!(findings_toml.findings[0].id, "FID-1");
-
-        let verdict: ReviewVerdictArtifact = serde_json::from_str(
-            &fs::read_to_string(output_dir.join("review-verdict.json"))
-                .expect("review-verdict.json should exist"),
-        )
-        .expect("review verdict should parse");
-        assert_eq!(verdict.decision, ReviewDecision::Fail);
-        assert_eq!(verdict.severity_counts[&Severity::High], 1);
-        assert!(
-            fs::read_to_string(output_dir.join("summary.md"))
-                .expect("summary should exist")
-                .contains("reviewer 2 (gemini-cli) => UNAVAILABLE")
-        );
-        assert!(
-            fs::read_to_string(output_dir.join("details.md"))
-                .expect("details should exist")
-                .contains("Review unavailable: reviewer timed out")
-        );
-    }
-
-    #[test]
-    fn write_multi_reviewer_parent_artifacts_accepts_reviewer_contract_artifact() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let temp = tempdir().expect("tempdir should be created");
-        let session_dir = temp.path().display().to_string();
-        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
-        let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
-        let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
-
-        let reviewer_dir = temp.path().join("reviewer-1");
-        fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
-        let findings = vec![Finding {
-            severity: Severity::High,
-            fid: "FID-1".to_string(),
-            file: "src/lib.rs".to_string(),
-            line: Some(7),
-            rule_id: "rule.review.parent-sidecars".to_string(),
-            summary: "parent sidecar finding".to_string(),
-            engine: "reviewer".to_string(),
-        }];
-        fs::write(
-            reviewer_dir.join("review-findings.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "verdict": "FAIL",
-                "findings": findings,
-                "summary": "High-severity finding present"
-            }))
-            .expect("artifact should serialize"),
-        )
-        .expect("review artifact should be written");
-
-        let outcomes = vec![super::super::output::ReviewerOutcome {
-            reviewer_index: 0,
-            tool: ToolName::Codex,
-            session_id: "01CHILDSESSION0000000000000".to_string(),
-            output: "Reviewer details".to_string(),
-            exit_code: 1,
-            verdict: crate::review_consensus::HAS_ISSUES,
-            diagnostic: None,
-        }];
-
-        write_multi_reviewer_parent_artifacts(
-            temp.path(),
-            1,
-            &outcomes,
-            crate::review_consensus::HAS_ISSUES,
-            false,
-            None,
-        )
-        .expect("parent artifacts should be produced");
-
-        let verdict: ReviewVerdictArtifact = serde_json::from_str(
-            &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
-                .expect("review-verdict.json should exist"),
-        )
-        .expect("review verdict should parse");
-        assert_eq!(verdict.decision, ReviewDecision::Fail);
-        assert_eq!(verdict.severity_counts[&Severity::High], 1);
-    }
-
-    #[test]
-    fn write_multi_reviewer_parent_artifacts_empty_findings_override_fail_consensus() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let temp = tempdir().expect("tempdir should be created");
-        let session_dir = temp.path().display().to_string();
-        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
-        let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
-        let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
-
-        let reviewer_dir = temp.path().join("reviewer-1");
-        fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
-        fs::write(
-            reviewer_dir.join("review-findings.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "verdict": "PASS",
-                "summary": "No blocking findings in main...HEAD.",
-                "findings": []
-            }))
-            .expect("artifact should serialize"),
-        )
-        .expect("review artifact should be written");
-
-        let outcomes = vec![super::super::output::ReviewerOutcome {
-            reviewer_index: 0,
-            tool: ToolName::Codex,
-            session_id: "01CHILDSESSION0000000000000".to_string(),
-            output: "Reviewer wrote a clean findings artifact.".to_string(),
-            exit_code: 1,
-            verdict: crate::review_consensus::HAS_ISSUES,
-            diagnostic: None,
-        }];
-        let parent_meta = csa_session::state::ReviewSessionMeta {
-            session_id: "01PARENTSESSION000000000000".to_string(),
-            head_sha: "abcdef1234567890".to_string(),
-            decision: ReviewDecision::Fail.as_str().to_string(),
-            verdict: crate::review_consensus::HAS_ISSUES.to_string(),
-            status_reason: None,
-            routed_to: None,
-            primary_failure: None,
-            failure_reason: None,
-            tool: "consensus".to_string(),
-            scope: "range:main...HEAD".to_string(),
-            exit_code: 1,
-            fix_attempted: false,
-            fix_rounds: 0,
-            review_iterations: 1,
-            timestamp: chrono::Utc::now(),
-            diff_fingerprint: Some("sha256:test".to_string()),
-        };
-
-        write_multi_reviewer_parent_artifacts(
-            temp.path(),
-            1,
-            &outcomes,
-            crate::review_consensus::HAS_ISSUES,
-            false,
-            Some(&parent_meta),
-        )
-        .expect("parent artifacts should be produced");
-
-        let output_dir = temp.path().join("output");
-        let verdict: ReviewVerdictArtifact = serde_json::from_str(
-            &fs::read_to_string(output_dir.join("review-verdict.json"))
-                .expect("review-verdict.json should exist"),
-        )
-        .expect("review verdict should parse");
-        assert_eq!(verdict.decision, ReviewDecision::Pass);
-        assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
-        assert!(verdict.severity_counts.values().all(|count| *count == 0));
-
-        let findings_toml: FindingsFile = toml::from_str(
-            &fs::read_to_string(output_dir.join("findings.toml"))
-                .expect("findings.toml should exist"),
-        )
-        .expect("findings.toml should parse");
-        assert!(findings_toml.findings.is_empty());
-        assert!(
-            fs::read_to_string(output_dir.join("summary.md"))
-                .expect("summary should exist")
-                .starts_with("Final verdict: CLEAN")
-        );
-
-        let written_meta: csa_session::state::ReviewSessionMeta = serde_json::from_str(
-            &fs::read_to_string(temp.path().join("review_meta.json"))
-                .expect("review_meta.json should exist"),
-        )
-        .expect("review meta should parse");
-        assert_eq!(written_meta.decision, ReviewDecision::Pass.as_str());
-        assert_eq!(written_meta.verdict, crate::review_consensus::CLEAN);
-        assert_eq!(written_meta.exit_code, 0);
-    }
-
-    #[test]
-    fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let temp = tempdir().expect("tempdir should be created");
-        let session_dir = temp.path().display().to_string();
-        let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
-        let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
-        let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
-        let outcomes = vec![super::super::output::ReviewerOutcome {
-            reviewer_index: 0,
-            tool: ToolName::Codex,
-            session_id: "reviewer-1-unavailable".to_string(),
-            output: "Review unavailable: reviewer timed out after 1800s\n".to_string(),
-            exit_code: 1,
-            verdict: UNAVAILABLE,
-            diagnostic: Some("reviewer timed out after 1800s".to_string()),
-        }];
-
-        write_multi_reviewer_parent_artifacts(temp.path(), 1, &outcomes, UNAVAILABLE, true, None)
-            .expect("parent artifacts should be produced");
-
-        let verdict: ReviewVerdictArtifact = serde_json::from_str(
-            &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
-                .expect("review-verdict.json should exist"),
-        )
-        .expect("review verdict should parse");
-        assert_eq!(verdict.decision, ReviewDecision::Unavailable);
-        assert_eq!(verdict.verdict_legacy, UNAVAILABLE);
-    }
-
-    #[test]
-    fn write_multi_reviewer_parent_artifacts_writes_daemon_review_meta() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let temp = tempdir().expect("tempdir should be created");
-        let session_dir = temp.path().display().to_string();
-        let _daemon_session_dir_guard =
-            ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_DIR", &session_dir);
-        let _daemon_session_id_guard =
-            ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_ID", "01PARENTSESSION000000000000");
-        let _session_dir_guard =
-            ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, "/unrelated/session");
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01UNRELATEDSESSION0000000000");
-
-        let outcomes = vec![super::super::output::ReviewerOutcome {
-            reviewer_index: 0,
-            tool: ToolName::Codex,
-            session_id: "01CHILDSESSION0000000000000".to_string(),
-            output: "Reviewer details".to_string(),
-            exit_code: 0,
-            verdict: crate::review_consensus::CLEAN,
-            diagnostic: None,
-        }];
-        let parent_meta = csa_session::state::ReviewSessionMeta {
-            session_id: "01PARENTSESSION000000000000".to_string(),
-            head_sha: "abcdef1234567890".to_string(),
-            decision: ReviewDecision::Pass.as_str().to_string(),
-            verdict: crate::review_consensus::CLEAN.to_string(),
-            status_reason: None,
-            routed_to: None,
-            primary_failure: None,
-            failure_reason: None,
-            tool: "consensus".to_string(),
-            scope: "range:main...HEAD".to_string(),
-            exit_code: 0,
-            fix_attempted: false,
-            fix_rounds: 0,
-            review_iterations: 1,
-            timestamp: chrono::Utc::now(),
-            diff_fingerprint: Some("sha256:test".to_string()),
-        };
-
-        write_multi_reviewer_parent_artifacts(
-            temp.path(),
-            1,
-            &outcomes,
-            crate::review_consensus::CLEAN,
-            false,
-            Some(&parent_meta),
-        )
-        .expect("parent artifacts should be produced");
-
-        let written_meta: csa_session::state::ReviewSessionMeta = serde_json::from_str(
-            &fs::read_to_string(temp.path().join("review_meta.json")).unwrap(),
-        )
-        .expect("review meta should parse");
-        assert_eq!(written_meta.session_id, "01PARENTSESSION000000000000");
-        assert_eq!(written_meta.tool, "consensus");
-        assert_eq!(written_meta.decision, ReviewDecision::Pass.as_str());
-    }
-
-    #[test]
-    fn parent_consensus_review_meta_falls_back_to_session_env() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
-        let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
-        let _session_dir_guard =
-            ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, "/tmp/parent-session");
-        let _session_id_guard =
-            ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
-
-        let meta = parent_consensus_review_meta(
-            "abcdef1234567890",
-            "range:main...HEAD",
-            crate::review_consensus::CLEAN,
-            2,
-            Some("sha256:test".to_string()),
-        )
-        .expect("session env should synthesize parent review meta");
-
-        assert_eq!(meta.session_id, "01PARENTSESSION000000000000");
-        assert_eq!(meta.tool, "consensus");
-        assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
-        assert_eq!(meta.scope, "range:main...HEAD");
-        assert_eq!(meta.review_iterations, 2);
-    }
-}
+#[path = "review_cmd_parent_artifacts_tests.rs"]
+mod tests;

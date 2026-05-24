@@ -3,52 +3,21 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
 use csa_core::types::{OutputFormat, ToolName};
 use csa_process::check_tool_installed;
 
+use crate::codex_transcript_filter::{
+    extract_codex_json_event_text, first_non_empty_line_is_thread_started,
+};
 use crate::pipeline::{
     ParentSessionSource, SessionCreationMode, execute_with_session_and_meta_with_parent_source,
 };
 use crate::run_helpers::build_executor;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
-
-#[derive(Debug, Deserialize)]
-struct CodexTranscriptEvent {
-    #[serde(rename = "type")]
-    event_type: String,
-    #[serde(default)]
-    agent_message: Option<AgentMessageText>,
-    #[serde(default)]
-    item: Option<CodexTranscriptItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodexTranscriptItem {
-    #[serde(default, rename = "type")]
-    item_type: String,
-    #[serde(default)]
-    text: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum AgentMessageText {
-    Text(String),
-    Object { text: String },
-}
-
-impl AgentMessageText {
-    fn into_text(self) -> String {
-        match self {
-            Self::Text(text) | Self::Object { text } => text,
-        }
-    }
-}
 
 pub(super) struct StepExecutionOutcome {
     pub(super) exit_code: i32,
@@ -348,56 +317,6 @@ fn should_extract_codex_json_events(
 ) -> bool {
     (matches!(tool_name, ToolName::Codex) && matches!(output_format, OutputFormat::Json))
         || first_non_empty_line_is_thread_started(raw_output)
-}
-
-fn first_non_empty_line_is_thread_started(raw_output: &str) -> bool {
-    let Some(line) = raw_output.lines().find(|line| !line.trim().is_empty()) else {
-        return false;
-    };
-
-    serde_json::from_str::<serde_json::Value>(line)
-        .ok()
-        .is_some_and(|value| {
-            value
-                .as_object()
-                .and_then(|object| object.get("type"))
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|event_type| event_type == "thread.started")
-        })
-}
-
-fn extract_codex_json_event_text(raw_output: &str) -> Option<String> {
-    let mut first_non_empty_was_json = None;
-    let pieces: Vec<String> = raw_output
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| {
-            let event = serde_json::from_str::<CodexTranscriptEvent>(line).ok();
-            if first_non_empty_was_json.is_none() {
-                first_non_empty_was_json = Some(event.is_some());
-            }
-            event
-        })
-        .filter_map(|event| {
-            if let Some(agent_message) = event.agent_message {
-                return Some(agent_message.into_text());
-            }
-            if event.event_type == "item.completed" {
-                return event.item.and_then(|item| {
-                    (item.item_type == "agent_message")
-                        .then_some(item.text)
-                        .flatten()
-                });
-            }
-            None
-        })
-        .collect();
-
-    if pieces.is_empty() {
-        first_non_empty_was_json.unwrap_or(false).then(String::new)
-    } else {
-        Some(pieces.join("\n"))
-    }
 }
 
 pub(super) fn is_stale_session_error(error: &anyhow::Error) -> bool {

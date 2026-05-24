@@ -116,8 +116,15 @@ pub(crate) fn finalize_debate_outcome(
                     execution.execution.summary.as_str(),
                     context.debate_mode,
                 );
+                let exit_code = if execution.execution.exit_code != 0
+                    && output_has_explicit_debate_verdict(&output)
+                {
+                    0
+                } else {
+                    execution.execution.exit_code
+                };
                 (
-                    execution.execution.exit_code,
+                    exit_code,
                     execution.meta_session_id,
                     persisted_session_id,
                     output,
@@ -131,6 +138,7 @@ pub(crate) fn finalize_debate_outcome(
         let session_dir = csa_session::get_session_dir(project_root, session_id)?;
         let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
         append_debate_artifacts_to_result(project_root, session_id, &artifacts, &debate_summary)?;
+        persist_debate_exit_code(project_root, session_id, exit_code, &debate_summary.summary)?;
         if let (Some(original_tool), Some(fallback_tool)) =
             (context.original_tool, context.fallback_tool)
         {
@@ -155,6 +163,36 @@ pub(crate) fn finalize_debate_outcome(
         exit_code,
         rendered_output,
     })
+}
+
+fn output_has_explicit_debate_verdict(output: &str) -> bool {
+    output.lines().any(|line| {
+        let normalized = line.trim().to_ascii_lowercase();
+        normalized.starts_with("verdict:")
+            || normalized.starts_with("decision:")
+            || normalized.starts_with("final decision:")
+    })
+}
+
+fn persist_debate_exit_code(
+    project_root: &Path,
+    session_id: &str,
+    exit_code: i32,
+    summary: &str,
+) -> Result<()> {
+    let mut result = csa_session::load_result(project_root, session_id)?
+        .ok_or_else(|| anyhow::anyhow!("Missing result.toml for debate session {session_id}"))?;
+    if result.exit_code == exit_code
+        && result.status == csa_session::SessionResult::status_from_exit_code(exit_code)
+    {
+        return Ok(());
+    }
+
+    result.exit_code = exit_code;
+    result.status = csa_session::SessionResult::status_from_exit_code(exit_code);
+    result.summary = summary.to_string();
+    csa_session::save_result(project_root, session_id, &result)?;
+    Ok(())
 }
 
 pub(crate) fn resolve_persisted_debate_session_id(

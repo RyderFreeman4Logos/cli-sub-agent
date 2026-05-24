@@ -6,6 +6,7 @@ use crate::session_cmds_daemon::{
 use crate::test_env_lock::TEST_ENV_LOCK;
 use std::io::Write;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -71,7 +72,7 @@ fn session_wait_lock_reuses_unheld_stale_lock_file() {
 }
 
 #[test]
-fn session_wait_lock_recovers_when_flock_holder_pid_is_dead() {
+fn session_wait_lock_rejects_locked_stale_pid_without_replacing_inode() {
     let td = tempdir().expect("tempdir");
     let lock_path = td.path().join(".wait.lock");
     let stale_pid = exited_child_pid();
@@ -89,19 +90,25 @@ fn session_wait_lock_recovers_when_flock_holder_pid_is_dead() {
     // stale inherited flock whose diagnostic PID no longer exists.
     let rc = unsafe { libc::flock(stale_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     assert_eq!(rc, 0, "test setup should acquire stale flock");
+    let original_inode = std::fs::metadata(&lock_path)
+        .expect("lock path metadata")
+        .ino();
 
-    let recovered = try_acquire_session_wait_lock(td.path())
-        .expect("stale wait lock recovery should not error")
-        .expect("dead wait pid should allow lock recovery");
-    let duplicate = try_acquire_session_wait_lock(td.path())
-        .expect("duplicate wait lock check should not error");
+    let blocked = try_acquire_session_wait_lock(td.path())
+        .expect("stale locked wait lock check should not error");
     assert!(
-        duplicate.is_none(),
-        "recovered live wait lock should still reject duplicates"
+        blocked.is_none(),
+        "locked wait file should reject duplicates even when diagnostic pid is stale"
+    );
+    let current_inode = std::fs::metadata(&lock_path)
+        .expect("lock path metadata after blocked acquire")
+        .ino();
+    assert_eq!(
+        original_inode, current_inode,
+        "blocked acquisition must not replace the lock path"
     );
 
-    drop(recovered);
-    // SAFETY: `stale_file` still owns the fd for the old unlinked inode.
+    // SAFETY: `stale_file` owns the fd holding the test lock.
     unsafe {
         libc::flock(stale_file.as_raw_fd(), libc::LOCK_UN);
     }

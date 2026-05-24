@@ -340,6 +340,16 @@ run_timeout_test() {
 
   assert_json_value "${output_file}" '.status' 'timeout'
   assert_json_value "${output_file}" '.elapsed_seconds' '3'
+  assert_json_value "${output_file}" '.timeout_seconds' '3'
+  assert_json_value "${output_file}" '.interval_seconds' '1'
+  assert_json_value "${output_file}" '.repo' 'test-owner/test-repo'
+  assert_json_value "${output_file}" '.bot.login' 'test-bot[bot]'
+  assert_json_value "${output_file}" '.bot.name' 'test-bot'
+  assert_json_value "${output_file}" '.push_sha' "${push_sha}"
+  if [ -z "$(jq -r '.window_start // empty' "${output_file}")" ]; then
+    echo "timeout scenario expected non-empty window_start" >&2
+    exit 1
+  fi
 }
 
 run_quiet_wait_window_regression_test() {

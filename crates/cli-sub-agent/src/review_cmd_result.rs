@@ -21,13 +21,19 @@ const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAu
 const AUTH_PROMPT_DIAGNOSTIC: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced";
 const REVIEW_UNAVAILABLE_PREFIX: &str = "Review unavailable: ";
-const TRANSIENT_GEMINI_FAILURE_PATTERNS: &[&str] = &[
+const REVIEW_UNAVAILABLE_FAILURE_PATTERNS: &[&str] = &[
     "retrydelayms",
     "rate limit",
     "rate_limit",
+    "usage limit",
+    "monthly usage limit",
     "overloaded",
     "temporarily unavailable",
     "503",
+    "api key not found",
+    "api_key_invalid",
+    "invalid api key",
+    "authentication required",
 ];
 
 fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
@@ -83,7 +89,7 @@ pub(super) fn resolve_single_review_result(
     let auth_prompt_failure =
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
     let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
-    let transient_unavailable_reason = transient_gemini_failure_reason(result, tool);
+    let tool_unavailable_reason = tool_unavailable_failure_reason(result, tool);
     let sanitized = if auth_prompt_failure {
         AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
     } else if forced_unavailable {
@@ -94,14 +100,14 @@ pub(super) fn resolve_single_review_result(
                 .as_deref()
                 .unwrap_or("all configured tier models failed")
         )
-    } else if let Some(reason) = transient_unavailable_reason.as_deref() {
+    } else if let Some(reason) = tool_unavailable_reason.as_deref() {
         format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
     } else {
         sanitize_review_output(&result.execution.execution.output)
     };
     let empty_output = !auth_prompt_failure
         && !forced_unavailable
-        && transient_unavailable_reason.is_none()
+        && tool_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.execution.output);
     let tool_diagnostic = detect_tool_diagnostic(
         &result.execution.execution.output,
@@ -131,7 +137,7 @@ pub(super) fn resolve_single_review_result(
         decision
     } else if let Some(forced) = result.forced_decision {
         forced
-    } else if transient_unavailable_reason.is_some() {
+    } else if tool_unavailable_reason.is_some() {
         ReviewDecision::Unavailable
     } else if auth_prompt_failure || empty_output {
         ReviewDecision::Uncertain
@@ -167,11 +173,10 @@ pub(super) fn build_reviewer_outcome(
         session_result.forced_decision,
         Some(ReviewDecision::Unavailable)
     );
-    let transient_unavailable_reason =
-        transient_gemini_failure_reason(session_result, reviewer_tool);
+    let tool_unavailable_reason = tool_unavailable_failure_reason(session_result, reviewer_tool);
     let empty = !auth_prompt_failure
         && !forced_unavailable
-        && transient_unavailable_reason.is_none()
+        && tool_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.output);
     let diagnostic =
         detect_tool_diagnostic(&result.execution.output, &result.execution.stderr_output);
@@ -193,7 +198,7 @@ pub(super) fn build_reviewer_outcome(
         decision
     } else if let Some(forced) = session_result.forced_decision {
         forced
-    } else if transient_unavailable_reason.is_some() {
+    } else if tool_unavailable_reason.is_some() {
         ReviewDecision::Unavailable
     } else if auth_prompt_failure || empty {
         ReviewDecision::Uncertain
@@ -220,7 +225,7 @@ pub(super) fn build_reviewer_outcome(
                     .as_deref()
                     .unwrap_or("all configured tier models failed")
             )
-        } else if let Some(reason) = transient_unavailable_reason.as_deref() {
+        } else if let Some(reason) = tool_unavailable_reason.as_deref() {
             format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
         } else {
             sanitize_review_output(&result.execution.output)
@@ -228,15 +233,21 @@ pub(super) fn build_reviewer_outcome(
         exit_code: exit_code_from_decision(decision),
         diagnostic: diagnostic
             .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
-            .or_else(|| transient_unavailable_reason.clone()),
+            .or_else(|| tool_unavailable_reason.clone()),
     })
 }
 
-fn transient_gemini_failure_reason(
+fn tool_unavailable_failure_reason(
     result: &ReviewExecutionOutcome,
     tool: ToolName,
 ) -> Option<String> {
-    if tool != ToolName::GeminiCli || result.execution.execution.exit_code == 0 {
+    if result.execution.execution.exit_code == 0 {
+        return None;
+    }
+    if extract_review_text(&result.execution.execution.output)
+        .as_deref()
+        .is_some_and(contains_explicit_verdict_token)
+    {
         return None;
     }
 
@@ -245,25 +256,25 @@ fn transient_gemini_failure_reason(
         result.primary_failure.as_deref(),
         Some(result.execution.execution.summary.as_str()),
         Some(result.execution.execution.stderr_output.as_str()),
-        Some(result.execution.execution.output.as_str()),
         result.status_reason.as_deref(),
     ];
 
     fields
         .into_iter()
         .flatten()
-        .find(|text| contains_transient_gemini_failure_pattern(text))
+        .find(|text| contains_review_unavailable_failure_pattern(text))
         .map(|text| {
             format!(
-                "gemini-cli transient failure: {}",
+                "{} tool failure: {}",
+                tool.as_str(),
                 truncate_single_line(text, 240)
             )
         })
 }
 
-fn contains_transient_gemini_failure_pattern(text: &str) -> bool {
+fn contains_review_unavailable_failure_pattern(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    TRANSIENT_GEMINI_FAILURE_PATTERNS
+    REVIEW_UNAVAILABLE_FAILURE_PATTERNS
         .iter()
         .chain(RATE_LIMIT_PATTERNS.iter())
         .any(|pattern| lower.contains(pattern))
@@ -403,6 +414,106 @@ mod tests {
         assert_eq!(resolved.effective_exit_code, 1);
         assert!(resolved.sanitized.contains("Review unavailable:"));
         assert!(resolved.sanitized.contains("retryDelayMs: undefined"));
+    }
+
+    #[test]
+    fn build_reviewer_outcome_maps_quota_limited_tool_to_unavailable() {
+        let mut result = outcome(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day"}}"#,
+            1,
+        );
+        result.execution.execution.summary =
+            r#"{"api_error_status":429,"result":"You've hit your org's monthly usage limit"}"#
+                .to_string();
+
+        let reviewer =
+            build_reviewer_outcome(0, ToolName::Codex, &result).expect("reviewer outcome");
+
+        assert_eq!(reviewer.verdict, UNAVAILABLE);
+        assert_eq!(reviewer.exit_code, 1);
+        assert!(reviewer.output.contains("Review unavailable:"));
+        assert!(
+            reviewer
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("monthly usage limit"))
+        );
+    }
+
+    #[test]
+    fn build_reviewer_outcome_maps_api_key_failure_to_unavailable() {
+        let mut result = outcome("", 1);
+        result.executed_tool = ToolName::GeminiCli;
+        result.execution.execution.stderr_output = r#"API Key not found.
+details: [{"reason":"API_KEY_INVALID","domain":"googleapis.com"}]"#
+            .to_string();
+
+        let reviewer =
+            build_reviewer_outcome(0, ToolName::GeminiCli, &result).expect("reviewer outcome");
+
+        assert_eq!(reviewer.verdict, UNAVAILABLE);
+        assert_eq!(reviewer.exit_code, 1);
+        assert!(reviewer.output.contains("Review unavailable:"));
+        assert!(
+            reviewer
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("API_KEY_INVALID"))
+        );
+    }
+
+    #[test]
+    fn resolve_single_review_result_maps_api_key_failure_to_unavailable() {
+        let mut result = outcome("", 1);
+        result.executed_tool = ToolName::GeminiCli;
+        result.execution.execution.stderr_output =
+            "status: 400 API_KEY_INVALID API Key not found".to_string();
+
+        let resolved = resolve_single_review_result(
+            &result,
+            ToolName::GeminiCli,
+            "uncommitted",
+            Path::new("."),
+        );
+
+        assert_eq!(resolved.decision, ReviewDecision::Unavailable);
+        assert_eq!(resolved.verdict, UNAVAILABLE);
+        assert_eq!(resolved.effective_exit_code, 1);
+        assert!(resolved.sanitized.contains("Review unavailable:"));
+    }
+
+    #[test]
+    fn build_reviewer_outcome_does_not_mark_review_prose_quota_mentions_unavailable() {
+        let reviewer = build_reviewer_outcome(
+            0,
+            ToolName::Codex,
+            &outcome(
+                "Substantive review finding: quota handling drops errors but no explicit verdict.",
+                1,
+            ),
+        )
+        .expect("reviewer outcome");
+
+        assert_ne!(reviewer.verdict, UNAVAILABLE);
+        assert!(!reviewer.output.contains("Review unavailable:"));
+        assert!(reviewer.diagnostic.is_none());
+    }
+
+    #[test]
+    fn tool_unavailable_failure_does_not_override_explicit_fail_verdict() {
+        let reviewer = build_reviewer_outcome(
+            0,
+            ToolName::Codex,
+            &outcome(
+                "<!-- CSA:SECTION:summary -->\nFAIL\n<!-- CSA:SECTION:summary:END -->\n\
+                 <!-- CSA:SECTION:details -->\nA real finding mentions rate limit handling.\n<!-- CSA:SECTION:details:END -->",
+                1,
+            ),
+        )
+        .expect("reviewer outcome");
+
+        assert_eq!(reviewer.verdict, HAS_ISSUES);
+        assert!(!reviewer.output.contains("Review unavailable:"));
     }
 
     #[test]
