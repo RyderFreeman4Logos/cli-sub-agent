@@ -166,11 +166,9 @@ pub(super) fn write_multi_reviewer_consensus_artifacts(
 pub(super) fn write_standalone_consensus_review_artifacts(
     ctx: &MultiReviewerConsensusArtifacts<'_>,
 ) -> Result<Option<String>> {
-    let Some(target) = ctx.outcomes.first() else {
+    let Some((target, session_dir)) = resolve_standalone_consensus_carrier(ctx)? else {
         return Ok(None);
     };
-    let session_dir = csa_session::get_session_dir(ctx.project_root, &target.session_id)
-        .with_context(|| format!("failed to resolve session dir for {}", target.session_id))?;
     let decision = if ctx.all_reviewers_unavailable {
         ReviewDecision::Unavailable
     } else {
@@ -215,6 +213,19 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         &meta.scope,
     );
     Ok(Some(target.session_id.clone()))
+}
+
+fn resolve_standalone_consensus_carrier<'a>(
+    ctx: &'a MultiReviewerConsensusArtifacts<'_>,
+) -> Result<Option<(&'a ReviewerOutcome, PathBuf)>> {
+    for outcome in ctx.outcomes {
+        let session_dir = csa_session::get_session_dir(ctx.project_root, &outcome.session_id)
+            .with_context(|| format!("failed to resolve session dir for {}", outcome.session_id))?;
+        if session_dir.is_dir() {
+            return Ok(Some((outcome, session_dir)));
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn parent_consensus_review_meta(

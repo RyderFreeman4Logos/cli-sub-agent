@@ -474,6 +474,70 @@ fn write_standalone_consensus_review_artifacts_updates_carrier_session() {
 }
 
 #[test]
+fn write_standalone_consensus_review_artifacts_skips_synthetic_unavailable_carrier() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).expect("project dir should be created");
+    let carrier = csa_session::create_session_fresh(
+        &project,
+        Some("review[2]: range:main...HEAD"),
+        None,
+        None,
+    )
+    .expect("carrier session should be created");
+    let carrier_id = carrier.meta_session_id.clone();
+    let outcomes = vec![
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 0,
+            tool: ToolName::Codex,
+            session_id: "reviewer-1-unavailable".to_string(),
+            output: "Review unavailable: reviewer timed out after 1800s\n".to_string(),
+            exit_code: 1,
+            verdict: UNAVAILABLE,
+            diagnostic: Some("reviewer timed out after 1800s".to_string()),
+        },
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 1,
+            tool: ToolName::GeminiCli,
+            session_id: carrier_id.clone(),
+            output: "Reviewer 2 was clean.".to_string(),
+            exit_code: 0,
+            verdict: crate::review_consensus::CLEAN,
+            diagnostic: None,
+        },
+    ];
+
+    let ctx = MultiReviewerConsensusArtifacts {
+        project_root: &project,
+        reviewers: 2,
+        outcomes: &outcomes,
+        final_verdict: crate::review_consensus::CLEAN,
+        all_reviewers_unavailable: false,
+        head_sha: "abcdef1234567890",
+        scope: "range:main...HEAD",
+        review_iterations: 2,
+        diff_fingerprint: Some("sha256:test".to_string()),
+    };
+
+    let written = write_standalone_consensus_review_artifacts(&ctx)
+        .expect("standalone consensus artifacts should be written");
+
+    assert_eq!(written.as_deref(), Some(carrier_id.as_str()));
+    let session_dir = csa_session::get_session_dir(&project, &carrier_id).unwrap();
+    let meta: csa_session::state::ReviewSessionMeta =
+        serde_json::from_str(&fs::read_to_string(session_dir.join("review_meta.json")).unwrap())
+            .expect("review meta should parse");
+    assert_eq!(meta.session_id, carrier_id);
+    assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(meta.verdict, crate::review_consensus::CLEAN);
+
+    let synthetic_dir = csa_session::get_session_dir(&project, "reviewer-1-unavailable").unwrap();
+    assert!(!synthetic_dir.join("review_meta.json").exists());
+}
+
+#[test]
 fn write_multi_reviewer_parent_artifacts_writes_daemon_review_meta() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
