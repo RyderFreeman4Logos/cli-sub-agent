@@ -929,7 +929,7 @@ else
 fi
 # Configurable wait/poll timeouts for cloud bot response.
 CLOUD_BOT_WAIT_SECONDS=$(csa config get pr_review.cloud_bot_wait_seconds --default "$(csa config get kv_cache.frequent_poll_seconds --default 60)")
-CLOUD_BOT_POLL_MAX_SECONDS=$(csa config get pr_review.cloud_bot_poll_max_seconds --default "$(csa config get kv_cache.long_poll_seconds --default 240)")
+CLOUD_BOT_POLL_MAX_SECONDS=$(csa config get pr_review.cloud_bot_poll_max_seconds --default 600)
 CLOUD_BOT_SKIPPED=false
 CLOUD_BOT_SKIP_KIND=""
 CLOUD_BOT_SKIP_REASON=""
@@ -1116,7 +1116,7 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
 
-Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then launch `patterns/pr-bot/scripts/pr-bot-wait.sh` with `cloud_bot_poll_max_seconds` (default: `kv_cache.long_poll_seconds`, 240s) as its internal timeout and `cloud_bot_poll_interval_seconds` (default: `30`) as its shell-level poll interval.
+Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then launch `patterns/pr-bot/scripts/pr-bot-wait.sh` with `cloud_bot_poll_max_seconds` (default: `600`) as its internal timeout and `cloud_bot_poll_interval_seconds` (default: `30`) as its shell-level poll interval.
 If an exact current-HEAD bot review already exists before this run triggers the
 bot, reuse that specific review object instead of posting a duplicate trigger
 or aborting on resume/rerun.
@@ -1608,7 +1608,7 @@ timeout branch. Steps 7-10 are structurally inside the `BOT_UNAVAILABLE=false`
 branch and are NOT reachable from here.
 
 Delegate this cycle to CSA as a single operation and enforce hard bounds:
-- CSA daemon + session wait (configured by `cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, defaults: `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`)
+- CSA daemon + session wait (configured by `cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, defaults: `kv_cache.frequent_poll_seconds = 60` and `cloud_bot_poll_max_seconds = 600`)
 - no `|| true` silent downgrade
 - success requires marker `FALLBACK_FIX=clean`
 - on success, orchestrator explicitly sets `FALLBACK_REVIEW_HAS_ISSUES=false`

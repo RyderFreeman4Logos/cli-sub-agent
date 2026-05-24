@@ -131,7 +131,9 @@ cloud_bot_name = "gemini-code-assist"      # bot name (for @mention and display)
 cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
 cloud_bot_login = ""                       # bot GitHub login override (default: "${cloud_bot_name}[bot]")
 cloud_bot_retrigger_command = ""           # command to re-trigger after fix push (default: derived from name)
+cloud_bot_wait_seconds = 60                # quiet wait before polling (default: kv_cache.frequent_poll_seconds)
 cloud_bot_poll_interval_seconds = 30       # helper-script gh poll interval (default: 30s)
+cloud_bot_poll_max_seconds = 600           # helper-script max poll duration after quiet wait (default: 600s)
 merge_strategy = "merge"                   # "merge" | "rebase" (squash is forbidden for audit)
 delete_branch = false                      # delete remote branch after merge
 ```
@@ -149,7 +151,7 @@ Default: `/gemini review` for gemini-code-assist, `@{name} review` for others.
 Override via `cloud_bot_retrigger_command`.
 
 **Timeout behavior**: If bot does not respond within the configured polling window
-(`cloud_bot_wait_seconds` + helper timeout `cloud_bot_poll_max_seconds`, with helper poll interval `cloud_bot_poll_interval_seconds`, default ~5 minutes via `kv_cache.frequent_poll_seconds = 60`, `cloud_bot_poll_interval_seconds = 30`, and `kv_cache.long_poll_seconds = 240`),
+(`cloud_bot_wait_seconds` + helper timeout `cloud_bot_poll_max_seconds`, with helper poll interval `cloud_bot_poll_interval_seconds`, default ~11 minutes via `kv_cache.frequent_poll_seconds = 60`, `cloud_bot_poll_interval_seconds = 30`, and `cloud_bot_poll_max_seconds = 600`),
 the workflow **aborts** and presents options to the user. It does NOT silently
 fall back to local review and merge, except for the explicit quota-exhaustion
 path described below.
