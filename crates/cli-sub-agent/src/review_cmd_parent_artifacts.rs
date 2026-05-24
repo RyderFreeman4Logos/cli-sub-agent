@@ -188,15 +188,15 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     let Some((target, session_dir)) = resolve_standalone_consensus_carrier(ctx)? else {
         return Ok(None);
     };
-    let decision = if ctx.all_reviewers_unavailable {
-        ReviewDecision::Unavailable
-    } else {
-        consensus_review_decision(ctx.final_verdict)
-    };
-    let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
     let reviewer_artifacts =
         load_multi_reviewer_artifacts(ctx.project_root, &session_dir, ctx.reviewers, ctx.outcomes)?;
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &target.session_id);
+    let decision = parent_review_decision(
+        &consolidated,
+        ctx.final_verdict,
+        ctx.all_reviewers_unavailable,
+    );
+    let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
     let artifact = parent_artifact_for_decision(&consolidated, decision);
     write_consolidated_artifact(&artifact, &session_dir)?;
     write_parent_findings_toml(&session_dir, &artifact)?;

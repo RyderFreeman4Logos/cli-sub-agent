@@ -628,7 +628,7 @@ fn write_standalone_consensus_review_artifacts_updates_carrier_session() {
 }
 
 #[test]
-fn write_standalone_consensus_review_artifacts_preserves_child_findings() {
+fn standalone_consensus_preserves_blocking_child_findings_on_clean_consensus() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
     let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
@@ -671,16 +671,16 @@ fn write_standalone_consensus_review_artifacts_preserves_child_findings() {
         reviewer_index: 0,
         tool: ToolName::Codex,
         session_id: carrier_id.clone(),
-        output: "Reviewer found an issue.".to_string(),
-        exit_code: 1,
-        verdict: crate::review_consensus::HAS_ISSUES,
+        output: "Reviewer text was clean, but artifact contains a blocking finding.".to_string(),
+        exit_code: 0,
+        verdict: crate::review_consensus::CLEAN,
         diagnostic: None,
     }];
     let ctx = MultiReviewerConsensusArtifacts {
         project_root: &project,
         reviewers: 1,
         outcomes: &outcomes,
-        final_verdict: crate::review_consensus::HAS_ISSUES,
+        final_verdict: crate::review_consensus::CLEAN,
         all_reviewers_unavailable: false,
         head_sha: "abcdef1234567890",
         scope: "range:main...HEAD",
