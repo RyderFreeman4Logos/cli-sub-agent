@@ -1,6 +1,5 @@
-use std::fs;
 use std::path::Path;
-use std::str::FromStr;
+use std::{fs, str::FromStr};
 
 use anyhow::Result;
 use csa_core::gemini::RATE_LIMIT_PATTERNS;
@@ -11,8 +10,6 @@ use csa_executor::{
 use csa_session::output_parser::parse_sections;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{Finding, OutputSection, ReviewVerdictArtifact, Severity, write_review_verdict};
-use regex::Regex;
-use serde::Deserialize;
 use tracing::{debug, warn};
 
 #[path = "review_cmd_output_artifacts.rs"]
@@ -21,20 +18,28 @@ mod artifacts;
 mod clean_detection;
 #[path = "review_cmd_output_diagnostics.rs"]
 mod diagnostics;
+#[path = "review_cmd_output_exit.rs"]
+mod exit_code;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
+#[path = "review_cmd_output_text.rs"]
+mod text;
 use artifacts::{
     has_blocking_severity, json_severity_counts_if_present, load_findings_toml_from_output,
     load_review_artifact_from_output, severity_counts_are_zero, severity_counts_for_artifact,
     severity_counts_for_findings_toml,
 };
-use clean_detection::{
-    contains_clean_phrase, review_contains_prose_clean_conclusion, strip_prompt_guards,
-};
+use clean_detection::{review_contains_prose_clean_conclusion, strip_prompt_guards};
 pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
+pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
+};
+pub(super) use text::extract_review_text;
+use text::{
+    derive_decision_from_text, parse_overall_risk_from_text, severity_counts_from_text,
+    zero_severity_counts,
 };
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
@@ -60,24 +65,6 @@ impl ToolReviewFailureKind {
             }
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct TranscriptEvent {
-    #[serde(rename = "type")]
-    event_type: String,
-    #[serde(default)]
-    item: Option<TranscriptItem>,
-    #[serde(default)]
-    result: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TranscriptItem {
-    #[serde(rename = "type")]
-    item_type: String,
-    #[serde(default)]
-    text: Option<String>,
 }
 
 /// Prefer structured review sections (summary/details) when available to avoid
@@ -258,7 +245,6 @@ pub(super) fn persist_review_verdict(
         }
     }
 }
-
 #[cfg(test)]
 pub(crate) fn persist_review_verdict_for_tests(
     project_root: &Path,
@@ -464,106 +450,6 @@ fn full_output_is_effectively_empty(session_dir: &Path) -> Result<bool, anyhow::
         .all(|line| line.starts_with('{')))
 }
 
-pub(super) fn extract_review_text(raw_output: &str) -> Option<String> {
-    let mut transcript_messages = Vec::new();
-    let mut saw_json_line = false;
-
-    for line in raw_output.lines().filter(|line| !line.trim().is_empty()) {
-        let event = match serde_json::from_str::<TranscriptEvent>(line) {
-            Ok(event) => {
-                saw_json_line = true;
-                event
-            }
-            Err(_) if !saw_json_line => continue,
-            Err(_) => return Some(raw_output.to_string()),
-        };
-        if event.event_type == "result" {
-            if let Some(text) = event.result.filter(|text| looks_like_review_message(text)) {
-                transcript_messages.push(text);
-            }
-            continue;
-        }
-
-        let Some(item) = event.item else {
-            continue;
-        };
-        if event.event_type == "item.completed"
-            && item.item_type == "agent_message"
-            && let Some(text) = item.text.filter(|text| looks_like_review_message(text))
-        {
-            transcript_messages.push(text);
-        }
-    }
-
-    if transcript_messages.is_empty() {
-        return if saw_json_line {
-            None
-        } else {
-            Some(raw_output.to_string())
-        };
-    }
-
-    transcript_messages.pop()
-}
-
-fn looks_like_review_message(text: &str) -> bool {
-    has_structured_review_content(text)
-        || contains_verdict_token(text, "PASS")
-        || contains_verdict_token(text, "CLEAN")
-        || contains_verdict_token(text, "FAIL")
-        || contains_verdict_token(text, "HAS_ISSUES")
-        || contains_verdict_token(text, "UNAVAILABLE")
-        || contains_verdict_token(text, "UNCERTAIN")
-        || contains_clean_phrase(text)
-        || text.lines().any(|line| {
-            is_findings_header(line) || line.to_ascii_lowercase().contains("overall risk")
-        })
-}
-
-fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32> {
-    [
-        (Severity::Critical, 0),
-        (Severity::High, 0),
-        (Severity::Medium, 0),
-        (Severity::Low, 0),
-    ]
-    .into_iter()
-    .collect()
-}
-
-fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity, u32> {
-    let marker_re =
-        Regex::new(r"(?i)\[(critical|high|medium|low|info|p[0-4])\]").expect("valid regex");
-    let mut counts = zero_severity_counts();
-
-    for captures in marker_re.captures_iter(text) {
-        let severity = match captures.get(1).map(|m| m.as_str().to_ascii_lowercase()) {
-            Some(level) if level == "critical" => Severity::Critical,
-            Some(level) if level == "high" => Severity::High,
-            Some(level) if level == "medium" => Severity::Medium,
-            Some(level) if level == "low" => Severity::Low,
-            Some(level) if level == "info" => Severity::Low,
-            Some(level) if level == "p0" => Severity::Critical,
-            Some(level) if level == "p1" => Severity::High,
-            Some(level) if level == "p2" => Severity::Medium,
-            Some(level) if level == "p3" || level == "p4" => Severity::Low,
-            _ => continue,
-        };
-        *counts.entry(severity).or_insert(0) += 1;
-    }
-
-    counts
-}
-
-fn parse_overall_risk_from_text(text: &str) -> Option<String> {
-    let risk_re = Regex::new(r"(?im)\boverall risk\b\s*:?\s*(critical|high|medium|low)\b")
-        .expect("valid regex");
-    risk_re
-        .captures(text)
-        .and_then(|captures| captures.get(1))
-        .map(|level| level.as_str().to_ascii_lowercase())
-}
-
 /// Derive the review decision from structured severity counts, not summary-text
 /// keywords or stale `meta.decision` values (#1045).
 /// Blocking severities fail; low-only findings pass; zero findings and zero
@@ -635,48 +521,6 @@ fn derive_decision_from_severity_counts(
     }
 
     Ok(ReviewDecision::Pass)
-}
-
-fn derive_decision_from_text(
-    text: &str,
-    counts: &std::collections::BTreeMap<Severity, u32>,
-    overall_risk: Option<&str>,
-) -> ReviewDecision {
-    // Only blocking severities (critical/high/medium) cause fail; low-only is advisory (#1048 M2).
-    if has_blocking_severity(counts) {
-        return ReviewDecision::Fail;
-    }
-    if !severity_counts_are_zero(counts)
-        && (contains_verdict_token(text, "FAIL") || contains_verdict_token(text, "HAS_ISSUES"))
-    {
-        return ReviewDecision::Fail; // #1352: token alone without evidence must not fail
-    }
-    if contains_verdict_token(text, "UNAVAILABLE") {
-        return ReviewDecision::Unavailable;
-    }
-    if contains_verdict_token(text, "SKIP") {
-        return ReviewDecision::Skip;
-    }
-    if contains_verdict_token(text, "UNCERTAIN") {
-        return ReviewDecision::Uncertain;
-    }
-    if (contains_verdict_token(text, "PASS")
-        || contains_verdict_token(text, "CLEAN")
-        || contains_clean_phrase(text))
-        && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
-    {
-        return ReviewDecision::Pass;
-    }
-    if text.lines().any(is_findings_header)
-        && contains_clean_phrase(text)
-        && overall_risk.is_none_or(|risk| risk.eq_ignore_ascii_case("low"))
-    {
-        return ReviewDecision::Pass;
-    }
-    if overall_risk.is_some_and(|risk| !risk.eq_ignore_ascii_case("low")) {
-        return ReviewDecision::Fail;
-    }
-    ReviewDecision::Uncertain
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -777,19 +621,6 @@ pub(super) fn detect_tool_review_failure(
 }
 
 pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
-
-fn contains_verdict_token(haystack: &str, token: &str) -> bool {
-    haystack
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .any(|part| part.eq_ignore_ascii_case(token))
-}
-
-fn is_findings_header(line: &str) -> bool {
-    let trimmed = line.trim();
-    let normalized = trimmed.trim_start_matches('#').trim();
-    normalized.eq_ignore_ascii_case("findings")
-        || normalized.eq_ignore_ascii_case("review findings")
-}
 
 #[cfg(test)]
 #[path = "review_cmd_output_fix_reuse_tests.rs"]

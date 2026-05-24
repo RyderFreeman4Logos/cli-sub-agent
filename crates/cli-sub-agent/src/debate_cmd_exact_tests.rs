@@ -165,7 +165,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
     )
     .expect("pre-session all-fail should synthesize unavailable");
 
-    assert_eq!(finalized.exit_code, 1);
+    assert_eq!(finalized.exit_code, 2);
     let rendered_json: serde_json::Value =
         serde_json::from_str(&finalized.rendered_output).expect("json output");
     assert_eq!(rendered_json["verdict"], "UNAVAILABLE");
@@ -234,7 +234,7 @@ fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
     .unwrap();
 
     let output = r#"<!-- CSA:SECTION:summary -->
-Verdict: stop and ask the user before retrying.
+Verdict: APPROVE
 <!-- CSA:SECTION:summary:END -->
 "#;
     let finalized = debate_cmd::finalize_debate_outcome(
@@ -271,4 +271,77 @@ Verdict: stop and ask the user before retrying.
         .expect("saved result");
     assert_eq!(saved.status, "success");
     assert_eq!(saved.exit_code, 0);
+}
+
+#[test]
+fn debate_nonzero_with_revise_artifact_exits_failure() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let _env_lock = test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let state_home = temp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = DebateExactEnvVarGuard::set("HOME", temp.path());
+    let _state_guard = DebateExactEnvVarGuard::set("XDG_STATE_HOME", &state_home);
+
+    let project_root = temp.path();
+    let session = create_session(project_root, Some("debate"), None, Some("codex")).unwrap();
+    save_result(
+        project_root,
+        &session.meta_session_id,
+        &csa_session::SessionResult {
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "tool exited non-zero".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: chrono::Utc::now(),
+            completed_at: chrono::Utc::now(),
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            manager_fields: Default::default(),
+        },
+    )
+    .unwrap();
+
+    let output = r#"<!-- CSA:SECTION:summary -->
+Verdict: REVISE
+<!-- CSA:SECTION:summary:END -->
+"#;
+    let finalized = debate_cmd::finalize_debate_outcome(
+        project_root,
+        csa_core::types::OutputFormat::Text,
+        Some(pipeline::SessionExecutionResult {
+            execution: csa_process::ExecutionResult {
+                output: output.to_string(),
+                stderr_output: String::new(),
+                summary: "debate verdict produced".to_string(),
+                exit_code: 1,
+                peak_memory_mb: None,
+            },
+            meta_session_id: session.meta_session_id.clone(),
+            provider_session_id: None,
+            changed_paths: None,
+        }),
+        debate_cmd::DebateFinalizeContext {
+            all_tier_models_failed: false,
+            resolved_tier_name: None,
+            failures: &[],
+            debate_mode: debate_cmd::DebateMode::Heterogeneous,
+            output_header: None,
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+        },
+    )
+    .expect("revise verdict should finalize");
+
+    assert_eq!(finalized.exit_code, 1);
+    let saved = csa_session::load_result(project_root, &session.meta_session_id)
+        .unwrap()
+        .expect("saved result");
+    assert_eq!(saved.status, "failure");
+    assert_eq!(saved.exit_code, 1);
 }

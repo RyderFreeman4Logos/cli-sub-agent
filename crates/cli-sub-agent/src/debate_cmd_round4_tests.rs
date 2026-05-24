@@ -254,7 +254,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
     )
     .expect("pre-session all-fail should synthesize unavailable");
 
-    assert_eq!(finalized.exit_code, 1);
+    assert_eq!(finalized.exit_code, 2);
     let rendered_json: serde_json::Value =
         serde_json::from_str(&finalized.rendered_output).expect("json output");
     assert_eq!(rendered_json["verdict"], "UNAVAILABLE");
