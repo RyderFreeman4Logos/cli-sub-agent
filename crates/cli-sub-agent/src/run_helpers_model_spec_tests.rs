@@ -19,7 +19,12 @@ fn project_config_with_tier_tools(tools: &[&str]) -> ProjectConfig {
                 ..Default::default()
             },
         );
-        tier_models.push(format!("{tool}/provider/model/medium"));
+        let model_spec = match *tool {
+            "codex" => "codex/openai/gpt-5.4/medium".to_string(),
+            "gemini-cli" => "gemini-cli/google/default/medium".to_string(),
+            other => format!("{other}/provider/model/medium"),
+        };
+        tier_models.push(model_spec);
     }
 
     let mut tiers = HashMap::new();
@@ -73,7 +78,7 @@ fn resolve_tool_and_model_allows_matching_tool_with_model_spec_when_tiers_config
         project_root: std::path::Path::new("/tmp/test-project"),
         ..super::RoutingRequest::new(std::path::Path::new("/tmp/test-project"))
     })
-    .expect("matching --tool + --model-spec should bypass tier enforcement");
+    .expect("matching --tool + configured --model-spec should pass tier enforcement");
 
     assert_eq!(tool, ToolName::Codex);
     assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/medium"));
@@ -96,6 +101,56 @@ fn resolve_tool_and_model_rejects_mismatched_tool_and_model_spec() {
     assert!(message.contains("--tool gemini-cli"));
     assert!(message.contains("--model-spec codex/openai/gpt-5.4/medium"));
     assert!(message.contains("tool codex"));
+}
+
+#[test]
+fn resolve_tool_and_model_allows_model_spec_matching_tool_default_without_tiers() {
+    let mut config = project_config_with_tier_tools(&["codex"]);
+    config.tiers.clear();
+    config.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: true,
+            default_model: Some("gpt-5.5".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let (tool, model_spec, model) = resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.5/high"),
+        config: Some(&config),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp/test-project"))
+    })
+    .expect("model-spec matching [tools.codex].default_model should pass");
+
+    assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.5/high"));
+    assert!(model.is_none());
+}
+
+#[test]
+fn resolve_tool_and_model_rejects_model_spec_mismatching_tool_default_without_tiers() {
+    let mut config = project_config_with_tier_tools(&["codex"]);
+    config.tiers.clear();
+    config.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: true,
+            default_model: Some("gpt-5.5".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let error = resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.4/high"),
+        config: Some(&config),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp/test-project"))
+    })
+    .expect_err("model-spec must match configured tool default when no tiers exist");
+
+    let message = error.to_string();
+    assert!(message.contains("[tools.codex].default_model"));
+    assert!(message.contains("gpt-5.5"));
 }
 
 #[test]

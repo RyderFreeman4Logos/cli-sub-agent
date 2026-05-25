@@ -10,17 +10,14 @@ pub(crate) async fn handle_claude_sub_agent(
     args: ClaudeSubAgentArgs,
     current_depth: u32,
 ) -> Result<i32> {
-    // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
-    // 2. Load config and validate recursion depth
     let Some((config, global_config)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
     };
 
-    // 3. Read prompt
     let prompt = crate::run_helpers::read_prompt(args.question)?;
 
     let parent_tool = crate::run_helpers::detect_parent_tool();
@@ -44,19 +41,14 @@ pub(crate) async fn handle_claude_sub_agent(
             project: config.as_ref(),
             global: Some(&global_config),
         },
-        // enforce tier whitelist for sub-agent execution, except when the caller
-        // provided an exact --model-spec (matching the csa run / review / debate
-        // escape-hatch semantic so the CLI contract is consistent).
         args.model_spec.is_none(),
         false, // claude-sub-agent does not support --force-override-user-config
         false, // scoped to `csa run --tool`, not sub-agent orchestration
     )
     .await?;
 
-    // 9. Acquire global slot to enforce concurrency limit
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
-    // 10. Get env injection from global config
     let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
@@ -71,10 +63,8 @@ pub(crate) async fn handle_claude_sub_agent(
             executor.tool_name(),
         );
 
-    // 11. Session description (no longer derived from --skill)
     let description: Option<String> = None;
 
-    // 12. Execute with session
     let result = crate::pipeline::execute_with_session(
         &executor,
         &tool_name,
@@ -103,14 +93,12 @@ pub(crate) async fn handle_claude_sub_agent(
     )
     .await?;
 
-    // 13. Audit logging
     info!(
         tool = %tool_name.as_str(),
         exit_code = result.exit_code,
         "claude-sub-agent execution completed"
     );
 
-    // 14. Print result
     print!("{}", result.output);
     if !result.summary.trim().is_empty() {
         eprintln!("summary: {}", result.summary);
@@ -315,7 +303,12 @@ mod tests {
                     ..Default::default()
                 },
             );
-            tier_models.push(format!("{tool}/provider/model/medium"));
+            let model_spec = match *tool {
+                "codex" => "codex/openai/gpt-5.4/high".to_string(),
+                "gemini-cli" => "gemini-cli/google/default/medium".to_string(),
+                other => format!("{other}/provider/model/medium"),
+            };
+            tier_models.push(model_spec);
         }
 
         let mut tiers = HashMap::new();
@@ -502,7 +495,7 @@ mod tests {
 
         let aliased = super::resolve_claude_sub_agent_tool_and_model(
             Some(ToolArg::Alias("router".to_string())),
-            Some("codex/openai/gpt-5.4/medium"),
+            Some("codex/openai/gpt-5.4/high"),
             None,
             Some(&cfg),
             &global,
@@ -513,7 +506,7 @@ mod tests {
 
         let direct = super::resolve_claude_sub_agent_tool_and_model(
             Some(ToolArg::AnyAvailable),
-            Some("codex/openai/gpt-5.4/medium"),
+            Some("codex/openai/gpt-5.4/high"),
             None,
             Some(&cfg),
             &global,

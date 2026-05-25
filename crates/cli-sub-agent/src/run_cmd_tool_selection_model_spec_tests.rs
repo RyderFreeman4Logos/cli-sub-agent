@@ -37,7 +37,10 @@ fn resolve_tool_by_strategy_model_spec_disables_default_tier_and_runtime_fallbac
             "tier-3-complex".to_string(),
             csa_config::config::TierConfig {
                 description: "Test tier".to_string(),
-                models: vec!["openai-compat/openai/gpt-5-codex/high".to_string()],
+                models: vec![
+                    "openai-compat/openai/gpt-5-codex/high".to_string(),
+                    "codex/openai/gpt-5.4/high".to_string(),
+                ],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
