@@ -162,18 +162,6 @@ pub(crate) fn write_review_gate_marker(
     }
 }
 
-/// Write a gate marker from a [`csa_session::state::ReviewSessionMeta`] when its
-/// decision is Pass.  No-op for non-Pass decisions.
-pub(crate) fn maybe_write_gate_marker_from_meta(
-    project_root: &Path,
-    meta: &csa_session::state::ReviewSessionMeta,
-) {
-    if meta.decision != csa_core::types::ReviewDecision::Pass.as_str() {
-        return;
-    }
-    maybe_write_review_gate_marker(project_root, &meta.head_sha, &meta.session_id, &meta.scope);
-}
-
 /// Write a gate marker when `verdict == "CLEAN"`.  No-op for any other verdict.
 pub(crate) fn maybe_write_gate_marker_for_clean(
     project_root: &Path,
