@@ -125,19 +125,18 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_tier_provided() {
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_bypassed_when_model_spec_provided() {
     let _guard = assume_tier_tools_available();
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
-    // When --model-spec is provided, validation should be skipped
+    // --force-ignore-tier-setting preserves the explicit bypass for unconfigured specs.
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         model_spec: Some("codex/openai/gpt-4/high"), // --model-spec provided
         config: Some(&cfg),
         force_ignore_tier_setting: true, // force_ignore_tier_setting = true
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
-    // Should succeed because model_spec is provided, bypassing the validation
     assert!(
         result.is_ok(),
-        "model_spec provided should bypass validation: {:?}",
+        "force-ignore should bypass model_spec validation: {:?}",
         result
     );
 }

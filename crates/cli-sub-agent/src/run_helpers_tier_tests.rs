@@ -339,11 +339,9 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
     );
 }
 
-/// When tiers are configured, --model-spec is the exact-selection escape hatch and
-/// implicitly bypasses the tier whitelist. `enforce_tool_enabled` still applies (see
-/// `resolve_tool_and_model_disabled_tool_model_spec_errors`).
+/// When tiers are configured, --model-spec must match one configured tier model.
 #[test]
-fn resolve_tool_and_model_allows_model_spec_exact_selection_when_tiers_configured() {
+fn resolve_tool_and_model_rejects_unconfigured_model_spec_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
         vec!["gemini-cli/google/default/xhigh"],
@@ -354,14 +352,34 @@ fn resolve_tool_and_model_allows_model_spec_exact_selection_when_tiers_configure
         config: Some(&cfg),
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
+    assert!(result.is_err(), "model-spec must not bypass tier whitelist");
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("not configured in any tier"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn resolve_tool_and_model_allows_configured_model_spec_when_tiers_configured() {
+    let cfg = config_with_tier(
+        "default",
+        vec!["codex/openai/gpt-5.5/high"],
+        &["gemini-cli", "codex"],
+    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.5/high"),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
     assert!(
         result.is_ok(),
-        "model-spec should bypass tier whitelist: {}",
+        "configured model-spec should pass: {}",
         result.unwrap_err()
     );
     let (tool, model_spec, model) = result.unwrap();
     assert_eq!(tool, ToolName::Codex);
-    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.5/high"));
     assert!(model.is_none());
 }
 

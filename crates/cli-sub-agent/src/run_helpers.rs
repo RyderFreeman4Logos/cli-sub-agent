@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_executor::{Executor, ModelSpec, ThinkingBudget};
+use csa_executor::ModelSpec;
 
 #[path = "run_helpers_atomic_commit.rs"]
 mod atomic_commit;
@@ -12,16 +12,22 @@ mod atomic_commit;
 mod compound_tier;
 #[path = "run_helpers_edit_requirement.rs"]
 mod edit_requirement;
+#[path = "run_helpers_executor.rs"]
+mod executor;
 #[path = "run_helpers_inline_review_context.rs"]
 mod inline_review_context;
 #[path = "run_helpers_model_compat.rs"]
 pub(crate) mod model_compat;
+#[path = "run_helpers_model_spec_validation.rs"]
+mod model_spec_validation;
 #[path = "run_helpers_prompt.rs"]
 mod prompt;
 #[path = "run_helpers_routing_conflict.rs"]
 mod routing_conflict;
 #[path = "run_helpers_routing_request.rs"]
 mod routing_request;
+#[path = "run_helpers_tier_resolution.rs"]
+mod tier_resolution;
 #[path = "run_helpers_token_parse.rs"]
 mod token_parse;
 #[path = "run_helpers_tool_availability.rs"]
@@ -31,7 +37,9 @@ pub(crate) use atomic_commit::atomic_commit_discipline_preamble;
 pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
 pub(crate) use compound_tier::{apply_compound_tier_selector, apply_compound_tier_selector_arg};
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
+pub(crate) use executor::{build_executor, model_name_for_tier_validation};
 pub(crate) use inline_review_context::prepend_review_context_to_prompt;
+use model_spec_validation::enforce_model_spec_matches_tool_default;
 #[cfg(test)]
 pub(crate) use prompt::resolve_prompt_with_file_from_reader;
 pub(crate) use prompt::{
@@ -40,6 +48,10 @@ pub(crate) use prompt::{
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
+pub(crate) use tier_resolution::{
+    TierToolResolution, collect_available_tier_models, resolve_requested_tool_from_tier,
+    resolve_tool_from_tier,
+};
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
 pub(crate) use token_parse::{extract_cost, extract_number};
@@ -181,8 +193,8 @@ pub(crate) fn resolve_tool_and_model(
     let exact_selection_active = model_spec.is_some();
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
-    // unless --force-ignore-tier-setting (or --force) is active. --model-spec is the
-    // exact-selection escape hatch and is handled below.
+    // unless --force-ignore-tier-setting (or --force) is active. --model-spec is
+    // exact selection, but it must still match a configured tier model below.
     // Auto-resolved tools (from HeterogeneousPreferred etc.) don't count as user-explicit.
     let tool_triggers_enforcement = tool.is_some() && !tool_is_auto_resolved;
     validate_tool_tier_override_flags(tool_triggers_enforcement, tier, force_ignore_tier_setting)?;
@@ -307,9 +319,8 @@ pub(crate) fn resolve_tool_and_model(
         return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
     }
 
-    // Case 1: model_spec provided → parse it to get tool. --model-spec is the
-    // exact-selection escape hatch and implicitly bypasses tier whitelist;
-    // enforce_tool_enabled still applies.
+    // Case 1: model_spec provided → parse it to get tool. --model-spec is an
+    // exact selection, but configured tiers still whitelist allowed specs.
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
@@ -327,6 +338,13 @@ pub(crate) fn resolve_tool_and_model(
         // Enforce tool enablement from user config
         if let Some(cfg) = config {
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
+            if !force && !bypass_tier {
+                if cfg.tiers.is_empty() {
+                    enforce_model_spec_matches_tool_default(cfg, &parsed, spec)?;
+                } else {
+                    cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
+                }
+            }
         }
         let resolved_model = model.map(|m| {
             config
@@ -430,90 +448,6 @@ pub(crate) fn resolve_tool_and_model(
     )
 }
 
-/// Build an executor from tool, model_spec, model, and thinking parameters.
-pub(crate) fn build_executor(
-    tool: &ToolName,
-    model_spec: Option<&str>,
-    model: Option<&str>,
-    thinking: Option<&str>,
-    config: Option<&ProjectConfig>,
-    apply_tool_defaults: bool,
-) -> Result<Executor> {
-    let mut executor = if let Some(spec) = model_spec {
-        let parsed = ModelSpec::parse(spec)?;
-        Executor::from_spec(&parsed)?
-    } else {
-        let tool_name = tool.as_str();
-
-        // Smart-parse --model: split trailing thinking suffix (e.g. "/xhigh")
-        // when --thinking is not explicitly provided.
-        let (parsed_model, model_thinking) = match model {
-            Some(m) => {
-                let (clean, budget) = ThinkingBudget::try_split_from_model(m);
-                (Some(clean.to_string()), budget)
-            }
-            None => (None, None),
-        };
-
-        let final_model = parsed_model.or_else(|| {
-            apply_tool_defaults.then(|| {
-                config.and_then(|cfg| {
-                    cfg.tool_default_model(tool_name)
-                        .map(|default_model| cfg.resolve_alias(default_model))
-                })
-            })?
-        });
-
-        // Explicit --thinking > thinking parsed from --model suffix > config default
-        let effective_thinking = thinking.or_else(|| {
-            apply_tool_defaults
-                .then(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)))?
-        });
-        let budget = if let Some(t) = effective_thinking {
-            Some(ThinkingBudget::parse(t)?)
-        } else {
-            model_thinking
-        };
-
-        Executor::from_tool_name(tool, final_model, budget)
-    };
-
-    // When model_spec is present, the model and thinking come from the spec.
-    // Explicit arguments must override them (CLI/config > tier spec).
-    if model_spec.is_some() {
-        if let Some(explicit_model) = model {
-            // Also smart-parse model override for thinking suffix.
-            let (clean, suffix_budget) = ThinkingBudget::try_split_from_model(explicit_model);
-            executor.override_model(clean.to_string());
-            // Explicit --thinking takes precedence over suffix in override too.
-            if thinking.is_none()
-                && let Some(budget) = suffix_budget
-            {
-                executor.override_thinking_budget(budget);
-            }
-        }
-        if let Some(explicit_thinking) = thinking {
-            let budget = ThinkingBudget::parse(explicit_thinking)?;
-            executor.override_thinking_budget(budget);
-        }
-    }
-
-    if matches!(executor, Executor::Codex { .. }) {
-        let transport = tool_availability::resolved_codex_transport(config);
-        executor.override_codex_transport(transport);
-    }
-    if matches!(executor, Executor::ClaudeCode { .. }) {
-        let transport = tool_availability::resolved_claude_code_transport(config);
-        executor.override_claude_code_transport(transport);
-    }
-
-    Ok(executor)
-}
-
-pub(crate) fn model_name_for_tier_validation(model: Option<&str>) -> Option<&str> {
-    model.map(|name| ThinkingBudget::try_split_from_model(name).0)
-}
-
 /// Check if a prompt is a context compress/compact command.
 pub(crate) fn is_compress_command(prompt: &str) -> bool {
     let trimmed = prompt.trim();
@@ -559,152 +493,6 @@ pub(crate) fn truncate_prompt(s: &str, max_len: usize) -> String {
 
         format!("{substring}...")
     }
-}
-
-/// Result of resolving a tool from a tier's models list.
-#[derive(Debug, Clone)]
-pub(crate) struct TierToolResolution {
-    /// The resolved tool name.
-    pub tool: ToolName,
-    /// The full model spec string (e.g., "gemini-cli/google/gemini-3.1-pro-preview/xhigh").
-    pub model_spec: String,
-}
-
-/// Collect all enabled + available model specs from a named tier in config order.
-///
-/// Applies the same availability and whitelist rules as tier resolution so
-/// callers can consistently build reviewer pools or per-tool model-spec maps.
-pub(crate) fn collect_available_tier_models(
-    tier_name: &str,
-    config: &ProjectConfig,
-    whitelist: Option<&[String]>,
-    skip_specs: &[String],
-) -> Vec<TierToolResolution> {
-    let Some(tier) = config.tiers.get(tier_name) else {
-        return Vec::new();
-    };
-
-    tier.models
-        .iter()
-        .filter_map(|spec| {
-            if skip_specs.iter().any(|s| s == spec) {
-                return None;
-            }
-            let parts: Vec<&str> = spec.splitn(4, '/').collect();
-            if parts.len() != 4 {
-                return None;
-            }
-            let tool_str = parts[0];
-            let tool = parse_tool_name(tool_str).ok()?;
-            if !config.is_tool_enabled(tool_str)
-                || !is_tool_binary_available_for_config(tool_str, Some(config))
-            {
-                return None;
-            }
-            if let Some(wl) = whitelist
-                && !wl.iter().any(|w| w == tool_str)
-            {
-                return None;
-            }
-            Some(TierToolResolution {
-                tool,
-                model_spec: spec.clone(),
-            })
-        })
-        .collect()
-}
-
-/// Resolve a user-requested tool from a tier, preserving tier ordering while
-/// failing clearly when the tool is absent from that tier.
-pub(crate) fn resolve_requested_tool_from_tier(
-    tier_name: &str,
-    config: &ProjectConfig,
-    parent_tool: Option<&str>,
-    requested_tool: ToolName,
-    force_override_user_config: bool,
-    skip_specs: &[String],
-) -> Result<TierToolResolution> {
-    let requested_tool_name = requested_tool.as_str();
-    let Some(tier) = config.tiers.get(tier_name) else {
-        anyhow::bail!("Tier '{}' not found.", tier_name);
-    };
-    let tool_in_tier = tier.models.iter().any(|spec| {
-        !skip_specs.iter().any(|skip| skip == spec)
-            && spec
-                .split('/')
-                .next()
-                .is_some_and(|tool_name| tool_name == requested_tool_name)
-    });
-    if !tool_in_tier {
-        let suggestions = config.suggest_compatible_alternatives(requested_tool_name, tier_name);
-        anyhow::bail!(
-            "Tool '{}' is not available in tier '{}'\n\n{}",
-            requested_tool_name,
-            tier_name,
-            suggestions
-        );
-    }
-
-    config.enforce_tool_enabled(requested_tool_name, force_override_user_config)?;
-
-    let whitelist = [requested_tool_name.to_string()];
-    if let Some(resolution) =
-        resolve_tool_from_tier(tier_name, config, parent_tool, Some(&whitelist), skip_specs)
-    {
-        return Ok(resolution);
-    }
-
-    anyhow::bail!(
-        "Requested tool '{}' is configured in tier '{}' but is not currently available. \
-         Ensure it is installed and enabled.",
-        requested_tool_name,
-        tier_name
-    );
-}
-
-/// Resolve a tool from a named tier's models list with heterogeneous preference.
-///
-/// Filters tier models by enabled + binary available, then prefers a tool from
-/// a different `ModelFamily` than `parent_tool`. Falls back to any available tool
-/// in the tier when no heterogeneous option exists.
-///
-/// `skip_specs` excludes model specs that have already been tried (e.g. due to
-/// 429 rate-limit failover within the same tier).
-///
-/// **Whitelist interaction (#648)**: When `whitelist` is `Some`, only tier models
-/// whose tool name appears in the whitelist are considered. This is how
-/// `[review].tool` and `[debate].tool` narrow a multi-tool tier to a single tool.
-/// Pass `None` to use the tier's full fallback chain.
-///
-/// Returns `None` if no enabled, available tool is found in the tier.
-pub(crate) fn resolve_tool_from_tier(
-    tier_name: &str,
-    config: &ProjectConfig,
-    parent_tool: Option<&str>,
-    whitelist: Option<&[String]>,
-    skip_specs: &[String],
-) -> Option<TierToolResolution> {
-    let parent_family = parent_tool
-        .and_then(|p| parse_tool_name(p).ok())
-        .map(|t| t.model_family());
-
-    let available = collect_available_tier_models(tier_name, config, whitelist, skip_specs);
-
-    if available.is_empty() {
-        return None;
-    }
-
-    // Prefer heterogeneous (different model family from parent)
-    if let Some(parent_fam) = parent_family
-        && let Some(resolution) = available
-            .iter()
-            .find(|resolution| resolution.tool.model_family() != parent_fam)
-    {
-        return Some(resolution.clone());
-    }
-
-    // No heterogeneous option (or no parent) — use first available
-    Some(available[0].clone())
 }
 
 /// Detect the parent tool context.

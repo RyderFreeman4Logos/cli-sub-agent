@@ -467,9 +467,9 @@ fn resolve_run_tier_context_drops_tier_for_explicit_model_spec() {
 }
 
 #[test]
-fn primary_writer_spec_seeds_run_without_model_selecting_flags_and_bypasses_tiers() {
+fn primary_writer_spec_seeds_run_without_model_selecting_flags_and_disables_tier_context() {
     let tmp = TempDir::new().expect("tempdir");
-    let config = make_config_with_primary_writer_spec("codex/openai/gpt-5.4/high");
+    let config = make_config_with_primary_writer_spec("codex/openai/o4-mini/high");
     let global_config = GlobalConfig::default();
 
     let spec = resolve_primary_writer_spec_for_run(
@@ -498,7 +498,7 @@ fn primary_writer_spec_seeds_run_without_model_selecting_flags_and_bypasses_tier
     assert_eq!(resolution.model_spec.as_deref(), Some(spec.as_str()));
     assert!(
         resolution.resolved_tier_name.is_none(),
-        "synthetic model-spec must keep --model-spec tier bypass semantics"
+        "synthetic model-spec should still disable tier runtime context"
     );
 }
 

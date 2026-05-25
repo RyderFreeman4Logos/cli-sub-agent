@@ -502,7 +502,7 @@ pub(crate) async fn handle_run(
         strategy: loop_strategy,
         initial_tool: resolved_tool,
         initial_model_spec: resolved_model_spec,
-        user_model_spec_explicit,
+        user_model_spec_explicit: false,
         initial_model: resolved_model,
         runtime_fallback_candidates: heterogeneous_runtime_fallback_candidates,
         project_root: &project_root,
