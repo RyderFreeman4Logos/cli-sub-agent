@@ -51,6 +51,9 @@ pub use cli_memory::*;
 #[path = "cli_skill.rs"]
 mod cli_skill;
 pub use cli_skill::*;
+#[path = "cli_verify.rs"]
+mod cli_verify;
+pub use cli_verify::*;
 
 #[derive(Parser)]
 #[command(name = "csa", version = build_version())]
@@ -426,6 +429,9 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: TokuinCommands,
     },
+
+    /// Verify a falsifiable claim against baseline and treatment git refs
+    Verify(VerifyArgs),
 
     /// Analyze workspace token health
     Health(HealthArgs),

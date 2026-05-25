@@ -84,6 +84,7 @@ fn command_prefix(command: &Commands) -> Vec<&'static str> {
         Commands::Tokuin {
             cmd: TokuinCommands::Models,
         } => vec!["tokuin", "models"],
+        Commands::Verify(_) => vec!["verify"],
         Commands::Health(_) => vec!["health"],
         Commands::Hunt(_) => vec!["hunt"],
         Commands::Arch(_) => vec!["arch"],
