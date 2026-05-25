@@ -196,7 +196,7 @@ Reviewer tool hint: {}.",
 
 fn reviewer_output_dir(reviewer_index: usize) -> String {
     let reviewer_dir = format!("reviewer-{reviewer_index}");
-    format!("${{{CSA_SESSION_DIR_ENV_KEY}:-${CSA_PARENT_SESSION_DIR_ENV_KEY}}}/{reviewer_dir}")
+    format!("${{{CSA_PARENT_SESSION_DIR_ENV_KEY}:-${CSA_SESSION_DIR_ENV_KEY}}}/{reviewer_dir}")
 }
 
 pub(crate) fn parse_consensus_strategy(raw: &str) -> Result<ConsensusStrategy> {

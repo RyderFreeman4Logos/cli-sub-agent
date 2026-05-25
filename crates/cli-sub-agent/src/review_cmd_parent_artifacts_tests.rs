@@ -1,7 +1,7 @@
 use super::{
-    MultiReviewerConsensusArtifacts, parent_consensus_review_meta,
-    write_multi_reviewer_consensus_artifacts, write_multi_reviewer_parent_artifacts,
-    write_standalone_consensus_review_artifacts,
+    MultiReviewerConsensusArtifacts, parent_artifact_for_decision, parent_consensus_review_meta,
+    parent_review_decision, write_multi_reviewer_consensus_artifacts,
+    write_multi_reviewer_parent_artifacts, write_standalone_consensus_review_artifacts,
 };
 use crate::review_consensus::UNAVAILABLE;
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
@@ -10,8 +10,52 @@ use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::review_artifact::{
     Finding, FindingsFile, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary,
 };
+use proptest::prelude::*;
 use std::fs;
 use tempfile::tempdir;
+
+#[derive(Clone, Copy, Debug)]
+enum ReviewerState {
+    Pass,
+    Fail,
+    Unavailable,
+}
+
+fn blocking_finding(fid: impl Into<String>) -> Finding {
+    let fid = fid.into();
+    Finding {
+        severity: Severity::High,
+        fid: fid.clone(),
+        file: "src/lib.rs".to_string(),
+        line: Some(7),
+        rule_id: format!("rule.review.{fid}"),
+        summary: "blocking finding must propagate".to_string(),
+        engine: "reviewer".to_string(),
+    }
+}
+
+fn write_parent_reviewer_artifact(
+    session_dir: &std::path::Path,
+    reviewer_index: usize,
+    finding: Finding,
+) {
+    let reviewer_dir = session_dir.join(format!("reviewer-{}", reviewer_index + 1));
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let findings = vec![finding];
+    let artifact = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: format!("01TESTREVIEWER{reviewer_index:012}"),
+        timestamp: chrono::Utc::now(),
+    };
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+}
 
 #[test]
 fn write_multi_reviewer_parent_artifacts_writes_output_sidecars() {
@@ -322,6 +366,83 @@ fn write_multi_reviewer_parent_artifacts_reads_child_session_reviewer_artifacts(
 }
 
 #[test]
+fn consensus_artifacts_copy_child_only_findings_into_parent_session_outputs() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).expect("project dir should be created");
+    let parent_dir = temp.path().join("parent-session");
+    fs::create_dir_all(&parent_dir).expect("parent session dir should be created");
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &parent_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    let child = csa_session::create_session_fresh(
+        &project,
+        Some("review[1]: range:main...HEAD"),
+        None,
+        None,
+    )
+    .expect("child reviewer session should be created");
+    let child_id = child.meta_session_id.clone();
+    let child_dir = csa_session::get_session_dir(&project, &child_id).unwrap();
+    write_parent_reviewer_artifact(&child_dir, 0, blocking_finding("CHILD-ONLY-FID"));
+
+    let outcomes = vec![super::super::output::ReviewerOutcome {
+        reviewer_index: 0,
+        tool: ToolName::Codex,
+        session_id: child_id.clone(),
+        output: "Reviewer found an issue.".to_string(),
+        exit_code: 1,
+        verdict: crate::review_consensus::HAS_ISSUES,
+        diagnostic: None,
+    }];
+    let ctx = MultiReviewerConsensusArtifacts {
+        project_root: &project,
+        reviewers: 1,
+        outcomes: &outcomes,
+        final_verdict: crate::review_consensus::HAS_ISSUES,
+        all_reviewers_unavailable: false,
+        head_sha: "abcdef1234567890",
+        scope: "range:main...HEAD",
+        review_iterations: 1,
+        diff_fingerprint: Some("sha256:test".to_string()),
+    };
+
+    write_multi_reviewer_consensus_artifacts(ctx)
+        .expect("parent consensus artifacts should be produced");
+
+    let parent_findings: FindingsFile = toml::from_str(
+        &fs::read_to_string(parent_dir.join("output").join("findings.toml"))
+            .expect("parent findings.toml should exist"),
+    )
+    .expect("parent findings.toml should parse");
+    assert_eq!(parent_findings.findings.len(), 1);
+    assert_eq!(parent_findings.findings[0].id, "CHILD-ONLY-FID");
+    assert!(
+        parent_dir
+            .join("output")
+            .join("review-verdict.json")
+            .exists()
+    );
+    assert!(
+        parent_dir
+            .join(crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE)
+            .exists()
+    );
+    assert!(
+        !child_dir
+            .join("output")
+            .join("review-verdict.json")
+            .exists(),
+        "consensus artifacts must be parent-session artifacts, not child-only outputs"
+    );
+}
+
+#[test]
 fn write_multi_reviewer_parent_artifacts_preserves_has_issues_consensus_with_empty_findings() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
@@ -550,6 +671,72 @@ fn write_multi_reviewer_consensus_artifacts_preserves_blocking_findings_on_clean
     .expect("review-findings-consolidated.json should parse");
     assert_eq!(parent_artifact.findings.len(), 1);
     assert_eq!(parent_artifact.findings[0].fid, "FID-1");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn parent_aggregation_never_drops_blocking_findings_when_consensus_text_is_clean(
+        states in prop::collection::vec(reviewer_state_strategy(), 2..=4),
+    ) {
+        let reviewer_artifacts: Vec<ReviewArtifact> = states
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, state)| {
+                matches!(state, ReviewerState::Fail).then(|| {
+                    let findings = vec![blocking_finding(format!("PROP-BLOCKING-{idx}"))];
+                    ReviewArtifact {
+                        severity_summary: SeveritySummary::from_findings(&findings),
+                        findings,
+                        review_mode: Some("diff".to_string()),
+                        schema_version: "1.0".to_string(),
+                        session_id: format!("01TESTREVIEWER{idx:012}"),
+                        timestamp: chrono::Utc::now(),
+                    }
+                })
+            })
+            .collect();
+        let consolidated = crate::review_consensus::build_consolidated_artifact(
+            reviewer_artifacts,
+            "01PARENTSESSION000000000000",
+        );
+        let decision = parent_review_decision(
+            &consolidated,
+            crate::review_consensus::CLEAN,
+            states.iter().all(|state| matches!(state, ReviewerState::Unavailable)),
+        );
+        let parent_artifact = parent_artifact_for_decision(&consolidated, decision);
+
+        let expected_blocking_ids: Vec<String> = states
+            .iter()
+            .enumerate()
+            .filter(|(_, state)| matches!(state, ReviewerState::Fail))
+            .map(|(idx, _)| format!("PROP-BLOCKING-{idx}"))
+            .collect();
+        for expected_id in &expected_blocking_ids {
+            prop_assert!(
+                parent_artifact.findings.iter().any(|finding| finding.fid == *expected_id),
+                "blocking finding {expected_id} must survive clean consensus text"
+            );
+        }
+        if expected_blocking_ids.is_empty() {
+            prop_assert!(
+                decision != ReviewDecision::Fail,
+                "clean consensus without blocking artifacts should not be promoted to failure"
+            );
+        } else {
+            prop_assert_eq!(decision, ReviewDecision::Fail);
+        }
+    }
+}
+
+fn reviewer_state_strategy() -> impl Strategy<Value = ReviewerState> {
+    prop_oneof![
+        Just(ReviewerState::Pass),
+        Just(ReviewerState::Fail),
+        Just(ReviewerState::Unavailable),
+    ]
 }
 
 #[test]
