@@ -108,6 +108,7 @@ mod todo_ref_cmd;
 mod tool_version;
 mod triage_cmd;
 mod verdict_exit_code;
+mod verify_cmd;
 #[cfg(test)]
 include!("review_cmd_exact_tests.rs");
 #[cfg(test)]
@@ -734,6 +735,10 @@ async fn run() -> Result<()> {
             exit_current_process(exit_code);
         }
         Commands::Tokuin { cmd } => cli::handle_tokuin(cmd)?,
+        Commands::Verify(args) => {
+            let exit_code = verify_cmd::handle_verify(args)?;
+            exit_current_process(exit_code);
+        }
         Commands::Health(args) => cli::handle_health(args)?,
         Commands::Xurl { cmd } => cli::handle_xurl(cmd)?,
         Commands::Recall(args) => recall_cmd::handle_recall(args.cmd)?,
