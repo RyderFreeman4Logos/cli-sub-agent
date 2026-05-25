@@ -4,6 +4,7 @@ use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
+use proptest::prelude::*;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
@@ -69,6 +70,23 @@ fn response(agent: &str, verdict: &str, timed_out: bool) -> AgentResponse {
 
 fn verdict_to_exit_code(verdict: &str) -> i32 {
     if verdict == CLEAN { 0 } else { 1 }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReviewerState {
+    Pass,
+    Fail,
+    Unavailable,
+}
+
+impl ReviewerState {
+    fn verdict(self) -> &'static str {
+        match self {
+            Self::Pass => CLEAN,
+            Self::Fail => HAS_ISSUES,
+            Self::Unavailable => UNAVAILABLE,
+        }
+    }
 }
 
 fn finding_with_location(
@@ -289,9 +307,9 @@ fn build_multi_reviewer_instruction_keeps_session_dir_deferred_when_env_exists()
 
     assert!(
         prompt.contains(
-            "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-2/review-findings.json"
+            "${CSA_PARENT_SESSION_DIR:-$CSA_SESSION_DIR}/reviewer-2/review-findings.json"
         ),
-        "review prompt should defer session dir resolution to the reviewer process"
+        "review prompt should prefer the parent session dir while deferring shell resolution"
     );
     assert!(
         !prompt.contains("/tmp/child-session") && !prompt.contains("/tmp/parent-session"),
@@ -317,7 +335,7 @@ fn build_multi_reviewer_instruction_does_not_capture_parent_session_dir_env() {
 
     assert!(
         prompt.contains(
-            "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-3/review-findings.json"
+            "${CSA_PARENT_SESSION_DIR:-$CSA_SESSION_DIR}/reviewer-3/review-findings.json"
         )
     );
     assert!(
@@ -327,7 +345,7 @@ fn build_multi_reviewer_instruction_does_not_capture_parent_session_dir_env() {
 }
 
 #[test]
-fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_missing() {
+fn build_multi_reviewer_instruction_uses_parent_first_shell_fallback_when_env_missing() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _parent_guard = ScopedEnvVarRestore::unset(CSA_PARENT_SESSION_DIR_ENV_KEY);
     let _session_guard = ScopedEnvVarRestore::unset(CSA_SESSION_DIR_ENV_KEY);
@@ -343,7 +361,7 @@ fn build_multi_reviewer_instruction_uses_session_first_shell_fallback_when_env_m
 
     assert!(
         prompt.contains(
-            "${CSA_SESSION_DIR:-$CSA_PARENT_SESSION_DIR}/reviewer-4/review-findings.json"
+            "${CSA_PARENT_SESSION_DIR:-$CSA_SESSION_DIR}/reviewer-4/review-findings.json"
         )
     );
 }
@@ -492,6 +510,60 @@ fn agreement_level_ignores_timed_out_responses_with_consensus_decision() {
 
     assert_eq!(consensus.decision.as_deref(), Some(CLEAN));
     assert!((agreement_level(&consensus) - 1.0).abs() < f32::EPSILON);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn majority_consensus_excludes_unavailable_reviewers_before_voting(
+        states in prop::collection::vec(reviewer_state_strategy(), 2..=4),
+    ) {
+        let responses: Vec<AgentResponse> = states
+            .iter()
+            .enumerate()
+            .map(|(idx, state)| {
+                response(
+                    &format!("reviewer-{idx}"),
+                    state.verdict(),
+                    matches!(state, ReviewerState::Unavailable),
+                )
+            })
+            .collect();
+        let active_responses: Vec<AgentResponse> = responses
+            .iter()
+            .filter(|response| !response.timed_out)
+            .cloned()
+            .collect();
+
+        let consensus_with_unavailable =
+            resolve_consensus(ConsensusStrategy::Majority, &responses);
+        let consensus_without_unavailable =
+            resolve_consensus(ConsensusStrategy::Majority, &active_responses);
+
+        prop_assert_eq!(
+            consensus_with_unavailable.decision.as_deref(),
+            consensus_without_unavailable.decision.as_deref()
+        );
+        prop_assert_eq!(
+            consensus_verdict(&consensus_with_unavailable),
+            consensus_verdict(&consensus_without_unavailable)
+        );
+        prop_assert!(
+            (agreement_level(&consensus_with_unavailable)
+                - agreement_level(&consensus_without_unavailable))
+                .abs()
+                < f32::EPSILON
+        );
+    }
+}
+
+fn reviewer_state_strategy() -> impl Strategy<Value = ReviewerState> {
+    prop_oneof![
+        Just(ReviewerState::Pass),
+        Just(ReviewerState::Fail),
+        Just(ReviewerState::Unavailable),
+    ]
 }
 
 #[test]

@@ -397,6 +397,24 @@ mod tests {
     use super::*;
     use crate::review_consensus::HAS_ISSUES;
     use csa_core::consensus::ConsensusStrategy;
+    use proptest::prelude::*;
+
+    #[derive(Clone, Copy, Debug)]
+    enum ReviewerState {
+        Pass,
+        Fail,
+        Unavailable,
+    }
+
+    impl ReviewerState {
+        fn verdict(self) -> &'static str {
+            match self {
+                Self::Pass => CLEAN,
+                Self::Fail => HAS_ISSUES,
+                Self::Unavailable => UNAVAILABLE,
+            }
+        }
+    }
 
     fn outcome(reviewer_index: usize, verdict: &'static str) -> ReviewerOutcome {
         ReviewerOutcome {
@@ -459,5 +477,56 @@ mod tests {
         assert_eq!(outcomes.len(), 2);
         assert_eq!(outcomes[0].verdict, UNAVAILABLE);
         assert_eq!(outcomes[1].verdict, CLEAN);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn reviewer_outcome_consensus_mapping_filters_unavailable_before_vote(
+            states in prop::collection::vec(reviewer_state_strategy(), 2..=4),
+        ) {
+            let outcomes: Vec<ReviewerOutcome> = states
+                .iter()
+                .enumerate()
+                .map(|(idx, state)| outcome(idx, state.verdict()))
+                .collect();
+            let responses: Vec<AgentResponse> = outcomes
+                .iter()
+                .map(consensus_response_from_outcome)
+                .collect();
+            let active_responses: Vec<AgentResponse> = responses
+                .iter()
+                .filter(|response| !response.timed_out)
+                .cloned()
+                .collect();
+
+            prop_assert_eq!(
+                responses.iter().filter(|response| response.timed_out).count(),
+                states.iter().filter(|state| matches!(state, ReviewerState::Unavailable)).count()
+            );
+
+            let consensus_with_unavailable =
+                resolve_consensus(ConsensusStrategy::Majority, &responses);
+            let consensus_without_unavailable =
+                resolve_consensus(ConsensusStrategy::Majority, &active_responses);
+
+            prop_assert_eq!(
+                consensus_with_unavailable.decision.as_deref(),
+                consensus_without_unavailable.decision.as_deref()
+            );
+            prop_assert_eq!(
+                consensus_verdict(&consensus_with_unavailable),
+                consensus_verdict(&consensus_without_unavailable)
+            );
+        }
+    }
+
+    fn reviewer_state_strategy() -> impl Strategy<Value = ReviewerState> {
+        prop_oneof![
+            Just(ReviewerState::Pass),
+            Just(ReviewerState::Fail),
+            Just(ReviewerState::Unavailable),
+        ]
     }
 }
