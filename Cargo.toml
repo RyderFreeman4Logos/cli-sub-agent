@@ -20,7 +20,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.791"
+version = "0.1.792"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -80,4 +80,6 @@ glob = "0.3"
 ignore = "0.4"
 tantivy = "0.25"
 tokuin = { git = "https://github.com/RyderFreeman4Logos/tokuin.git", default-features = false, features = ["conservative"] }
+tree-sitter = "0.26.9"
+tree-sitter-rust = "0.24.2"
 xurl-core = { git = "https://github.com/Xuanwo/xurl.git" }
