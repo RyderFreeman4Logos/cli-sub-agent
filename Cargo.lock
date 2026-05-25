@@ -509,7 +509,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli-sub-agent"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -547,6 +547,8 @@ dependencies = [
  "toml_edit 0.25.11+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-rust",
  "ulid",
  "weave",
  "which 8.0.2",
@@ -701,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "csa-acp"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -721,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "csa-config"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -739,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "csa-core"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "agent-teams",
  "chrono",
@@ -755,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "csa-eval"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -769,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "csa-executor"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "agent-teams",
  "anyhow",
@@ -797,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "csa-hooks"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -816,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "csa-lock"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -830,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "csa-mcp-hub"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "axum",
@@ -853,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "csa-memory"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -872,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "csa-process"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -891,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "csa-resource"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "csa-core",
@@ -907,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "csa-scheduler"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -925,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "csa-session"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -951,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "csa-todo"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3295,6 +3297,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -3480,6 +3483,12 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
 
 [[package]]
 name = "strsim"
@@ -4234,6 +4243,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter"
+version = "0.26.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dab76d0b724ba557954125188cf0633a1ca43199ced82d95c7b9c32cc3de1f3"
+dependencies = [
+ "cc",
+ "regex",
+ "regex-syntax",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4517,7 +4556,7 @@ dependencies = [
 
 [[package]]
 name = "weave"
-version = "0.1.791"
+version = "0.1.792"
 dependencies = [
  "anyhow",
  "clap",
