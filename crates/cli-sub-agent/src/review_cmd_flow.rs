@@ -40,11 +40,17 @@ pub(crate) fn persist_review_sidecars_if_session_exists(
     persist_review_meta(project_root, meta);
     persist_review_findings_toml(project_root, meta);
     persist_review_verdict(project_root, meta, &[], Vec::new());
-    crate::review_gate::maybe_write_gate_marker_from_meta(project_root, meta);
-    Some(persisted_review_verdict_exit_code(
-        project_root,
-        persistable_session_id,
-    ))
+    let verdict_exit_code =
+        persisted_review_verdict_exit_code(project_root, persistable_session_id);
+    if verdict_exit_code == 0 {
+        crate::review_gate::maybe_write_review_gate_marker(
+            project_root,
+            &meta.head_sha,
+            persistable_session_id,
+            &meta.scope,
+        );
+    }
+    Some(verdict_exit_code)
 }
 
 #[cfg(test)]

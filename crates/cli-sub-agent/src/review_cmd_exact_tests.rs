@@ -277,6 +277,69 @@ fn persist_review_sidecars_returns_fail_exit_for_has_issues_artifact() {
     assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
 }
 
+#[test]
+fn issue_1593_clean_verdict_artifact_writes_gate_marker_despite_stale_fail_meta() {
+    let project_dir = exact_test_setup_git_repo();
+    exact_test_run_git(project_dir.path(), &["checkout", "-b", "fix-1593-test"]);
+    let _state_home = test_env_lock::ScopedTestEnvVar::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let session_id = "01TEST1593CLEANVERDICT0000";
+    let session_dir = csa_session::get_session_dir(project_dir.path(), session_id)
+        .expect("resolve session dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+
+    let review_text = concat!(
+        "<!-- CSA:SECTION:summary -->\n",
+        "PASS\n",
+        "<!-- CSA:SECTION:summary:END -->\n\n",
+        "<!-- CSA:SECTION:details -->\n",
+        "No blocking findings.\n\n",
+        "```findings.toml\n",
+        "findings = []\n",
+        "```\n",
+        "<!-- CSA:SECTION:details:END -->\n",
+    );
+    let full_output = serde_json::to_string(&serde_json::json!({
+        "type": "item.completed",
+        "item": {
+            "type": "agent_message",
+            "text": review_text
+        }
+    }))
+    .expect("serialize transcript line");
+    std::fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write full output");
+    csa_session::persist_structured_output(&session_dir, review_text)
+        .expect("persist structured output");
+
+    let mut meta = exact_test_make_review_meta(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    meta.head_sha = csa_session::detect_git_head(project_dir.path()).expect("detect HEAD");
+    meta.scope = "range:main...HEAD".to_string();
+
+    let persisted_exit_code = review_cmd::persist_review_sidecars_if_session_exists(
+        project_dir.path(),
+        &meta,
+        Some(session_id),
+    );
+
+    assert_eq!(persisted_exit_code, Some(0));
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: csa_session::ReviewVerdictArtifact =
+        serde_json::from_str(&std::fs::read_to_string(&verdict_path).unwrap()).unwrap();
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert!(artifact.severity_counts.values().all(|count| *count == 0));
+
+    let marker_path =
+        crate::review_gate::marker_path(project_dir.path(), "fix-1593-test", &meta.head_sha);
+    assert!(
+        marker_path.exists(),
+        "clean derived verdict should write the pre-push gate marker"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
