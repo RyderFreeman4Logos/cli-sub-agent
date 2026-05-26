@@ -39,8 +39,17 @@ stderr_fifo=$3
 status_file=$4
 program=$5
 shift 5
-"$program" "$@" < "$stdin_fifo" > >(tee "$stdout_fifo") 2> >(tee "$stderr_fifo" >&2)
+program_stdout_fifo="${stdout_fifo}.program"
+program_stderr_fifo="${stderr_fifo}.program"
+rm -f "$program_stdout_fifo" "$program_stderr_fifo"
+mkfifo "$program_stdout_fifo" "$program_stderr_fifo"
+tee "$stdout_fifo" < "$program_stdout_fifo" &
+stdout_tee_pid=$!
+tee "$stderr_fifo" < "$program_stderr_fifo" >&2 &
+stderr_tee_pid=$!
+"$program" "$@" < "$stdin_fifo" > "$program_stdout_fifo" 2> "$program_stderr_fifo"
 code=$?
+wait "$stdout_tee_pid" "$stderr_tee_pid"
 printf "%s\n" "$code" > "$status_file"
 exit "$code"
 '
@@ -56,12 +65,15 @@ stdout_pid=$!
 cat "$stderr_fifo" >&2 &
 stderr_pid=$!
 
-cat > "$stdin_fifo" || true
+cat > "$stdin_fifo" &
+stdin_pid=$!
 
 while tmux has-session -t "$session_name" >/dev/null 2>&1; do
   sleep 0.2
 done
 
+kill "$stdin_pid" 2>/dev/null || true
+wait "$stdin_pid" 2>/dev/null || true
 wait "$stdout_pid" "$stderr_pid" 2>/dev/null || true
 
 if [ -f "$status_file" ]; then
