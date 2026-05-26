@@ -1,6 +1,6 @@
 ---
 name: mktsk
-description: "Use when: converting TODO plan into deterministic execution checklist"
+description: "Use when: converting TODO plan or open GitHub issues into deterministic execution checklist"
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, TaskCreate, TaskUpdate, TaskGet, TaskList
 triggers:
   - "mktsk"
@@ -8,6 +8,8 @@ triggers:
   - "make tasks"
   - "execute plan"
   - "todo to tasks"
+  - "--from-issues"
+  - "process all open issues"
 ---
 
 # mktsk: Make Task -- Plan-to-Execution Bridge
@@ -25,6 +27,11 @@ making task persistence impossible.
 
 Read the pattern at `../../PATTERN.md` (relative to this SKILL.md) and follow it
 step by step. You are executing directly — every step runs in your context.
+
+Modes:
+- Default: parse a TODO plan from `path=...`, `timestamp=...`, or the latest mktd output.
+- `--from-issues`: read open GitHub issues and register one ordered TaskCreate
+  task per issue.
 
 For `csa` commands within pattern steps (e.g., `csa review --diff`), add
 `--sa-mode true` when operating under SA mode.
@@ -55,6 +62,7 @@ If there is no useful parallel work available, return control and wait for the n
 | `/mktsk` | Execute the most recent TODO plan for the current branch |
 | `/mktsk path=./plans/feature.md` | Execute tasks from a specific plan file |
 | `/mktsk timestamp=01JK...` | Execute tasks from a csa todo by timestamp |
+| `/mktsk --from-issues` | Create an ordered TaskCreate backlog from all open issues |
 
 ## Integration
 
