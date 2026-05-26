@@ -271,6 +271,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         pre_exec_snapshot: None,
         has_tool_calls: true,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
     let mut disabled_result = csa_process::ExecutionResult {
@@ -314,6 +315,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         pre_exec_snapshot: None,
         has_tool_calls: true,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
     let mut enabled_result = csa_process::ExecutionResult {
@@ -516,6 +518,7 @@ auto_capture = true
         pre_exec_snapshot: None,
         has_tool_calls: true,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
     let mut result = csa_process::ExecutionResult {

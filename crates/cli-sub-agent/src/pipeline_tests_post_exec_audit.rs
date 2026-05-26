@@ -204,6 +204,7 @@ fn pre_execution_audit_baseline_returns_none_for_legacy_sessions_without_snapsho
         pre_exec_snapshot: None,
         has_tool_calls: false,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
 
@@ -271,6 +272,7 @@ fn pre_execution_audit_baseline_prefers_per_execution_snapshot() {
         }),
         has_tool_calls: false,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
 
@@ -365,6 +367,7 @@ fn audit_failure_does_not_fail_execution() {
         pre_exec_snapshot: None,
         has_tool_calls: false,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
     let session = MetaSessionState {
@@ -488,6 +491,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         pre_exec_snapshot: Some(turn_two_snapshot),
         has_tool_calls: false,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
     let session = MetaSessionState {
@@ -590,6 +594,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         pre_exec_snapshot: None,
         has_tool_calls: false,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     };
     let session = MetaSessionState {
