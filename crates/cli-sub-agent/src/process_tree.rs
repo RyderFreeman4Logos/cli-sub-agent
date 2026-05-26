@@ -71,6 +71,21 @@ pub(crate) fn detect_ancestor_tool() -> Option<String> {
     None
 }
 
+const CODEX_YIELD_TIME_MS: u64 = 300_000;
+
+pub(crate) fn codex_yield_hint() -> String {
+    if detect_ancestor_tool().as_deref() != Some("codex") {
+        return String::new();
+    }
+    format!(
+        "\n<!-- CSA:CODEX_HINT yield_time_ms={ms} \
+         rule=\"You are running inside Codex. When calling 'csa session wait', \
+         pass yield_time_ms: {ms} (5 min) to avoid 10s re-polling that wastes tokens. \
+         Example tool call: shell({{ command: 'csa session wait --session <ID> --cd <PATH>', yield_time_ms: {ms} }})\" -->",
+        ms = CODEX_YIELD_TIME_MS,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Platform: Linux — read /proc
 // ---------------------------------------------------------------------------

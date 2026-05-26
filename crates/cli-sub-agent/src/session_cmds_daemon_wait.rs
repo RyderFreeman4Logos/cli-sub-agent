@@ -513,6 +513,10 @@ where
                         .map(|p| format!(" --cd '{p}'"))
                         .unwrap_or_default(),
                 );
+                let codex_hint = crate::process_tree::codex_yield_hint();
+                if !codex_hint.is_empty() {
+                    eprint!("{codex_hint}");
+                }
                 return Ok(SESSION_WAIT_KV_WARM_EXIT_CODE);
             }
             // Defensive: daemon gone with no result.toml (rare; earlier loop branches usually exit-1 first).
@@ -594,6 +598,10 @@ fn emit_wait_completion_signal(
          FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
          any manual polling wastes caller tokens with zero benefit.\" -->"
     );
+    let codex_hint = crate::process_tree::codex_yield_hint();
+    if !codex_hint.is_empty() {
+        eprint!("{codex_hint}");
+    }
 }
 
 fn emit_wait_memory_warn_marker(session_id: &str, rss_mb: u64, limit_mb: u64) {
