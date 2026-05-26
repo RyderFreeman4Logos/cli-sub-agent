@@ -223,6 +223,10 @@ pub(crate) fn spawn_and_exit(
         id = result.session_id,
         cd = cd_hint,
     );
+    let codex_hint = crate::process_tree::codex_yield_hint();
+    if !codex_hint.is_empty() {
+        eprint!("{codex_hint}");
+    }
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(0);
