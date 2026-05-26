@@ -28,12 +28,31 @@ impl Executor {
         }
     }
 
+    pub fn set_codex_tmux_mode(&mut self, enabled: bool) {
+        if let Self::Codex {
+            runtime_metadata, ..
+        } = self
+        {
+            *runtime_metadata = runtime_metadata.with_tmux_mode(enabled);
+        }
+    }
+
     #[must_use]
     pub fn codex_fast_mode_enabled(&self) -> bool {
         match self {
             Self::Codex {
                 runtime_metadata, ..
             } => runtime_metadata.fast_mode_enabled(),
+            _ => false,
+        }
+    }
+
+    #[must_use]
+    pub fn codex_tmux_mode_enabled(&self) -> bool {
+        match self {
+            Self::Codex {
+                runtime_metadata, ..
+            } => runtime_metadata.tmux_mode_enabled(),
             _ => false,
         }
     }

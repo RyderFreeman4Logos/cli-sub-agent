@@ -79,6 +79,28 @@ fn build_executor_codex_transport_respects_explicit_cli_override() {
 }
 
 #[test]
+fn build_executor_codex_tmux_mode_respects_project_config() {
+    let config = project_config_with_tool(
+        "codex",
+        ToolConfig {
+            tmux_mode: true,
+            ..Default::default()
+        },
+    );
+    let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
+
+    match exec {
+        Executor::Codex {
+            runtime_metadata, ..
+        } => {
+            assert!(runtime_metadata.tmux_mode_enabled());
+            assert_eq!(runtime_metadata.transport_mode(), CodexTransport::Cli);
+        }
+        other => panic!("expected codex executor, got: {other:?}"),
+    }
+}
+
+#[test]
 fn build_executor_codex_transport_respects_explicit_acp_override() {
     let config = project_config_with_tool(
         "codex",

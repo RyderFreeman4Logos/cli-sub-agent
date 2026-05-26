@@ -501,6 +501,60 @@ fn test_validate_config_warns_but_passes_on_fork_prefix_budget_below_min() {
     );
 }
 
+#[test]
+fn test_validate_codex_tmux_mode_rejects_acp_transport() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            transport: Some(crate::TransportKind::Acp),
+            tmux_mode: true,
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test-project".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let err = validate_config_with_paths(None, &config_path).expect_err("must reject");
+
+    assert!(
+        err.to_string()
+            .contains("codex tmux_mode requires CLI transport"),
+        "{err:#}"
+    );
+}
+
 include!("validate_tests_deprecated.rs");
 include!("validate_tests_preferences.rs");
 include!("validate_tests_sandbox.rs");

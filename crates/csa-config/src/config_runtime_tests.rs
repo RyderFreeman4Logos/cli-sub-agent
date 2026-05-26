@@ -740,6 +740,25 @@ fn codex_auto_trust_reads_tools_codex_setting() {
 }
 
 #[test]
+fn codex_tmux_mode_defaults_to_false() {
+    let cfg = empty_config();
+    assert!(!cfg.codex_tmux_mode());
+}
+
+#[test]
+fn codex_tmux_mode_reads_tools_codex_setting() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            tmux_mode: true,
+            ..Default::default()
+        },
+    );
+    assert!(cfg.codex_tmux_mode());
+}
+
+#[test]
 fn tool_default_model_reads_tool_override() {
     let mut cfg = empty_config();
     cfg.tools.insert(

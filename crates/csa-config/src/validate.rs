@@ -197,6 +197,7 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
         if let Some(transport) = tool_config.transport {
             validate_tool_transport_override(tool_name, transport)?;
         }
+        validate_tool_tmux_mode(tool_name, tool_config)?;
         // Validate per-tool sandbox memory overrides.
         if let Some(mem) = tool_config.memory_max_mb
             && mem < 256
@@ -231,6 +232,29 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_tool_tmux_mode(tool_name: &str, tool_config: &crate::ToolConfig) -> Result<()> {
+    if !tool_config.tmux_mode {
+        return Ok(());
+    }
+
+    if tool_name != "codex" {
+        bail!("Invalid tools.{tool_name}.tmux_mode = true: tmux_mode is only supported for codex.")
+    }
+
+    match tool_config.resolve_transport(tool_name) {
+        Some(TransportKind::Auto | TransportKind::Cli) => Ok(()),
+        Some(TransportKind::Acp) => {
+            bail!("Invalid tools.codex.tmux_mode = true: codex tmux_mode requires CLI transport.")
+        }
+        Some(TransportKind::Tmux) => {
+            bail!(
+                "Invalid tools.codex.tmux_mode = true: use transport = \"cli\" or omit transport; codex does not support transport = \"tmux\"."
+            )
+        }
+        None => Ok(()),
+    }
 }
 
 fn validate_tool_transport_override_value(tool_name: &str, raw_transport: &str) -> Result<()> {
