@@ -1,6 +1,8 @@
 use super::{
-    PostExecGateCommandOutcome, PostExecGateOutcome, maybe_run_post_exec_gate_with_runner,
+    PostExecGateCommandOutcome, PostExecGateOutcome, execute_post_exec_gate_command,
+    maybe_run_post_exec_gate_with_runner,
 };
+use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{PostExecGateConfig, ProjectConfig, ProjectMeta, ResourcesConfig, RunConfig};
 use csa_session::create_session_fresh;
@@ -82,6 +84,32 @@ fn create_session_at_current_head(project_root: &Path) -> String {
     )
     .expect("create session")
     .meta_session_id
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn execute_post_exec_gate_strips_inherited_csa_env() {
+    let _lock = TEST_ENV_LOCK.clone().lock_owned().await;
+    let project_dir = tempdir().unwrap();
+    let _session_guard = ScopedEnvVarRestore::set("CSA_SESSION_ID", "01KTESTGATEENV000000000000");
+    let _depth_guard = ScopedEnvVarRestore::set("CSA_DEPTH", "7");
+    let _root_guard = ScopedEnvVarRestore::set("CSA_PROJECT_ROOT", project_dir.path());
+    let _dir_guard = ScopedEnvVarRestore::set("CSA_SESSION_DIR", project_dir.path().join("state"));
+    let _future_guard = ScopedEnvVarRestore::set("CSA_UNLISTED_GATE_ENV", "must-not-leak");
+
+    let outcome = execute_post_exec_gate_command(
+        r#"test -z "${CSA_SESSION_ID+x}" &&
+           test -z "${CSA_DEPTH+x}" &&
+           test -z "${CSA_PROJECT_ROOT+x}" &&
+           test -z "${CSA_SESSION_DIR+x}" &&
+           test -z "${CSA_UNLISTED_GATE_ENV+x}""#,
+        project_dir.path(),
+        30,
+    )
+    .await
+    .expect("post-exec gate command should run");
+
+    assert_eq!(outcome, PostExecGateCommandOutcome::Exited(Some(0)));
 }
 
 #[tokio::test]

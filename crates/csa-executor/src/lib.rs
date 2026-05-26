@@ -26,6 +26,7 @@ pub use context_loader::{
 };
 pub use csa_process::ExecutionResult;
 pub use design_context::{extract_design_sections, format_design_context};
+pub use executor::executor_env::STRIPPED_ENV_VARS as CHILD_PROCESS_STRIPPED_ENV_VARS;
 pub use executor::{ExecuteOptions, Executor, SandboxContext};
 pub use install_hints::{
     CLAUDE_CODE_ACP_INSTALL_HINT, CLAUDE_CODE_CLI_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT,
