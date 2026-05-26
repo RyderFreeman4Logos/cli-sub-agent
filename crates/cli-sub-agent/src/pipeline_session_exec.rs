@@ -1,5 +1,4 @@
 use super::prompt_cache::PromptAssembly;
-use super::prompt_guard::emit_prompt_guard_to_caller;
 use super::result_contract::{
     clear_expected_result_artifacts_for_prompt, enforce_result_toml_path_contract,
 };
@@ -15,150 +14,36 @@ use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::Executor;
-use csa_hooks::{
-    GuardContext, HookEvent, format_guard_output, global_hooks_path, load_hooks_config,
-    run_prompt_guards,
-};
+use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config};
 use csa_lock::acquire_lock;
-use csa_process::ExecutionResult;
-use csa_session::{compute_cooldown_wait, create_session, create_session_fresh, get_session_dir};
+use csa_session::get_session_dir;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 use tracing::{debug, info, warn};
+#[path = "pipeline_session_exec_api.rs"]
+mod session_exec_api;
 #[path = "pipeline_session_exec_audit.rs"]
 mod session_exec_audit;
+#[path = "pipeline_session_exec_bootstrap.rs"]
+mod session_exec_bootstrap;
 #[path = "pipeline_session_exec_memory.rs"]
 mod session_exec_memory;
 #[path = "pipeline_session_exec_metadata.rs"]
 mod session_exec_metadata;
 #[path = "pipeline_session_exec_pre_exec.rs"]
 mod session_exec_pre_exec;
+#[path = "pipeline_session_exec_prompt_guard.rs"]
+mod session_exec_prompt_guard;
 #[path = "pipeline_session_exec_tool_state.rs"]
 mod session_exec_tool_state;
 use self::session_exec_pre_exec::{
     check_resources_before_spawn, persist_pipeline_pre_exec_failure,
 };
 use self::session_exec_tool_state::ensure_tool_state_initialized;
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
-pub(crate) async fn execute_with_session(
-    executor: &Executor,
-    tool: &ToolName,
-    prompt: &str,
-    session_arg: Option<String>,
-    fresh_spawn_preflight_override: bool,
-    description: Option<String>,
-    parent: Option<String>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    extra_env: Option<&std::collections::HashMap<String, String>>,
-    task_type: Option<&str>,
-    tier_name: Option<&str>,
-    context_load_options: Option<&csa_executor::ContextLoadOptions>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
-    wall_timeout: Option<Duration>,
-    memory_injection: Option<&MemoryInjectionOptions>,
-    global_config: Option<&GlobalConfig>,
-    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
-    no_fs_sandbox: bool,
-    readonly_project_root: bool,
-    extra_writable: &[PathBuf],
-    extra_readable: &[PathBuf],
-) -> Result<ExecutionResult> {
-    let execution = execute_with_session_and_meta(
-        executor,
-        tool,
-        prompt,
-        OutputFormat::Json,
-        session_arg,
-        fresh_spawn_preflight_override,
-        description,
-        parent,
-        project_root,
-        config,
-        extra_env,
-        task_type,
-        tier_name,
-        context_load_options,
-        stream_mode,
-        idle_timeout_seconds,
-        initial_response_timeout_seconds,
-        wall_timeout,
-        memory_injection,
-        global_config,
-        pre_session_hook,
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-        extra_readable,
-    )
-    .await?;
-    Ok(execution.execution)
-}
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(tool = %tool))]
-pub(crate) async fn execute_with_session_and_meta(
-    executor: &Executor,
-    tool: &ToolName,
-    prompt: &str,
-    output_format: OutputFormat,
-    session_arg: Option<String>,
-    fresh_spawn_preflight_override: bool,
-    description: Option<String>,
-    parent: Option<String>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    extra_env: Option<&std::collections::HashMap<String, String>>,
-    task_type: Option<&str>,
-    tier_name: Option<&str>,
-    context_load_options: Option<&csa_executor::ContextLoadOptions>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
-    wall_timeout: Option<Duration>,
-    memory_injection: Option<&MemoryInjectionOptions>,
-    global_config: Option<&GlobalConfig>,
-    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
-    no_fs_sandbox: bool,
-    readonly_project_root: bool,
-    extra_writable: &[PathBuf],
-    extra_readable: &[PathBuf],
-) -> Result<SessionExecutionResult> {
-    execute_with_session_and_meta_with_parent_source(
-        executor,
-        tool,
-        prompt,
-        output_format,
-        session_arg,
-        fresh_spawn_preflight_override,
-        description,
-        parent,
-        project_root,
-        config,
-        extra_env,
-        task_type,
-        tier_name,
-        context_load_options,
-        stream_mode,
-        idle_timeout_seconds,
-        initial_response_timeout_seconds,
-        wall_timeout,
-        memory_injection,
-        global_config,
-        pre_session_hook,
-        ParentSessionSource::ExplicitOrEnv,
-        SessionCreationMode::DaemonManaged,
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-        extra_readable,
-    )
-    .await
-}
+pub(crate) use session_exec_api::{execute_with_session, execute_with_session_and_meta};
+
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]
 pub(crate) async fn execute_with_session_and_meta_with_parent_source(
@@ -190,100 +75,26 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
 ) -> Result<SessionExecutionResult> {
-    // Check for parent session violation: a child process must not operate on its own session
-    if let Some(ref session_id) = session_arg
-        && let Ok(env_session) = std::env::var("CSA_SESSION_ID")
-        && env_session == *session_id
-    {
-        return Err(csa_core::error::AppError::ParentSessionViolation.into());
-    }
-    if session_arg.is_none() || fresh_spawn_preflight_override {
-        let preflight_check_config = config
-            .map(|cfg| &cfg.preflight.ai_config_symlink_check)
-            .or_else(|| global_config.map(|cfg| &cfg.preflight.ai_config_symlink_check));
-        if let Some(preflight_check_config) = preflight_check_config {
-            crate::preflight_symlink::run_ai_config_symlink_check(
-                project_root,
-                preflight_check_config,
-            )?;
-        }
-    }
-    // Spawn background lefthook auto-install task (non-blocking, rate-limited).
-    super::lefthook_auto_install::spawn_lefthook_setup_if_needed(project_root);
-    // Spawn background review-gate auto-setup if configured (non-blocking, rate-limited).
-    crate::setup_cmds::spawn_review_gate_setup_if_needed(project_root, global_config);
     let memory_project_key = resolve_memory_project_key(project_root);
-    let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
-    let depth = crate::pipeline_env::current_csa_depth();
-    if let Some(wait) = compute_cooldown_wait(project_root, cd, &session_arg, &parent, depth) {
-        info!("Cooldown: sleeping {wait:?} before new session");
-        tokio::time::sleep(wait).await;
-    }
-    let mut resolved_provider_session_id: Option<String> = None;
-    let mut session = if let Some(ref session_id) = session_arg {
-        let resolution =
-            csa_session::resolve_resume_session(project_root, session_id, tool.as_str())?;
-        resolved_provider_session_id = resolution.provider_session_id;
-        if resolved_provider_session_id.is_some() {
-            info!(
-                session = %resolution.meta_session_id,
-                tool = %executor.tool_name(),
-                "Resolved provider session ID from state.toml"
-            );
-        }
-        csa_session::load_session(project_root, &resolution.meta_session_id)?
-    } else {
-        // Auto-generate description from prompt when not provided
-        let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
-        let parent_id = match parent_session_source {
-            ParentSessionSource::ExplicitOrEnv => {
-                parent.or_else(|| std::env::var("CSA_SESSION_ID").ok())
-            }
-            ParentSessionSource::ExplicitOnly => parent,
-        };
-        let mut new_session = match session_creation_mode {
-            SessionCreationMode::DaemonManaged => create_session(
-                project_root,
-                effective_description.as_deref(),
-                parent_id.as_deref(),
-                Some(tool.as_str()),
-            )?,
-            SessionCreationMode::FreshChild => create_session_fresh(
-                project_root,
-                effective_description.as_deref(),
-                parent_id.as_deref(),
-                Some(tool.as_str()),
-            )?,
-        };
-        crate::recall_cmd::spawn_recall_record_if_needed(project_root);
-        new_session.task_context = csa_session::TaskContext {
-            task_type: task_type.map(|s| s.to_string()),
-            tier_name: tier_name.map(|s| s.to_string()),
-        };
-        if let (Some(cfg), Some(tier)) = (config, tier_name)
-            && let Some(tier_cfg) = cfg.tiers.get(tier)
-            && (tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some())
-        {
-            let allocated = tier_cfg.token_budget.unwrap_or(u64::MAX);
-            let mut budget = csa_session::state::TokenBudget::new(allocated);
-            budget.max_turns = tier_cfg.max_turns;
-            new_session.token_budget = Some(budget);
-            info!(
-                session = %new_session.meta_session_id,
-                allocated = ?tier_cfg.token_budget,
-                max_turns = ?tier_cfg.max_turns,
-                "Initialized token budget from tier config"
-            );
-        }
-        new_session
-    };
-    if session_arg.is_some() && session.phase == csa_session::SessionPhase::Available {
-        if let Err(e) = session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
-            warn!(session = %session.meta_session_id, error = %e, "Skipping phase transition on resume");
-        } else {
-            info!(session = %session.meta_session_id, "Session resumed and marked Active");
-        }
-    }
+    let session_exec_bootstrap::SessionBootstrap {
+        mut session,
+        resolved_provider_session_id,
+    } = session_exec_bootstrap::bootstrap_session(
+        tool,
+        prompt,
+        session_arg.as_deref(),
+        fresh_spawn_preflight_override,
+        description,
+        parent,
+        project_root,
+        config,
+        global_config,
+        task_type,
+        tier_name,
+        parent_session_source,
+        session_creation_mode,
+    )
+    .await?;
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
     // New-session cleanup guard: delete the orphan directory on pre-exec failure.
     let mut cleanup_guard = if session_arg.is_none() {
@@ -503,28 +314,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-    // Suppress guards for debate (read-only, #467); review keeps them for --fix.
-    if !matches!(task_type, Some("debate")) && !hooks_config.prompt_guard.is_empty() {
-        let guard_context = GuardContext {
-            project_root: session.project_path.clone(),
-            session_id: session.meta_session_id.clone(),
-            tool: executor.tool_name().to_string(),
-            is_resume: session_arg.is_some(),
-            cwd: std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-        };
-        let guard_results = run_prompt_guards(&hooks_config.prompt_guard, &guard_context);
-        if let Some(guard_block) = format_guard_output(&guard_results) {
-            info!(
-                guard_count = guard_results.len(),
-                bytes = guard_block.len(),
-                "Injecting prompt guard output into effective prompt"
-            );
-            emit_prompt_guard_to_caller(&guard_block, guard_results.len());
-            prompt_assembly.append_dynamic_block(&guard_block);
-        }
-    }
+    session_exec_prompt_guard::inject_prompt_guards_if_needed(
+        task_type,
+        &hooks_config,
+        &session,
+        executor,
+        session_arg.is_some(),
+        &mut prompt_assembly,
+    );
     // Inject structured output section markers when enabled in config.
     let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);
     if let Some(instructions) =
@@ -770,6 +567,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         has_tool_calls: transport_result.metadata.has_tool_calls
             || transport_result.metadata.has_execute_tool_calls,
         turn_count: transport_result.metadata.turn_count,
+        output_tokens: transport_result.metadata.output_tokens,
         sa_mode,
     };
     if let Err(err) =

@@ -33,6 +33,7 @@ fn build_test_ctx<'a>(
         pre_exec_snapshot: None,
         has_tool_calls: true,
         turn_count: 0,
+        output_tokens: None,
         sa_mode: false,
     }
 }
