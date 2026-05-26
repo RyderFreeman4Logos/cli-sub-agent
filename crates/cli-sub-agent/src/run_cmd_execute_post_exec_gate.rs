@@ -103,6 +103,17 @@ fn git_worktree_has_status_changes(project_root: &Path) -> Result<bool> {
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
+fn strip_inherited_csa_env(cmd: &mut Command) {
+    for var in csa_executor::CHILD_PROCESS_STRIPPED_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CSA_") {
+            cmd.env_remove(key);
+        }
+    }
+}
+
 pub(super) fn execute_post_exec_gate_command(
     command: &str,
     project_root: &Path,
@@ -118,6 +129,7 @@ pub(super) fn execute_post_exec_gate_command(
             .current_dir(&project_root)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
+        strip_inherited_csa_env(&mut cmd);
 
         #[cfg(unix)]
         {

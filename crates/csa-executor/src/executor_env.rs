@@ -9,7 +9,7 @@ use tokio::process::Command;
 ///
 /// The list removes recursive-invocation guards, hook bypass switches, and
 /// session-scoped CSA values that must be rebuilt for each fresh session.
-pub(crate) const STRIPPED_ENV_VARS: &[&str] = &[
+pub const STRIPPED_ENV_VARS: &[&str] = &[
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
     "LEFTHOOK",
