@@ -444,6 +444,16 @@ impl ProjectConfig {
             .map(|cfg| cfg.codex_auto_trust)
             .unwrap_or(false)
     }
+
+    /// Resolve Codex tmux visual-monitoring mode from tool config.
+    ///
+    /// Returns false by default.
+    pub fn codex_tmux_mode(&self) -> bool {
+        self.tools
+            .get("codex")
+            .map(|cfg| cfg.tmux_mode)
+            .unwrap_or(false)
+    }
 }
 
 /// Default sandbox options derived from a tool's resource profile.

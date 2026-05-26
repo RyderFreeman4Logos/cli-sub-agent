@@ -65,6 +65,8 @@ pub struct CodexRuntimeMetadata {
     transport: CodexTransport,
     #[serde(default)]
     fast_mode: bool,
+    #[serde(default)]
+    tmux_mode: bool,
 }
 
 impl CodexRuntimeMetadata {
@@ -78,6 +80,7 @@ impl CodexRuntimeMetadata {
         Self {
             transport,
             fast_mode: false,
+            tmux_mode: false,
         }
     }
 
@@ -91,6 +94,7 @@ impl CodexRuntimeMetadata {
         Self {
             transport,
             fast_mode: self.fast_mode,
+            tmux_mode: self.tmux_mode,
         }
     }
 
@@ -99,12 +103,27 @@ impl CodexRuntimeMetadata {
         Self {
             transport: self.transport,
             fast_mode,
+            tmux_mode: self.tmux_mode,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_tmux_mode(self, tmux_mode: bool) -> Self {
+        Self {
+            transport: self.transport,
+            fast_mode: self.fast_mode,
+            tmux_mode,
         }
     }
 
     #[must_use]
     pub const fn fast_mode_enabled(self) -> bool {
         self.fast_mode
+    }
+
+    #[must_use]
+    pub const fn tmux_mode_enabled(self) -> bool {
+        self.tmux_mode
     }
 
     #[must_use]

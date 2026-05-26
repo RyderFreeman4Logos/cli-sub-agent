@@ -101,6 +101,10 @@ pub struct ToolConfig {
     /// Defaults to false for explicit safety.
     #[serde(default)]
     pub codex_auto_trust: bool,
+    /// Codex-only: run the CLI command inside a detached tmux session while
+    /// preserving the normal stdout/stderr capture pipe. Defaults to false.
+    #[serde(default)]
+    pub tmux_mode: bool,
     /// OpenAI-compat only: base URL for the API endpoint (e.g., "http://localhost:8317").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -136,6 +140,7 @@ impl Default for ToolConfig {
             initial_response_timeout_seconds: None,
             transport: None,
             codex_auto_trust: false,
+            tmux_mode: false,
             base_url: None,
             api_key: None,
             filesystem_sandbox: None,

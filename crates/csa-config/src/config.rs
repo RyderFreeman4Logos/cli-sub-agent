@@ -664,6 +664,7 @@ init_timeout_seconds = 120
 # [tools.codex]
 # enabled = true
 # codex_auto_trust = false
+# tmux_mode = false
 # [tools.gemini-cli]
 # enabled = true
 # [tiers.tier-1-quick]

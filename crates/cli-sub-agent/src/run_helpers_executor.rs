@@ -62,6 +62,7 @@ pub(crate) fn build_executor(
 
     if matches!(executor, Executor::Codex { .. }) {
         executor.override_codex_transport(tool_availability::resolved_codex_transport(config));
+        executor.set_codex_tmux_mode(config.is_some_and(ProjectConfig::codex_tmux_mode));
     }
     if matches!(executor, Executor::ClaudeCode { .. }) {
         executor.override_claude_code_transport(tool_availability::resolved_claude_code_transport(
