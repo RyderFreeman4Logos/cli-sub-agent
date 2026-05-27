@@ -87,14 +87,6 @@ fn assert_no_rate_limit(action: RateLimitAction) {
     }
 }
 
-fn assert_exhausted_failovers(action: RateLimitAction) {
-    match action {
-        RateLimitAction::ExhaustedFailovers => {}
-        RateLimitAction::NoRateLimit => panic!("expected exhausted failovers, got no rate limit"),
-        RateLimitAction::Retry { .. } => panic!("expected exhausted failovers, got retry"),
-    }
-}
-
 #[test]
 fn persist_fork_timeout_result_if_missing_skips_non_fork_sessions() {
     let td = tempfile::tempdir().expect("tempdir");
@@ -251,7 +243,10 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
 }
 
 #[test]
-fn full_anyhow_chain_preserves_quota_markers_and_stops_failover() {
+fn full_anyhow_chain_preserves_quota_markers_and_fails_over_to_next_provider() {
+    // #1629: permanent quota exhaustion on gemini-cli (Google pool) MUST NOT
+    // short-circuit failover; cross-provider alternatives (codex/OpenAI) still
+    // count, and the gemini-cli quota attempt is recorded in fallback_chain.
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -269,6 +264,7 @@ fn full_anyhow_chain_preserves_quota_markers_and_stops_failover() {
 
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
     let action = evaluate_error_rate_limit_failover(
         "gemini-cli",
         &rendered,
@@ -287,12 +283,25 @@ fn full_anyhow_chain_preserves_quota_markers_and_stops_failover() {
         Some(&config),
         None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut vec![],
+        &mut fallback_chain,
         None,
     )
     .expect("evaluate failover");
 
-    assert_exhausted_failovers(action);
+    assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
+    assert_eq!(tried_tools, vec!["gemini-cli".to_string()]);
+    assert_eq!(
+        tried_specs,
+        vec!["gemini-cli/google/gemini-2.5-pro/high".to_string()]
+    );
+    assert_eq!(
+        fallback_chain.len(),
+        1,
+        "gemini-cli quota attempt must be recorded"
+    );
+    let entry = &fallback_chain[0];
+    assert_eq!(entry.tool, "gemini-cli");
+    assert!(entry.quota_exhausted, "entry must mark quota exhaustion");
 }
 
 #[test]
@@ -388,7 +397,10 @@ fn evaluate_rate_limit_failover_skips_rate_limit_without_active_tier_routing() {
 }
 
 #[test]
-fn evaluate_rate_limit_failover_stops_on_permanent_quota_result() {
+fn evaluate_rate_limit_failover_continues_past_permanent_quota_to_next_provider() {
+    // #1629: gemini-cli (Google pool) RESOURCE_EXHAUSTED MUST fail over to
+    // codex (OpenAI pool) instead of stopping the chain. Same-provider tools
+    // would be skipped; cross-provider alternatives proceed.
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -426,19 +438,20 @@ fn evaluate_rate_limit_failover_stops_on_permanent_quota_result() {
     )
     .expect("evaluate failover");
 
-    assert_exhausted_failovers(action);
-    assert!(
-        tried_tools.is_empty(),
-        "permanent quota must not mutate tried tools"
+    assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
+    assert_eq!(tried_tools, vec!["gemini-cli".to_string()]);
+    assert_eq!(
+        tried_specs,
+        vec!["gemini-cli/google/gemini-2.5-pro/high".to_string()]
     );
-    assert!(
-        tried_specs.is_empty(),
-        "permanent quota must not mutate tried specs"
+    assert_eq!(
+        fallback_chain.len(),
+        1,
+        "gemini-cli quota attempt must be recorded for audit"
     );
-    assert!(
-        fallback_chain.is_empty(),
-        "permanent quota must not append fallback attempts"
-    );
+    let entry = &fallback_chain[0];
+    assert_eq!(entry.tool, "gemini-cli");
+    assert!(entry.quota_exhausted, "entry must mark quota exhaustion");
 }
 
 #[test]
@@ -531,6 +544,9 @@ fn explicit_tool_no_tier_crash_no_failover() {
 
 #[test]
 fn explicit_tool_in_tier_permanent_quota_no_failover() {
+    // Explicit tool (tier_auto_select=false) with permanent quota:
+    // failover is suppressed (returns NoRateLimit). Behavior is independent
+    // of the #1629 fix: the explicit-tool guard remains the merge gate.
     let config = make_named_failover_config(
         "tier-3-complex",
         &[
@@ -540,6 +556,7 @@ fn explicit_tool_in_tier_permanent_quota_no_failover() {
     );
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
 
     let action = evaluate_error_rate_limit_failover(
         "codex",
@@ -559,19 +576,23 @@ fn explicit_tool_in_tier_permanent_quota_no_failover() {
         Some(&config),
         None,
         Some("codex/openai/o4-mini/high"),
-        &mut vec![],
+        &mut fallback_chain,
         None,
     )
     .expect("evaluate failover");
 
-    assert_exhausted_failovers(action);
+    assert_no_rate_limit(action);
     assert!(
         tried_tools.is_empty(),
-        "permanent quota exhaustion should not mutate retry state"
+        "explicit-tool guard suppresses failover; tried_tools stays empty"
     );
     assert!(
         tried_specs.is_empty(),
-        "permanent quota exhaustion should not mutate retry state"
+        "explicit-tool guard suppresses failover; tried_specs stays empty"
+    );
+    assert!(
+        fallback_chain.is_empty(),
+        "explicit-tool guard suppresses failover; no fallback_chain entry"
     );
 }
 
@@ -703,7 +724,9 @@ fn evaluate_error_rate_limit_failover_populates_fallback_chain_on_transient_retr
 }
 
 #[test]
-fn evaluate_error_rate_limit_failover_stops_on_permanent_gemini_quota() {
+fn evaluate_error_rate_limit_failover_continues_past_permanent_gemini_quota() {
+    // #1629: gemini-cli permanent quota (via retry chain exhaustion with
+    // QUOTA_EXHAUSTED tail) MUST fail over to codex (different provider).
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -735,19 +758,20 @@ fn evaluate_error_rate_limit_failover_stops_on_permanent_gemini_quota() {
     )
     .expect("evaluate failover");
 
-    assert_exhausted_failovers(action);
-    assert!(
-        tried_tools.is_empty(),
-        "permanent quota must not mutate tried tools"
+    assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
+    assert_eq!(tried_tools, vec!["gemini-cli".to_string()]);
+    assert_eq!(
+        tried_specs,
+        vec!["gemini-cli/google/gemini-2.5-pro/high".to_string()]
     );
-    assert!(
-        tried_specs.is_empty(),
-        "permanent quota must not mutate tried specs"
+    assert_eq!(
+        fallback_chain.len(),
+        1,
+        "gemini-cli quota attempt must be recorded for audit"
     );
-    assert!(
-        fallback_chain.is_empty(),
-        "permanent quota must not create fallback_chain entries"
-    );
+    let entry = &fallback_chain[0];
+    assert_eq!(entry.tool, "gemini-cli");
+    assert!(entry.quota_exhausted, "entry must mark quota exhaustion");
 }
 
 #[test]
@@ -763,8 +787,8 @@ fn evaluate_error_rate_limit_failover_no_failover_flag_prevents_fallback_chain_e
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    // Permanent quota exhaustion fails fast before tier routing, even when
-    // tier_auto_select=false.
+    // tier_auto_select=false suppresses rate-limit failover entirely (#1346);
+    // the caller observes NoRateLimit and no fallback_chain entry is recorded.
     let action = evaluate_error_rate_limit_failover(
         "gemini-cli",
         "quota_exhausted for this account",
@@ -788,9 +812,123 @@ fn evaluate_error_rate_limit_failover_no_failover_flag_prevents_fallback_chain_e
     )
     .expect("evaluate failover");
 
-    assert_exhausted_failovers(action);
+    assert_no_rate_limit(action);
     assert!(
         fallback_chain.is_empty(),
         "no fallback_chain entry when failover is suppressed (#1346)"
+    );
+}
+
+// --- Same-provider quota-pool skip tests (#1629) ---
+
+#[test]
+fn evaluate_rate_limit_failover_gemini_quota_skips_antigravity_picks_codex() {
+    // tier-4-critical-style ordering: gemini-cli → antigravity-cli → codex.
+    // Both gemini-cli and antigravity-cli share Google's quota pool, so once
+    // gemini-cli is marked permanently exhausted, antigravity-cli MUST be
+    // skipped and codex (OpenAI) selected.
+    let config = make_failover_config(&[
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        "antigravity-cli/google/gemini-3.1-pro/high",
+        "codex/openai/gpt-5.5/high",
+        "claude-code/anthropic/claude-sonnet-4-7/high",
+    ]);
+    let exec_result = ExecutionResult {
+        output: String::new(),
+        stderr_output: "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED".to_string(),
+        summary: "daily quota for project exceeded".to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
+
+    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
+        "gemini-cli",
+        &exec_result,
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        true,
+        Some("tier3"),
+        None,
+        None,
+        true,
+        "debug the request",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        &mut fallback_chain,
+        None,
+    )
+    .expect("evaluate failover");
+
+    assert_retry_to(action, "codex", "codex/openai/gpt-5.5/high");
+}
+
+#[test]
+fn evaluate_rate_limit_failover_chained_google_pool_exhaustion_continues_past() {
+    // Simulate the second pass: gemini-cli was already attempted and recorded
+    // with quota_exhausted=true in fallback_chain. Now antigravity-cli (same
+    // Google pool) also hits quota. The decision must skip antigravity-cli
+    // (same provider) and pick codex.
+    let config = make_failover_config(&[
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        "antigravity-cli/google/gemini-3.1-pro/high",
+        "codex/openai/gpt-5.5/high",
+    ]);
+    let exec_result = ExecutionResult {
+        output: String::new(),
+        stderr_output: "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED".to_string(),
+        summary: "Google quota pool exhausted".to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+    let mut tried_tools = vec!["gemini-cli".to_string()];
+    let mut tried_specs = vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()];
+    let mut fallback_chain = vec![csa_core::types::FallbackAttempt {
+        tool: "gemini-cli".to_string(),
+        model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+        skip_reason: "RESOURCE_EXHAUSTED".to_string(),
+        quota_exhausted: true,
+        timestamp: Utc::now(),
+    }];
+
+    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
+        "antigravity-cli",
+        &exec_result,
+        2,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        true,
+        Some("tier3"),
+        None,
+        None,
+        true,
+        "debug the request",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("antigravity-cli/google/gemini-3.1-pro/high"),
+        &mut fallback_chain,
+        None,
+    )
+    .expect("evaluate failover");
+
+    assert_retry_to(action, "codex", "codex/openai/gpt-5.5/high");
+    assert_eq!(
+        fallback_chain.len(),
+        2,
+        "both gemini-cli and antigravity-cli quota attempts must be recorded"
+    );
+    let antigravity_entry = &fallback_chain[1];
+    assert_eq!(antigravity_entry.tool, "antigravity-cli");
+    assert!(
+        antigravity_entry.quota_exhausted,
+        "antigravity-cli entry must mark quota exhaustion"
     );
 }

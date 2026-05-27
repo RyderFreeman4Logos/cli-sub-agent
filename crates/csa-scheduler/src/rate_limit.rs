@@ -179,7 +179,9 @@ fn http_status_reason_requires_init_window(reason: &str) -> bool {
 
 fn failover_patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
     match tool {
-        "gemini-cli" => GEMINI_RETRY_CHAIN_FAILOVER_PATTERNS,
+        // antigravity-cli rides the same Gemini retry chain as gemini-cli — its
+        // ACP transport (when applicable) emits identical exhaustion markers.
+        "gemini-cli" | "antigravity-cli" => GEMINI_RETRY_CHAIN_FAILOVER_PATTERNS,
         "codex" | "claude-code" => ACP_CRASH_FAILOVER_PATTERNS,
         _ => &[],
     }
@@ -187,7 +189,11 @@ fn failover_patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
 
 fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
     match tool {
-        "gemini-cli" => &[
+        // antigravity-cli shares Google's OAuth/API quota pool with gemini-cli,
+        // so it surfaces the same RESOURCE_EXHAUSTED / quota messages. Reuse
+        // the gemini-cli patterns verbatim so failover detection works for it
+        // without a parallel pattern table (#1629).
+        "gemini-cli" | "antigravity-cli" => &[
             FailoverPattern {
                 pattern: "429_quota_exhausted",
                 reason: "429_quota_exhausted",
