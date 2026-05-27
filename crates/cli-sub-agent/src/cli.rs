@@ -269,7 +269,7 @@ pub enum Commands {
     /// Push the current branch only after a passing review covers HEAD
     Push(PushArgs),
 
-    /// Merge a GitHub pull request and return to the default branch
+    /// Merge a GitHub pull request and sync the base branch
     Merge(MergeArgs),
 
     /// Manage audit manifest lifecycle
@@ -486,17 +486,9 @@ pub struct MergeArgs {
     #[arg(value_name = "PR_NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
     pub pr_number: u64,
 
-    /// Use GitHub's rebase merge strategy instead of a merge commit
-    #[arg(long)]
-    pub rebase: bool,
-
-    /// Bypass pre-merge working tree checks
-    #[arg(long)]
-    pub force: bool,
-
-    /// Emergency bypass for the deterministic pr-bot gate
-    #[arg(long = "skip-pr-bot", alias = "skip-prbot")]
-    pub skip_pr_bot: bool,
+    /// Base branch to check out and pull after merge (defaults to PR base or main)
+    #[arg(long, value_name = "BRANCH")]
+    pub base: Option<String>,
 }
 
 #[derive(Subcommand)]

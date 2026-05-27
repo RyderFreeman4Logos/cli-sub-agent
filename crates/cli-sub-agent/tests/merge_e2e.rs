@@ -20,7 +20,8 @@ fn merge_help_shows_post_merge_checkout_options() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("PR_NUMBER"));
-    assert!(stdout.contains("--rebase"));
-    assert!(stdout.contains("--force"));
-    assert!(stdout.contains("--skip-pr-bot"));
+    assert!(stdout.contains("--base <BRANCH>"));
+    assert!(stdout.contains("sync the base branch"));
+    assert!(!stdout.contains("--rebase"));
+    assert!(!stdout.contains("--force"));
 }
