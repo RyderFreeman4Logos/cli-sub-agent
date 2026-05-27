@@ -60,46 +60,6 @@ pub enum XurlCommands {
     },
 }
 
-pub fn handle_xurl(cmd: XurlCommands) -> Result<()> {
-    match cmd {
-        XurlCommands::Threads {
-            keyword,
-            provider,
-            limit,
-            json,
-        } => handle_threads(keyword, provider, limit, json),
-        XurlCommands::Recall {
-            keyword,
-            session,
-            page,
-            list,
-            all,
-            limit,
-        } => handle_recall(keyword, session, page, list, all, limit),
-    }
-}
-
-fn handle_recall(
-    keyword: Option<String>,
-    session: Option<String>,
-    page: Option<u32>,
-    list: bool,
-    all: bool,
-    limit: usize,
-) -> Result<()> {
-    if list {
-        return crate::recall_cmd::handle_recall_list_cmd(limit, all);
-    }
-    if let Some(kw) = keyword {
-        return crate::recall_cmd::handle_recall_keyword(&kw, all, limit);
-    }
-    if let Some(sid) = session {
-        return crate::recall_cmd::handle_recall_read_cmd(&sid, page);
-    }
-    // No mode flags: default to reading the latest session, optionally paginated.
-    crate::recall_cmd::handle_recall_read_cmd("latest", page)
-}
-
 const ALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
     xurl_core::ProviderKind::Claude,
     xurl_core::ProviderKind::Codex,
@@ -123,7 +83,7 @@ fn parse_provider(s: &str) -> Result<xurl_core::ProviderKind> {
     }
 }
 
-fn handle_threads(
+pub fn handle_threads(
     keyword: Option<String>,
     provider: Option<String>,
     limit: usize,

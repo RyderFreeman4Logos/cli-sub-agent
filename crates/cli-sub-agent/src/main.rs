@@ -109,6 +109,7 @@ mod tool_version;
 mod triage_cmd;
 mod verdict_exit_code;
 mod verify_cmd;
+mod xurl_cmd;
 #[cfg(test)]
 include!("review_cmd_exact_tests.rs");
 #[cfg(test)]
@@ -174,7 +175,6 @@ async fn main() {
 async fn run() -> Result<()> {
     link_bug_class_pipeline();
 
-    // Read current depth from env
     let current_depth: u32 = std::env::var("CSA_DEPTH")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -740,7 +740,7 @@ async fn run() -> Result<()> {
             exit_current_process(exit_code);
         }
         Commands::Health(args) => cli::handle_health(args)?,
-        Commands::Xurl { cmd } => cli::handle_xurl(cmd)?,
+        Commands::Xurl { cmd } => xurl_cmd::handle_xurl(cmd)?,
         Commands::Recall(args) => recall_cmd::handle_recall(args.cmd)?,
         Commands::Hooks { cmd } => hooks_cmd::handle_hooks(cmd)?,
     }
