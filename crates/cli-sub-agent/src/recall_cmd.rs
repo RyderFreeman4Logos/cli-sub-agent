@@ -1,5 +1,7 @@
 //! recall_cmd — main-agent session history tracking and xurl-based recovery.
 
+#[path = "recall_cmd_keyword.rs"]
+mod keyword;
 #[path = "recall_cmd_pages.rs"]
 mod pages;
 
@@ -19,7 +21,7 @@ const OUTPUT_GUARD_BYTES: usize = 50 * 1024;
 const RECENT_DEDUP_WINDOW: usize = 10;
 const SEARCH_CONTEXT_LINES: usize = 2;
 
-const RECALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
+pub(super) const RECALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
     xurl_core::ProviderKind::Claude,
     xurl_core::ProviderKind::Codex,
     xurl_core::ProviderKind::Gemini,
@@ -41,6 +43,10 @@ struct SessionRef {
 }
 
 pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
+    eprintln!(
+        "warning: `csa recall` is deprecated; use `csa xurl recall` instead. \
+         The alias will be removed in a future release."
+    );
     match cmd {
         RecallCommands::List { limit, all } => handle_recall_list(limit, all),
         RecallCommands::Read { session, page } => handle_recall_read(&session, page),
@@ -49,11 +55,19 @@ pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
     }
 }
 
+pub(crate) fn handle_recall_list_cmd(limit: usize, all: bool) -> Result<()> {
+    handle_recall_list(limit, all)
+}
+
+pub(crate) fn handle_recall_read_cmd(session: &str, page: Option<u32>) -> Result<()> {
+    handle_recall_read(session, page)
+}
+
 fn recall_allowed_at_depth(depth: u32) -> bool {
     depth == 0
 }
 
-fn thread_belongs_to_project(
+pub(super) fn thread_belongs_to_project(
     thread_source: &str,
     project_root: &Path,
     provider: xurl_core::ProviderKind,
@@ -327,6 +341,17 @@ fn handle_recall_search(query: &str) -> Result<()> {
     Ok(())
 }
 
+/// Search all recorded sessions across providers for `keyword`.
+///
+/// Scope:
+/// * `all = false` — restrict matches to threads belonging to `project_root`.
+/// * `all = true` — include matches from every project (use for cross-project recall).
+///
+/// `limit` caps results per provider (passed into `xurl_core::ThreadQuery::limit`).
+pub(crate) fn handle_recall_keyword(keyword: &str, all: bool, limit: usize) -> Result<()> {
+    keyword::handle_recall_keyword(keyword, all, limit)
+}
+
 fn latest_session_ref(project_root: &Path) -> Result<SessionRef> {
     resolve_session_ref("latest", project_root)
 }
@@ -478,7 +503,7 @@ fn render_session_markdown(session_ref: &SessionRef) -> Result<String> {
     resolve_session_thread(session_ref).map(|(_, content)| content)
 }
 
-fn provider_roots() -> Result<xurl_core::ProviderRoots> {
+pub(super) fn provider_roots() -> Result<xurl_core::ProviderRoots> {
     xurl_core::ProviderRoots::from_env_or_home().context("Failed to resolve provider roots")
 }
 
@@ -588,7 +613,7 @@ fn matching_ranges(lines: &[&str], query: &str, context: usize) -> Vec<(usize, u
     ranges
 }
 
-fn truncate_display(value: &str, width: usize) -> String {
+pub(super) fn truncate_display(value: &str, width: usize) -> String {
     let mut chars = value.chars();
     let preview: String = chars.by_ref().take(width).collect();
     if chars.next().is_some() && width > 3 {
@@ -599,177 +624,5 @@ fn truncate_display(value: &str, width: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_entry(sid: &str) -> RecallHistoryEntry {
-        RecallHistoryEntry {
-            ts: "2026-05-08T17:48:14Z".to_string(),
-            sid: sid.to_string(),
-            project: "/tmp/project".to_string(),
-            provider: "claude".to_string(),
-        }
-    }
-
-    fn make_entry_with_project_and_provider(
-        sid: &str,
-        project: &str,
-        provider: &str,
-    ) -> RecallHistoryEntry {
-        RecallHistoryEntry {
-            ts: "2026-05-08T17:48:14Z".to_string(),
-            sid: sid.to_string(),
-            project: project.to_string(),
-            provider: provider.to_string(),
-        }
-    }
-
-    #[test]
-    fn append_history_entry_writes_jsonl_line() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let history_path = temp_dir.path().join(HISTORY_FILE_NAME);
-
-        let appended = append_history_entry(&history_path, &make_entry("sid-1")).expect("append");
-        assert!(appended, "first append must write a line");
-
-        let entries = load_history_entries(&history_path).expect("load");
-        assert_eq!(entries, vec![make_entry("sid-1")]);
-    }
-
-    #[test]
-    fn append_history_entry_skips_recent_duplicate_sid() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let history_path = temp_dir.path().join(HISTORY_FILE_NAME);
-
-        append_history_entry(&history_path, &make_entry("sid-1")).expect("first append");
-        let appended =
-            append_history_entry(&history_path, &make_entry("sid-1")).expect("second append");
-
-        assert!(!appended, "duplicate sid in recent window must be skipped");
-        let entries = load_history_entries(&history_path).expect("load");
-        assert_eq!(
-            entries.len(),
-            1,
-            "duplicate append must not add a second line"
-        );
-    }
-
-    #[test]
-    fn append_history_entry_allows_duplicate_outside_recent_window() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let history_path = temp_dir.path().join(HISTORY_FILE_NAME);
-
-        append_history_entry(&history_path, &make_entry("sid-1")).expect("first append");
-        for index in 0..RECENT_DEDUP_WINDOW {
-            let sid = format!("sid-{index}-other");
-            append_history_entry(&history_path, &make_entry(&sid)).expect("filler append");
-        }
-
-        let appended =
-            append_history_entry(&history_path, &make_entry("sid-1")).expect("late append");
-        assert!(
-            appended,
-            "sid older than the dedup window must be recorded again"
-        );
-    }
-
-    #[test]
-    fn output_guard_triggers_at_threshold() {
-        let content = "x".repeat(OUTPUT_GUARD_BYTES);
-        let message = output_guard_message("sid-1", &content).expect("guard");
-        assert!(message.contains("OUTPUT_TOO_LARGE"));
-        assert!(message.contains("csa recall read sid-1 | tail -100"));
-    }
-
-    #[test]
-    fn output_guard_allows_small_output() {
-        let content = "x".repeat(OUTPUT_GUARD_BYTES - 1);
-        assert!(output_guard_message("sid-1", &content).is_none());
-    }
-
-    #[test]
-    fn matching_ranges_merges_overlapping_context() {
-        let lines = vec!["0", "match one", "2", "match two", "4"];
-        let ranges = matching_ranges(&lines, "match", 1);
-        assert_eq!(ranges, vec![(0, 4)]);
-    }
-
-    #[test]
-    fn recall_allowed_only_at_main_agent_depth() {
-        assert!(
-            recall_allowed_at_depth(0),
-            "main agent (depth=0) must be recorded"
-        );
-        assert!(
-            !recall_allowed_at_depth(1),
-            "depth=1 child session must not be recorded"
-        );
-        assert!(
-            !recall_allowed_at_depth(5),
-            "deeply nested child (depth=5) must not be recorded"
-        );
-    }
-
-    #[test]
-    fn thread_belongs_to_matching_project_claude() {
-        let source = "/home/obj/.claude/projects/-home-obj-project-github-user-repo/abc.jsonl";
-        let root = Path::new("/home/obj/project/github/user/repo");
-        assert!(thread_belongs_to_project(
-            source,
-            root,
-            xurl_core::ProviderKind::Claude
-        ));
-    }
-
-    #[test]
-    fn thread_rejects_different_project_claude() {
-        let source = "/home/obj/.claude/projects/-home-obj-project-github-user-other/abc.jsonl";
-        let root = Path::new("/home/obj/project/github/user/repo");
-        assert!(!thread_belongs_to_project(
-            source,
-            root,
-            xurl_core::ProviderKind::Claude
-        ));
-    }
-
-    #[test]
-    fn thread_belongs_to_project_codex_always_true() {
-        let source = "/home/obj/.codex/sessions/2026/05/16/rollout-abc.jsonl";
-        let root = Path::new("/home/obj/project/github/user/repo");
-        assert!(
-            thread_belongs_to_project(source, root, xurl_core::ProviderKind::Codex),
-            "codex sessions don't encode project; always pass ownership check"
-        );
-    }
-
-    #[test]
-    fn thread_belongs_to_project_gemini_always_true() {
-        let source = "/home/obj/.gemini/history/session-abc.jsonl";
-        let root = Path::new("/home/obj/project/github/user/repo");
-        assert!(
-            thread_belongs_to_project(source, root, xurl_core::ProviderKind::Gemini),
-            "gemini sessions don't encode project; always pass ownership check"
-        );
-    }
-
-    #[test]
-    fn latest_history_entry_returns_last_from_filtered_list() {
-        let entry1 = make_entry_with_project_and_provider("sid-1", "/project/a", "claude");
-        let entry2 = make_entry_with_project_and_provider("sid-2", "/project/b", "codex");
-        let entry3 = make_entry_with_project_and_provider("sid-3", "/project/a", "gemini");
-
-        let entries = vec![&entry1, &entry2, &entry3];
-
-        let result = latest_history_entry(&entries).expect("latest");
-        assert_eq!(result.sid, "sid-3", "latest should be the last entry");
-    }
-
-    #[test]
-    fn latest_history_entry_returns_none_for_empty_list() {
-        let entries: Vec<&RecallHistoryEntry> = vec![];
-        assert!(
-            latest_history_entry(&entries).is_none(),
-            "empty list should return None"
-        );
-    }
-}
+#[path = "recall_cmd_tests.rs"]
+mod tests;

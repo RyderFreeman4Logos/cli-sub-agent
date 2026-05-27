@@ -24,6 +24,40 @@ pub enum XurlCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Recover main-agent context from recorded session transcripts.
+    ///
+    /// Three exclusive modes (default is "read most recent session"):
+    /// * `--keyword TEXT` — search every recorded session for the keyword.
+    /// * `--session ULID` — render a specific session transcript as markdown.
+    /// * `--page N` — render compact page N of the latest session
+    ///   (page 0 = current, higher = older).
+    Recall {
+        /// Search every recorded session for this literal text.
+        #[arg(long, conflicts_with_all = ["session", "page", "list"])]
+        keyword: Option<String>,
+
+        /// Render this session as markdown (ULID, history index, or `latest`).
+        #[arg(long, conflicts_with_all = ["keyword", "page", "list"])]
+        session: Option<String>,
+
+        /// Render compact page N of the latest session (newest-first).
+        /// Page 0 = current page, 1 = previous, etc.
+        #[arg(long, conflicts_with_all = ["keyword", "session", "list"])]
+        page: Option<u32>,
+
+        /// List recorded sessions instead of reading or searching.
+        #[arg(long, conflicts_with_all = ["keyword", "session", "page"])]
+        list: bool,
+
+        /// With `--list` / `--keyword`: include all projects (not just the current one).
+        #[arg(long)]
+        all: bool,
+
+        /// With `--list` / `--keyword`: cap how many results to return.
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
 }
 
 pub fn handle_xurl(cmd: XurlCommands) -> Result<()> {
@@ -34,7 +68,36 @@ pub fn handle_xurl(cmd: XurlCommands) -> Result<()> {
             limit,
             json,
         } => handle_threads(keyword, provider, limit, json),
+        XurlCommands::Recall {
+            keyword,
+            session,
+            page,
+            list,
+            all,
+            limit,
+        } => handle_recall(keyword, session, page, list, all, limit),
     }
+}
+
+fn handle_recall(
+    keyword: Option<String>,
+    session: Option<String>,
+    page: Option<u32>,
+    list: bool,
+    all: bool,
+    limit: usize,
+) -> Result<()> {
+    if list {
+        return crate::recall_cmd::handle_recall_list_cmd(limit, all);
+    }
+    if let Some(kw) = keyword {
+        return crate::recall_cmd::handle_recall_keyword(&kw, all, limit);
+    }
+    if let Some(sid) = session {
+        return crate::recall_cmd::handle_recall_read_cmd(&sid, page);
+    }
+    // No mode flags: default to reading the latest session, optionally paginated.
+    crate::recall_cmd::handle_recall_read_cmd("latest", page)
 }
 
 const ALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
