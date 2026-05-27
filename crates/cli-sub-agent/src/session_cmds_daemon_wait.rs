@@ -8,10 +8,16 @@ mod next_step;
 mod result_loader;
 #[path = "session_cmds_daemon_wait_summary.rs"]
 mod summary;
+#[path = "session_cmds_daemon_wait_types.rs"]
+mod types;
 pub(crate) use lock::try_acquire_session_wait_lock;
 pub(crate) use next_step::synthesized_wait_next_step;
 use result_loader::{load_completed_daemon_result_with_fallback, refresh_result_for_wait};
 use summary::emit_wait_terminal_output;
+use types::WaitExecutionOptions;
+#[cfg(test)]
+pub(crate) use types::WaitLoopTiming;
+pub(crate) use types::{SessionWaitOutputMode, WaitBehavior, WaitReconciliationOutcome};
 
 /// Exit code reserved for `csa session wait` memory warning early-exit.
 pub(crate) const SESSION_WAIT_MEMORY_WARN_EXIT_CODE: i32 = 33;
@@ -23,70 +29,6 @@ const SESSION_WAIT_KV_WARM_EXIT_CODE: i32 = 0;
 /// Reserved for the rare case where the wait cap is reached but the session
 /// daemon is no longer alive and no result.toml was produced.
 const SESSION_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
-const SESSION_WAIT_MEMORY_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionWaitOutputMode {
-    CompactText,
-    CompactJson,
-    Verbose,
-}
-
-impl SessionWaitOutputMode {
-    pub(crate) fn from_flags(verbose: bool, json: bool) -> Self {
-        if verbose || std::env::var("CSA_WAIT_VERBOSE").is_ok_and(|value| value == "1") {
-            return Self::Verbose;
-        }
-        if json {
-            return Self::CompactJson;
-        }
-        Self::CompactText
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct WaitLoopTiming {
-    pub(crate) poll_interval: std::time::Duration,
-    pub(crate) memory_sample_interval: std::time::Duration,
-}
-
-impl Default for WaitLoopTiming {
-    fn default() -> Self {
-        Self {
-            poll_interval: std::time::Duration::from_secs(1),
-            memory_sample_interval: SESSION_WAIT_MEMORY_SAMPLE_INTERVAL,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct WaitBehavior {
-    pub(crate) wait_timeout_secs: u64,
-    pub(crate) memory_warn_mb: Option<u64>,
-    pub(crate) timing: WaitLoopTiming,
-}
-
-impl WaitBehavior {
-    fn new(wait_timeout_secs: u64, memory_warn_mb: Option<u64>) -> Self {
-        Self {
-            wait_timeout_secs,
-            memory_warn_mb,
-            timing: WaitLoopTiming::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WaitExecutionOptions {
-    behavior: WaitBehavior,
-    output_mode: SessionWaitOutputMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct WaitReconciliationOutcome {
-    pub(crate) result_became_available: bool,
-    pub(crate) synthetic: bool,
-}
 
 /// Wait for a daemon session to reach a terminal result and daemon exit.
 /// Exits 0 on session success, 1 on terminal session failure, 124 when the
@@ -506,7 +448,9 @@ where
                      NEVER batch multiple session waits in one Bash call. \
                      If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
                      FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-                     any manual polling wastes caller tokens with zero benefit.\" -->",
+                     any manual polling wastes caller tokens with zero benefit. \
+                     FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
+                     suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
                     sid = resolved.session_id,
                     cd = cd
                         .as_ref()
@@ -596,7 +540,9 @@ fn emit_wait_completion_signal(
          Generate tokens between waits to keep your KV cache warm. \
          If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
          FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-         any manual polling wastes caller tokens with zero benefit.\" -->"
+         any manual polling wastes caller tokens with zero benefit. \
+         FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
+         suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->"
     );
     let codex_hint = crate::process_tree::codex_yield_hint();
     if !codex_hint.is_empty() {
