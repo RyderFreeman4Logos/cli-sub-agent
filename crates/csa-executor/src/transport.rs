@@ -64,15 +64,17 @@ use transport_gemini_helpers::{
 use transport_gemini_helpers::{
     apply_gemini_legacy_initial_stall_summary, apply_gemini_mcp_warning_summary,
     apply_gemini_sandbox_runtime_contract, classify_gemini_legacy_initial_stall,
-    classify_gemini_oauth_prompt_result, is_gemini_mcp_issue_result, is_gemini_oauth_prompt_result,
-    resolve_gemini_shared_npm_cache_source,
+    is_gemini_mcp_issue_result, resolve_gemini_shared_npm_cache_source,
+};
+use crate::transport_gemini_oauth::{
+    classify_gemini_oauth_prompt_result, is_gemini_oauth_prompt_result,
 };
 #[cfg(all(test, feature = "acp"))]
 use transport_gemini_helpers::{
     apply_gemini_sandbox_runtime_env_overrides, ensure_gemini_runtime_home_writable_path,
     format_gemini_retry_report,
 };
-pub use transport_gemini_helpers::{
+pub use crate::transport_gemini_oauth::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
 };
 #[path = "transport_gemini_acp_runtime.rs"]
