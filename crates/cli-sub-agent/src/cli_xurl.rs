@@ -24,17 +24,40 @@ pub enum XurlCommands {
         #[arg(long)]
         json: bool,
     },
-}
 
-pub fn handle_xurl(cmd: XurlCommands) -> Result<()> {
-    match cmd {
-        XurlCommands::Threads {
-            keyword,
-            provider,
-            limit,
-            json,
-        } => handle_threads(keyword, provider, limit, json),
-    }
+    /// Recover main-agent context from recorded session transcripts.
+    ///
+    /// Three exclusive modes (default is "read most recent session"):
+    /// * `--keyword TEXT` — search every recorded session for the keyword.
+    /// * `--session ULID` — render a specific session transcript as markdown.
+    /// * `--page N` — render compact page N of the latest session
+    ///   (page 0 = current, higher = older).
+    Recall {
+        /// Search every recorded session for this literal text.
+        #[arg(long, conflicts_with_all = ["session", "page", "list"])]
+        keyword: Option<String>,
+
+        /// Render this session as markdown (ULID, history index, or `latest`).
+        #[arg(long, conflicts_with_all = ["keyword", "page", "list"])]
+        session: Option<String>,
+
+        /// Render compact page N of the latest session (newest-first).
+        /// Page 0 = current page, 1 = previous, etc.
+        #[arg(long, conflicts_with_all = ["keyword", "session", "list"])]
+        page: Option<u32>,
+
+        /// List recorded sessions instead of reading or searching.
+        #[arg(long, conflicts_with_all = ["keyword", "session", "page"])]
+        list: bool,
+
+        /// With `--list` / `--keyword`: include all projects (not just the current one).
+        #[arg(long)]
+        all: bool,
+
+        /// With `--list` / `--keyword`: cap how many results to return.
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
 }
 
 const ALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
@@ -60,7 +83,7 @@ fn parse_provider(s: &str) -> Result<xurl_core::ProviderKind> {
     }
 }
 
-fn handle_threads(
+pub fn handle_threads(
     keyword: Option<String>,
     provider: Option<String>,
     limit: usize,
