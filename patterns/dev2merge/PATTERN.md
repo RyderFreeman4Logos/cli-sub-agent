@@ -135,10 +135,15 @@ Tool: bash
 OnFail: abort
 
 Formatters and linters run regardless of FAST_PATH.
+Language detection: Cargo.toml → Rust, pyproject.toml → Python, package.json → JS/TS, go.mod → Go.
+Falls back to `just pre-commit` when available, skip otherwise.
 
 ```bash
-just fmt
-just clippy
+# Rust: just fmt + just clippy
+# Python: just lint or ruff check
+# JS/TS: just lint or biome check
+# Go: go vet + golangci-lint
+# Fallback: just pre-commit
 ```
 
 ## IF ${FAST_PATH}
@@ -153,7 +158,8 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 
 ```bash
 set -euo pipefail
-just test
+# Language-aware test gate (same detection as Step 3)
+# Rust: just test, Python: pytest, Go: go test, JS/TS: vitest
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 if [ -z "$(git status --porcelain)" ]; then
   COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
@@ -361,8 +367,8 @@ Before triggering `csa review`, the implementing agent MUST self-check the
 entire branch diff and fix any issues it finds.
 
 Required actions:
-1. Run `just clippy` (or `cargo clippy --workspace --all-targets -- -D warnings`) and fix every warning.
-2. Run `just test` (or `cargo test`) and fix every failure.
+1. Run the project's lint command (Rust: `just clippy`, Python: `just lint` or `ruff check`, Go: `go vet`, JS/TS: `just lint` or `biome check`) and fix every warning.
+2. Run the project's test command (Rust: `just test`, Python: `pytest`, Go: `go test ./...`, JS/TS: `vitest run`) and fix every failure.
 3. If `.csa/review-checklist.md` exists, inspect `git diff "${DEFAULT_BRANCH}...HEAD"` against that checklist for known anti-patterns.
 4. Fix any issues found during this self-review.
 5. Only after completing all checks and fixes, continue to the cumulative `csa review` step.
