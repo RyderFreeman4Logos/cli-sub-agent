@@ -11,6 +11,7 @@ const BACKGROUND_WAIT_RECOMMENDATION: &str = "with run_in_background: true";
 const TASK_NOTIFICATION_WAKE_SIGNAL: &str = "The task-notification IS your wake signal";
 const NO_MANUAL_POLLING_DIRECTIVE: &str =
     "ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID";
+const NO_STDERR_SUPPRESS_DIRECTIVE: &str = "piping csa commands through 2>/dev/null";
 
 const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
@@ -57,6 +58,10 @@ fn assert_wait_hint_contract(block: &str, site: &str) {
     assert!(
         block.contains(NO_MANUAL_POLLING_DIRECTIVE),
         "{site} CALLER_HINT must forbid manual polling (ls/cat/wc/grep on session-dir, state.toml reads, ps checks)"
+    );
+    assert!(
+        block.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
+        "{site} CALLER_HINT must forbid stderr suppression (2>/dev/null)"
     );
 }
 
@@ -120,6 +125,10 @@ fn session_cmds_daemon_wait_retry_wait_hint_warns_no_stack_wakeup() {
         retry.contains(NO_MANUAL_POLLING_DIRECTIVE),
         "retry_wait CALLER_HINT must forbid manual polling (ls/cat/wc/grep on session-dir, state.toml reads, ps checks)"
     );
+    assert!(
+        retry.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
+        "retry_wait CALLER_HINT must forbid stderr suppression (2>/dev/null)"
+    );
 }
 
 #[test]
@@ -136,5 +145,9 @@ fn session_cmds_daemon_wait_next_session_hint_warns_no_stack_wakeup() {
     assert!(
         next.contains(NO_MANUAL_POLLING_DIRECTIVE),
         "next_session CALLER_HINT must forbid manual polling (ls/cat/wc/grep on session-dir, state.toml reads, ps checks)"
+    );
+    assert!(
+        next.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
+        "next_session CALLER_HINT must forbid stderr suppression (2>/dev/null)"
     );
 }

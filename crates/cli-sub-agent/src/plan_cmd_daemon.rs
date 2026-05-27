@@ -219,7 +219,9 @@ pub(crate) fn spawn_and_exit(
          The task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top. \
          NEVER batch multiple waits in a for/while loop; use one backgrounded Bash tool call per session. \
          FORBIDDEN after backgrounding: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-         any manual polling wastes caller tokens with zero benefit.\" -->",
+         any manual polling wastes caller tokens with zero benefit. \
+         FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
+         suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
         id = result.session_id,
         cd = cd_hint,
     );
