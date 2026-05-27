@@ -139,11 +139,23 @@ Language detection: Cargo.toml → Rust, pyproject.toml → Python, package.json
 Falls back to `just pre-commit` when available, skip otherwise.
 
 ```bash
-# Rust: just fmt + just clippy
-# Python: just lint or ruff check
-# JS/TS: just lint or biome check
-# Go: go vet + golangci-lint
-# Fallback: just pre-commit
+set -euo pipefail
+if [ -f Cargo.toml ]; then
+  just fmt
+  just clippy
+elif [ -f pyproject.toml ]; then
+  if just --list 2>/dev/null | grep -q "lint"; then just lint
+  elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .; fi
+elif [ -f package.json ]; then
+  if just --list 2>/dev/null | grep -q "lint"; then just lint
+  elif command -v biome >/dev/null 2>&1; then biome check .; fi
+elif [ -f go.mod ]; then
+  go vet ./...
+elif just --list 2>/dev/null | grep -q "pre-commit"; then
+  just pre-commit
+else
+  echo "WARNING: No recognized project type; skipping L1 lint gate."
+fi
 ```
 
 ## IF ${FAST_PATH}
@@ -158,8 +170,16 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 
 ```bash
 set -euo pipefail
-# Language-aware test gate (same detection as Step 3)
-# Rust: just test, Python: pytest, Go: go test, JS/TS: vitest
+if [ -f Cargo.toml ]; then just test
+elif [ -f pyproject.toml ]; then
+  if just --list 2>/dev/null | grep -q "test"; then just test
+  elif command -v pytest >/dev/null 2>&1; then pytest; fi
+elif [ -f package.json ]; then
+  if just --list 2>/dev/null | grep -q "test"; then just test
+  elif command -v vitest >/dev/null 2>&1; then vitest run; fi
+elif [ -f go.mod ]; then go test ./...
+elif just --list 2>/dev/null | grep -q "test"; then just test
+else echo "WARNING: No recognized test runner; skipping L2 test gate."; fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 if [ -z "$(git status --porcelain)" ]; then
   COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
