@@ -145,13 +145,18 @@ if [ -f Cargo.toml ]; then
   just clippy
 elif [ -f pyproject.toml ]; then
   if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
-  elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .; fi
+  elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .;
+  else echo "WARNING: Python project detected but no linter (just lint or ruff) found."; fi
 elif [ -f package.json ]; then
   if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
-  elif command -v biome >/dev/null 2>&1; then biome check .; fi
+  elif command -v biome >/dev/null 2>&1; then biome check .;
+  else echo "WARNING: JS/TS project detected but no linter (just lint or biome) found."; fi
 elif [ -f go.mod ]; then
-  go vet ./...
-  if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; fi
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
+  else
+    go vet ./...
+    if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; fi
+  fi
 elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "pre-commit"; then
   just pre-commit
 else
