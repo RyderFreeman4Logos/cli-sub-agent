@@ -27,18 +27,27 @@ pub enum XurlCommands {
 
     /// Recover main-agent context from recorded session transcripts.
     ///
-    /// Three exclusive modes (default is "read most recent session"):
-    /// * `--keyword TEXT` — search every recorded session for the keyword.
+    /// Modes (default is "read most recent session"):
+    /// * `--keyword "A B C"` — search every recorded session; whitespace splits
+    ///   the value into terms that must ALL appear (AND logic, not exact phrase).
     /// * `--session ULID` — render a specific session transcript as markdown.
+    /// * `--keyword TEXT --session ULID` — search within the specified session
+    ///   for the keyword(s).
     /// * `--page N` — render compact page N of the latest session
     ///   (page 0 = current, higher = older).
     Recall {
-        /// Search every recorded session for this literal text.
-        #[arg(long, conflicts_with_all = ["session", "page", "list"])]
+        /// Search recorded sessions for these terms (whitespace-separated, AND).
+        ///
+        /// Without `--session`, scans every recorded session; with `--session`,
+        /// restricts the search to that session's transcript.
+        #[arg(long, conflicts_with_all = ["page", "list"])]
         keyword: Option<String>,
 
         /// Render this session as markdown (ULID, history index, or `latest`).
-        #[arg(long, conflicts_with_all = ["keyword", "page", "list"])]
+        ///
+        /// Combined with `--keyword`, restricts the keyword search to this
+        /// session instead of scanning all recorded sessions.
+        #[arg(long, conflicts_with_all = ["page", "list"])]
         session: Option<String>,
 
         /// Render compact page N of the latest session (newest-first).

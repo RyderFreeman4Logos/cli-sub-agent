@@ -41,7 +41,7 @@ fn handle_recall(
         return recall_cmd::handle_recall_list_cmd(limit, all);
     }
     if let Some(kw) = keyword {
-        return recall_cmd::handle_recall_keyword(&kw, all, limit);
+        return recall_cmd::handle_recall_keyword(&kw, session.as_deref(), all, limit);
     }
     if let Some(sid) = session {
         return recall_cmd::handle_recall_read_cmd(&sid, page);
