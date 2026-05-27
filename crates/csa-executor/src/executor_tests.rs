@@ -711,9 +711,17 @@ fn test_execute_in_preserves_model_override() {
                 // HTTP-only tool — no CLI args. Nothing to assert on Command.
             }
             Executor::AntigravityCli { .. } => {
+                // `agy` rejects `-m`; the model override is staged in
+                // `~/.gemini/antigravity-cli/settings.json` by
+                // `AntigravitySettingsGuard` in the transport layer
+                // instead. The CLI args must NOT carry the model (#1620).
                 assert!(
-                    debug_str.contains("gemini-3-pro"),
-                    "AntigravityCli missing model: {debug_str}"
+                    !debug_str.contains("\"-m\""),
+                    "AntigravityCli must NOT emit -m (#1620): {debug_str}"
+                );
+                assert!(
+                    !debug_str.contains("gemini-3-pro"),
+                    "AntigravityCli must NOT pass the model name on argv (#1620): {debug_str}"
                 );
             }
         }
