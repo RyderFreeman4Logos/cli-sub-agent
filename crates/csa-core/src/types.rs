@@ -104,6 +104,22 @@ impl std::fmt::Display for ModelFamily {
     }
 }
 
+/// Resolve the `ModelFamily` (quota-pool / provider grouping) for a CLI tool name.
+///
+/// Tools that share an upstream provider quota pool — `gemini-cli` and
+/// `antigravity-cli` both consume the Google OAuth quota — map to the same
+/// `ModelFamily` so that failover can skip same-provider alternatives after one
+/// of them exhausts the shared quota.
+pub fn provider_for_tool_name(tool: &str) -> Option<ModelFamily> {
+    match tool {
+        "gemini-cli" | "antigravity-cli" | "antigravity" | "gemini" => Some(ModelFamily::Gemini),
+        "claude-code" | "claude" => Some(ModelFamily::Claude),
+        "codex" => Some(ModelFamily::OpenAI),
+        "opencode" | "openai-compat" => Some(ModelFamily::Other),
+        _ => None,
+    }
+}
+
 /// One step in a quota/rate-limit failover chain: which tool/spec was tried and why it was skipped.
 ///
 /// Written to `result.toml` under `[[fallback_chain]]` when failover occurred during `csa run`.

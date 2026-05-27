@@ -1,6 +1,7 @@
 use super::failover::*;
 use chrono::Utc;
 use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy, ToolConfig};
+use csa_core::types::ModelFamily;
 use csa_session::MetaSessionState;
 use std::collections::HashMap;
 
@@ -192,6 +193,7 @@ fn test_failover_to_next_tool() {
         None,
         &[],
         &[],
+        &[],
         &config,
         "429 Resource exhausted",
     );
@@ -212,6 +214,7 @@ fn test_failover_all_exhausted() {
         None,
         &["codex".to_string()],
         &[],
+        &[],
         &config,
         "429",
     );
@@ -231,6 +234,7 @@ fn test_failover_retry_in_session() {
         None,
         Some(false),
         Some(&session),
+        &[],
         &[],
         &[],
         &config,
@@ -277,6 +281,7 @@ fn test_failover_on_cooldown_error() {
         None,
         &[],
         &[],
+        &[],
         &config,
         "429 Too Many Requests: cooldown for 60 seconds",
     );
@@ -297,6 +302,7 @@ fn test_failover_on_quota_error() {
         None,
         &[],
         &[],
+        &[],
         &config,
         "Error: quota exceeded for model o4-mini",
     );
@@ -315,6 +321,7 @@ fn test_failover_normal_error_no_match() {
         None,
         Some(false),
         None,
+        &[],
         &[],
         &[],
         &config,
@@ -344,6 +351,7 @@ fn test_failover_disabled_tool_skipped() {
         None,
         &[],
         &[],
+        &[],
         &config,
         "429",
     );
@@ -365,6 +373,7 @@ fn test_failover_missing_tier_returns_error() {
         None,
         Some(false),
         None,
+        &[],
         &[],
         &[],
         &config,
@@ -397,6 +406,7 @@ fn test_failover_valuable_session_tool_slot_occupied_uses_sibling() {
         Some(&session),
         &[],
         &[],
+        &[],
         &config,
         "429",
     );
@@ -424,6 +434,7 @@ fn test_failover_no_session_no_valuable_context() {
         Some(&session),
         &[],
         &[],
+        &[],
         &config,
         "429",
     );
@@ -442,6 +453,7 @@ fn test_failover_needs_edit_none_skips_filter() {
         None,
         None,
         None,
+        &[],
         &[],
         &[],
         &config,
@@ -471,6 +483,7 @@ fn test_gemini_pro_failover_to_claude_in_same_tier() {
         None,
         Some(false),
         None,
+        &[],
         &[],
         &[],
         &config,
@@ -506,6 +519,7 @@ fn test_gemini_flash_failover_to_claude_in_same_tier() {
         None,
         &[],
         &[],
+        &[],
         &config,
         "quota exceeded",
     );
@@ -538,6 +552,7 @@ fn test_cross_tier_fallback_when_current_tier_exhausted() {
         None,
         &[],
         &["gemini-cli/google/gemini-2.5-flash/0".to_string()],
+        &[],
         &config,
         "429 MODEL_CAPACITY_EXHAUSTED",
     );
@@ -571,6 +586,7 @@ fn test_cross_tier_all_tiers_exhausted_reports_error() {
             "gemini-cli/google/gemini-2.5-flash/0".to_string(),
             "claude-code/anthropic/claude-sonnet-4-20250514/high".to_string(),
         ],
+        &[],
         &config,
         "429",
     );
@@ -607,6 +623,7 @@ fn test_failover_never_reports_error_when_alternatives_exist() {
         Some(&session),
         &[],
         &[],
+        &[],
         &config,
         "RESOURCE_EXHAUSTED",
     );
@@ -616,5 +633,112 @@ fn test_failover_never_reports_error_when_alternatives_exist() {
         FailoverAction::ReportError { reason, .. } => {
             panic!("Should not report error when alternatives exist: {reason}");
         }
+    }
+}
+
+// --- Same-provider quota-pool exhaustion tests (#1629) ---
+//
+// `gemini-cli` and `antigravity-cli` both consume Google's OAuth/API quota pool,
+// so once one of them is marked permanently exhausted, the other MUST be skipped
+// even though it appears earlier/later in the tier model list.
+
+#[test]
+fn test_exhausted_gemini_provider_skips_antigravity_picks_codex() {
+    let config = make_config(
+        vec![
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "antigravity-cli/google/gemini-3.1-pro/high",
+            "codex/openai/gpt-5.5/high",
+            "claude-code/anthropic/claude-sonnet-4-7/high",
+        ],
+        vec![],
+    );
+    let action = decide_failover(
+        "gemini-cli",
+        "default",
+        None,
+        Some(false),
+        None,
+        &["gemini-cli".to_string()],
+        &["gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()],
+        &[ModelFamily::Gemini],
+        &config,
+        "RESOURCE_EXHAUSTED",
+    );
+    match action {
+        FailoverAction::RetrySiblingSession {
+            new_tool,
+            new_model_spec,
+        } => {
+            assert_eq!(
+                new_tool, "codex",
+                "expected codex after both Google tools skipped, got {new_tool}"
+            );
+            assert!(new_model_spec.contains("codex"), "spec: {new_model_spec}");
+        }
+        other => panic!("Expected RetrySiblingSession to codex, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_exhausted_gemini_provider_skips_antigravity_in_cross_tier_fallback() {
+    let config = make_multi_tier_config(
+        vec!["claude-code/anthropic/claude-sonnet-4-7/high"],
+        vec![
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "antigravity-cli/google/gemini-3.1-pro/high",
+        ],
+        vec![],
+    );
+    let action = decide_failover(
+        "gemini-cli",
+        "default",
+        None,
+        Some(false),
+        None,
+        &[],
+        &[
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+            "antigravity-cli/google/gemini-3.1-pro/high".to_string(),
+        ],
+        &[ModelFamily::Gemini],
+        &config,
+        "RESOURCE_EXHAUSTED",
+    );
+    match action {
+        FailoverAction::RetrySiblingSession { new_tool, .. } => {
+            assert_eq!(new_tool, "claude-code");
+        }
+        other => panic!("Expected cross-tier failover to claude-code, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_exhausted_unrelated_provider_does_not_skip_others() {
+    // OpenAI exhausted should NOT cause Google-backed tools to be skipped.
+    let config = make_config(
+        vec![
+            "codex/openai/gpt-5.5/high",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        ],
+        vec![],
+    );
+    let action = decide_failover(
+        "codex",
+        "default",
+        None,
+        Some(false),
+        None,
+        &["codex".to_string()],
+        &["codex/openai/gpt-5.5/high".to_string()],
+        &[ModelFamily::OpenAI],
+        &config,
+        "quota exceeded",
+    );
+    match action {
+        FailoverAction::RetrySiblingSession { new_tool, .. } => {
+            assert_eq!(new_tool, "gemini-cli");
+        }
+        other => panic!("Expected RetrySiblingSession to gemini-cli, got {other:?}"),
     }
 }

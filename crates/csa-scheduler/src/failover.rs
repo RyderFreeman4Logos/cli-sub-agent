@@ -1,7 +1,7 @@
 //! Failover decision logic for 429 / rate-limit situations.
 
 use csa_config::ProjectConfig;
-use csa_core::types::FallbackAttempt;
+use csa_core::types::{FallbackAttempt, ModelFamily, provider_for_tool_name};
 use csa_session::MetaSessionState;
 use serde::Serialize;
 use tracing::info;
@@ -44,6 +44,9 @@ pub enum FailoverAction {
 /// - `tried_tools`: tools already attempted in this failover chain.
 /// - `tried_specs`: model specs already attempted (enables intra-tier failover
 ///   when the same tool has multiple models in the tier).
+/// - `exhausted_providers`: provider quota pools that are confirmed exhausted
+///   (e.g. `[ModelFamily::Gemini]` once gemini-cli hit a daily quota — this
+///   makes the caller skip antigravity-cli, which shares Google OAuth quota).
 /// - `config`: project configuration.
 /// - `original_error`: the error message from the rate-limited tool.
 #[allow(clippy::too_many_arguments)]
@@ -55,6 +58,7 @@ pub fn decide_failover(
     session: Option<&MetaSessionState>,
     tried_tools: &[String],
     tried_specs: &[String],
+    exhausted_providers: &[ModelFamily],
     config: &ProjectConfig,
     original_error: &str,
 ) -> FailoverAction {
@@ -74,7 +78,9 @@ pub fn decide_failover(
         }
     };
 
-    // 2. Find eligible alternative models (not tried, enabled, edit-compatible).
+    // 2. Find eligible alternative models (not tried, enabled, edit-compatible,
+    //    and NOT sharing a quota pool with any provider already known to be
+    //    exhausted).
     //    When tried_specs is non-empty, filter at spec granularity so that the
     //    same tool with a different model can be selected (intra-tier failover).
     //    When tried_specs is empty, fall back to tool-level filtering for
@@ -96,6 +102,14 @@ pub fn decide_failover(
                 return None;
             }
             if matches!(task_needs_edit, Some(true)) && !config.can_tool_edit_existing(tool) {
+                return None;
+            }
+            if provider_is_exhausted(tool, exhausted_providers) {
+                info!(
+                    skipped_tool = %tool,
+                    skipped_spec = %spec,
+                    "Skipping alternative whose provider quota pool is already exhausted"
+                );
                 return None;
             }
             Some((tool.to_string(), spec.clone()))
@@ -122,6 +136,9 @@ pub fn decide_failover(
                     continue;
                 }
                 if matches!(task_needs_edit, Some(true)) && !config.can_tool_edit_existing(tool) {
+                    continue;
+                }
+                if provider_is_exhausted(tool, exhausted_providers) {
                     continue;
                 }
                 info!(
@@ -190,6 +207,15 @@ pub fn decide_failover(
         new_tool,
         new_model_spec: new_spec,
     }
+}
+
+/// Return `true` when `tool`'s upstream provider/quota pool is in
+/// `exhausted_providers`.
+///
+/// Tools whose provider is unknown to `provider_for_tool_name` are treated as
+/// non-exhausted so unrelated/third-party tools are never accidentally skipped.
+fn provider_is_exhausted(tool: &str, exhausted_providers: &[ModelFamily]) -> bool {
+    provider_for_tool_name(tool).is_some_and(|p| exhausted_providers.contains(&p))
 }
 
 /// Check if a session has accumulated valuable context worth preserving.
