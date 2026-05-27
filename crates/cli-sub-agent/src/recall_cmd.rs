@@ -37,9 +37,9 @@ struct RecallHistoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SessionRef {
-    sid: String,
-    provider: String,
+pub(super) struct SessionRef {
+    pub(super) sid: String,
+    pub(super) provider: String,
 }
 
 pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
@@ -341,22 +341,31 @@ fn handle_recall_search(query: &str) -> Result<()> {
     Ok(())
 }
 
-/// Search all recorded sessions across providers for `keyword`.
+/// Search recorded sessions for whitespace-separated `keyword` terms (AND).
 ///
 /// Scope:
-/// * `all = false` — restrict matches to threads belonging to `project_root`.
-/// * `all = true` — include matches from every project (use for cross-project recall).
+/// * `session = Some(sel)` — search only within the selected session
+///   (ULID, history index, or `latest`).
+/// * `session = None`, `all = false` — restrict matches to threads belonging
+///   to the current project.
+/// * `session = None`, `all = true` — include matches from every project.
 ///
 /// `limit` caps results per provider (passed into `xurl_core::ThreadQuery::limit`).
-pub(crate) fn handle_recall_keyword(keyword: &str, all: bool, limit: usize) -> Result<()> {
-    keyword::handle_recall_keyword(keyword, all, limit)
+/// Ignored when `session` is set (single-session output has no per-provider fan-out).
+pub(crate) fn handle_recall_keyword(
+    keyword: &str,
+    session: Option<&str>,
+    all: bool,
+    limit: usize,
+) -> Result<()> {
+    keyword::handle_recall_keyword(keyword, session, all, limit)
 }
 
 fn latest_session_ref(project_root: &Path) -> Result<SessionRef> {
     resolve_session_ref("latest", project_root)
 }
 
-fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef> {
+pub(super) fn resolve_session_ref(selector: &str, project_root: &Path) -> Result<SessionRef> {
     let trimmed = selector.trim();
     if trimmed.is_empty() {
         anyhow::bail!("Session selector must not be empty");
@@ -499,7 +508,7 @@ fn resolve_session_thread(session_ref: &SessionRef) -> Result<(xurl_core::Resolv
     Ok((resolved, content))
 }
 
-fn render_session_markdown(session_ref: &SessionRef) -> Result<String> {
+pub(super) fn render_session_markdown(session_ref: &SessionRef) -> Result<String> {
     resolve_session_thread(session_ref).map(|(_, content)| content)
 }
 
