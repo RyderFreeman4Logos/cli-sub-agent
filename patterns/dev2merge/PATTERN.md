@@ -144,14 +144,15 @@ if [ -f Cargo.toml ]; then
   just fmt
   just clippy
 elif [ -f pyproject.toml ]; then
-  if just --list 2>/dev/null | grep -q "lint"; then just lint
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
   elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .; fi
 elif [ -f package.json ]; then
-  if just --list 2>/dev/null | grep -q "lint"; then just lint
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
   elif command -v biome >/dev/null 2>&1; then biome check .; fi
 elif [ -f go.mod ]; then
   go vet ./...
-elif just --list 2>/dev/null | grep -q "pre-commit"; then
+  if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; fi
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "pre-commit"; then
   just pre-commit
 else
   echo "WARNING: No recognized project type; skipping L1 lint gate."
@@ -172,13 +173,13 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 set -euo pipefail
 if [ -f Cargo.toml ]; then just test
 elif [ -f pyproject.toml ]; then
-  if just --list 2>/dev/null | grep -q "test"; then just test
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
   elif command -v pytest >/dev/null 2>&1; then pytest; fi
 elif [ -f package.json ]; then
-  if just --list 2>/dev/null | grep -q "test"; then just test
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
   elif command -v vitest >/dev/null 2>&1; then vitest run; fi
 elif [ -f go.mod ]; then go test ./...
-elif just --list 2>/dev/null | grep -q "test"; then just test
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
 else echo "WARNING: No recognized test runner; skipping L2 test gate."; fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 if [ -z "$(git status --porcelain)" ]; then
