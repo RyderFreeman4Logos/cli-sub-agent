@@ -775,6 +775,86 @@ fn test_build_command_opencode_args_structure() {
     );
 }
 
+#[test]
+fn test_build_command_antigravity_omits_model_flag_with_model_set() {
+    // `agy` does not accept `-m`; the model is staged in
+    // ~/.gemini/antigravity-cli/settings.json before spawn. The CLI args must
+    // therefore NEVER contain `-m` or the model name, regardless of whether a
+    // `model_override` is configured (#1620).
+    let exec = Executor::AntigravityCli {
+        model_override: Some("Gemini 3.1 Pro (High)".to_string()),
+        thinking_budget: Some(ThinkingBudget::High),
+    };
+    let session = make_test_session();
+    let (cmd, _stdin_data) = exec.build_command("analyze code", None, &session, None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.iter().any(|a| a == "-m"),
+        "antigravity-cli must NOT emit -m (agy rejects this flag); args={args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "Gemini 3.1 Pro (High)"),
+        "antigravity-cli must NOT pass the model name on argv; args={args:?}"
+    );
+    assert!(
+        args.contains(&"-y".to_string()),
+        "antigravity-cli still uses -y for yolo mode"
+    );
+    assert!(
+        args.contains(&"-p".to_string()),
+        "antigravity-cli still uses -p for prompt"
+    );
+}
+
+#[test]
+fn test_build_command_antigravity_omits_model_flag_without_model_set() {
+    let exec = Executor::AntigravityCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let (cmd, _stdin_data) = exec.build_command("analyze code", None, &session, None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.iter().any(|a| a == "-m"),
+        "antigravity-cli must NOT emit -m even when no override is set; args={args:?}"
+    );
+}
+
+#[test]
+fn test_build_execute_in_command_antigravity_omits_model_flag() {
+    let exec = Executor::AntigravityCli {
+        model_override: Some("Gemini 3.1 Pro (High)".to_string()),
+        thinking_budget: None,
+    };
+    let (cmd, _stdin_data) =
+        exec.build_execute_in_command("analyze code", std::path::Path::new("/tmp"), None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.iter().any(|a| a == "-m"),
+        "antigravity-cli execute_in path must NOT emit -m; args={args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "Gemini 3.1 Pro (High)"),
+        "antigravity-cli execute_in path must NOT pass the model name on argv; args={args:?}"
+    );
+}
+
 include!("executor_build_cmd_preamble_tests.rs");
 include!("executor_build_cmd_resume_tests.rs");
 include!("executor_build_cmd_tests_part2.rs");

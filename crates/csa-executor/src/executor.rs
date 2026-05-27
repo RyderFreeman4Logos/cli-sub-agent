@@ -31,6 +31,10 @@ use arg_helpers::{
     effective_gemini_model_override, gemini_include_directories,
 };
 
+#[path = "executor_antigravity_settings.rs"]
+pub(crate) mod antigravity_settings;
+pub(crate) use antigravity_settings::AntigravitySettingsGuard;
+
 #[path = "executor_codex_tmux.rs"]
 mod codex_tmux;
 #[path = "executor_command.rs"]
@@ -257,6 +261,25 @@ impl Executor {
         }
     }
 
+    /// Stage the antigravity-cli model override in `settings.json` (if any).
+    ///
+    /// For [`Executor::AntigravityCli`] this returns an
+    /// [`AntigravitySettingsGuard`] that rewrites
+    /// `~/.gemini/antigravity-cli/settings.json` to point at the configured
+    /// model and restores it when dropped. For every other executor variant
+    /// this is a no-op returning `Ok(None)`.
+    ///
+    /// The returned guard MUST be kept alive for the duration of the spawned
+    /// process so that `agy` reads the staged model at startup.
+    pub(crate) fn antigravity_settings_guard(&self) -> Result<Option<AntigravitySettingsGuard>> {
+        match self {
+            Self::AntigravityCli { model_override, .. } => {
+                AntigravitySettingsGuard::apply_model(model_override)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Override the model (CLI `--model` / config `[review].model` > tier model_spec).
     pub fn override_model(&mut self, model: String) {
         match self {
@@ -462,197 +485,9 @@ impl Executor {
     ) -> Result<Box<dyn Transport>> {
         TransportFactory::create(self, session_config)
     }
-
-    /// Append tool-specific arguments for full execution.
-    #[cfg(test)]
-    fn append_tool_args(&self, cmd: &mut Command, prompt: &str, tool_state: Option<&ToolState>) {
-        self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv, &[]);
-    }
-
-    fn append_tool_args_with_transport(
-        &self,
-        cmd: &mut Command,
-        prompt: &str,
-        tool_state: Option<&ToolState>,
-        prompt_transport: PromptTransport,
-        gemini_include_directories: &[String],
-    ) {
-        let codex_resume = matches!(self, Self::Codex { .. })
-            && tool_state
-                .and_then(|state| state.provider_session_id.as_deref())
-                .is_some();
-
-        // Structural args (subcommand, output format, yolo) come first
-        match self {
-            Self::GeminiCli { .. } => {
-                // gemini: -p prompt -m model -y [-r session]
-            }
-            Self::Opencode { .. } => {
-                cmd.arg("run");
-                cmd.arg("--format").arg("json");
-            }
-            Self::Codex { .. } => {
-                cmd.arg("exec");
-                cmd.arg("--json");
-                cmd.arg("--dangerously-bypass-approvals-and-sandbox");
-            }
-            Self::ClaudeCode { .. } => {
-                cmd.arg("--dangerously-skip-permissions");
-                cmd.arg("--output-format").arg("json");
-            }
-            Self::OpenaiCompat { .. } | Self::AntigravityCli { .. } => {}
-        }
-
-        // Model and thinking budget (shared with execute_in)
-        self.append_model_args(cmd);
-
-        // Yolo flag for gemini/antigravity (other tools handle it in structural args above)
-        if matches!(self, Self::GeminiCli { .. } | Self::AntigravityCli { .. }) {
-            cmd.arg("-y");
-            append_gemini_include_directories_args(cmd, gemini_include_directories);
-        }
-
-        // Session resume
-        if let Some(state) = tool_state
-            && let Some(ref session_id) = state.provider_session_id
-        {
-            match self {
-                Self::GeminiCli { .. } | Self::AntigravityCli { .. } => {
-                    cmd.arg("-r").arg(session_id);
-                }
-                Self::Opencode { .. } => {
-                    cmd.arg("-s").arg(session_id);
-                }
-                Self::Codex { .. } => {
-                    cmd.arg("resume").arg(session_id);
-                }
-                Self::ClaudeCode { .. }
-                    if matches!(self.claude_code_transport(), Some(ClaudeCodeTransport::Acp)) =>
-                {
-                    cmd.arg("--resume").arg(session_id);
-                }
-                Self::OpenaiCompat { .. } => {} // HTTP-only
-                Self::ClaudeCode { .. } => {}
-            }
-        }
-
-        // Prompt (position matters per tool)
-        match prompt_transport {
-            PromptTransport::Argv => match self {
-                Self::GeminiCli { .. } | Self::ClaudeCode { .. } | Self::AntigravityCli { .. } => {
-                    cmd.arg("-p").arg(prompt);
-                }
-                Self::Opencode { .. } | Self::Codex { .. } => {
-                    cmd.arg(prompt);
-                }
-                Self::OpenaiCompat { .. } => {} // HTTP-only
-            },
-            PromptTransport::Stdin => {
-                match self {
-                    Self::GeminiCli { .. }
-                    | Self::ClaudeCode { .. }
-                    | Self::AntigravityCli { .. } => {
-                        cmd.arg("-p");
-                    }
-                    Self::Codex { .. } if codex_resume => {
-                        cmd.arg("-");
-                    }
-                    Self::Opencode { .. } | Self::Codex { .. } | Self::OpenaiCompat { .. } => {
-                        // These tools read from stdin natively without extra flags.
-                    }
-                }
-            }
-        }
-    }
-
-    /// Append model override and thinking budget args (tool-specific flags).
-    fn append_model_args(&self, cmd: &mut Command) {
-        match self {
-            Self::GeminiCli {
-                model_override,
-                thinking_budget,
-            }
-            | Self::AntigravityCli {
-                model_override,
-                thinking_budget,
-            } => {
-                if let Some(model) = effective_gemini_model_override(model_override) {
-                    cmd.arg("-m").arg(model);
-                }
-                if thinking_budget.is_some() {
-                    tracing::debug!(
-                        "Ignoring thinking budget for {}: no flag support",
-                        self.tool_name()
-                    );
-                }
-            }
-            Self::Opencode {
-                model_override,
-                agent,
-                thinking_budget,
-            } => {
-                if let Some(model) = model_override {
-                    cmd.arg("-m").arg(model);
-                }
-                if let Some(agent_name) = agent {
-                    cmd.arg("--agent").arg(agent_name);
-                }
-                if let Some(budget) = thinking_budget {
-                    let variant = match budget {
-                        ThinkingBudget::DefaultBudget => "medium",
-                        ThinkingBudget::Low => "minimal",
-                        ThinkingBudget::Medium => "medium",
-                        ThinkingBudget::High => "high",
-                        ThinkingBudget::Xhigh => "max",
-                        ThinkingBudget::Max => "max",
-                        ThinkingBudget::Custom(_) => "max",
-                    };
-                    cmd.arg("--variant").arg(variant);
-                }
-            }
-            Self::Codex {
-                model_override,
-                thinking_budget,
-                runtime_metadata,
-            } => {
-                if let Some(model) = model_override {
-                    cmd.arg("--model").arg(model);
-                }
-                if let Some(budget) = thinking_budget {
-                    cmd.arg("-c")
-                        .arg(format!("model_reasoning_effort={}", budget.codex_effort()));
-                }
-                if runtime_metadata.fast_mode_enabled() {
-                    cmd.arg("--enable").arg("fast_mode");
-                }
-            }
-            Self::ClaudeCode {
-                model_override,
-                thinking_budget,
-                ..
-            } => {
-                if let Some(model) = model_override {
-                    cmd.arg("--model").arg(model);
-                }
-                // claude-code 2.x: `--effort <level>`, not `--thinking-budget`
-                // (removed, #1124). DefaultBudget omits the flag entirely.
-                if let Some(budget) = thinking_budget
-                    && let Some(level) = budget.claude_effort()
-                {
-                    cmd.arg("--effort").arg(level);
-                }
-            }
-            Self::OpenaiCompat { .. } => {} // HTTP-only: model/thinking via API body
-        }
-    }
-
-    fn append_yolo_args(&self, cmd: &mut Command) {
-        for arg in self.yolo_args() {
-            cmd.arg(arg);
-        }
-    }
 }
 
+include!("executor_tool_args.rs");
 include!("executor_runtime_transport.rs");
 
 #[cfg(test)]

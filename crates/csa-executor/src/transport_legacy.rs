@@ -89,6 +89,12 @@ impl LegacyTransport {
         &self,
         request: ExecuteInAttempt<'_>,
     ) -> Result<TransportResult> {
+        // Stage the antigravity-cli `model` field in
+        // `~/.gemini/antigravity-cli/settings.json` before spawning `agy`,
+        // and hold the RAII guard so the original contents are restored
+        // when this function returns (#1620). For all other executors this
+        // is `None` and a no-op.
+        let _antigravity_guard = request.executor.antigravity_settings_guard()?;
         let (cmd, stdin_data) = request.executor.build_execute_in_command(
             request.prompt,
             request.work_dir,
@@ -149,6 +155,12 @@ impl LegacyTransport {
         attempt_env: LegacyAttemptEnv<'_>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
+        // Stage the antigravity-cli `model` field in
+        // `~/.gemini/antigravity-cli/settings.json` before spawning `agy`,
+        // and hold the RAII guard so the original contents are restored
+        // when this function returns (#1620). For all other executors this
+        // is `None` and a no-op.
+        let _antigravity_guard = executor.antigravity_settings_guard()?;
         let (cmd, stdin_data) =
             executor.build_command(prompt, tool_state, session, attempt_env.extra_env);
 
