@@ -135,10 +135,33 @@ Tool: bash
 OnFail: abort
 
 Formatters and linters run regardless of FAST_PATH.
+Language detection: Cargo.toml → Rust, pyproject.toml → Python, package.json → JS/TS, go.mod → Go.
+Falls back to `just pre-commit` when available, skip otherwise.
 
 ```bash
-just fmt
-just clippy
+set -euo pipefail
+if [ -f Cargo.toml ]; then
+  just fmt
+  just clippy
+elif [ -f pyproject.toml ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
+  elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .;
+  else echo "WARNING: Python project detected but no linter (just lint or ruff) found."; fi
+elif [ -f package.json ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
+  elif command -v biome >/dev/null 2>&1; then biome check .;
+  else echo "WARNING: JS/TS project detected but no linter (just lint or biome) found."; fi
+elif [ -f go.mod ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
+  else
+    go vet ./...
+    if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; fi
+  fi
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "pre-commit"; then
+  just pre-commit
+else
+  echo "WARNING: No recognized project type; skipping L1 lint gate."
+fi
 ```
 
 ## IF ${FAST_PATH}
@@ -153,7 +176,16 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 
 ```bash
 set -euo pipefail
-just test
+if [ -f Cargo.toml ]; then just test
+elif [ -f pyproject.toml ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
+  elif command -v pytest >/dev/null 2>&1; then pytest; fi
+elif [ -f package.json ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
+  elif command -v vitest >/dev/null 2>&1; then vitest run; fi
+elif [ -f go.mod ]; then go test ./...
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
+else echo "WARNING: No recognized test runner; skipping L2 test gate."; fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 if [ -z "$(git status --porcelain)" ]; then
   COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
@@ -361,8 +393,8 @@ Before triggering `csa review`, the implementing agent MUST self-check the
 entire branch diff and fix any issues it finds.
 
 Required actions:
-1. Run `just clippy` (or `cargo clippy --workspace --all-targets -- -D warnings`) and fix every warning.
-2. Run `just test` (or `cargo test`) and fix every failure.
+1. Run the project's lint command (Rust: `just clippy`, Python: `just lint` or `ruff check`, Go: `go vet`, JS/TS: `just lint` or `biome check`) and fix every warning.
+2. Run the project's test command (Rust: `just test`, Python: `pytest`, Go: `go test ./...`, JS/TS: `vitest run`) and fix every failure.
 3. If `.csa/review-checklist.md` exists, inspect `git diff "${DEFAULT_BRANCH}...HEAD"` against that checklist for known anti-patterns.
 4. Fix any issues found during this self-review.
 5. Only after completing all checks and fixes, continue to the cumulative `csa review` step.
