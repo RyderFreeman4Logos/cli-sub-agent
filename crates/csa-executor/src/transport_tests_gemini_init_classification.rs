@@ -204,6 +204,29 @@ fn test_classify_gemini_legacy_initial_stall_detects_first_response_timeout() {
 }
 
 #[test]
+fn test_classify_gemini_legacy_initial_stall_uses_600s_default() {
+    let executor = Executor::GeminiCli {
+        model_override: Some("gemini-2.5-pro".to_string()),
+        thinking_budget: None,
+    };
+    let execution = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: "initial_response_timeout: no stdout output for 600s; process killed immediately"
+            .to_string(),
+        summary: "initial_response_timeout: no stdout output for 600s; process killed immediately"
+            .to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+    };
+
+    // Pass None to test the default timeout behavior
+    let classification = classify_gemini_legacy_initial_stall(&executor, &execution, None)
+        .expect("gemini legacy initial timeout should classify with default");
+    assert_eq!(classification.code, "gemini_legacy_initial_stall");
+    assert_eq!(classification.timeout_seconds, 600);
+}
+
+#[test]
 fn test_classify_gemini_legacy_initial_stall_is_gemini_only() {
     let executor = Executor::Codex {
         model_override: Some("gpt-5-codex".to_string()),
