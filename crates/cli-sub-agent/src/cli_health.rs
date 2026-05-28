@@ -215,7 +215,7 @@ fn summarize(files: &[HealthFile]) -> HealthSummary {
     let total = files.len();
     let ok = total.saturating_sub(block + warning);
     let token_total = files.iter().map(|file| file.tokens).sum::<usize>();
-    let mean = if total == 0 { 0 } else { token_total / total };
+    let mean = token_total.checked_div(total).unwrap_or(0);
     let max = files.iter().map(|file| file.tokens).max().unwrap_or(0);
 
     HealthSummary {
