@@ -49,6 +49,54 @@ fn test_validate_liveness_dead_seconds_zero_rejected() {
 }
 
 #[test]
+fn test_validate_fatal_error_markers_rejects_blank_marker() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            fatal_error_markers: vec!["HTTP 429".to_string(), " ".to_string()],
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("resources.fatal_error_markers must not contain blank markers")
+    );
+}
+
+#[test]
 fn test_validate_memory_max_mb_too_low() {
     let dir = tempdir().unwrap();
 

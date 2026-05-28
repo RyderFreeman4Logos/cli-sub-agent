@@ -119,6 +119,14 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if config.resources.liveness_dead_seconds == Some(0) {
         bail!("resources.liveness_dead_seconds must be > 0 when set (got 0)");
     }
+    if config
+        .resources
+        .fatal_error_markers
+        .iter()
+        .any(|marker| marker.trim().is_empty())
+    {
+        bail!("resources.fatal_error_markers must not contain blank markers");
+    }
     if config.resources.slot_wait_timeout_seconds == 0 {
         bail!("resources.slot_wait_timeout_seconds must be > 0 (got 0)");
     }

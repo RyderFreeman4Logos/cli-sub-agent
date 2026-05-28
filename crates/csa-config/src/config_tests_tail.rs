@@ -628,6 +628,39 @@ idle_timeout_seconds = 250
     assert_eq!(cfg.initial_response_timeout_seconds, None);
 }
 
+#[test]
+fn test_resources_config_default_has_fatal_error_markers() {
+    let cfg = ResourcesConfig::default();
+
+    assert!(
+        cfg.fatal_error_markers
+            .iter()
+            .any(|marker| marker == "HTTP 429"),
+        "defaults should detect rate-limit HTTP failures"
+    );
+    assert!(
+        cfg.fatal_error_markers
+            .iter()
+            .any(|marker| marker == "500 Internal Server Error"),
+        "defaults should detect provider 5xx failures"
+    );
+    assert!(cfg.is_default());
+}
+
+#[test]
+fn test_resources_config_deser_fatal_error_markers_custom() {
+    let toml_str = r#"
+fatal_error_markers = ["custom fatal", "HTTP 418"]
+"#;
+    let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
+
+    assert_eq!(
+        cfg.fatal_error_markers,
+        vec!["custom fatal".to_string(), "HTTP 418".to_string()]
+    );
+    assert!(!cfg.is_default());
+}
+
 // ---------------------------------------------------------------------------
 // enforce_tool_enabled: "Currently enabled tools:" alternatives hint
 // ---------------------------------------------------------------------------
