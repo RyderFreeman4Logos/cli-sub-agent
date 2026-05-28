@@ -126,7 +126,7 @@ for a in "$@"; do [ "$a" = "--ff-only" ] && exit {me}; done; exit 0
     )
     .unwrap();
     #[cfg(unix)]
-    fs::set_permissions(&mock_bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(mock_bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     (guard_dir, fake_gh, mock_bin, git_log)
 }
 

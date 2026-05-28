@@ -7,11 +7,12 @@ use super::*;
 /// Process-wide lock for `CSA_WORKSPACE_BOUNDARY_THRESHOLD` mutation in tests.
 ///
 /// cargo-test runs tests in parallel within a crate; env vars are process-global.
-static WORKSPACE_BOUNDARY_ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+/// Uses `tokio::sync::Mutex` because the guard is held across `.await` points
+/// (spawn_tool + wait_and_capture are async).
+static WORKSPACE_BOUNDARY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn restore_boundary_env(original: Option<String>) {
-    // SAFETY: test-scoped env mutation guarded by WORKSPACE_BOUNDARY_ENV_LOCK.
+    // SAFETY: test-scoped env mutation; caller holds WORKSPACE_BOUNDARY_ENV_LOCK.
     unsafe {
         match original {
             Some(value) => std::env::set_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV, value),
@@ -33,9 +34,7 @@ fn boundary_error_echo_phrase() -> String {
 
 #[tokio::test]
 async fn test_wait_and_capture_repeated_workspace_boundary_errors_warns_but_does_not_kill() {
-    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK
-        .lock()
-        .expect("boundary env lock poisoned");
+    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK.lock().await;
     let original = std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV).ok();
     // SAFETY: test-scoped env mutation, restored on drop below.
     unsafe { std::env::remove_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV) };
@@ -104,9 +103,7 @@ async fn test_wait_and_capture_repeated_workspace_boundary_errors_warns_but_does
 
 #[tokio::test]
 async fn test_wait_and_capture_single_workspace_boundary_error_does_not_fail_fast() {
-    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK
-        .lock()
-        .expect("boundary env lock poisoned");
+    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK.lock().await;
     let original = std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV).ok();
     // SAFETY: test-scoped env mutation, restored below.
     unsafe { std::env::remove_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV) };
@@ -146,9 +143,7 @@ async fn test_wait_and_capture_single_workspace_boundary_error_does_not_fail_fas
 
 #[tokio::test]
 async fn test_wait_and_capture_env_override_lowers_threshold() {
-    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK
-        .lock()
-        .expect("boundary env lock poisoned");
+    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK.lock().await;
     let original = std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV).ok();
     // SAFETY: test-scoped env mutation, restored below.
     unsafe { std::env::set_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV, "2") };
@@ -190,9 +185,7 @@ async fn test_wait_and_capture_env_override_lowers_threshold() {
 
 #[tokio::test]
 async fn test_wait_and_capture_env_override_invalid_falls_back_to_default() {
-    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK
-        .lock()
-        .expect("boundary env lock poisoned");
+    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK.lock().await;
     let original = std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV).ok();
     // SAFETY: test-scoped env mutation, restored below.
     unsafe { std::env::set_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV, "notanumber") };
@@ -232,9 +225,7 @@ async fn test_wait_and_capture_env_override_invalid_falls_back_to_default() {
 
 #[tokio::test]
 async fn test_wait_and_capture_hint_emitted_only_once_per_session() {
-    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK
-        .lock()
-        .expect("boundary env lock poisoned");
+    let _env_lock = WORKSPACE_BOUNDARY_ENV_LOCK.lock().await;
     let original = std::env::var(WORKSPACE_BOUNDARY_THRESHOLD_ENV).ok();
     // SAFETY: test-scoped env mutation, restored below.
     unsafe { std::env::remove_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV) };

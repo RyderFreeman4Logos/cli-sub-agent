@@ -74,6 +74,7 @@ fn make_result(status: &str, exit_code: i32) -> SessionResult {
         artifacts: Vec::new(),
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     }
 }
@@ -501,6 +502,7 @@ fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
         artifacts: Vec::new(),
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     })
     .unwrap();
@@ -560,6 +562,7 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         },
     )

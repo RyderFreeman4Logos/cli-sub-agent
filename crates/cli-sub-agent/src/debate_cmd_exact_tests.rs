@@ -65,6 +65,7 @@ fn setup_unrelated_debate_session(
             ],
             peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
         },
     )
@@ -228,6 +229,7 @@ fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
         },
     )
@@ -301,6 +303,7 @@ fn debate_nonzero_with_revise_artifact_exits_failure() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
         },
     )

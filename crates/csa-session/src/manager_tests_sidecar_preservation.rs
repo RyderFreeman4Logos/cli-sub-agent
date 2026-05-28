@@ -22,6 +22,7 @@ fn test_save_result_preserves_existing_contract_result_artifact_when_output_resu
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     save_result_in(
@@ -73,6 +74,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -101,6 +103,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
     let updated_result = crate::result::SessionResult {
         summary: "updated summary".to_string(),
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -155,6 +158,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -181,6 +185,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
 
     let clear_result = crate::result::SessionResult {
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
         ..populated_result
     };
@@ -223,6 +228,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -245,6 +251,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
 
     let clear_result = crate::result::SessionResult {
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
         ..populated_result
     };

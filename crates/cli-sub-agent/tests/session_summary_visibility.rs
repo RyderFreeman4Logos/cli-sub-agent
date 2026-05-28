@@ -52,6 +52,7 @@ summary = "{PRE_EXEC_SUMMARY}"
 tool = "codex"
 started_at = "2026-04-27T00:00:00Z"
 completed_at = "2026-04-27T00:00:01Z"
+gate_timeout = false
 "#
         ),
     )
@@ -89,11 +90,11 @@ fn assert_subcommand_surfaces_summary_for_session(
             "session",
             subcommand,
             "--session",
-            &session_id,
+            session_id,
             "--cd",
             project.to_str().expect("project path utf8"),
         ])
-        .current_dir(&project)
+        .current_dir(project)
         .output()
         .expect("run csa session command");
 

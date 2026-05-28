@@ -78,6 +78,7 @@ fn debate_tier_all_fail_does_not_overwrite_unrelated_latest_session() {
             ],
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         },
     )
@@ -211,6 +212,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             ],
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         },
     )

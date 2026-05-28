@@ -92,7 +92,7 @@ find-monolith-files:
         */AGENTS.md|*/FACTORY.md) exempt=true ;;
         */PATTERN.md|*/SKILL.md) exempt=true ;;
         */workflow.toml) exempt=true ;;
-        *_tests.rs|*_test.rs) exempt=true ;;       # dedicated test files
+        *_tests.rs|*_test.rs|*_tests_*.rs) exempt=true ;; # dedicated test files
         */tests/*.rs) exempt=true ;;               # integration test directory
         */benches/*.rs) exempt=true ;;             # benchmark files
         */config.rs|*/global.rs) exempt=true ;;    # config definition files (high token density, low complexity)

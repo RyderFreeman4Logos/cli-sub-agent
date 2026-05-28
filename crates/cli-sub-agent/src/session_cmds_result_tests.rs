@@ -339,6 +339,7 @@ fn build_result_json_payload_includes_review_iterations() {
         artifacts: Vec::new(),
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     let review_meta = ReviewSessionMeta {
@@ -393,6 +394,7 @@ fn build_result_json_payload_includes_result_sidecars() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         },
         manager_sidecar: Some(
@@ -437,6 +439,7 @@ fn build_result_json_payload_redacts_result_sidecars() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         },
         manager_sidecar: Some(

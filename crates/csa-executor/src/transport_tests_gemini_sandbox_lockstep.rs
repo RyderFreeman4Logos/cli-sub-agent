@@ -1,6 +1,6 @@
 #[cfg(unix)]
-static GEMINI_SHARED_NPM_CACHE_ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+static GEMINI_SHARED_NPM_CACHE_ENV_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
 
 #[cfg(unix)]
 struct GeminiSharedNpmCacheScopedEnvVar {
@@ -461,7 +461,7 @@ async fn test_execute_fails_fast_when_symlinked_shared_npm_cache_resolves_outsid
     let (temp, mut env, model_log_path) = setup_fake_gemini_environment(99);
     let source_home = temp.path().join("source-home");
     std::fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
-    let _env_lock = GEMINI_SHARED_NPM_CACHE_ENV_LOCK.lock().expect("env lock");
+    let _env_lock = GEMINI_SHARED_NPM_CACHE_ENV_LOCK.lock().await;
     let _home_guard = GeminiSharedNpmCacheScopedEnvVar::set(
         "HOME",
         source_home.to_str().expect("utf8 source home path"),
@@ -592,7 +592,7 @@ async fn test_legacy_execute_fails_fast_when_symlinked_shared_npm_cache_resolves
     let (temp, mut env, model_log_path) = setup_fake_gemini_environment(99);
     let source_home = temp.path().join("source-home");
     std::fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
-    let _env_lock = GEMINI_SHARED_NPM_CACHE_ENV_LOCK.lock().expect("env lock");
+    let _env_lock = GEMINI_SHARED_NPM_CACHE_ENV_LOCK.lock().await;
     let _home_guard = GeminiSharedNpmCacheScopedEnvVar::set(
         "HOME",
         source_home.to_str().expect("utf8 source home path"),

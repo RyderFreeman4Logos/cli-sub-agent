@@ -65,6 +65,7 @@ fn test_load_result_view_ignores_orphaned_manager_sidecar() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -122,6 +123,7 @@ fn test_load_result_merges_manager_sidecar_sections_into_runtime_result() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     std::fs::write(
@@ -241,6 +243,7 @@ fn test_manager_sidecar_roundtrip_preserves_full_sa_schema() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     let input_sidecar = toml::Value::Table(toml::toml! {
@@ -391,6 +394,7 @@ fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     save_result_in(
@@ -428,6 +432,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -454,6 +459,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
 
     let clean_result = crate::result::SessionResult {
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
         ..populated_result.clone()
     };
@@ -501,6 +507,7 @@ fn test_clear_manager_sidecar_removes_existing_sidecar() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -553,6 +560,7 @@ fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     std::fs::write(
@@ -631,6 +639,7 @@ fn test_fallback_chain_not_retained_after_save_without_fallback() {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
 

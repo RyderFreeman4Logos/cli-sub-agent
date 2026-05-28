@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_scheduler::FallbackChain;
-use csa_session::{PhaseEvent, SessionPhase, load_result, save_result};
+use csa_session::{PhaseEvent, SessionPhase, load_result, load_session, save_result, save_session};
 
 use crate::run_cmd_fork::{ForkResolution, load_child_return_packet};
 use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
@@ -165,11 +165,16 @@ pub(crate) fn overwrite_result_as_post_exec_gate_failure(
     gate_err: &anyhow::Error,
 ) {
     let gate_summary = format!("post-exec gate failed: {gate_err:#}");
+    let is_timeout = gate_err.to_string().contains("timed out")
+        || gate_err.to_string().contains("timeout")
+        || gate_err.to_string().contains("Timeout");
+
     match load_result(project_root, session_id) {
         Ok(Some(mut result)) => {
             result.exit_code = 1;
             result.status = "failure".to_string();
             result.summary = gate_summary;
+            result.gate_timeout = is_timeout;
             if let Err(save_err) = save_result(project_root, session_id, &result) {
                 warn!(
                     session = %session_id,
@@ -192,6 +197,55 @@ pub(crate) fn overwrite_result_as_post_exec_gate_failure(
             );
         }
     }
+
+    // Retire the session so it doesn't remain in Active state when daemon exits
+    if let Err(retire_err) = retire_session_after_gate_failure(project_root, session_id) {
+        warn!(
+            session = %session_id,
+            error = %retire_err,
+            "Failed to retire session after post-exec gate failure"
+        );
+    }
+}
+
+/// Retire a session after post-exec gate failure to prevent it from remaining in Active state.
+/// This ensures that `csa session wait` will not poll indefinitely for a dead session.
+fn retire_session_after_gate_failure(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
+    match load_session(project_root, session_id) {
+        Ok(mut session) => {
+            let phase_result = session.phase.transition(&PhaseEvent::Retired);
+            match phase_result {
+                Ok(new_phase) => {
+                    session.phase = new_phase;
+                    save_session(&session)?;
+                    debug!(
+                        session = %session_id,
+                        phase = ?session.phase,
+                        "Session retired after post-exec gate failure"
+                    );
+                }
+                Err(transition_err) => {
+                    warn!(
+                        session = %session_id,
+                        phase = ?session.phase,
+                        error = %transition_err,
+                        "Failed to transition session to Retired after gate failure; forcing to Retired"
+                    );
+                    // Force transition to Retired even if the normal transition fails
+                    session.phase = SessionPhase::Retired;
+                    save_session(&session)?;
+                }
+            }
+        }
+        Err(load_err) => {
+            warn!(
+                session = %session_id,
+                error = %load_err,
+                "Failed to load session when attempting to retire after gate failure"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Mark a successful non-fork session as a seed candidate and run LRU eviction

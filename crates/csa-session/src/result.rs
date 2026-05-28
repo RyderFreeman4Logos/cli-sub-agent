@@ -76,6 +76,10 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SessionManagerFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -191,6 +195,10 @@ pub struct SessionResult {
     /// `None` when no failover occurred; non-empty only when `csa run` cycled through alternatives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_chain: Option<Vec<FallbackAttempt>>,
+    /// Whether the session failed due to a post-exec gate timeout.
+    /// Only set when post-exec gate times out; false otherwise.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gate_timeout: bool,
     /// Manager-facing data loaded from `output/result.toml` sidecars at read time.
     /// This is intentionally read-only metadata and is never serialized back into
     /// the runtime `result.toml` envelope.
@@ -233,6 +241,7 @@ mod tests {
             artifacts: vec![SessionArtifact::new("output/diff.patch")],
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         };
 
@@ -265,6 +274,7 @@ mod tests {
             artifacts: vec![],
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         };
 
@@ -351,6 +361,7 @@ artifacts = ["output/a.txt", "output/b.txt"]
             ],
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         };
 

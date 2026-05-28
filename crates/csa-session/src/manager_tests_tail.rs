@@ -44,6 +44,7 @@ fn test_save_and_load_result() {
         artifacts: vec![crate::result::SessionArtifact::new("output/result.txt")],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &result, crate::SaveOptions::default())
@@ -95,6 +96,7 @@ fn test_save_session_and_result_preserve_legacy_symlink_root() {
         artifacts: Vec::new(),
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     let canonical_project = project.canonicalize().unwrap();
@@ -156,6 +158,7 @@ name = "gemini-cli"
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -222,6 +225,7 @@ artifacts = [1, 2]
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -283,6 +287,7 @@ name = "gemini-cli"
         artifacts: vec![],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -307,6 +312,7 @@ name = "gemini-cli"
         artifacts: vec![],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -367,6 +373,7 @@ done = false
         artifacts: vec![],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     let err = save_result_in(
@@ -399,6 +406,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         artifacts: vec![crate::result::SessionArtifact::new("output/old-artifact.txt")],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -423,6 +431,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         artifacts: vec![],
         peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: Default::default(),
     };
     save_result_in(

@@ -1,0 +1,23 @@
+Please analyze this PR review comment and determine if it should be CONFIRMED (real issue needing a fix) or DISMISSED (false positive, nit, or out of scope).
+
+File: patterns/dev2merge/PATTERN.md
+
+Current code in L1 Quality Gates:
+```bash
+elif [ -f pyproject.toml ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
+  elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .; fi
+elif [ -f package.json ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
+  elif command -v biome >/dev/null 2>&1; then biome check .; fi
+elif [ -f go.mod ]; then
+  go vet ./...
+  if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; fi
+```
+
+Bot comment:
+### Silent Bypass & Go Inconsistency in L1 Quality Gate
+1. **Silent Bypass**: If a Python or JS/TS project is detected but the respective linters (`ruff` or `biome`) are not installed and no `just lint` recipe exists, the gate silently passes without running any checks or warning the user.
+2. **Go Inconsistency**: Unlike Python and JS/TS, Go projects do not check for a `just lint` recipe first, which might bypass custom linting configurations defined in the project's `justfile`.
+
+We should add fallback warnings for Python/JS/TS and check for `just lint` first in Go projects.

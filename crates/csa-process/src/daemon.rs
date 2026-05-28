@@ -504,19 +504,19 @@ mod tests {
         // (#1130 PR-1 review F2).
         let arg_lines: Vec<&str> = contents.lines().filter(|l| l.starts_with("arg=")).collect();
         assert!(
-            arg_lines.iter().any(|l| *l == "arg=plan"),
+            arg_lines.contains(&"arg=plan"),
             "expected a distinct `arg=plan` line proving the subcommand was \
              split, got arg lines: {arg_lines:?}"
         );
         assert!(
-            arg_lines.iter().any(|l| *l == "arg=run"),
+            arg_lines.contains(&"arg=run"),
             "expected a distinct `arg=run` line proving the subcommand was \
              split, got arg lines: {arg_lines:?}"
         );
         // Sanity: the daemon-child prefix the spawner injects must also be
         // present so we know we're inspecting the real exec, not a noop.
         assert!(
-            arg_lines.iter().any(|l| *l == "arg=--daemon-child"),
+            arg_lines.contains(&"arg=--daemon-child"),
             "expected `arg=--daemon-child` from the spawner injection, got \
              arg lines: {arg_lines:?}"
         );

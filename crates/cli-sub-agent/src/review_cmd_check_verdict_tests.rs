@@ -47,6 +47,7 @@ fn write_review_session_with_parent(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_review_session_with_description(
     project_root: &Path,
     branch: &str,

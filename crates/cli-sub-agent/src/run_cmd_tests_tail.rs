@@ -60,8 +60,10 @@ fn extract_executed_shell_commands_from_events_returns_execute_titles() {
 
 #[test]
 fn extract_executed_shell_commands_prefers_incremental_metadata() {
-    let mut metadata = StreamingMetadata::default();
-    metadata.extracted_commands = vec!["git status".to_string(), "cargo test".to_string()];
+    let metadata = StreamingMetadata {
+        extracted_commands: vec!["git status".to_string(), "cargo test".to_string()],
+        ..Default::default()
+    };
     let events = vec![SessionEvent::ToolCallStarted {
         id: "call-1".to_string(),
         title: "Read README".to_string(),
@@ -94,8 +96,10 @@ fn events_contain_execute_tool_calls_detects_execute_entries() {
 
 #[test]
 fn execute_tool_calls_observed_uses_incremental_metadata() {
-    let mut metadata = StreamingMetadata::default();
-    metadata.has_execute_tool_calls = true;
+    let metadata = StreamingMetadata {
+        has_execute_tool_calls: true,
+        ..Default::default()
+    };
     let events = vec![SessionEvent::ToolCallStarted {
         id: "call-1".to_string(),
         title: "Read README".to_string(),

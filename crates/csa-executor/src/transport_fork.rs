@@ -455,6 +455,7 @@ mod tests {
             artifacts: vec![],
             peak_memory_mb: None,
             fallback_chain: None,
+            gate_timeout: false,
             manager_fields: Default::default(),
         };
         std::fs::write(

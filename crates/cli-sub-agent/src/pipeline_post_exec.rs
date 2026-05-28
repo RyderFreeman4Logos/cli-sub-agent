@@ -162,6 +162,7 @@ pub(crate) async fn process_execution_result(
         artifacts: ctx.transcript_artifacts.clone(),
         peak_memory_mb: result.peak_memory_mb,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
