@@ -213,7 +213,6 @@ pub(crate) async fn execute_transport_with_signal(
                 artifacts: Vec::new(),
                 peak_memory_mb,
                 fallback_chain: None,
-        gate_timeout: false,
                 gate_timeout: false,
                 manager_fields: Default::default(),
             };
@@ -340,7 +339,6 @@ fn record_session_termination(
         artifacts: Vec::new(),
         peak_memory_mb: None,
         fallback_chain: None,
-        gate_timeout: false,
         gate_timeout: false,
         manager_fields: Default::default(),
     };

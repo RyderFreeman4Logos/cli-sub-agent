@@ -211,35 +211,39 @@ pub(crate) fn overwrite_result_as_post_exec_gate_failure(
 /// Retire a session after post-exec gate failure to prevent it from remaining in Active state.
 /// This ensures that `csa session wait` will not poll indefinitely for a dead session.
 fn retire_session_after_gate_failure(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
-    if let Some(mut session) = load_session(project_root, session_id)? {
-        let phase_result = session.phase.transition(PhaseEvent::Complete);
-        match phase_result {
-            Ok(new_phase) => {
-                session.phase = new_phase;
-                save_session(project_root, &session)?;
-                debug!(
-                    session = %session_id,
-                    phase = ?session.phase,
-                    "Session retired after post-exec gate failure"
-                );
-            }
-            Err(transition_err) => {
-                warn!(
-                    session = %session_id,
-                    phase = ?session.phase,
-                    error = %transition_err,
-                    "Failed to transition session to Retired after gate failure; forcing to Retired"
-                );
-                // Force transition to Retired even if the normal transition fails
-                session.phase = SessionPhase::Retired;
-                save_session(project_root, &session)?;
+    match load_session(project_root, session_id) {
+        Ok(mut session) => {
+            let phase_result = session.phase.transition(PhaseEvent::Retired);
+            match phase_result {
+                Ok(new_phase) => {
+                    session.phase = new_phase;
+                    save_session(&session)?;
+                    debug!(
+                        session = %session_id,
+                        phase = ?session.phase,
+                        "Session retired after post-exec gate failure"
+                    );
+                }
+                Err(transition_err) => {
+                    warn!(
+                        session = %session_id,
+                        phase = ?session.phase,
+                        error = %transition_err,
+                        "Failed to transition session to Retired after gate failure; forcing to Retired"
+                    );
+                    // Force transition to Retired even if the normal transition fails
+                    session.phase = SessionPhase::Retired;
+                    save_session(&session)?;
+                }
             }
         }
-    } else {
-        warn!(
-            session = %session_id,
-            "Session not found when attempting to retire after gate failure"
-        );
+        Err(load_err) => {
+            warn!(
+                session = %session_id,
+                error = %load_err,
+                "Failed to load session when attempting to retire after gate failure"
+            );
+        }
     }
     Ok(())
 }

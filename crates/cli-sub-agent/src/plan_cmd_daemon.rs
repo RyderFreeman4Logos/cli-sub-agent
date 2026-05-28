@@ -297,7 +297,6 @@ pub(crate) async fn handle_plan_run_daemon_child(
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
-        gate_timeout: false,
         manager_fields: Default::default(),
     };
     if let Err(save_err) = save_result(&project_root, session_id, &session_result) {
