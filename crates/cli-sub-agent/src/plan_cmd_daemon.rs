@@ -17,8 +17,11 @@ use csa_session::{
 use tracing::warn;
 
 use crate::cli::PlanCommands;
+use crate::gh_env::fetch_issue_body;
 use crate::pipeline::determine_project_root;
-use crate::plan_cmd::{self, PlanRunArgs, PlanRunPipelineSource, handle_plan_run};
+use crate::plan_cmd::{
+    self, FEATURE_INPUT_VAR, PlanRunArgs, PlanRunPipelineSource, handle_plan_run,
+};
 use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
@@ -49,6 +52,7 @@ pub(crate) async fn dispatch(
         pattern,
         sa_mode: _,
         vars,
+        issue,
         tool,
         model_spec,
         dry_run,
@@ -60,6 +64,33 @@ pub(crate) async fn dispatch(
         daemon_child,
         session_id,
     } = cmd;
+
+    // Resolve `--issue <N>` into the FEATURE_INPUT workflow variable before the
+    // daemon/foreground split. Fetching in the top-level invocation means a bad
+    // issue number or auth failure fails fast with a non-zero exit rather than
+    // surfacing only via the daemon session result, and the issue is fetched
+    // exactly once: the resolved variable is forwarded to the daemon child in
+    // place of `--issue` (see `forwarded_args_with_feature_input`). A daemon
+    // child never sees `--issue` (the parent strips it), so this branch only
+    // runs in the top-level/foreground process.
+    let mut vars = vars;
+    let mut forwarded_args = None;
+    if let Some(issue_number) = issue {
+        if vars.iter().any(|entry| {
+            entry
+                .split_once('=')
+                .is_some_and(|(key, _)| key == FEATURE_INPUT_VAR)
+        }) {
+            anyhow::bail!(
+                "--issue {issue_number} conflicts with an explicit --var {FEATURE_INPUT_VAR}=...; \
+                 supply only one source for the workflow's {FEATURE_INPUT_VAR} variable"
+            );
+        }
+        let body = fetch_issue_body(issue_number).await?;
+        forwarded_args = Some(forwarded_args_with_feature_input(&body));
+        vars.push(format!("{FEATURE_INPUT_VAR}={body}"));
+    }
+
     let pipeline_source = if daemon_child {
         std::env::var(PLAN_PIPELINE_SOURCE_ENV)
             .ok()
@@ -90,7 +121,7 @@ pub(crate) async fn dispatch(
             session_id,
             sa_mode_active,
             text_output,
-            forwarded_args: None,
+            forwarded_args,
         },
     )
     .await
@@ -509,6 +540,51 @@ fn build_forwarded_plan_args(all_args: &[String]) -> Vec<String> {
             continue;
         }
         forwarded.push(token.clone());
+    }
+    forwarded
+}
+
+/// Build daemon-child forwarded args for the `--issue` path.
+///
+/// Starts from the normal [`build_forwarded_plan_args`] output, drops the
+/// already-resolved `--issue <N>` / `--issue=<N>` token(s), and appends the
+/// fetched issue body as `--var FEATURE_INPUT=<body>`. This lets the daemon
+/// child consume the pre-fetched body instead of re-running `gh issue view`,
+/// so the issue is fetched exactly once (in the parent).
+///
+/// Like [`build_forwarded_plan_args`], the `--issue` strip is `--`-aware: a
+/// literal `--issue`/`--issue=` token appearing AFTER a `--` positional
+/// separator is a workflow argument and is preserved intact.
+fn forwarded_args_with_feature_input(feature_input: &str) -> Vec<String> {
+    let argv: Vec<String> = std::env::args().collect();
+    let base = build_forwarded_plan_args(&argv);
+    let mut forwarded = Vec::with_capacity(base.len() + 2);
+    let mut post_double_dash = Vec::new();
+    let mut tokens = base.into_iter();
+    let mut past_double_dash = false;
+    while let Some(token) = tokens.next() {
+        if past_double_dash {
+            post_double_dash.push(token);
+            continue;
+        }
+        match token.as_str() {
+            "--" => {
+                past_double_dash = true;
+            }
+            // Space form `--issue <N>`: drop the flag and its value token.
+            "--issue" => {
+                tokens.next();
+            }
+            // Equals form `--issue=<N>`: drop the single token.
+            t if t.starts_with("--issue=") => {}
+            _ => forwarded.push(token),
+        }
+    }
+    forwarded.push("--var".to_string());
+    forwarded.push(format!("{FEATURE_INPUT_VAR}={feature_input}"));
+    if past_double_dash {
+        forwarded.push("--".to_string());
+        forwarded.extend(post_double_dash);
     }
     forwarded
 }

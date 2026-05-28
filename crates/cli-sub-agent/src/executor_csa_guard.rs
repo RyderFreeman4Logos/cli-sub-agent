@@ -106,7 +106,6 @@ fn command_prefix(command: &Commands) -> Vec<&'static str> {
         Commands::Setup { .. } => vec!["setup"],
         Commands::Tiers { .. } => vec!["tiers"],
         Commands::Checklist { .. } => vec!["checklist"],
-        Commands::Dev2merge(_) => vec!["dev2merge"],
         Commands::Migrate { .. } => vec!["migrate"],
         Commands::SelfUpdate { .. } => vec!["self-update"],
         Commands::ClaudeSubAgent(_) => vec!["claude-sub-agent"],

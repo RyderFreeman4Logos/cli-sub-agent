@@ -317,9 +317,6 @@ pub fn validate_command_args(
         Commands::Debate(args) => {
             validate_timeout(args.timeout, min_timeout)?;
         }
-        Commands::Dev2merge(args) => {
-            validate_timeout(args.timeout, min_timeout)?;
-        }
         _ => {}
     }
 
