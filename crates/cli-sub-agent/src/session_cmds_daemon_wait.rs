@@ -1,4 +1,6 @@
 use super::*;
+use chrono::Utc;
+use csa_config::GlobalConfig;
 
 #[path = "session_cmds_daemon_wait_lock.rs"]
 mod lock;
@@ -219,6 +221,21 @@ where
         .filter(|limit| *limit > 0);
     let mut next_memory_sample_at =
         memory_warn_mb.map(|_| start + wait_options.behavior.timing.memory_sample_interval);
+
+    // Check if the session is Stale before entering the polling loop.
+    // This prevents indefinite polling of sessions that have no live daemon process
+    // and no progress for an extended period.
+    if let Err(stale_err) = check_session_stale_before_wait(effective_root, &resolved.session_id) {
+        eprintln!(
+            "Session {} appears stale: {}",
+            resolved.session_id, stale_err
+        );
+        eprintln!(
+            "Run `csa session result --session {}` for diagnostics.",
+            resolved.session_id
+        );
+        return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+    }
 
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
@@ -548,6 +565,40 @@ fn emit_wait_completion_signal(
     if !codex_hint.is_empty() {
         eprint!("{codex_hint}");
     }
+}
+
+/// Check if a session is stale before starting to wait.
+/// Returns Err if the session is stale (daemon not running, no recent progress).
+fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
+    // Load the session to check its phase and last_accessed time
+    if let Some(session) = csa_session::load_session(project_root, session_id)? {
+        // Only check Active sessions for staleness
+        if matches!(session.phase, csa_session::SessionPhase::Active) {
+            let stale_threshold_seconds =
+                GlobalConfig::resolve_session_wait_long_poll_seconds().saturating_mul(2);
+            let now = Utc::now();
+            let elapsed = now.signed_duration_since(session.last_accessed);
+
+            if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
+                return Err(anyhow::anyhow!(
+                    "daemon not running, no recent progress ({}s > {}s threshold)",
+                    elapsed.num_seconds(),
+                    stale_threshold_seconds
+                ));
+            }
+        }
+
+        // Also check if there's already a result.toml (terminal result available)
+        if csa_session::load_result(project_root, session_id)?.is_some() {
+            return Err(anyhow::anyhow!(
+                "session already has a terminal result; no need to wait"
+            ));
+        }
+    } else {
+        return Err(anyhow::anyhow!("session not found"));
+    }
+
+    Ok(())
 }
 
 fn emit_wait_memory_warn_marker(session_id: &str, rss_mb: u64, limit_mb: u64) {

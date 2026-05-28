@@ -120,6 +120,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         artifacts,
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
 

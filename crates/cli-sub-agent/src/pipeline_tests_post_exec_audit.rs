@@ -95,6 +95,7 @@ fn apply_repo_write_audit_to_result_populates_manager_sidecar_sections() {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     let audit = RepoWriteAudit {
@@ -412,6 +413,7 @@ fn audit_failure_does_not_fail_execution() {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
 
@@ -536,6 +538,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
 
@@ -639,6 +642,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
 

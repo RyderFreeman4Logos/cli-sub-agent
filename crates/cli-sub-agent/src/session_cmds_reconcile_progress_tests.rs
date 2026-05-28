@@ -147,6 +147,7 @@ fn make_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
         artifacts: Vec::new(),
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     }
 }

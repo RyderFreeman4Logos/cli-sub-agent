@@ -19,6 +19,7 @@ fn write_success_result_for(project_root: &Path, session_id: &str) {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     save_result(project_root, session_id, &result).unwrap();

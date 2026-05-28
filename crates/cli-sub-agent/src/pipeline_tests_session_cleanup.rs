@@ -381,6 +381,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
+        gate_timeout: false,
             manager_fields: csa_session::SessionManagerFields {
                 report: Some(
                     toml::toml! {

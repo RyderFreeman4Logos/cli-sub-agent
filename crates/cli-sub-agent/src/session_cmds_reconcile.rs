@@ -373,6 +373,7 @@ where
         artifacts,
         peak_memory_mb: None,
         fallback_chain: None,
+        gate_timeout: false,
         manager_fields: Default::default(),
     };
     #[rustfmt::skip]
