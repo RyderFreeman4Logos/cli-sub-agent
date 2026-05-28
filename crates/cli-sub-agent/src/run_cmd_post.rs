@@ -213,7 +213,7 @@ pub(crate) fn overwrite_result_as_post_exec_gate_failure(
 fn retire_session_after_gate_failure(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
     match load_session(project_root, session_id) {
         Ok(mut session) => {
-            let phase_result = session.phase.transition(PhaseEvent::Retired);
+            let phase_result = session.phase.transition(&PhaseEvent::Retired);
             match phase_result {
                 Ok(new_phase) => {
                     session.phase = new_phase;

@@ -1,6 +1,5 @@
 //! Daemon-specific session commands extracted from `session_cmds.rs`.
 
-use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

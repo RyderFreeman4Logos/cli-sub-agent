@@ -562,7 +562,7 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             fallback_chain: None,
-        gate_timeout: false,
+            gate_timeout: false,
             manager_fields: Default::default(),
         },
     )

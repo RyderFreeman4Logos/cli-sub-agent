@@ -708,7 +708,7 @@ mod tests {
                 artifacts: vec![SessionArtifact::new("output/summary.md")],
                 peak_memory_mb: None,
                 fallback_chain: None,
-        gate_timeout: false,
+                gate_timeout: false,
                 manager_fields: Default::default(),
             },
         )
