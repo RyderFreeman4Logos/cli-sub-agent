@@ -4,6 +4,45 @@ use std::time::{Duration, Instant};
 use crate::ToolLiveness;
 
 const LIVENESS_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const FATAL_ERROR_PROGRESS_GRACE: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleTerminationReason {
+    Idle,
+    FatalError,
+}
+
+pub(crate) fn idle_timeout_note(
+    received_first_output: bool,
+    initial_response_timeout: Option<Duration>,
+    reason: IdleTerminationReason,
+    effective_idle: Duration,
+    liveness_dead_timeout: Duration,
+) -> (&'static str, String) {
+    if !received_first_output && initial_response_timeout.is_some() {
+        return (
+            "initial_response_timeout",
+            format!(
+                "initial_response_timeout: no stdout output for {}s; process killed immediately (no liveness polling)",
+                effective_idle.as_secs(),
+            ),
+        );
+    }
+    if matches!(reason, IdleTerminationReason::FatalError) {
+        return (
+            "fatal backend error",
+            "fatal backend error: matched configured 4xx/5xx/provider marker and observed no output progress for 30s; process killed".to_string(),
+        );
+    }
+    (
+        "idle timeout",
+        format!(
+            "idle timeout: no stdout/stderr output for {}s; liveness false for {}s; process killed",
+            effective_idle.as_secs(),
+            liveness_dead_timeout.as_secs(),
+        ),
+    )
+}
 
 /// Check whether an idle tool process should be terminated.
 ///
@@ -20,17 +59,18 @@ pub(crate) fn should_terminate_for_idle(
     session_dir: Option<&Path>,
     liveness_dead_since: &mut Option<Instant>,
     next_liveness_poll_at: &mut Option<Instant>,
-) -> bool {
-    if last_activity.elapsed() < idle_timeout {
+) -> Option<IdleTerminationReason> {
+    let idle_for = last_activity.elapsed();
+    if idle_for < idle_timeout && idle_for < FATAL_ERROR_PROGRESS_GRACE {
         *liveness_dead_since = None;
         *next_liveness_poll_at = None;
-        return false;
+        return None;
     }
 
     // Legacy execute_in path has no spool/session directory context.
     // Preserve original behavior: idle-timeout means immediate termination.
     let Some(dir) = session_dir else {
-        return true;
+        return (idle_for >= idle_timeout).then_some(IdleTerminationReason::Idle);
     };
 
     let now = Instant::now();
@@ -38,7 +78,7 @@ pub(crate) fn should_terminate_for_idle(
         .as_ref()
         .is_none_or(|next_poll| now >= *next_poll);
     if !should_poll {
-        return false;
+        return None;
     }
 
     let signals = ToolLiveness::probe(dir);
@@ -47,17 +87,27 @@ pub(crate) fn should_terminate_for_idle(
         *last_activity = now;
         *liveness_dead_since = None;
         *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
-        return false;
+        return None;
+    }
+
+    if signals.fatal_error && idle_for >= FATAL_ERROR_PROGRESS_GRACE {
+        return Some(IdleTerminationReason::FatalError);
+    }
+
+    if idle_for < idle_timeout {
+        *liveness_dead_since = None;
+        *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
+        return None;
     }
 
     let dead_since = liveness_dead_since.get_or_insert(now);
     if dead_since.elapsed() >= liveness_dead_timeout {
-        return true;
+        return Some(IdleTerminationReason::Idle);
     }
 
     let liveness_dead_deadline = *dead_since + liveness_dead_timeout;
     *next_liveness_poll_at = Some((now + LIVENESS_POLL_INTERVAL).min(liveness_dead_deadline));
-    false
+    None
 }
 
 #[cfg(test)]
@@ -78,7 +128,7 @@ mod tests {
             &mut next_poll,
         );
 
-        assert!(should_terminate);
+        assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
         assert!(dead_since.is_none());
         assert!(next_poll.is_none());
     }
@@ -98,7 +148,7 @@ mod tests {
             &mut next_poll,
         );
 
-        assert!(!should_terminate);
+        assert_eq!(should_terminate, None);
         assert!(dead_since.is_some());
         assert!(next_poll.is_some());
     }
@@ -136,7 +186,7 @@ mod tests {
             &mut next_poll,
         );
 
-        assert!(!terminate, "should not terminate when tool is alive");
+        assert_eq!(terminate, None, "should not terminate when tool is alive");
         assert!(
             dead_since.is_none(),
             "progress signal should reset death timer"
@@ -185,7 +235,7 @@ mod tests {
         );
 
         assert!(
-            !terminate,
+            terminate.is_none(),
             "rotated spool progress should prevent termination"
         );
         assert!(dead_since.is_none(), "progress should clear death timer");
@@ -193,5 +243,59 @@ mod tests {
             last_activity > before,
             "monotonic spool growth should reset idle timer"
         );
+    }
+
+    #[test]
+    fn fatal_error_marker_fast_fails_before_promoted_idle_timeout() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("stderr.log"),
+            "provider failed: HTTP 429 Too Many Requests\n",
+        )
+        .expect("write stderr");
+
+        let mut dead_since = None;
+        let mut next_poll = None;
+        let mut last_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+
+        let terminate = should_terminate_for_idle(
+            &mut last_activity,
+            Duration::from_secs(7200),
+            Duration::from_secs(600),
+            Some(tmp.path()),
+            &mut dead_since,
+            &mut next_poll,
+        );
+
+        assert_eq!(terminate, Some(IdleTerminationReason::FatalError));
+        assert!(dead_since.is_none());
+    }
+
+    #[test]
+    fn fatal_error_marker_waits_for_no_progress_grace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("stderr.log"),
+            "provider failed: HTTP 500 Internal Server Error\n",
+        )
+        .expect("write stderr");
+
+        let mut dead_since = None;
+        let mut next_poll = None;
+        let mut last_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE + Duration::from_secs(1);
+
+        let terminate = should_terminate_for_idle(
+            &mut last_activity,
+            Duration::from_secs(7200),
+            Duration::from_secs(600),
+            Some(tmp.path()),
+            &mut dead_since,
+            &mut next_poll,
+        );
+
+        assert_eq!(terminate, None);
+        assert!(dead_since.is_none());
     }
 }

@@ -427,7 +427,7 @@ fn test_liveness_true_resets_death_timer() {
         &mut next_poll,
     );
 
-    assert!(!terminate);
+    assert_eq!(terminate, None);
     assert!(
         dead_since.is_none(),
         "progress signal should reset death timer"

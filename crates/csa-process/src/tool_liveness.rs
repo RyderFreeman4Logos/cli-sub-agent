@@ -1,12 +1,18 @@
-use std::fs;
+use regex::{Regex, RegexBuilder};
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, SystemTime};
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
 const DAEMON_PID_FILE: &str = "daemon.pid";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
+const OUTPUT_LOG_FILE: &str = "output.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
+const FATAL_ERROR_MARKERS_FILE: &str = ".fatal-error-markers";
+const FATAL_ERROR_TAIL_BYTES: u64 = 4096;
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
 #[derive(Debug, Clone, Copy)]
 struct DaemonPidRecord {
@@ -32,6 +38,7 @@ pub(crate) struct LivenessSignals {
     pub output_growth: bool,
     pub session_write: bool,
     pub stderr_activity: bool,
+    pub fatal_error: bool,
 }
 
 impl LivenessSignals {
@@ -69,12 +76,14 @@ impl ToolLiveness {
         let now = SystemTime::now();
         let mut snapshot = load_snapshot(session_dir);
         let daemon_pid_alive = Self::daemon_pid_is_alive(session_dir);
+        let fatal_error_markers = read_fatal_error_markers(session_dir);
 
         let signals = LivenessSignals {
             pid_alive: has_live_pid_signal(session_dir) || daemon_pid_alive,
             output_growth: has_output_growth_signal(session_dir, &mut snapshot),
             session_write: has_recent_session_write_signal(session_dir, now),
             stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
+            fatal_error: has_fatal_error_signal(session_dir, &fatal_error_markers),
         };
 
         save_snapshot(session_dir, &snapshot);
@@ -159,6 +168,14 @@ impl ToolLiveness {
         };
         is_pid_working(pid)
     }
+}
+
+pub fn write_fatal_error_markers(session_dir: &Path, markers: &[String]) -> std::io::Result<()> {
+    let mut file = File::create(session_dir.join(FATAL_ERROR_MARKERS_FILE))?;
+    for marker in markers {
+        writeln!(file, "{marker}")?;
+    }
+    Ok(())
 }
 
 pub(crate) fn record_spool_bytes_written(session_dir: &Path, bytes_written: u64) {
@@ -377,6 +394,134 @@ fn read_legacy_daemon_pid_from_stderr(session_dir: &Path) -> Option<u32> {
     let rest = &content[pid_start + 4..];
     let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     pid_str.parse::<u32>().ok()
+}
+
+fn default_fatal_error_markers() -> Vec<String> {
+    [
+        "HTTP 400",
+        "HTTP 401",
+        "HTTP 403",
+        "HTTP 404",
+        "HTTP 408",
+        "HTTP 409",
+        "HTTP 429",
+        "HTTP 500",
+        "HTTP 502",
+        "HTTP 503",
+        "HTTP 504",
+        "status 400",
+        "status 401",
+        "status 403",
+        "status 404",
+        "status 408",
+        "status 409",
+        "status 429",
+        "status 500",
+        "status 502",
+        "status 503",
+        "status 504",
+        "400 Bad Request",
+        "401 Unauthorized",
+        "403 Forbidden",
+        "404 Not Found",
+        "408 Request Timeout",
+        "409 Conflict",
+        "429 Too Many Requests",
+        "500 Internal Server Error",
+        "502 Bad Gateway",
+        "503 Service Unavailable",
+        "504 Gateway Timeout",
+        "rate limit",
+        "rate_limit_exceeded",
+        "quota exceeded",
+        "insufficient quota",
+        "provider error",
+        "provider returned error",
+        "overloaded",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn read_fatal_error_markers(session_dir: &Path) -> Vec<String> {
+    let marker_path = session_dir.join(FATAL_ERROR_MARKERS_FILE);
+    if marker_path.exists() {
+        return fs::read_to_string(marker_path)
+            .ok()
+            .map(|content| {
+                content
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    default_fatal_error_markers()
+}
+
+fn has_fatal_error_signal(session_dir: &Path, markers: &[String]) -> bool {
+    let Some(regex) = build_fatal_error_regex(markers) else {
+        return false;
+    };
+
+    [STDERR_LOG_FILE, OUTPUT_LOG_FILE]
+        .into_iter()
+        .filter_map(|file_name| read_file_tail(&session_dir.join(file_name)).ok())
+        .any(|tail| regex.is_match(&tail))
+        || capture_tmux_pane(session_dir).is_some_and(|pane| regex.is_match(&pane))
+}
+
+fn build_fatal_error_regex(markers: &[String]) -> Option<Regex> {
+    let alternatives = markers
+        .iter()
+        .map(|marker| marker.trim())
+        .filter(|marker| !marker.is_empty())
+        .map(regex::escape)
+        .collect::<Vec<_>>();
+    if alternatives.is_empty() {
+        return None;
+    }
+    let pattern = format!(r"\b(?:{})\b", alternatives.join("|"));
+    RegexBuilder::new(&pattern)
+        .case_insensitive(true)
+        .build()
+        .ok()
+}
+
+fn read_file_tail(path: &Path) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let tail_len = file_len.min(FATAL_ERROR_TAIL_BYTES);
+    file.seek(SeekFrom::Start(file_len.saturating_sub(tail_len)))?;
+
+    let mut buf = Vec::with_capacity(tail_len as usize);
+    file.take(tail_len).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn capture_tmux_pane(session_dir: &Path) -> Option<String> {
+    let session_id = session_dir.file_name()?.to_str()?;
+    let session_name = format!("csa-{session_id}");
+    let has_session = Command::new("tmux")
+        .args(["has-session", "-t", &session_name])
+        .status()
+        .ok()
+        .is_some_and(|status| status.success());
+    if !has_session {
+        return None;
+    }
+
+    let output = Command::new("tmux")
+        .args(["capture-pane", "-t", &session_name, "-p", "-S", "-200"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {

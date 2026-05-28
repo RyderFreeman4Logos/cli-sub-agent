@@ -42,6 +42,31 @@ pub(super) fn check_resources_before_spawn(
     Ok(())
 }
 
+pub(super) fn write_fatal_error_marker_sidecar(
+    config: Option<&ProjectConfig>,
+    session_dir: &Path,
+    project_root: &Path,
+    session: &mut MetaSessionState,
+    tool_name: &str,
+    cleanup_guard: &mut Option<SessionCleanupGuard>,
+) -> anyhow::Result<()> {
+    let Some(cfg) = config else {
+        return Ok(());
+    };
+    csa_process::write_fatal_error_markers(session_dir, &cfg.resources.fatal_error_markers).map_err(
+        |err| {
+            persist_pipeline_pre_exec_failure(
+                project_root,
+                session,
+                tool_name,
+                anyhow::anyhow!(err).context("Failed to write fatal error marker sidecar"),
+                cleanup_guard,
+                None,
+            )
+        },
+    )
+}
+
 pub(super) fn persist_pipeline_pre_exec_failure(
     project_root: &Path,
     session: &mut MetaSessionState,

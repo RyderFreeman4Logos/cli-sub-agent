@@ -226,6 +226,52 @@ fn probe_detects_spool_byte_growth_after_rotation() {
 }
 
 #[test]
+fn probe_detects_fatal_error_marker_in_stderr_tail() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let padding = "x".repeat(8192);
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        format!("{padding}\nbackend failed with HTTP 429 Too Many Requests\n"),
+    )
+    .expect("write stderr");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(signals.fatal_error);
+}
+
+#[test]
+fn probe_uses_custom_fatal_error_marker_sidecar() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(tmp.path(), &["custom backend died".to_string()])
+        .expect("write markers");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "agent ui shows: custom backend died\n",
+    )
+    .expect("write output");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(signals.fatal_error);
+}
+
+#[test]
+fn empty_fatal_error_marker_sidecar_disables_defaults() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(tmp.path(), &[]).expect("write markers");
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "backend failed with HTTP 500 Internal Server Error\n",
+    )
+    .expect("write stderr");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(!signals.fatal_error);
+}
+
+#[test]
 fn pid_matches_session_context_returns_true_for_recent_file_even_without_context_match() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let pid = std::process::id();

@@ -40,6 +40,7 @@ mod session_exec_prompt_guard;
 mod session_exec_tool_state;
 use self::session_exec_pre_exec::{
     check_resources_before_spawn, persist_pipeline_pre_exec_failure,
+    write_fatal_error_marker_sidecar,
 };
 use self::session_exec_tool_state::ensure_tool_state_initialized;
 pub(crate) use session_exec_api::{execute_with_session, execute_with_session_and_meta};
@@ -102,6 +103,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
+    write_fatal_error_marker_sidecar(
+        config,
+        &session_dir,
+        project_root,
+        &mut session,
+        executor.tool_name(),
+        &mut cleanup_guard,
+    )?;
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {
