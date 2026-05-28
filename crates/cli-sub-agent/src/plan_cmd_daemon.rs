@@ -559,17 +559,17 @@ fn forwarded_args_with_feature_input(feature_input: &str) -> Vec<String> {
     let argv: Vec<String> = std::env::args().collect();
     let base = build_forwarded_plan_args(&argv);
     let mut forwarded = Vec::with_capacity(base.len() + 2);
+    let mut post_double_dash = Vec::new();
     let mut tokens = base.into_iter();
     let mut past_double_dash = false;
     while let Some(token) = tokens.next() {
         if past_double_dash {
-            forwarded.push(token);
+            post_double_dash.push(token);
             continue;
         }
         match token.as_str() {
             "--" => {
                 past_double_dash = true;
-                forwarded.push(token);
             }
             // Space form `--issue <N>`: drop the flag and its value token.
             "--issue" => {
@@ -582,6 +582,10 @@ fn forwarded_args_with_feature_input(feature_input: &str) -> Vec<String> {
     }
     forwarded.push("--var".to_string());
     forwarded.push(format!("{FEATURE_INPUT_VAR}={feature_input}"));
+    if past_double_dash {
+        forwarded.push("--".to_string());
+        forwarded.extend(post_double_dash);
+    }
     forwarded
 }
 
