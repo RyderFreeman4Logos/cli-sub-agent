@@ -17,7 +17,6 @@ mod debate_cmd;
 mod debate_cmd_output;
 mod debate_cmd_resolve;
 mod debate_errors;
-mod dev2merge_cmd;
 mod difficulty_routing;
 mod doctor;
 mod edit_restriction_guard;
@@ -52,6 +51,7 @@ mod pipeline_sandbox;
 mod pipeline_transcript;
 mod plan_cmd;
 mod plan_cmd_daemon;
+mod plan_cmd_journal;
 mod plan_condition;
 mod plan_display;
 mod preflight_state_dir;
@@ -717,10 +717,6 @@ async fn run() -> Result<()> {
         Commands::Checklist { command } => checklist_cmd::handle_checklist_command(command)?,
         Commands::Plan { cmd } => {
             plan_cmd_daemon::dispatch(cmd, current_depth, sa_mode_active, text_output).await?;
-        }
-        Commands::Dev2merge(args) => {
-            dev2merge_cmd::handle_dev2merge(args, current_depth, sa_mode_active, text_output)
-                .await?
         }
         Commands::Migrate { dry_run, status } => migrate_cmd::handle_migrate(dry_run, status)?,
         Commands::SelfUpdate { check } => self_update::handle_self_update(check)?,

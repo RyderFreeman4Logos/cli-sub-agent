@@ -5,10 +5,6 @@ use csa_core::types::ToolName;
 
 use super::parse_model_spec_arg;
 
-#[path = "cli_dev2merge.rs"]
-mod cli_dev2merge;
-pub use cli_dev2merge::*;
-
 #[derive(Subcommand)]
 pub enum PlanCommands {
     /// Execute a weave workflow file
@@ -26,6 +22,11 @@ pub enum PlanCommands {
         /// Variable override (KEY=VALUE, repeatable)
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
+
+        /// Fetch a GitHub issue body and inject it as the FEATURE_INPUT
+        /// workflow variable (conflicts with an explicit --var FEATURE_INPUT=...).
+        #[arg(long, value_name = "NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
+        issue: Option<u64>,
 
         /// Override tool for all CSA steps (ignores tier routing)
         #[arg(long)]
