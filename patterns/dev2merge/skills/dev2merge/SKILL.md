@@ -91,6 +91,20 @@ Once squashed, the original commits cannot be reconstructed from the default bra
 csa plan run patterns/dev2merge/workflow.toml
 ```
 
+To drive the pipeline from a specific GitHub issue, pass `--issue <N>`. CSA
+fetches the issue body (using the project's configured `GH_CONFIG_DIR`, falling
+back to default `gh` auth on a permission/not-found error) and injects it as the
+`FEATURE_INPUT` workflow variable that the dev2merge planning step consumes:
+
+```bash
+csa plan run patterns/dev2merge/workflow.toml --issue 1638
+```
+
+`--issue <N>` is mutually exclusive with an explicit `--var FEATURE_INPUT=...`:
+supply only one source for the workflow's `FEATURE_INPUT`. (The flag is generic
+to `csa plan run` — it replaces the removed dev2merge `--issue` subcommand and
+works with any pattern that reads `FEATURE_INPUT`.)
+
 Or invoke as a skill:
 
 ```bash
