@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn unavailable_outcomes_do_not_vote_against_clean_consensus() {
-        let outcomes = vec![outcome(0, UNAVAILABLE), outcome(1, CLEAN)];
+        let outcomes = [outcome(0, UNAVAILABLE), outcome(1, CLEAN)];
         let responses: Vec<AgentResponse> = outcomes
             .iter()
             .map(consensus_response_from_outcome)
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn unavailable_outcomes_do_not_hide_has_issues_consensus() {
-        let outcomes = vec![outcome(0, UNAVAILABLE), outcome(1, HAS_ISSUES)];
+        let outcomes = [outcome(0, UNAVAILABLE), outcome(1, HAS_ISSUES)];
         let responses: Vec<AgentResponse> = outcomes
             .iter()
             .map(consensus_response_from_outcome)

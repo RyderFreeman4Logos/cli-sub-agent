@@ -440,12 +440,16 @@ mod tests {
         let fake_git = temp.path().join("real-git");
         write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
 
+        // Commit message body intentionally starts with "- " (markdown bullet),
+        // which is NOT a separate flag — bind to a variable so clippy does not
+        // misinterpret the leading dash as a split-args candidate.
+        let body_msg = "- **Design Intent**: count failed reads as skipped";
         let output = std::process::Command::new(&wrapper)
             .arg("commit")
             .arg("--message")
             .arg("fix(batch): count read failures as skipped")
             .arg("--message")
-            .arg("- **Design Intent**: count failed reads as skipped")
+            .arg(body_msg)
             .env("CSA_REAL_GIT", &fake_git)
             .output()
             .unwrap();
@@ -468,10 +472,13 @@ mod tests {
         let fake_git = temp.path().join("real-git");
         write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
 
+        // Message intentionally starts with "- " (markdown bullet); bind to a
+        // variable so clippy does not flag suspicious_command_arg_space.
+        let msg = "- leading dash is message text";
         let output = std::process::Command::new(&wrapper)
             .arg("commit")
             .arg("-m")
-            .arg("- leading dash is message text")
+            .arg(msg)
             .env("CSA_REAL_GIT", &fake_git)
             .output()
             .unwrap();

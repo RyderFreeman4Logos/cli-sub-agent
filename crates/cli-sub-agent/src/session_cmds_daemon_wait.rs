@@ -240,11 +240,24 @@ fn emit_wait_completion_signal(
 /// Check if a session is stale before starting to wait.
 /// Returns Err if the session is stale (daemon not running, no recent progress).
 fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
-    // Load the session to check its phase and last_accessed time
+    // Load the session to check its phase and last_accessed time.
+    // Only flag truly stale sessions (Active phase, no daemon, no recent progress).
+    // Sessions with an existing result.toml are NOT stale — they completed, and the
+    // main polling loop will return the result correctly.
     match csa_session::load_session(project_root, session_id) {
         Ok(session) => {
             // Only check Active sessions for staleness
             if matches!(session.phase, csa_session::SessionPhase::Active) {
+                // If there's already a terminal result (or a result file exists but
+                // fails to parse), let the main loop handle it rather than flagging
+                // as stale. The session completed normally; parse errors are handled
+                // downstream with better diagnostics.
+                match csa_session::load_result(project_root, session_id) {
+                    Ok(Some(_)) => return Ok(()),
+                    Err(_) => return Ok(()), // result file exists but unparseable
+                    Ok(None) => {}           // no result yet
+                }
+
                 let stale_threshold_seconds =
                     GlobalConfig::resolve_session_wait_long_poll_seconds().saturating_mul(2);
                 let now = Utc::now();
@@ -257,13 +270,6 @@ fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> any
                         stale_threshold_seconds
                     ));
                 }
-            }
-
-            // Also check if there's already a result.toml (terminal result available)
-            if csa_session::load_result(project_root, session_id)?.is_some() {
-                return Err(anyhow::anyhow!(
-                    "session already has a terminal result; no need to wait"
-                ));
             }
         }
         Err(load_err) => {

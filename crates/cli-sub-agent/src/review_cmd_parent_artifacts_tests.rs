@@ -683,18 +683,17 @@ proptest! {
         let reviewer_artifacts: Vec<ReviewArtifact> = states
             .iter()
             .enumerate()
-            .filter_map(|(idx, state)| {
-                matches!(state, ReviewerState::Fail).then(|| {
-                    let findings = vec![blocking_finding(format!("PROP-BLOCKING-{idx}"))];
-                    ReviewArtifact {
-                        severity_summary: SeveritySummary::from_findings(&findings),
-                        findings,
-                        review_mode: Some("diff".to_string()),
-                        schema_version: "1.0".to_string(),
-                        session_id: format!("01TESTREVIEWER{idx:012}"),
-                        timestamp: chrono::Utc::now(),
-                    }
-                })
+            .filter(|(_, state)| matches!(state, ReviewerState::Fail))
+            .map(|(idx, _)| {
+                let findings = vec![blocking_finding(format!("PROP-BLOCKING-{idx}"))];
+                ReviewArtifact {
+                    severity_summary: SeveritySummary::from_findings(&findings),
+                    findings,
+                    review_mode: Some("diff".to_string()),
+                    schema_version: "1.0".to_string(),
+                    session_id: format!("01TESTREVIEWER{idx:012}"),
+                    timestamp: chrono::Utc::now(),
+                }
             })
             .collect();
         let consolidated = crate::review_consensus::build_consolidated_artifact(

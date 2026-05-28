@@ -404,7 +404,7 @@ mod tests {
 
         let long_summary = "summary ".repeat(40);
         let long_body = "implemented detailed steps ".repeat(30);
-        let long_decisions = vec![
+        let long_decisions = [
             "decision A ".repeat(20),
             "decision B ".repeat(20),
             "decision C ".repeat(20),

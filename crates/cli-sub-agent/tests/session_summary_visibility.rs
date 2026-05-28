@@ -90,11 +90,11 @@ fn assert_subcommand_surfaces_summary_for_session(
             "session",
             subcommand,
             "--session",
-            &session_id,
+            session_id,
             "--cd",
             project.to_str().expect("project path utf8"),
         ])
-        .current_dir(&project)
+        .current_dir(project)
         .output()
         .expect("run csa session command");
 

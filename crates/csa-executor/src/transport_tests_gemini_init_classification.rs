@@ -1,5 +1,4 @@
-static GEMINI_INIT_ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+static GEMINI_INIT_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct GeminiInitScopedEnvVar {
     key: &'static str,
@@ -40,8 +39,8 @@ fn test_classify_gemini_acp_init_failure_detects_oom() {
 #[test]
 fn test_classify_gemini_acp_init_failure_detects_auth_env() {
     let _env_lock = GEMINI_INIT_ENV_LOCK
-        .lock()
-        .expect("gemini init env lock poisoned");
+        .try_lock()
+        .expect("gemini init env lock contended");
     let _api_key = GeminiInitScopedEnvVar::set(csa_core::gemini::API_KEY_ENV, "test-key");
     let _base_url =
         GeminiInitScopedEnvVar::set(csa_core::gemini::BASE_URL_ENV, "http://127.0.0.1:8317");
@@ -486,9 +485,7 @@ fn write_gemini_settings(home: &std::path::Path, command: &str) {
 
 #[tokio::test]
 async fn test_execute_in_retries_with_degraded_mcp_when_allowed() {
-    let _env_lock = GEMINI_INIT_ENV_LOCK
-        .lock()
-        .expect("gemini init env lock poisoned");
+    let _env_lock = GEMINI_INIT_ENV_LOCK.lock().await;
 
     let temp = tempfile::tempdir().expect("tempdir");
     let script_path = temp.path().join("gemini");
@@ -546,9 +543,7 @@ async fn test_execute_in_retries_with_degraded_mcp_when_allowed() {
 
 #[tokio::test]
 async fn test_execute_in_hard_fails_when_degraded_mcp_disabled() {
-    let _env_lock = GEMINI_INIT_ENV_LOCK
-        .lock()
-        .expect("gemini init env lock poisoned");
+    let _env_lock = GEMINI_INIT_ENV_LOCK.lock().await;
 
     let temp = tempfile::tempdir().expect("tempdir");
     let script_path = temp.path().join("gemini");
@@ -605,9 +600,7 @@ async fn test_execute_in_hard_fails_when_degraded_mcp_disabled() {
 
 #[tokio::test]
 async fn test_execute_in_healthy_mcp_has_no_warning() {
-    let _env_lock = GEMINI_INIT_ENV_LOCK
-        .lock()
-        .expect("gemini init env lock poisoned");
+    let _env_lock = GEMINI_INIT_ENV_LOCK.lock().await;
 
     let temp = tempfile::tempdir().expect("tempdir");
     let script_path = temp.path().join("gemini");

@@ -15,7 +15,10 @@ const NO_STDERR_SUPPRESS_DIRECTIVE: &str = "piping csa commands through 2>/dev/n
 
 const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
-const SESSION_CMDS_DAEMON_WAIT_SRC: &str = include_str!("session_cmds_daemon_wait.rs");
+const SESSION_CMDS_DAEMON_WAIT_SRC: &str = concat!(
+    include_str!("session_cmds_daemon_wait.rs"),
+    include_str!("session_cmds_daemon_wait_core.rs")
+);
 
 /// Extract the body of every `<!-- CSA:CALLER_HINT action=... -->` block in a
 /// source string.

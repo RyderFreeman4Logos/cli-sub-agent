@@ -207,7 +207,7 @@ fn build_plan_empty_tasks_empty_plan() {
 
 #[test]
 fn level_resource_check_errors_before_spawning_tasks_on_low_memory() {
-    let tasks = vec![make_task("review-a", "codex", vec![])];
+    let tasks = [make_task("review-a", "codex", vec![])];
     let task_map: HashMap<&str, &BatchTask> = tasks.iter().map(|t| (t.name.as_str(), t)).collect();
     let level = vec!["review-a".to_string()];
     let mut resource_guard = Some(ResourceGuard::new(ResourceLimits {
