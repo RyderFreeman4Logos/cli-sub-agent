@@ -214,6 +214,48 @@ fn issue_1675_fail_verdict_in_duplicate_later_details_section_emits_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1675 Case 6 (review-finding follow-up): a MIXED-CASE affirmative FAIL verdict
+/// (`Verdict: Fail`) must fail closed. The CLI's verdict parser matches tokens
+/// case-insensitively (`eq_ignore_ascii_case`), so `Verdict: Fail` sets meta=Fail;
+/// the fail-closed prose detector was case-sensitive and missed it, reopening the
+/// #1675 lost-evidence path for case variants. The detector is now case-insensitive.
+#[test]
+fn issue_1675_mixed_case_fail_verdict_emits_fail() {
+    let session_id = "01TEST1675MIXEDCASEFAIL0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-mixed-case-fail", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    // Mixed-case "Verdict: Fail": recognized by the CLI's case-insensitive verdict
+    // parser (meta=Fail) but missed by the old case-sensitive prose detector.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nVerdict: Fail\n\nOne blocking issue.\n<!-- CSA:SECTION:summary:END -->\n",
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1675: mixed-case 'Verdict: Fail' must fail closed (case-insensitive detector)"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 // ─── Unit tests for detect_prose_fail_conclusion ───
 
 #[test]
@@ -239,4 +281,31 @@ fn detect_prose_fail_conclusion_benign_fail_substring_is_false() {
 #[test]
 fn detect_prose_fail_conclusion_pass_verdict_is_false() {
     assert!(!detect_prose_fail_conclusion("Verdict: PASS"));
+}
+
+#[test]
+fn detect_prose_fail_conclusion_mixed_case_labeled_is_true() {
+    // The CLI verdict parser matches case-insensitively; the detector must agree.
+    assert!(detect_prose_fail_conclusion("Verdict: Fail"));
+    assert!(detect_prose_fail_conclusion("verdict: fail"));
+}
+
+#[test]
+fn detect_prose_fail_conclusion_lowercase_bare_token_is_true() {
+    assert!(detect_prose_fail_conclusion(
+        "review notes\nfail\nmore notes"
+    ));
+}
+
+#[test]
+fn detect_prose_fail_conclusion_mixed_case_emphasized_is_true() {
+    assert!(detect_prose_fail_conclusion("**Fail**"));
+}
+
+#[test]
+fn detect_prose_fail_conclusion_lowercase_benign_substring_is_false() {
+    // Case-insensitivity must NOT regress precision: "fails" is still not a token.
+    assert!(!detect_prose_fail_conclusion(
+        "the run fails intermittently"
+    ));
 }

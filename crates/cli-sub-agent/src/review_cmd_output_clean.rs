@@ -33,37 +33,77 @@ const PASS_VERDICT_TOKENS: &[&str] = &["PASS", "CLEAN"];
 /// Verdict tokens that affirmatively conclude a failing review (#1675).
 const FAIL_VERDICT_TOKENS: &[&str] = &["FAIL", "HAS_ISSUES", "REJECT"];
 
+/// Case-matching policy for verdict tokens.
+///
+/// The PASS/CLEAN and FAIL detectors deliberately differ — both erring toward
+/// FAIL, like the fail-closed/fail-open asymmetry documented on
+/// [`review_contains_prose_fail_conclusion`]:
+/// - PASS/CLEAN is fail-OPEN — an affirmative clean conclusion SUPPRESSES the
+///   #1675 fail-closed path — so it matches [`MatchCase::Sensitive`]
+///   (uppercase-only). A prior codex finding showed case-insensitive clean
+///   detection misread mixed-case prose (`Verdict: Pass`, "cannot pass yet") as
+///   a clean conclusion and unblocked merges on uncertain evidence.
+/// - FAIL is fail-CLOSED, so it matches [`MatchCase::Insensitive`] to agree with
+///   the CLI's own verdict parser (`review_consensus::contains_verdict_token`,
+///   `eq_ignore_ascii_case`): `Verdict: Fail` sets meta=Fail, so this detector
+///   must catch it too or the #1675 lost-evidence path reopens for case variants
+///   the CLI already recognizes.
+#[derive(Clone, Copy)]
+enum MatchCase {
+    Sensitive,
+    Insensitive,
+}
+
+impl MatchCase {
+    fn token_eq(self, candidate: &str, token: &str) -> bool {
+        match self {
+            MatchCase::Sensitive => candidate == token,
+            MatchCase::Insensitive => candidate.eq_ignore_ascii_case(token),
+        }
+    }
+
+    fn prefix_eq(self, head: &[u8], token: &[u8]) -> bool {
+        match self {
+            MatchCase::Sensitive => head == token,
+            MatchCase::Insensitive => head.eq_ignore_ascii_case(token),
+        }
+    }
+}
+
 fn verdict_token_pass_or_clean(text: &str) -> bool {
-    verdict_token_matches(text, PASS_VERDICT_TOKENS)
+    verdict_token_matches(text, PASS_VERDICT_TOKENS, MatchCase::Sensitive)
 }
 
 /// Detect an affirmative FAIL verdict token (`FAIL`/`HAS_ISSUES`/`REJECT`),
 /// mirroring [`verdict_token_pass_or_clean`]. Matches ONLY bounded verdict tokens
 /// (bare line, `Verdict:`-labeled, or `**`/`__`-emphasized) — never the substring
 /// "fail" — so prose like "the test no longer fails" is not read as a FAIL
-/// conclusion (#1675 precision requirement).
+/// conclusion (#1675 precision requirement). Unlike the PASS/CLEAN detector this
+/// is case-INsensitive; see [`MatchCase`].
 fn verdict_token_fail(text: &str) -> bool {
-    verdict_token_matches(text, FAIL_VERDICT_TOKENS)
+    verdict_token_matches(text, FAIL_VERDICT_TOKENS, MatchCase::Insensitive)
 }
 
 /// Scan each line for one of `tokens` appearing as a bounded verdict token,
 /// either standalone, after a `Verdict:`-style label, or `**`/`__`-emphasized.
-fn verdict_token_matches(text: &str, tokens: &[&str]) -> bool {
+/// `case` selects verdict-token case-matching; the surrounding `Verdict:`-style
+/// label is always matched case-insensitively (only the token honors `case`).
+fn verdict_token_matches(text: &str, tokens: &[&str], case: MatchCase) -> bool {
     text.lines().any(|line| {
         let trimmed = line.trim();
-        is_verdict_token(trimmed, tokens)
-            || has_emphasized_verdict_token_prefix(trimmed, tokens)
-            || line_has_labeled_verdict_token(trimmed, tokens)
+        is_verdict_token(trimmed, tokens, case)
+            || has_emphasized_verdict_token_prefix(trimmed, tokens, case)
+            || line_has_labeled_verdict_token(trimmed, tokens, case)
     })
 }
 
-fn is_verdict_token(text: &str, tokens: &[&str]) -> bool {
+fn is_verdict_token(text: &str, tokens: &[&str], case: MatchCase) -> bool {
     let trimmed =
         text.trim_matches(|c: char| c.is_whitespace() || c == '*' || c == '_' || c == '.');
-    tokens.contains(&trimmed)
+    tokens.iter().any(|token| case.token_eq(trimmed, token))
 }
 
-fn line_has_labeled_verdict_token(line: &str, tokens: &[&str]) -> bool {
+fn line_has_labeled_verdict_token(line: &str, tokens: &[&str], case: MatchCase) -> bool {
     const LABELS: &[&str] = &["Verdict:", "Decision:", "Status:", "Result:", "Review:"];
 
     let bytes = line.as_bytes();
@@ -82,11 +122,12 @@ fn line_has_labeled_verdict_token(line: &str, tokens: &[&str]) -> bool {
             }
 
             let rest = &line[index + label_bytes.len()..];
-            if is_verdict_token(rest, tokens)
-                || has_emphasized_verdict_token_prefix(rest.trim_start(), tokens)
+            if is_verdict_token(rest, tokens, case)
+                || has_emphasized_verdict_token_prefix(rest.trim_start(), tokens, case)
                 || has_verdict_token_prefix(
                     rest.trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '_'),
                     tokens,
+                    case,
                 )
             {
                 return true;
@@ -97,20 +138,34 @@ fn line_has_labeled_verdict_token(line: &str, tokens: &[&str]) -> bool {
     false
 }
 
-fn has_verdict_token_prefix(text: &str, tokens: &[&str]) -> bool {
-    tokens.iter().any(|token| {
-        let Some(rest) = text.strip_prefix(token) else {
-            return false;
-        };
-        verdict_token_is_bounded(rest)
-    })
+fn has_verdict_token_prefix(text: &str, tokens: &[&str], case: MatchCase) -> bool {
+    tokens
+        .iter()
+        .any(|token| strip_token_prefix(text, token, case).is_some_and(verdict_token_is_bounded))
 }
 
-fn has_emphasized_verdict_token_prefix(text: &str, tokens: &[&str]) -> bool {
+/// [`str::strip_prefix`] for an ASCII verdict `token`, honoring `case`.
+///
+/// Verdict tokens are uppercase ASCII, so a matched prefix is exactly
+/// `token.len()` bytes and lands on a char boundary. Returns the remainder after
+/// the token, or `None` when `text` does not start with `token` under `case`.
+fn strip_token_prefix<'a>(text: &'a str, token: &str, case: MatchCase) -> Option<&'a str> {
+    let head = text.as_bytes().get(..token.len())?;
+    if case.prefix_eq(head, token.as_bytes()) {
+        // The token is ASCII, so a matched head means `token.len()` lands on a
+        // char boundary; slicing here cannot panic. (Taken only on match, so the
+        // index is never evaluated for a non-boundary split.)
+        Some(&text[token.len()..])
+    } else {
+        None
+    }
+}
+
+fn has_emphasized_verdict_token_prefix(text: &str, tokens: &[&str], case: MatchCase) -> bool {
     ["**", "__"].iter().any(|marker| {
         tokens.iter().any(|token| {
             text.strip_prefix(marker)
-                .and_then(|rest| rest.strip_prefix(token))
+                .and_then(|rest| strip_token_prefix(rest, token, case))
                 .and_then(|rest| rest.strip_prefix(marker))
                 .is_some_and(verdict_token_is_bounded)
         })
@@ -297,7 +352,21 @@ fn contains_positive_no_issue_clause(lower: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::verdict_token_pass_or_clean;
+    use super::{verdict_token_fail, verdict_token_pass_or_clean};
+
+    #[test]
+    fn fail_detection_case_insensitive_clean_detection_case_sensitive() {
+        // Intentional asymmetry (both err toward FAIL): FAIL is fail-closed so it
+        // matches case-insensitively (agreeing with the CLI's verdict parser);
+        // PASS/CLEAN is fail-open so it stays case-sensitive (a prior codex
+        // finding showed case-insensitive clean detection unblocked merges on
+        // uncertain evidence). A shared case-insensitive helper (the #1675 round-3
+        // regression) breaks this — lock both directions in one test.
+        assert!(verdict_token_fail("Verdict: Fail"));
+        assert!(verdict_token_fail("HAS_ISSUES"));
+        assert!(!verdict_token_pass_or_clean("Verdict: Pass"));
+        assert!(!verdict_token_pass_or_clean("Status: Clean"));
+    }
 
     #[test]
     fn verdict_token_uppercase_pass_matches() {
