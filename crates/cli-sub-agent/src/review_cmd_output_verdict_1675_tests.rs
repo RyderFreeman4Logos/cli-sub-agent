@@ -129,6 +129,48 @@ fn issue_1675_benign_fail_mention_in_clean_prose_stays_pass() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1675 Case 4 (review-finding follow-up): an affirmative FAIL verdict that lives
+/// ONLY in the `details` section — neutral `summary`, no `output/full.md` — MUST
+/// still fail closed. The initial fix scanned only `summary` + `full.md`, so a
+/// structured review that records its verdict solely in `details` would slip
+/// through as a false Pass (flagged by the heterogeneous codex review of this fix).
+#[test]
+fn issue_1675_fail_verdict_only_in_details_section_emits_fail() {
+    let session_id = "01TEST1675DETAILSFAILONLY00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-details-fail-only", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    // Neutral summary, FAIL verdict only in details, and no output/full.md: the
+    // summary-only scan would miss this and false-Pass.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nReviewed the diff.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nVerdict: FAIL\n\nTwo blocking issues found.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1675: affirmative FAIL verdict only in details section must fail closed"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 // ─── Unit tests for detect_prose_fail_conclusion ───
 
 #[test]
