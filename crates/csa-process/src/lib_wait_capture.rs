@@ -228,6 +228,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             last_stdout_activity,
                             effective_idle,
                             session_dir,
+                            &mut next_liveness_poll_at,
                         )
                     } else {
                         should_terminate_for_idle(
@@ -340,6 +341,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             last_stdout_activity,
                             effective_idle,
                             session_dir,
+                            &mut next_liveness_poll_at,
                         )
                     } else {
                         should_terminate_for_idle(

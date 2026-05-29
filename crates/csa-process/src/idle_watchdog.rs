@@ -61,12 +61,27 @@ pub(crate) fn should_terminate_for_initial_response(
     last_stdout_activity: Instant,
     initial_response_timeout: Duration,
     session_dir: Option<&Path>,
+    next_liveness_poll_at: &mut Option<Instant>,
 ) -> Option<IdleTerminationReason> {
     let stdout_idle_for = last_stdout_activity.elapsed();
-    if stdout_idle_for >= FATAL_ERROR_PROGRESS_GRACE
-        && session_dir.is_some_and(|dir| ToolLiveness::probe(dir).fatal_error)
-    {
-        return Some(IdleTerminationReason::FatalError);
+
+    if stdout_idle_for < FATAL_ERROR_PROGRESS_GRACE {
+        *next_liveness_poll_at = None;
+        return (stdout_idle_for >= initial_response_timeout)
+            .then_some(IdleTerminationReason::Idle);
+    }
+
+    if let Some(dir) = session_dir {
+        let now = Instant::now();
+        let should_poll = next_liveness_poll_at
+            .as_ref()
+            .is_none_or(|next_poll| now >= *next_poll);
+        if should_poll {
+            *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
+            if ToolLiveness::probe(dir).fatal_error {
+                return Some(IdleTerminationReason::FatalError);
+            }
+        }
     }
 
     (stdout_idle_for >= initial_response_timeout).then_some(IdleTerminationReason::Idle)
@@ -167,11 +182,13 @@ mod tests {
         std::fs::write(temp.path().join("stderr.log"), "invalid_api_key\n").expect("stderr log");
         let last_stdout_activity =
             Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+        let mut next_poll = None;
 
         let should_terminate = should_terminate_for_initial_response(
             last_stdout_activity,
             Duration::from_secs(600),
             Some(temp.path()),
+            &mut next_poll,
         );
 
         assert_eq!(should_terminate, Some(IdleTerminationReason::FatalError));
@@ -183,24 +200,68 @@ mod tests {
         std::fs::write(temp.path().join("stderr.log"), "startup heartbeat\n").expect("stderr log");
         let last_stdout_activity =
             Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+        let mut next_poll = None;
 
         let should_terminate = should_terminate_for_initial_response(
             last_stdout_activity,
             Duration::from_secs(600),
             Some(temp.path()),
+            &mut next_poll,
         );
 
         assert_eq!(should_terminate, None);
+        assert!(next_poll.is_some());
+    }
+
+    #[test]
+    fn initial_response_liveness_probe_waits_for_next_poll() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("stderr.log"), "invalid_api_key\n").expect("stderr log");
+        let last_stdout_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+        let scheduled_next_poll = Instant::now() + LIVENESS_POLL_INTERVAL;
+        let mut next_poll = Some(scheduled_next_poll);
+
+        let should_terminate = should_terminate_for_initial_response(
+            last_stdout_activity,
+            Duration::from_secs(600),
+            Some(temp.path()),
+            &mut next_poll,
+        );
+
+        assert_eq!(should_terminate, None);
+        assert_eq!(next_poll, Some(scheduled_next_poll));
     }
 
     #[test]
     fn initial_response_timeout_still_fires_without_session_dir() {
-        let last_stdout_activity = Instant::now() - Duration::from_secs(3);
+        let last_stdout_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+        let mut next_poll = None;
 
         let should_terminate = should_terminate_for_initial_response(
             last_stdout_activity,
             Duration::from_secs(2),
             None,
+            &mut next_poll,
+        );
+
+        assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
+    }
+
+    #[test]
+    fn initial_response_timeout_still_fires_while_liveness_poll_is_throttled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("stderr.log"), "invalid_api_key\n").expect("stderr log");
+        let last_stdout_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+        let mut next_poll = Some(Instant::now() + LIVENESS_POLL_INTERVAL);
+
+        let should_terminate = should_terminate_for_initial_response(
+            last_stdout_activity,
+            Duration::from_secs(2),
+            Some(temp.path()),
+            &mut next_poll,
         );
 
         assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
