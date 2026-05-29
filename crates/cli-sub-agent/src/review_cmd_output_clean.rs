@@ -27,22 +27,43 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
         || verdict_token_pass_or_clean(text)
 }
 
+/// Verdict tokens that affirmatively conclude a clean/passing review.
+const PASS_VERDICT_TOKENS: &[&str] = &["PASS", "CLEAN"];
+
+/// Verdict tokens that affirmatively conclude a failing review (#1675).
+const FAIL_VERDICT_TOKENS: &[&str] = &["FAIL", "HAS_ISSUES", "REJECT"];
+
 fn verdict_token_pass_or_clean(text: &str) -> bool {
+    verdict_token_matches(text, PASS_VERDICT_TOKENS)
+}
+
+/// Detect an affirmative FAIL verdict token (`FAIL`/`HAS_ISSUES`/`REJECT`),
+/// mirroring [`verdict_token_pass_or_clean`]. Matches ONLY bounded verdict tokens
+/// (bare line, `Verdict:`-labeled, or `**`/`__`-emphasized) — never the substring
+/// "fail" — so prose like "the test no longer fails" is not read as a FAIL
+/// conclusion (#1675 precision requirement).
+fn verdict_token_fail(text: &str) -> bool {
+    verdict_token_matches(text, FAIL_VERDICT_TOKENS)
+}
+
+/// Scan each line for one of `tokens` appearing as a bounded verdict token,
+/// either standalone, after a `Verdict:`-style label, or `**`/`__`-emphasized.
+fn verdict_token_matches(text: &str, tokens: &[&str]) -> bool {
     text.lines().any(|line| {
         let trimmed = line.trim();
-        is_verdict_token(trimmed)
-            || has_emphasized_verdict_token_prefix(trimmed)
-            || line_has_labeled_verdict_token(trimmed)
+        is_verdict_token(trimmed, tokens)
+            || has_emphasized_verdict_token_prefix(trimmed, tokens)
+            || line_has_labeled_verdict_token(trimmed, tokens)
     })
 }
 
-fn is_verdict_token(text: &str) -> bool {
+fn is_verdict_token(text: &str, tokens: &[&str]) -> bool {
     let trimmed =
         text.trim_matches(|c: char| c.is_whitespace() || c == '*' || c == '_' || c == '.');
-    matches!(trimmed, "PASS" | "CLEAN")
+    tokens.contains(&trimmed)
 }
 
-fn line_has_labeled_verdict_token(line: &str) -> bool {
+fn line_has_labeled_verdict_token(line: &str, tokens: &[&str]) -> bool {
     const LABELS: &[&str] = &["Verdict:", "Decision:", "Status:", "Result:", "Review:"];
 
     let bytes = line.as_bytes();
@@ -61,10 +82,11 @@ fn line_has_labeled_verdict_token(line: &str) -> bool {
             }
 
             let rest = &line[index + label_bytes.len()..];
-            if is_verdict_token(rest)
-                || has_emphasized_verdict_token_prefix(rest.trim_start())
+            if is_verdict_token(rest, tokens)
+                || has_emphasized_verdict_token_prefix(rest.trim_start(), tokens)
                 || has_verdict_token_prefix(
                     rest.trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '_'),
+                    tokens,
                 )
             {
                 return true;
@@ -75,8 +97,8 @@ fn line_has_labeled_verdict_token(line: &str) -> bool {
     false
 }
 
-fn has_verdict_token_prefix(text: &str) -> bool {
-    ["PASS", "CLEAN"].iter().any(|token| {
+fn has_verdict_token_prefix(text: &str, tokens: &[&str]) -> bool {
+    tokens.iter().any(|token| {
         let Some(rest) = text.strip_prefix(token) else {
             return false;
         };
@@ -84,9 +106,9 @@ fn has_verdict_token_prefix(text: &str) -> bool {
     })
 }
 
-fn has_emphasized_verdict_token_prefix(text: &str) -> bool {
+fn has_emphasized_verdict_token_prefix(text: &str, tokens: &[&str]) -> bool {
     ["**", "__"].iter().any(|marker| {
-        ["PASS", "CLEAN"].iter().any(|token| {
+        tokens.iter().any(|token| {
             text.strip_prefix(marker)
                 .and_then(|rest| rest.strip_prefix(token))
                 .and_then(|rest| rest.strip_prefix(marker))
@@ -131,6 +153,38 @@ pub(super) fn review_contains_prose_clean_conclusion(session_dir: &Path) -> Resu
         .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
     let review_text = extract_review_text(&raw_output).unwrap_or(raw_output);
     Ok(detect_prose_clean_conclusion(&review_text))
+}
+
+/// Detect whether review prose AFFIRMATIVELY concludes FAIL via a bounded verdict
+/// token (`FAIL`/`HAS_ISSUES`/`REJECT`). Unlike [`detect_prose_clean_conclusion`],
+/// this matches ONLY verdict tokens (bare/labeled/emphasized) — never the substring
+/// "fail" — so benign prose like "the test no longer fails" is not misread as a FAIL
+/// verdict (#1675). Used to fail-closed when a real prose FAIL lost its structured
+/// findings.
+pub(super) fn detect_prose_fail_conclusion(text: &str) -> bool {
+    verdict_token_fail(text)
+}
+
+/// Whether the review's persisted prose affirmatively concludes FAIL.
+///
+/// Mirrors [`review_contains_prose_clean_conclusion`]: check the persisted
+/// `summary` section first, then fall back to `output/full.md`.
+pub(super) fn review_contains_prose_fail_conclusion(session_dir: &Path) -> Result<bool> {
+    if let Some(summary) = csa_session::read_section(session_dir, "summary")?
+        && detect_prose_fail_conclusion(&summary)
+    {
+        return Ok(true);
+    }
+
+    let full_output_path = session_dir.join("output").join("full.md");
+    if !full_output_path.exists() {
+        return Ok(false);
+    }
+
+    let raw_output = fs::read_to_string(&full_output_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
+    let review_text = extract_review_text(&raw_output).unwrap_or(raw_output);
+    Ok(detect_prose_fail_conclusion(&review_text))
 }
 
 pub(super) fn contains_clean_phrase(output: &str) -> bool {

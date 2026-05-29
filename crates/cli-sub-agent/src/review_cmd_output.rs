@@ -7,9 +7,8 @@ use csa_core::types::{ReviewDecision, ToolName};
 use csa_executor::{
     contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
 };
-use csa_session::output_parser::parse_sections;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
-use csa_session::{Finding, OutputSection, ReviewVerdictArtifact, Severity, write_review_verdict};
+use csa_session::{Finding, ReviewVerdictArtifact, Severity, write_review_verdict};
 use tracing::{debug, warn};
 
 #[path = "review_cmd_output_artifacts.rs"]
@@ -20,6 +19,8 @@ mod clean_detection;
 mod diagnostics;
 #[path = "review_cmd_output_exit.rs"]
 mod exit_code;
+#[path = "review_cmd_output_sections.rs"]
+mod sections;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
 #[path = "review_cmd_output_text.rs"]
@@ -29,10 +30,18 @@ use artifacts::{
     load_review_artifact_from_output, severity_counts_are_zero, severity_counts_for_artifact,
     severity_counts_for_findings_toml,
 };
-use clean_detection::{review_contains_prose_clean_conclusion, strip_prompt_guards};
+#[cfg(test)]
+use clean_detection::detect_prose_fail_conclusion;
+use clean_detection::{
+    review_contains_prose_clean_conclusion, review_contains_prose_fail_conclusion,
+    strip_prompt_guards,
+};
 pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
+pub(super) use sections::{
+    derive_review_result_summary, has_structured_review_content, sanitize_review_output,
+};
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
 };
@@ -65,98 +74,6 @@ impl ToolReviewFailureKind {
             }
         }
     }
-}
-
-/// Prefer structured review sections (summary/details) when available to avoid
-/// leaking unrelated provider noise into caller-facing review output.
-pub(super) fn sanitize_review_output(output: &str) -> String {
-    let sections = parse_sections(output);
-    if sections.is_empty() {
-        return output.to_string();
-    }
-
-    let summary = last_non_empty_section_content(output, &sections, "summary");
-    let details = last_non_empty_section_content(output, &sections, "details");
-    if summary.is_none() && details.is_none() {
-        return output.to_string();
-    }
-
-    let mut rendered = String::new();
-    if let Some(content) = summary {
-        rendered.push_str("<!-- CSA:SECTION:summary -->\n");
-        rendered.push_str(&content);
-        if !content.ends_with('\n') {
-            rendered.push('\n');
-        }
-        rendered.push_str("<!-- CSA:SECTION:summary:END -->\n");
-    }
-    if let Some(content) = details {
-        if !rendered.is_empty() && !rendered.ends_with('\n') {
-            rendered.push('\n');
-        }
-        rendered.push_str("<!-- CSA:SECTION:details -->\n");
-        rendered.push_str(&content);
-        if !content.ends_with('\n') {
-            rendered.push('\n');
-        }
-        rendered.push_str("<!-- CSA:SECTION:details:END -->\n");
-    }
-    rendered
-}
-
-pub(super) fn has_structured_review_content(output: &str) -> bool {
-    let sanitized = sanitize_review_output(output);
-    let sections = parse_sections(&sanitized);
-    ["summary", "details"].into_iter().any(|section_id| {
-        last_non_empty_section_content(&sanitized, &sections, section_id).is_some()
-    })
-}
-
-pub(super) fn derive_review_result_summary(output: &str) -> Option<String> {
-    let sanitized = sanitize_review_output(output);
-    let sections = parse_sections(&sanitized);
-    let content = last_non_empty_section_content(&sanitized, &sections, "summary")
-        .or_else(|| last_non_empty_section_content(&sanitized, &sections, "details"))?;
-
-    content
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(truncate_review_result_summary)
-}
-
-fn last_non_empty_section_content(
-    output: &str,
-    sections: &[OutputSection],
-    section_id: &str,
-) -> Option<String> {
-    sections
-        .iter()
-        .rev()
-        .filter(|section| section.id == section_id)
-        .find_map(|section| {
-            let content = extract_section_content(output, section);
-            if content.trim().is_empty() {
-                None
-            } else {
-                Some(content)
-            }
-        })
-}
-
-fn extract_section_content(output: &str, section: &OutputSection) -> String {
-    if section.line_start == 0 || section.line_end < section.line_start {
-        return String::new();
-    }
-
-    let lines: Vec<&str> = output.lines().collect();
-    if lines.is_empty() || section.line_start > lines.len() {
-        return String::new();
-    }
-
-    let start = section.line_start - 1;
-    let end_exclusive = section.line_end.min(lines.len());
-    lines[start..end_exclusive].join("\n")
 }
 
 /// Persist a [`ReviewSessionMeta`] to `{session_dir}/review_meta.json`.
@@ -292,6 +209,7 @@ fn cross_check_json_for_blocking(
         json_artifact.overall_risk.as_deref(),
         ReviewDecision::from_str(&meta.decision).ok(),
         || review_contains_prose_clean_conclusion(session_dir),
+        || review_contains_prose_fail_conclusion(session_dir),
     )?;
     Ok(Some(verdict_from_meta(meta, decision, json_counts)))
 }
@@ -345,6 +263,7 @@ fn derive_review_verdict_artifact(
                         None,
                         ReviewDecision::from_str(&meta.decision).ok(),
                         || review_contains_prose_clean_conclusion(session_dir),
+                        || review_contains_prose_fail_conclusion(session_dir),
                     )?;
                     return Ok(verdict_from_meta(meta, decision, json_counts));
                 }
@@ -356,6 +275,7 @@ fn derive_review_verdict_artifact(
                 None,
                 ReviewDecision::from_str(&meta.decision).ok(),
                 || review_contains_prose_clean_conclusion(session_dir),
+                || review_contains_prose_fail_conclusion(session_dir),
             )?;
             return Ok(verdict_from_meta(meta, decision, severity_counts));
         }
@@ -369,6 +289,7 @@ fn derive_review_verdict_artifact(
             artifact.overall_risk.as_deref(),
             ReviewDecision::from_str(&meta.decision).ok(),
             || review_contains_prose_clean_conclusion(session_dir),
+            || review_contains_prose_fail_conclusion(session_dir),
         )?;
         return Ok(verdict_from_meta(meta, decision, severity_counts));
     }
@@ -460,6 +381,7 @@ fn derive_decision_from_severity_counts(
     overall_risk: Option<&str>,
     meta_decision: Option<ReviewDecision>,
     prose_clean_check: impl FnOnce() -> Result<bool, anyhow::Error>,
+    prose_fail_check: impl FnOnce() -> Result<bool, anyhow::Error>,
 ) -> Result<ReviewDecision, anyhow::Error> {
     // Blocking findings (critical/high/medium) always fail.
     if has_blocking_severity(severity_counts) {
@@ -494,6 +416,17 @@ fn derive_decision_from_severity_counts(
     // to contain "SKIP" but the structured artifact shows zero findings, the zero-evidence
     // Pass conclusion must win over the text-parse Skip noise.
     if findings_empty && severity_counts_are_zero(severity_counts) {
+        // #1675: a Fail/Uncertain meta whose prose AFFIRMATIVELY concludes FAIL, but whose
+        // structured findings failed to emit, is a real failure with lost evidence — fail
+        // closed. Gated on affirmative prose FAIL (NOT "prose not clean") so #1349's
+        // neutral-prose noise still resolves to the zero-evidence Pass below.
+        if matches!(
+            meta_decision,
+            Some(ReviewDecision::Fail | ReviewDecision::Uncertain)
+        ) && prose_fail_check()?
+        {
+            return Ok(ReviewDecision::Fail);
+        }
         return Ok(ReviewDecision::Pass);
     }
 
