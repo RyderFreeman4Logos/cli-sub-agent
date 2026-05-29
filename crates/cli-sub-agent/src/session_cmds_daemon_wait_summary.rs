@@ -80,7 +80,10 @@ fn render_wait_result_summary(
         lines.push(format!("Review verdict: {verdict}"));
     }
 
-    if let Some(summary) = compact_wait_summary_text(&result.summary) {
+    if let Some(summary) =
+        crate::session_summary_text::human_session_summary(session_dir, &result.summary)
+            .and_then(|text| compact_wait_summary_text(&text))
+    {
         lines.push(format!("Summary: {summary}"));
     }
 
@@ -108,7 +111,8 @@ fn render_wait_result_json(
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,
         "review_verdict": read_review_verdict_label(session_dir),
-        "summary": compact_wait_summary_text(&result.summary),
+        "summary": crate::session_summary_text::human_session_summary(session_dir, &result.summary)
+            .and_then(|text| compact_wait_summary_text(&text)),
     });
     serde_json::to_string_pretty(&value).map_err(Into::into)
 }

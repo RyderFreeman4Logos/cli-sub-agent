@@ -86,6 +86,7 @@ mod session_cmds_result_measure;
 mod session_dispatch;
 mod session_guard;
 mod session_observability;
+mod session_summary_text;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_dispatch;
