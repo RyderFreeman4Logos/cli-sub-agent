@@ -235,19 +235,28 @@ pub(super) fn detect_prose_fail_conclusion(text: &str) -> bool {
 
 /// Whether the review's persisted prose affirmatively concludes FAIL.
 ///
-/// Scans every place a reviewer might record a FAIL verdict: ALL persisted
-/// `summary` and `details` sections, then `output/full.md`. It uses
-/// [`csa_session::read_all_sections`] rather than [`csa_session::read_section`]
-/// because the latter returns only the FIRST section per id. Duplicate section
-/// ids persist their later copies as suffixed files (`details-2.md`, …) and
-/// caller-facing sanitization treats the last-non-empty copy as authoritative —
-/// so a FAIL verdict in a *later* duplicate must still fail closed; reading only
-/// the first copy could hide it (#1675 review finding). This is intentionally
-/// MORE thorough than [`review_contains_prose_clean_conclusion`] (which reads only
-/// `summary` + `full.md`): a missed FAIL signal silently merges blocking findings,
-/// so the fail-closed path errs toward catching FAIL wherever it appears —
-/// including structured output that has section markers but no `full.md`, where
-/// the verdict can live only in `details`. Both asymmetries err toward FAIL.
+/// Scans every place a reviewer might record a FAIL verdict in two passes:
+///
+/// 1. ALL persisted `summary` and `details` sections, via
+///    [`csa_session::read_all_sections`] rather than [`csa_session::read_section`]
+///    (the latter returns only the FIRST section per id). Duplicate section ids
+///    persist their later copies as suffixed files (`details-2.md`, …) and
+///    caller-facing sanitization treats the last-non-empty copy as authoritative,
+///    so a FAIL verdict in a *later* duplicate must still fail closed; reading only
+///    the first copy could hide it (#1675 review finding).
+/// 2. The canonical review prose resolved by
+///    [`crate::review_cmd::findings_toml::load_canonical_review_text`] — the SAME
+///    loader the findings extractor uses (`full.md` → `output.log` → `details.md`
+///    precedence). Reusing it keeps the fail-closed detector's source set identical
+///    to the extractor's: a FAIL verdict that survives only in the raw `output.log`
+///    (full.md absent, sections neutral, findings.toml synthetic-empty) must still
+///    fail closed, and the two can never drift apart again (the #1675 review rounds
+///    were repeatedly a source-set divergence between detector and extractor).
+///
+/// This is intentionally MORE thorough than [`review_contains_prose_clean_conclusion`]
+/// (which reads only `summary` + `full.md`): a missed FAIL signal silently merges
+/// blocking findings, so the fail-closed path errs toward catching FAIL wherever it
+/// appears. Both asymmetries err toward FAIL.
 pub(super) fn review_contains_prose_fail_conclusion(session_dir: &Path) -> Result<bool> {
     for (section, content) in csa_session::read_all_sections(session_dir)? {
         if matches!(section.id.as_str(), "summary" | "details")
@@ -257,15 +266,14 @@ pub(super) fn review_contains_prose_fail_conclusion(session_dir: &Path) -> Resul
         }
     }
 
-    let full_output_path = session_dir.join("output").join("full.md");
-    if !full_output_path.exists() {
-        return Ok(false);
+    if let Some(review_text) =
+        crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
+        && detect_prose_fail_conclusion(&review_text)
+    {
+        return Ok(true);
     }
 
-    let raw_output = fs::read_to_string(&full_output_path)
-        .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
-    let review_text = extract_review_text(&raw_output).unwrap_or(raw_output);
-    Ok(detect_prose_fail_conclusion(&review_text))
+    Ok(false)
 }
 
 pub(super) fn contains_clean_phrase(output: &str) -> bool {

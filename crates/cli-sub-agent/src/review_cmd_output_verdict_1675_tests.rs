@@ -401,6 +401,63 @@ fn issue_1675_synthetic_empty_findings_with_neutral_prose_stays_pass() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1675 Case 10 (cloud-review round-7 follow-up): a FAIL verdict that survives ONLY
+/// in the raw `output.log` (full.md absent, sections neutral, findings.toml
+/// synthetic-empty) must fail closed. The findings extractor reads `output.log` when
+/// `full.md` is missing, but the fail-closed detector previously stopped at full.md —
+/// so the synthetic fallback false-passed. Detector and extractor now share
+/// `load_canonical_review_text`, so their source sets match.
+#[test]
+fn issue_1675_synthetic_empty_fail_verdict_only_in_output_log_emits_fail() {
+    let session_id = "01TEST1675OUTPUTLOGFAIL0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-output-log-fail", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER),
+        "",
+    )
+    .expect("write synthetic marker");
+    // Neutral summary + details sections (step-1 section scan finds no FAIL) and NO
+    // full.md, so load_canonical_review_text falls back to output.log.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nReviewed the diff.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nNotes on the change.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+    // The affirmative FAIL verdict survives only in the raw transcript (output.log)
+    // as a reviewer agent message, outside the persisted sections.
+    fs::write(
+        session_dir.join("output.log"),
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"Verdict: FAIL"}}"#,
+    )
+    .expect("write output.log");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1675 r7: FAIL verdict only in output.log must fail closed (shared extractor source set)"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 // ─── Unit tests for detect_prose_fail_conclusion ───
 
 #[test]
