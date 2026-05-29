@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -35,6 +36,25 @@ pub(super) struct MultiReviewerConsensusArtifacts<'a> {
 const CSA_DAEMON_SESSION_DIR_ENV_KEY: &str = "CSA_DAEMON_SESSION_DIR";
 const CSA_DAEMON_SESSION_ID_ENV_KEY: &str = "CSA_DAEMON_SESSION_ID";
 const CSA_SESSION_ID_ENV_KEY: &str = "CSA_SESSION_ID";
+
+pub(super) fn clear_multi_reviewer_artifact_dirs(reviewers: usize) -> Result<()> {
+    let Some((session_dir, _session_id)) = resolve_parent_session_env() else {
+        return Ok(());
+    };
+
+    for reviewer_index in 1..=reviewers {
+        let reviewer_dir = session_dir.join(format!("reviewer-{reviewer_index}"));
+        match fs::remove_dir_all(&reviewer_dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to clear {}", reviewer_dir.display()));
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 struct ReviewerFindingsContractArtifact {

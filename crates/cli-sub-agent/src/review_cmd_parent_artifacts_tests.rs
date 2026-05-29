@@ -1,7 +1,8 @@
 use super::{
-    MultiReviewerConsensusArtifacts, parent_artifact_for_decision, parent_consensus_review_meta,
-    parent_review_decision, write_multi_reviewer_consensus_artifacts,
-    write_multi_reviewer_parent_artifacts, write_standalone_consensus_review_artifacts,
+    MultiReviewerConsensusArtifacts, clear_multi_reviewer_artifact_dirs,
+    parent_artifact_for_decision, parent_consensus_review_meta, parent_review_decision,
+    write_multi_reviewer_consensus_artifacts, write_multi_reviewer_parent_artifacts,
+    write_standalone_consensus_review_artifacts,
 };
 use crate::review_consensus::UNAVAILABLE;
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
@@ -699,6 +700,107 @@ fn write_multi_reviewer_parent_artifacts_fails_closed_when_empty_artifact_masks_
         verdict.decision,
         ReviewDecision::Fail,
         "#1659 round-2: an empty artifact must not mask an unpersisted HAS_ISSUES dissenter"
+    );
+}
+
+#[test]
+fn clear_multi_reviewer_artifact_dirs_removes_stale_empty_artifact_so_dissenter_fails_closed() {
+    // #1681: the parent/daemon session dir can survive across review invocations in a
+    // plan. If reviewer-1 left an empty artifact in round 1, round 2 must clear it before
+    // accepting reviewer-1 as a persisted HAS_ISSUES dissenter.
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    let stale_reviewer_dir = temp.path().join("reviewer-1");
+    fs::create_dir_all(&stale_reviewer_dir).expect("stale reviewer dir should be created");
+    fs::write(
+        stale_reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "verdict": "PASS",
+            "summary": "Round 1 had no findings.",
+            "findings": []
+        }))
+        .expect("stale artifact should serialize"),
+    )
+    .expect("stale artifact should be written");
+
+    let sibling_output_dir = temp.path().join("output");
+    fs::create_dir_all(&sibling_output_dir).expect("output dir should be created");
+    fs::write(
+        sibling_output_dir.join("keep.txt"),
+        "preserve sibling output",
+    )
+    .expect("sibling output marker should be written");
+    let out_of_scope_reviewer_dir = temp.path().join("reviewer-3");
+    fs::create_dir_all(&out_of_scope_reviewer_dir)
+        .expect("out-of-scope reviewer dir should be created");
+
+    clear_multi_reviewer_artifact_dirs(2).expect("stale reviewer dirs should be cleared");
+
+    assert!(
+        !temp.path().join("reviewer-1").exists(),
+        "reviewer-1 must be cleared before the new round writes"
+    );
+    assert!(
+        !temp.path().join("reviewer-2").exists(),
+        "missing reviewer-2 is treated as already clear"
+    );
+    assert!(
+        sibling_output_dir.join("keep.txt").exists(),
+        "clearing must preserve non-reviewer-N sibling artifacts"
+    );
+    assert!(
+        out_of_scope_reviewer_dir.exists(),
+        "clearing reviewers=2 must not remove reviewer-3"
+    );
+
+    let outcomes = vec![
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 0,
+            tool: ToolName::Codex,
+            session_id: "01DISSENTREVIEWER0000000000".to_string(),
+            output: "Reviewer 1 flagged blocking issues but persisted no fresh artifact."
+                .to_string(),
+            exit_code: 1,
+            verdict: crate::review_consensus::HAS_ISSUES,
+            diagnostic: None,
+        },
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 1,
+            tool: ToolName::GeminiCli,
+            session_id: "01CLEANREVIEWER00000000000".to_string(),
+            output: "Reviewer 2 was clean.".to_string(),
+            exit_code: 0,
+            verdict: crate::review_consensus::CLEAN,
+            diagnostic: None,
+        },
+    ];
+
+    write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        2,
+        &outcomes,
+        crate::review_consensus::HAS_ISSUES,
+        false,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(
+        verdict.decision,
+        ReviewDecision::Fail,
+        "#1681: stale empty reviewer-N artifacts must not satisfy persisted dissent"
     );
 }
 
