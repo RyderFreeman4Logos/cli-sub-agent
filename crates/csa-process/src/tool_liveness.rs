@@ -401,51 +401,48 @@ fn read_legacy_daemon_pid_from_stderr(session_dir: &Path) -> Option<u32> {
 }
 
 fn default_fatal_error_markers() -> Vec<String> {
-    [
-        "HTTP 400",
-        "HTTP 401",
-        "HTTP 403",
-        "HTTP 404",
-        "HTTP 408",
-        "HTTP 409",
-        "HTTP 429",
-        "HTTP 500",
-        "HTTP 502",
-        "HTTP 503",
-        "HTTP 504",
-        "status 400",
-        "status 401",
-        "status 403",
-        "status 404",
-        "status 408",
-        "status 409",
-        "status 429",
-        "status 500",
-        "status 502",
-        "status 503",
-        "status 504",
-        "400 Bad Request",
-        "401 Unauthorized",
-        "403 Forbidden",
-        "404 Not Found",
-        "408 Request Timeout",
-        "409 Conflict",
-        "429 Too Many Requests",
-        "500 Internal Server Error",
-        "502 Bad Gateway",
-        "503 Service Unavailable",
-        "504 Gateway Timeout",
-        "rate limit",
-        "rate_limit_exceeded",
-        "quota exceeded",
-        "insufficient quota",
-        "provider error",
-        "provider returned error",
-        "overloaded",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+    const MARKERS: &str = "\
+HTTP 400
+HTTP 401
+HTTP 403
+HTTP 404
+HTTP 408
+HTTP 409
+HTTP 429
+HTTP 500
+HTTP 502
+HTTP 503
+HTTP 504
+status 400
+status 401
+status 403
+status 404
+status 408
+status 409
+status 429
+status 500
+status 502
+status 503
+status 504
+400 Bad Request
+401 Unauthorized
+403 Forbidden
+404 Not Found
+408 Request Timeout
+409 Conflict
+429 Too Many Requests
+500 Internal Server Error
+502 Bad Gateway
+503 Service Unavailable
+504 Gateway Timeout
+rate limit
+rate_limit_exceeded
+quota exceeded
+insufficient quota
+provider error
+provider returned error
+overloaded";
+    MARKERS.lines().map(str::to_string).collect()
 }
 
 fn read_fatal_error_markers(session_dir: &Path) -> Vec<String> {
@@ -492,12 +489,26 @@ fn build_fatal_error_regex(markers: &[String]) -> Option<Regex> {
         .iter()
         .map(|marker| marker.trim())
         .filter(|marker| !marker.is_empty())
-        .map(regex::escape)
+        .map(|marker| {
+            let boundary = |ch: Option<char>| {
+                if ch.is_some_and(|ch| ch == '_' || ch.is_alphanumeric()) {
+                    r"\b"
+                } else {
+                    ""
+                }
+            };
+            format!(
+                "{}{}{}",
+                boundary(marker.chars().next()),
+                regex::escape(marker),
+                boundary(marker.chars().next_back())
+            )
+        })
         .collect::<Vec<_>>();
     if alternatives.is_empty() {
         return None;
     }
-    let pattern = format!(r"\b(?:{})\b", alternatives.join("|"));
+    let pattern = format!("(?:{})", alternatives.join("|"));
     RegexBuilder::new(&pattern)
         .case_insensitive(true)
         .build()
@@ -539,21 +550,6 @@ fn capture_tmux_pane(session_dir: &Path) -> Option<String> {
 }
 
 fn capture_tmux_pane_blocking(session_name: &str, tmux_available: &AtomicBool) -> Option<String> {
-    let has_session = match Command::new("tmux")
-        .args(["has-session", "-t", session_name])
-        .status()
-    {
-        Ok(status) => status.success(),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            tmux_available.store(false, Ordering::Relaxed);
-            return None;
-        }
-        Err(_) => return None,
-    };
-    if !has_session {
-        return None;
-    }
-
     let output = match Command::new("tmux")
         .args(["capture-pane", "-t", session_name, "-p", "-S", "-200"])
         .output()
@@ -719,6 +715,21 @@ fn is_process_alive(pid: u32) -> bool {
     #[cfg(not(unix))]
     {
         std::path::Path::new(&format!("/proc/{pid}/stat")).exists()
+    }
+}
+
+#[cfg(test)]
+mod fatal_error_regex_tests {
+    use super::*;
+
+    #[test]
+    fn matches_custom_markers_with_non_word_edges() {
+        let markers = ["[ERROR]", "fatal"].map(String::from);
+        let regex = build_fatal_error_regex(&markers).expect("regex");
+
+        assert!(regex.is_match("[ERROR] unavailable"));
+        assert!(regex.is_match("fatal error"));
+        assert!(!regex.is_match("nonfatal error"));
     }
 }
 
