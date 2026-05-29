@@ -536,6 +536,173 @@ fn write_multi_reviewer_parent_artifacts_promotes_empty_findings_to_pass() {
 }
 
 #[test]
+fn parent_review_decision_fails_closed_on_unbacked_has_issues_consensus() {
+    // #1659: a HAS_ISSUES consensus with an empty consolidated artifact is trustworthy as
+    // PASS only when EVERY dissenting (HAS_ISSUES-voting) reviewer persisted its structured
+    // findings. The 4th arg is `dissent_findings_persisted`: when false, at least one
+    // dissenter's findings never reached disk (quota/auth failure), so the empty artifact
+    // must FAIL-CLOSED, never promote to a synthetic PASS.
+    let empty = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&[]),
+        findings: Vec::new(),
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: "01PARENTSESSION000000000000".to_string(),
+        timestamp: chrono::Utc::now(),
+    };
+    assert_eq!(
+        parent_review_decision(&empty, crate::review_consensus::HAS_ISSUES, false, false),
+        ReviewDecision::Fail,
+        "#1659: unbacked HAS_ISSUES consensus must fail-closed"
+    );
+    assert_eq!(
+        parent_review_decision(&empty, crate::review_consensus::HAS_ISSUES, false, true),
+        ReviewDecision::Pass,
+        "every dissenting reviewer persisting an explicit empty artifact remains a trusted PASS"
+    );
+    assert_eq!(
+        parent_review_decision(&empty, crate::review_consensus::CLEAN, false, false),
+        ReviewDecision::Pass,
+        "a clean consensus with no artifacts must not fail-closed"
+    );
+}
+
+#[test]
+fn write_multi_reviewer_parent_artifacts_fails_closed_without_persisted_reviewer_artifact() {
+    // #1659 end-to-end: reviewers reached HAS_ISSUES but none persisted a
+    // review-findings.json (quota/auth failure). The parent gate verdict MUST be fail,
+    // not a synthetic-empty PASS, so the merge gate cannot be silently bypassed.
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    // Deliberately persist NO reviewer-N/review-findings.json (the #1659 condition).
+    let outcomes = vec![
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 0,
+            tool: ToolName::Codex,
+            session_id: "01CHILDSESSION0000000000000".to_string(),
+            output: "Reviewer flagged issues in prose but persisted no structured findings."
+                .to_string(),
+            exit_code: 1,
+            verdict: crate::review_consensus::HAS_ISSUES,
+            diagnostic: None,
+        },
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 1,
+            tool: ToolName::GeminiCli,
+            session_id: "reviewer-2-unavailable".to_string(),
+            output: "Review unavailable: quota exhausted\n".to_string(),
+            exit_code: 1,
+            verdict: UNAVAILABLE,
+            diagnostic: Some("quota exhausted".to_string()),
+        },
+    ];
+
+    write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        2,
+        &outcomes,
+        crate::review_consensus::HAS_ISSUES,
+        false,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(
+        verdict.decision,
+        ReviewDecision::Fail,
+        "#1659: HAS_ISSUES consensus with no persisted reviewer findings must fail-closed"
+    );
+}
+
+#[test]
+fn write_multi_reviewer_parent_artifacts_fails_closed_when_empty_artifact_masks_unpersisted_dissent()
+ {
+    // #1659 round-2 (codex): a single reviewer persisting an EMPTY artifact must NOT mask
+    // another reviewer that voted HAS_ISSUES but never persisted its findings. The earlier
+    // any-reviewer-loaded discriminator wrongly trusted the empty artifact and promoted to
+    // PASS; the per-dissenter check must fail-closed because the HAS_ISSUES voter (reviewer 2)
+    // left no structured findings on disk.
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    // Reviewer 1 (CLEAN) persists an EXPLICIT empty artifact.
+    let reviewer_dir = temp.path().join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "verdict": "PASS",
+            "summary": "No blocking findings.",
+            "findings": []
+        }))
+        .expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+
+    // Reviewer 2 (HAS_ISSUES) persists NOTHING -- the masked dissenter (no reviewer-2 dir).
+    let outcomes = vec![
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 0,
+            tool: ToolName::GeminiCli,
+            session_id: "01CLEANREVIEWER00000000000".to_string(),
+            output: "Reviewer 1 was clean.".to_string(),
+            exit_code: 0,
+            verdict: crate::review_consensus::CLEAN,
+            diagnostic: None,
+        },
+        super::super::output::ReviewerOutcome {
+            reviewer_index: 1,
+            tool: ToolName::Codex,
+            session_id: "01DISSENTREVIEWER0000000000".to_string(),
+            output: "Reviewer 2 flagged blocking issues in prose but persisted no findings."
+                .to_string(),
+            exit_code: 1,
+            verdict: crate::review_consensus::HAS_ISSUES,
+            diagnostic: None,
+        },
+    ];
+
+    write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        2,
+        &outcomes,
+        crate::review_consensus::HAS_ISSUES,
+        false,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(
+        verdict.decision,
+        ReviewDecision::Fail,
+        "#1659 round-2: an empty artifact must not mask an unpersisted HAS_ISSUES dissenter"
+    );
+}
+
+#[test]
 fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempdir().expect("tempdir should be created");
@@ -700,10 +867,14 @@ proptest! {
             reviewer_artifacts,
             "01PARENTSESSION000000000000",
         );
+        // final_verdict is always CLEAN here, so the #1659 dissent guard never fires; pass
+        // `true` (consensus treated as backed) -- this proptest exercises the
+        // blocking-findings-survive-clean-consensus path, not the fail-closed guard.
         let decision = parent_review_decision(
             &consolidated,
             crate::review_consensus::CLEAN,
             states.iter().all(|state| matches!(state, ReviewerState::Unavailable)),
+            true,
         );
         let parent_artifact = parent_artifact_for_decision(&consolidated, decision);
 
