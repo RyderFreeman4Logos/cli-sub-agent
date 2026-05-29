@@ -115,13 +115,21 @@ fn default_fatal_error_markers() -> Vec<String> {
         "502 Bad Gateway",
         "503 Service Unavailable",
         "504 Gateway Timeout",
-        "rate limit",
+        // Provider/quota/auth envelope tokens — high-specificity strings that do not occur in
+        // benign agent prose. Bare phrases like "rate limit" / "provider error" / "overloaded"
+        // were removed (#1652): they matched normal model output (e.g. "avoid the rate limit")
+        // which, combined with a >30s no-progress pause, fast-failed healthy live sessions.
+        // Keep in sync with tool_liveness_fatal_error.rs::default_tier1_fatal_error_markers.
         "rate_limit_exceeded",
-        "quota exceeded",
+        "rate limit exceeded",
+        "insufficient_quota",
         "insufficient quota",
-        "provider error",
-        "provider returned error",
-        "overloaded",
+        "quota exceeded",
+        "QUOTA_EXHAUSTED",
+        "TerminalQuotaError",
+        "overloaded_error",
+        "invalid_api_key",
+        "API key not found",
     ]
     .into_iter()
     .map(str::to_string)

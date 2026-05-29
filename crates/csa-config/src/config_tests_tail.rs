@@ -644,6 +644,20 @@ fn test_resources_config_default_has_fatal_error_markers() {
             .any(|marker| marker == "500 Internal Server Error"),
         "defaults should detect provider 5xx failures"
     );
+    // #1652: over-broad bare-prose markers must NOT be defaults — they match benign model
+    // output (e.g. "avoid the rate limit", "handle the provider error") and, combined with a
+    // >30s no-progress pause, fast-fail healthy live sessions.
+    for forbidden in [
+        "rate limit",
+        "provider error",
+        "provider returned error",
+        "overloaded",
+    ] {
+        assert!(
+            !cfg.fatal_error_markers.iter().any(|m| m == forbidden),
+            "default markers must not include over-broad bare phrase {forbidden:?} (#1652 FP)"
+        );
+    }
     assert!(cfg.is_default());
 }
 
