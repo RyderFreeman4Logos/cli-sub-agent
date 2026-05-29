@@ -299,6 +299,108 @@ fn issue_1675_colon_terminated_fail_verdict_emits_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1675 Case 8 (cloud-review P1 follow-up): the SYNTHETIC-empty findings.toml
+/// path had the SAME zero-evidence false-PASS hole. When findings.toml fails to
+/// parse, `persist_review_findings_toml` writes a `.findings.toml.synthetic`
+/// marker (#1045 r3) and the verdict derivation falls through the artifact chain.
+/// If no blocking JSON, no JSON artifact, and no `full.md` exist, the pre-fix code
+/// returned Pass UNCONDITIONALLY at the synthetic fallback — reopening #1675 on the
+/// synthetic branch. The synthetic fallback now routes through the shared
+/// `derive_decision_from_severity_counts` gate, so an affirmative prose FAIL with a
+/// Fail meta fails closed even when the structured findings were unparseable.
+#[test]
+fn issue_1675_synthetic_empty_findings_with_prose_fail_emits_fail() {
+    let session_id = "01TEST1675SYNTHETICFAIL0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-synthetic-fail", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    // Synthetic marker: findings.toml extraction failed, so the empty findings are
+    // NOT trusted and the verdict falls through the artifact chain (#1045 r3).
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER),
+        "",
+    )
+    .expect("write synthetic marker");
+    // Affirmative prose FAIL in summary; no output/full.md so the synthetic
+    // fallback (not infer_review_verdict_from_full_output) decides the verdict.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nVerdict: FAIL\n\nBlocking issue; structured findings failed to emit.\n<!-- CSA:SECTION:summary:END -->\n",
+    )
+    .expect("persist summary");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1675 P1: synthetic-empty findings + affirmative prose FAIL must fail closed"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+/// #1675 Case 9 (cloud-review P1 follow-up, precision guard): routing the synthetic
+/// fallback through the shared gate must NOT over-correct. Synthetic-empty findings
+/// with NEUTRAL prose (no FAIL verdict token) and no full.md must still resolve to
+/// Pass — preserving the #1045-r3 / #1349 behavior on the synthetic branch.
+#[test]
+fn issue_1675_synthetic_empty_findings_with_neutral_prose_stays_pass() {
+    let session_id = "01TEST1675SYNTHETICPASS0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-synthetic-pass", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER),
+        "",
+    )
+    .expect("write synthetic marker");
+    // Neutral prose, no FAIL verdict token: the synthetic fallback must stay Pass.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nSemantics-preserving refactor; findings block was malformed.\n<!-- CSA:SECTION:summary:END -->\n",
+    )
+    .expect("persist summary");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1675 P1: synthetic-empty + neutral prose must stay Pass (no over-correction)"
+    );
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 // ─── Unit tests for detect_prose_fail_conclusion ───
 
 #[test]

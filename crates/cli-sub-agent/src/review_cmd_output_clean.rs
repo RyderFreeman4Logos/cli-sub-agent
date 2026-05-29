@@ -98,17 +98,21 @@ fn verdict_token_matches(text: &str, tokens: &[&str], case: MatchCase) -> bool {
 }
 
 fn is_verdict_token(text: &str, tokens: &[&str], case: MatchCase) -> bool {
-    // Trim the same delimiter class the CLI's consensus parser splits on
-    // (`!is_ascii_alphanumeric() && c != '_'`) so a standalone verdict token
-    // survives surrounding punctuation — `FAIL:`, `PASS.`, `(CLEAN)` — which the
-    // consensus parser already counts as a blocking/clean verdict; missing `:`
-    // reopened the #1675 lost-evidence path for colon-terminated verdict lines
-    // (review finding). A multi-word line ("The test PASS rate is 100%") never
-    // reduces to a bare token, so exact equality after trimming stays the
+    // Trim ASCII punctuation and whitespace so a standalone verdict token survives
+    // surrounding punctuation — `FAIL:`, `PASS.`, `(CLEAN)` — which the CLI's
+    // consensus parser already counts as a blocking/clean verdict (missing `:`
+    // reopened the #1675 lost-evidence path for colon-terminated verdict lines).
+    // The trim set is restricted to ASCII punctuation/whitespace, NOT the consensus
+    // parser's full `!is_ascii_alphanumeric()` delimiter class: trimming every
+    // non-ASCII char would corrupt multilingual prose — e.g. `PASS нет`
+    // (Russian "no") would lose `нет` and reduce to a false PASS verdict
+    // (cloud-review finding). A multi-word line ("The test PASS rate is 100%")
+    // never reduces to a bare token, so exact equality after trimming stays the
     // precision guard. Underscore is NOT trimmed (the consensus parser treats it
     // as a word char): `HAS_ISSUES` stays one token and `CLEAN_UP` is not a CLEAN
     // verdict.
-    let trimmed = text.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+    let trimmed =
+        text.trim_matches(|c: char| (c.is_ascii_punctuation() || c.is_whitespace()) && c != '_');
     tokens.iter().any(|token| case.token_eq(trimmed, token))
 }
 
@@ -399,6 +403,23 @@ mod tests {
         assert!(!verdict_token_pass_or_clean("PASS: rate is 100%"));
         assert!(!verdict_token_fail("FAIL_SAFE:"));
         assert!(!verdict_token_pass_or_clean("CLEAN_UP:"));
+    }
+
+    #[test]
+    fn verdict_token_non_ascii_neighbors_are_not_trimmed() {
+        // The boundary-trim set is restricted to ASCII punctuation/whitespace, so a
+        // non-ASCII word adjacent to a verdict token is NOT stripped away. Trimming
+        // the consensus parser's full `!is_ascii_alphanumeric()` class would reduce
+        // `PASS нет` ("PASS" + Russian "no") to a bare `PASS` and emit a FALSE clean
+        // verdict (cloud-review HIGH finding). Cyrillic stands in for any non-ASCII
+        // script (CJK, Greek, accented Latin); multilingual prose must stay a
+        // multi-word line that never reduces to a bare token.
+        assert!(!verdict_token_pass_or_clean("PASS нет"));
+        assert!(!verdict_token_pass_or_clean("Оценка: PASS неверна"));
+        assert!(!verdict_token_fail("нет FAIL"));
+        // ASCII-only verdict lines stay matchable after the narrowed trim set.
+        assert!(verdict_token_pass_or_clean("PASS"));
+        assert!(verdict_token_fail("FAIL:"));
     }
 
     #[test]

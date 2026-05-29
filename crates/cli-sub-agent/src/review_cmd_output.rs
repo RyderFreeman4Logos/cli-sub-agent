@@ -299,11 +299,25 @@ fn derive_review_verdict_artifact(
     }
 
     if let Some(severity_counts) = synthetic_empty_findings_counts {
-        return Ok(verdict_from_meta(
-            meta,
-            ReviewDecision::Pass,
-            severity_counts,
-        ));
+        // Synthetic-empty findings.toml exhausted every artifact fallback (no
+        // blocking JSON, no JSON artifact, no full.md verdict). The pre-#1675
+        // behavior returned Pass unconditionally here — the SAME zero-evidence
+        // false-PASS hole #1675 closed on the non-synthetic path, just reached
+        // via the #1045-r3 synthetic fall-through. Route through the shared gate
+        // so a Fail/Uncertain meta whose prose affirmatively concludes FAIL
+        // fails closed even when the structured findings were unparseable. The
+        // counts are guaranteed zero here (set only inside the
+        // severity_counts_are_zero branch above), so the #1675 gate applies and
+        // neutral-prose synthetic-empty results still resolve to Pass (#1349).
+        let decision = derive_decision_from_severity_counts(
+            &severity_counts,
+            true,
+            None,
+            ReviewDecision::from_str(&meta.decision).ok(),
+            || review_contains_prose_clean_conclusion(session_dir),
+            || review_contains_prose_fail_conclusion(session_dir),
+        )?;
+        return Ok(verdict_from_meta(meta, decision, severity_counts));
     }
 
     if !full_output_is_effectively_empty(session_dir)? {
