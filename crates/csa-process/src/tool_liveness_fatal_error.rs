@@ -65,7 +65,6 @@ TerminalQuotaError
 overloaded_error
 invalid_api_key
 API key not found
-401 Unauthorized
 rate limit exceeded";
     MARKERS.lines().map(str::to_string).collect()
 }
