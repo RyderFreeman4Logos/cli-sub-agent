@@ -241,6 +241,62 @@ fn probe_detects_fatal_error_marker_in_stderr_tail() {
 }
 
 #[test]
+fn probe_ignores_broad_http_markers_in_output_log_content() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "docs quote HTTP 404 Not Found and 500 Internal Server Error as examples\n",
+    )
+    .expect("write output");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(!signals.fatal_error);
+}
+
+#[test]
+fn fatal_error_signal_scopes_tmux_pane_to_tier1_markers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    assert!(!has_fatal_error_signal_in_channels(
+        tmp.path(),
+        Some("agent quoted HTTP 429 while reading API docs")
+    ));
+    assert!(has_fatal_error_signal_in_channels(
+        tmp.path(),
+        Some("provider envelope: quota exceeded")
+    ));
+}
+
+#[test]
+fn probe_detects_broad_http_marker_in_stderr_tail() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "transport failed with HTTP 503\n",
+    )
+    .expect("write stderr");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(signals.fatal_error);
+}
+
+#[test]
+fn probe_detects_tier1_provider_marker_in_output_log() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "provider envelope: rate_limit_exceeded\n",
+    )
+    .expect("write output");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(signals.fatal_error);
+}
+
+#[test]
 fn probe_uses_custom_fatal_error_marker_sidecar() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_fatal_error_markers(tmp.path(), &["custom backend died".to_string()])
@@ -254,6 +310,25 @@ fn probe_uses_custom_fatal_error_marker_sidecar() {
     let signals = ToolLiveness::probe(tmp.path());
 
     assert!(signals.fatal_error);
+}
+
+#[test]
+fn probe_reuses_cached_custom_fatal_error_marker_regex() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(tmp.path(), &["custom backend died".to_string()])
+        .expect("write markers");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "agent ui shows: custom backend died\n",
+    )
+    .expect("write output");
+
+    assert!(ToolLiveness::probe(tmp.path()).fatal_error);
+
+    write_fatal_error_markers(tmp.path(), &["different marker".to_string()])
+        .expect("rewrite markers");
+
+    assert!(ToolLiveness::probe(tmp.path()).fatal_error);
 }
 
 #[test]

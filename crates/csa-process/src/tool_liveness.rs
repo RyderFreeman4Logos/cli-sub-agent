@@ -1,10 +1,11 @@
 use regex::{Regex, RegexBuilder};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    OnceLock,
+    Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, SystemTime};
@@ -80,14 +81,13 @@ impl ToolLiveness {
         let now = SystemTime::now();
         let mut snapshot = load_snapshot(session_dir);
         let daemon_pid_alive = Self::daemon_pid_is_alive(session_dir);
-        let fatal_error_markers = read_fatal_error_markers(session_dir);
 
         let signals = LivenessSignals {
             pid_alive: has_live_pid_signal(session_dir) || daemon_pid_alive,
             output_growth: has_output_growth_signal(session_dir, &mut snapshot),
             session_write: has_recent_session_write_signal(session_dir, now),
             stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
-            fatal_error: has_fatal_error_signal(session_dir, &fatal_error_markers),
+            fatal_error: has_fatal_error_signal(session_dir),
         };
 
         save_snapshot(session_dir, &snapshot);
@@ -400,88 +400,133 @@ fn read_legacy_daemon_pid_from_stderr(session_dir: &Path) -> Option<u32> {
     pid_str.parse::<u32>().ok()
 }
 
-fn default_fatal_error_markers() -> Vec<String> {
+#[derive(Clone)]
+struct FatalErrorRegexes {
+    all_channel: Option<Regex>,
+    stderr_only: Option<Regex>,
+}
+
+impl FatalErrorRegexes {
+    fn custom(markers: &[String]) -> Self {
+        Self {
+            all_channel: build_fatal_error_regex(markers),
+            stderr_only: None,
+        }
+    }
+}
+
+fn default_tier1_fatal_error_markers() -> Vec<String> {
     const MARKERS: &str = "\
-HTTP 400
-HTTP 401
-HTTP 403
-HTTP 404
-HTTP 408
-HTTP 409
-HTTP 429
-HTTP 500
-HTTP 502
-HTTP 503
-HTTP 504
-status 400
-status 401
-status 403
-status 404
-status 408
-status 409
-status 429
-status 500
-status 502
-status 503
-status 504
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-408 Request Timeout
-409 Conflict
-429 Too Many Requests
-500 Internal Server Error
-502 Bad Gateway
-503 Service Unavailable
-504 Gateway Timeout
-rate limit
 rate_limit_exceeded
-quota exceeded
+insufficient_quota
 insufficient quota
-provider error
-provider returned error
-overloaded";
+quota exceeded
+QUOTA_EXHAUSTED
+TerminalQuotaError
+overloaded_error
+invalid_api_key
+API key not found
+401 Unauthorized
+rate limit exceeded";
     MARKERS.lines().map(str::to_string).collect()
 }
 
-fn read_fatal_error_markers(session_dir: &Path) -> Vec<String> {
-    let marker_path = session_dir.join(FATAL_ERROR_MARKERS_FILE);
-    if marker_path.exists() {
-        return fs::read_to_string(marker_path)
-            .ok()
-            .map(|content| {
-                content
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+fn default_tier2_http_fatal_error_markers() -> Vec<String> {
+    const STATUSES: &[(&str, &str)] = &[
+        ("400", "Bad Request"),
+        ("401", "Unauthorized"),
+        ("403", "Forbidden"),
+        ("404", "Not Found"),
+        ("408", "Request Timeout"),
+        ("409", "Conflict"),
+        ("429", "Too Many Requests"),
+        ("500", "Internal Server Error"),
+        ("502", "Bad Gateway"),
+        ("503", "Service Unavailable"),
+        ("504", "Gateway Timeout"),
+    ];
+
+    let mut markers = Vec::with_capacity(STATUSES.len() * 3);
+    for (code, name) in STATUSES {
+        markers.push(format!("HTTP {code}"));
+        markers.push(format!("status {code}"));
+        markers.push(format!("{code} {name}"));
     }
-    default_fatal_error_markers()
+    markers
 }
 
-fn has_fatal_error_signal(session_dir: &Path, markers: &[String]) -> bool {
-    let marker_path = session_dir.join(FATAL_ERROR_MARKERS_FILE);
-    let regex = if marker_path.exists() {
-        build_fatal_error_regex(markers)
-    } else {
-        static DEFAULT_REGEX: OnceLock<Option<Regex>> = OnceLock::new();
-        DEFAULT_REGEX
-            .get_or_init(|| build_fatal_error_regex(&default_fatal_error_markers()))
-            .clone()
-    };
-    let Some(regex) = regex else {
-        return false;
+fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
+    fs::read_to_string(marker_path)
+        .ok()
+        .map(|content| {
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn has_fatal_error_signal(session_dir: &Path) -> bool {
+    let tmux_pane = capture_tmux_pane(session_dir);
+    has_fatal_error_signal_in_channels(session_dir, tmux_pane.as_deref())
+}
+
+fn has_fatal_error_signal_in_channels(session_dir: &Path, tmux_pane: Option<&str>) -> bool {
+    let regexes = fatal_error_regexes_for_session(session_dir);
+
+    read_file_tail(&session_dir.join(STDERR_LOG_FILE))
+        .ok()
+        .is_some_and(|tail| {
+            matches_fatal_error(&regexes.all_channel, &tail)
+                || matches_fatal_error(&regexes.stderr_only, &tail)
+        })
+        || read_file_tail(&session_dir.join(OUTPUT_LOG_FILE))
+            .ok()
+            .is_some_and(|tail| matches_fatal_error(&regexes.all_channel, &tail))
+        || tmux_pane.is_some_and(|pane| matches_fatal_error(&regexes.all_channel, pane))
+}
+
+fn matches_fatal_error(regex: &Option<Regex>, text: &str) -> bool {
+    regex.as_ref().is_some_and(|regex| regex.is_match(text))
+}
+
+fn fatal_error_regexes_for_session(session_dir: &Path) -> FatalErrorRegexes {
+    static SESSION_REGEX_CACHE: OnceLock<Mutex<HashMap<PathBuf, FatalErrorRegexes>>> =
+        OnceLock::new();
+
+    let cache = SESSION_REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     };
 
-    [STDERR_LOG_FILE, OUTPUT_LOG_FILE]
-        .into_iter()
-        .filter_map(|file_name| read_file_tail(&session_dir.join(file_name)).ok())
-        .any(|tail| regex.is_match(&tail))
-        || capture_tmux_pane(session_dir).is_some_and(|pane| regex.is_match(&pane))
+    cache
+        .entry(session_dir.to_path_buf())
+        .or_insert_with(|| load_fatal_error_regexes(session_dir))
+        .clone()
+}
+
+fn load_fatal_error_regexes(session_dir: &Path) -> FatalErrorRegexes {
+    let marker_path = session_dir.join(FATAL_ERROR_MARKERS_FILE);
+    if marker_path.exists() {
+        // User-provided sidecar markers are an explicit opt-in and preserve
+        // the historical all-channel matching semantics.
+        return FatalErrorRegexes::custom(&read_fatal_error_marker_file(&marker_path));
+    }
+    default_fatal_error_regexes()
+}
+
+fn default_fatal_error_regexes() -> FatalErrorRegexes {
+    static DEFAULT_REGEXES: OnceLock<FatalErrorRegexes> = OnceLock::new();
+    DEFAULT_REGEXES
+        .get_or_init(|| FatalErrorRegexes {
+            all_channel: build_fatal_error_regex(&default_tier1_fatal_error_markers()),
+            stderr_only: build_fatal_error_regex(&default_tier2_http_fatal_error_markers()),
+        })
+        .clone()
 }
 
 fn build_fatal_error_regex(markers: &[String]) -> Option<Regex> {
