@@ -23,33 +23,31 @@ impl FatalErrorRegexes {
         let (stderr_only, all_channel): (Vec<_>, Vec<_>) = markers
             .iter()
             .cloned()
-            .partition(|marker| broad_http_marker_pattern(marker).is_some());
+            .partition(|marker| is_broad_http_marker(marker));
+        // Broad HTTP/status markers are matched EXACTLY (same word-boundary logic as
+        // all-channel markers); only the CHANNEL differs (stderr-only), not the matching
+        // precision. A configured code like "HTTP 404" must never match an unrelated or
+        // non-fatal code such as "HTTP 200"/"HTTP 301" (#1652 round-5 false-positive).
         Self {
             all_channel: build_fatal_error_regex(&all_channel),
-            stderr_only: build_broad_http_marker_regex(&stderr_only),
+            stderr_only: build_fatal_error_regex(&stderr_only),
         }
     }
 }
 
-fn broad_http_marker_pattern(marker: &str) -> Option<&'static str> {
+/// Classify a marker as a "broad" HTTP/status reference (e.g. "HTTP 404",
+/// "status 500", "404 Not Found"). Broad markers are scoped to stderr only; they are
+/// still matched EXACTLY (by the caller via `build_fatal_error_regex`), so the specific
+/// status code is preserved — this is purely a channel classifier, not a pattern source.
+fn is_broad_http_marker(marker: &str) -> bool {
     let mut words = marker.split_whitespace();
-    let first = words.next()?;
-    let second = words.next()?;
+    let (Some(first), Some(second)) = (words.next(), words.next()) else {
+        return false;
+    };
     if first.eq_ignore_ascii_case("http") || first.eq_ignore_ascii_case("status") {
-        if !is_three_digit_status_code(second) {
-            return None;
-        }
-        return if first.eq_ignore_ascii_case("http") {
-            Some(r"\bHTTP\s+\d{3}\b")
-        } else {
-            Some(r"\bstatus\s+\d{3}\b")
-        };
+        return is_three_digit_status_code(second);
     }
-    if is_three_digit_status_code(first) && second.chars().next().is_some_and(char::is_alphabetic) {
-        return Some(r"\b\d{3}\s+\p{Alpha}");
-    }
-
-    None
+    is_three_digit_status_code(first) && second.chars().next().is_some_and(char::is_alphabetic)
 }
 
 fn is_three_digit_status_code(value: &str) -> bool {
@@ -73,9 +71,30 @@ rate limit exceeded";
 }
 
 fn default_tier2_http_fatal_error_markers() -> Vec<String> {
-    ["HTTP 400", "status 400", "400 Bad Request"]
-        .map(String::from)
-        .to_vec()
+    // Enumerate the fatal HTTP status codes explicitly. Markers are matched EXACTLY, so each
+    // code only fast-fails when that specific code appears on stderr — non-fatal codes
+    // (1xx/2xx/3xx) and uncatalogued codes never trip the watchdog.
+    const STATUSES: &[(&str, &str)] = &[
+        ("400", "Bad Request"),
+        ("401", "Unauthorized"),
+        ("403", "Forbidden"),
+        ("404", "Not Found"),
+        ("408", "Request Timeout"),
+        ("409", "Conflict"),
+        ("429", "Too Many Requests"),
+        ("500", "Internal Server Error"),
+        ("502", "Bad Gateway"),
+        ("503", "Service Unavailable"),
+        ("504", "Gateway Timeout"),
+    ];
+
+    let mut markers = Vec::with_capacity(STATUSES.len() * 3);
+    for (code, name) in STATUSES {
+        markers.push(format!("HTTP {code}"));
+        markers.push(format!("status {code}"));
+        markers.push(format!("{code} {name}"));
+    }
+    markers
 }
 
 fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
@@ -160,21 +179,6 @@ pub(super) fn build_fatal_error_regex(markers: &[String]) -> Option<Regex> {
                 boundary(marker.chars().next_back())
             )
         })
-        .collect::<Vec<_>>();
-    if alternatives.is_empty() {
-        return None;
-    }
-    let pattern = format!("(?:{})", alternatives.join("|"));
-    RegexBuilder::new(&pattern)
-        .case_insensitive(true)
-        .build()
-        .ok()
-}
-
-fn build_broad_http_marker_regex(markers: &[String]) -> Option<Regex> {
-    let alternatives = markers
-        .iter()
-        .filter_map(|marker| broad_http_marker_pattern(marker))
         .collect::<Vec<_>>();
     if alternatives.is_empty() {
         return None;

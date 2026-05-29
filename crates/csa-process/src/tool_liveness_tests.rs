@@ -289,15 +289,42 @@ fn sidecar_detects_broad_http_marker_in_stderr_tail() {
         ],
     )
     .expect("write markers");
+    // The exact configured code ("HTTP 404") on stderr fast-fails.
     fs::write(
         tmp.path().join(STDERR_LOG_FILE),
-        "transport failed with HTTP 503\n",
+        "transport failed with HTTP 404\n",
     )
     .expect("write stderr");
 
     let signals = ToolLiveness::probe(tmp.path());
 
     assert!(signals.fatal_error);
+}
+
+#[test]
+fn sidecar_broad_http_marker_ignores_unconfigured_status_code() {
+    // #1652 round-5: broad HTTP markers must match the SPECIFIC configured code, not any
+    // 3-digit code. A configured "HTTP 404" must NOT fast-fail on a non-fatal / unrelated
+    // code such as "HTTP 200" or "HTTP 301" appearing on stderr.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(
+        tmp.path(),
+        &[
+            "HTTP 404".to_string(),
+            "500 Internal Server Error".to_string(),
+            "rate_limit_exceeded".to_string(),
+        ],
+    )
+    .expect("write markers");
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "server replied HTTP 200 OK then redirected HTTP 301\n",
+    )
+    .expect("write stderr");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(!signals.fatal_error);
 }
 
 #[test]
