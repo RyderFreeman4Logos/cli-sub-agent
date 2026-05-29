@@ -1,12 +1,21 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+#[path = "tool_liveness_fatal_error.rs"]
+mod fatal_error;
+use fatal_error::has_fatal_error_signal;
+#[cfg(test)]
+use fatal_error::{build_fatal_error_regex, has_fatal_error_signal_in_channels};
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
 const DAEMON_PID_FILE: &str = "daemon.pid";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
+const OUTPUT_LOG_FILE: &str = "output.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
+const FATAL_ERROR_MARKERS_FILE: &str = ".fatal-error-markers";
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
 #[derive(Debug, Clone, Copy)]
 struct DaemonPidRecord {
@@ -32,6 +41,7 @@ pub(crate) struct LivenessSignals {
     pub output_growth: bool,
     pub session_write: bool,
     pub stderr_activity: bool,
+    pub fatal_error: bool,
 }
 
 impl LivenessSignals {
@@ -75,6 +85,7 @@ impl ToolLiveness {
             output_growth: has_output_growth_signal(session_dir, &mut snapshot),
             session_write: has_recent_session_write_signal(session_dir, now),
             stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
+            fatal_error: has_fatal_error_signal(session_dir),
         };
 
         save_snapshot(session_dir, &snapshot);
@@ -159,6 +170,14 @@ impl ToolLiveness {
         };
         is_pid_working(pid)
     }
+}
+
+pub fn write_fatal_error_markers(session_dir: &Path, markers: &[String]) -> std::io::Result<()> {
+    let mut file = File::create(session_dir.join(FATAL_ERROR_MARKERS_FILE))?;
+    for marker in markers {
+        writeln!(file, "{marker}")?;
+    }
+    Ok(())
 }
 
 pub(crate) fn record_spool_bytes_written(session_dir: &Path, bytes_written: u64) {

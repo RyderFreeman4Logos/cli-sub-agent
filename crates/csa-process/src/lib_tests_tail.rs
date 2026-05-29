@@ -194,7 +194,7 @@ fn test_should_terminate_resets_last_activity_on_progress_signal() {
         &mut next_poll,
     );
 
-    assert!(!terminate, "progress should prevent termination");
+    assert_eq!(terminate, None, "progress should prevent termination");
     assert!(dead_since.is_none(), "death timer should be cleared");
     assert!(
         last_activity > stale_activity,

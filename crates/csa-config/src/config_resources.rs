@@ -15,6 +15,10 @@ pub struct ResourcesConfig {
     /// consecutive seconds with no positive liveness signal.
     #[serde(default = "default_liveness_dead_seconds")]
     pub liveness_dead_seconds: Option<u64>,
+    /// Fatal backend/provider error markers that should trigger a fast-fail
+    /// watchdog path after output has stopped making progress.
+    #[serde(default = "default_fatal_error_markers")]
+    pub fatal_error_markers: Vec<String>,
     /// Maximum time to block when waiting for a free global tool slot.
     #[serde(default = "default_slot_wait_timeout_seconds")]
     pub slot_wait_timeout_seconds: u64,
@@ -76,6 +80,62 @@ fn default_liveness_dead_seconds() -> Option<u64> {
     Some(600)
 }
 
+fn default_fatal_error_markers() -> Vec<String> {
+    [
+        "HTTP 400",
+        "HTTP 401",
+        "HTTP 403",
+        "HTTP 404",
+        "HTTP 408",
+        "HTTP 409",
+        "HTTP 429",
+        "HTTP 500",
+        "HTTP 502",
+        "HTTP 503",
+        "HTTP 504",
+        "status 400",
+        "status 401",
+        "status 403",
+        "status 404",
+        "status 408",
+        "status 409",
+        "status 429",
+        "status 500",
+        "status 502",
+        "status 503",
+        "status 504",
+        "400 Bad Request",
+        "401 Unauthorized",
+        "403 Forbidden",
+        "404 Not Found",
+        "408 Request Timeout",
+        "409 Conflict",
+        "429 Too Many Requests",
+        "500 Internal Server Error",
+        "502 Bad Gateway",
+        "503 Service Unavailable",
+        "504 Gateway Timeout",
+        // Provider/quota/auth envelope tokens — high-specificity strings that do not occur in
+        // benign agent prose. Bare phrases like "rate limit" / "provider error" / "overloaded"
+        // were removed (#1652): they matched normal model output (e.g. "avoid the rate limit")
+        // which, combined with a >30s no-progress pause, fast-failed healthy live sessions.
+        // Keep in sync with tool_liveness_fatal_error.rs::default_tier1_fatal_error_markers.
+        "rate_limit_exceeded",
+        "rate limit exceeded",
+        "insufficient_quota",
+        "insufficient quota",
+        "quota exceeded",
+        "QUOTA_EXHAUSTED",
+        "TerminalQuotaError",
+        "overloaded_error",
+        "invalid_api_key",
+        "API key not found",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn default_stdin_write_timeout_seconds() -> u64 {
     30
 }
@@ -90,6 +150,7 @@ impl Default for ResourcesConfig {
             min_free_memory_mb: default_min_mem(),
             idle_timeout_seconds: default_idle_timeout_seconds(),
             liveness_dead_seconds: default_liveness_dead_seconds(),
+            fatal_error_markers: default_fatal_error_markers(),
             slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
             stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
             termination_grace_period_seconds: default_termination_grace_period_seconds(),
@@ -114,6 +175,7 @@ impl ResourcesConfig {
         self.min_free_memory_mb == default_min_mem()
             && self.idle_timeout_seconds == default_idle_timeout_seconds()
             && self.liveness_dead_seconds == default_liveness_dead_seconds()
+            && self.fatal_error_markers == default_fatal_error_markers()
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.termination_grace_period_seconds == default_termination_grace_period_seconds()

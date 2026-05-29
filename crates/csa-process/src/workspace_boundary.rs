@@ -17,3 +17,23 @@ pub(crate) fn workspace_boundary_hint(threshold: usize) -> String {
          from the orchestrator, not via direct filesystem reads from inside this session.\n"
     )
 }
+
+pub(crate) fn note_workspace_boundary_threshold(
+    hits: usize,
+    threshold: usize,
+    warned: &mut bool,
+    timed_out: &mut bool,
+    output: &mut String,
+) {
+    if hits < threshold || *warned {
+        return;
+    }
+    *timed_out = true;
+    *warned = true;
+    tracing::warn!(
+        hits,
+        threshold,
+        "Workspace boundary hits crossed threshold; continuing but flagging for diagnostics"
+    );
+    output.push_str(&workspace_boundary_hint(threshold));
+}
