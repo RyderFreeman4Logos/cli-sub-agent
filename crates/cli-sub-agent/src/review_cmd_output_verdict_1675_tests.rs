@@ -256,6 +256,49 @@ fn issue_1675_mixed_case_fail_verdict_emits_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1675 Case 7 (review-finding follow-up): a bare colon-terminated FAIL verdict
+/// (`FAIL:`) must fail closed. The CLI's consensus parser splits on
+/// non-alphanumeric/non-`_` delimiters, so `FAIL:` counts as a blocking verdict
+/// (meta=Fail); the bare-line prose detector trimmed only `{ws,*,_,.}` and missed
+/// the trailing colon, reopening the #1675 lost-evidence path. The detector now
+/// trims the full consensus delimiter class.
+#[test]
+fn issue_1675_colon_terminated_fail_verdict_emits_fail() {
+    let session_id = "01TEST1675COLONFAIL00000000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-colon-fail", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    // Bare colon-terminated FAIL verdict: counted by the consensus parser but
+    // missed by the old bare-line detector that did not trim the trailing `:`.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nFAIL:\n\nThe build is broken.\n<!-- CSA:SECTION:summary:END -->\n",
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1675: bare colon-terminated 'FAIL:' must fail closed"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 // ─── Unit tests for detect_prose_fail_conclusion ───
 
 #[test]
@@ -308,4 +351,12 @@ fn detect_prose_fail_conclusion_lowercase_benign_substring_is_false() {
     assert!(!detect_prose_fail_conclusion(
         "the run fails intermittently"
     ));
+}
+
+#[test]
+fn detect_prose_fail_conclusion_colon_terminated_is_true() {
+    // codex finding: a bare verdict token followed by a consensus delimiter (`:`)
+    // must be recognized — the consensus parser counts it as a blocking verdict.
+    assert!(detect_prose_fail_conclusion("FAIL:"));
+    assert!(detect_prose_fail_conclusion("review\nHAS_ISSUES:\nmore"));
 }

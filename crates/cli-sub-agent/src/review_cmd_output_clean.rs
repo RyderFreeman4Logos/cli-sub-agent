@@ -98,8 +98,17 @@ fn verdict_token_matches(text: &str, tokens: &[&str], case: MatchCase) -> bool {
 }
 
 fn is_verdict_token(text: &str, tokens: &[&str], case: MatchCase) -> bool {
-    let trimmed =
-        text.trim_matches(|c: char| c.is_whitespace() || c == '*' || c == '_' || c == '.');
+    // Trim the same delimiter class the CLI's consensus parser splits on
+    // (`!is_ascii_alphanumeric() && c != '_'`) so a standalone verdict token
+    // survives surrounding punctuation — `FAIL:`, `PASS.`, `(CLEAN)` — which the
+    // consensus parser already counts as a blocking/clean verdict; missing `:`
+    // reopened the #1675 lost-evidence path for colon-terminated verdict lines
+    // (review finding). A multi-word line ("The test PASS rate is 100%") never
+    // reduces to a bare token, so exact equality after trimming stays the
+    // precision guard. Underscore is NOT trimmed (the consensus parser treats it
+    // as a word char): `HAS_ISSUES` stays one token and `CLEAN_UP` is not a CLEAN
+    // verdict.
+    let trimmed = text.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
     tokens.iter().any(|token| case.token_eq(trimmed, token))
 }
 
@@ -366,6 +375,30 @@ mod tests {
         assert!(verdict_token_fail("HAS_ISSUES"));
         assert!(!verdict_token_pass_or_clean("Verdict: Pass"));
         assert!(!verdict_token_pass_or_clean("Status: Clean"));
+    }
+
+    #[test]
+    fn verdict_token_trailing_punctuation_matches() {
+        // codex finding: the bare-line path trimmed only {ws,*,_,.}, so a verdict
+        // token followed by a delimiter the consensus parser splits on — most
+        // importantly `:` — was missed, reopening the #1675 lost-evidence path for
+        // colon-terminated verdict lines. Internal `_` is preserved so `HAS_ISSUES`
+        // still matches.
+        assert!(verdict_token_fail("FAIL:"));
+        assert!(verdict_token_fail("HAS_ISSUES:"));
+        assert!(verdict_token_fail("REJECT;"));
+        assert!(verdict_token_fail("(FAIL)"));
+        assert!(verdict_token_pass_or_clean("PASS:"));
+        assert!(verdict_token_pass_or_clean("CLEAN!"));
+    }
+
+    #[test]
+    fn verdict_token_trailing_punctuation_keeps_precision() {
+        // Trimming surrounding punctuation must NOT let a multi-word line reduce to
+        // a bare token: exact equality after trimming stays the precision guard.
+        assert!(!verdict_token_pass_or_clean("PASS: rate is 100%"));
+        assert!(!verdict_token_fail("FAIL_SAFE:"));
+        assert!(!verdict_token_pass_or_clean("CLEAN_UP:"));
     }
 
     #[test]
