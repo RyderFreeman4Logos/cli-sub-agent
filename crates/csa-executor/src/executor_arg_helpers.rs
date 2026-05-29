@@ -173,7 +173,10 @@ fn gemini_prompt_directories(prompt: &str) -> Vec<String> {
             // canonicalize (TOCTOU removal after the existence check above) fall
             // back to the raw token.
             let normalized = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-            if !is_broad_system_dir(&dir) && !is_broad_system_dir(&normalized) {
+            let is_raw_broad_temp = GEMINI_BROAD_SYSTEM_DIRS
+                .iter()
+                .any(|broad| dir == Path::new(broad));
+            if !is_raw_broad_temp && !is_broad_system_dir(&normalized) {
                 push_unique_directory_string(
                     &mut directories,
                     normalized.to_string_lossy().as_ref(),
