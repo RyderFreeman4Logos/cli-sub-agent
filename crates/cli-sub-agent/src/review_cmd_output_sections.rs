@@ -47,11 +47,10 @@ pub(crate) fn sanitize_review_output(output: &str) -> String {
 }
 
 pub(crate) fn has_structured_review_content(output: &str) -> bool {
-    let sanitized = sanitize_review_output(output);
-    let sections = parse_sections(&sanitized);
-    ["summary", "details"].into_iter().any(|section_id| {
-        last_non_empty_section_content(&sanitized, &sections, section_id).is_some()
-    })
+    let sections = parse_sections(output);
+    ["summary", "details"]
+        .into_iter()
+        .any(|section_id| last_non_empty_section_content(output, &sections, section_id).is_some())
 }
 
 pub(crate) fn derive_review_result_summary(output: &str) -> Option<String> {
