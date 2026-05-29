@@ -89,7 +89,7 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
 fn derive_findings_toml_artifact(
     session_dir: &Path,
 ) -> Result<(FindingsFile, Option<&'static str>), anyhow::Error> {
-    let Some(review_text) = load_review_text_for_findings(session_dir)? else {
+    let Some(review_text) = load_canonical_review_text(session_dir)? else {
         return Ok((FindingsFile::default(), Some("review text unavailable")));
     };
 
@@ -102,7 +102,21 @@ fn derive_findings_toml_artifact(
     }
 }
 
-fn load_review_text_for_findings(session_dir: &Path) -> Result<Option<String>, anyhow::Error> {
+/// Load the canonical review prose for a session.
+///
+/// Resolves the authoritative review text via a fixed source precedence:
+/// when persisted `details` sections exist, prefer `output/full.md`, then the raw
+/// `output.log`, then the `details.md` body; otherwise fall back to `output/full.md`.
+/// This is the SINGLE source of review prose shared by both the findings extractor
+/// and the fail-closed verdict detector ([`super::output::clean_detection::
+/// review_contains_prose_fail_conclusion`]). Sharing one loader keeps their source
+/// sets identical so a FAIL verdict can never survive in a place one consults but
+/// the other ignores — the root cause of the #1675 review rounds (a verdict in
+/// `details`, then `output.log`, that the detector did not scan). Returns `None`
+/// when no review text can be located.
+pub(in crate::review_cmd) fn load_canonical_review_text(
+    session_dir: &Path,
+) -> Result<Option<String>, anyhow::Error> {
     let details_path = session_dir.join("output").join("details.md");
     if details_path.exists() {
         for candidate in [
