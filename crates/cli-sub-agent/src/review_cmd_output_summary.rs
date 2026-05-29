@@ -34,14 +34,14 @@ fn extract_section_content(output: &str, section: &OutputSection) -> String {
         return String::new();
     }
 
-    let lines: Vec<&str> = output.lines().collect();
-    if lines.is_empty() || section.line_start > lines.len() {
-        return String::new();
-    }
-
     let start = section.line_start - 1;
-    let end_exclusive = section.line_end.min(lines.len());
-    lines[start..end_exclusive].join("\n")
+    let count = section.line_end - start;
+    output
+        .lines()
+        .skip(start)
+        .take(count)
+        .collect::<Vec<&str>>()
+        .join("\n")
 }
 
 pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -> Result<()> {
