@@ -124,9 +124,14 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     };
     let reviewer_artifacts =
         load_multi_reviewer_artifacts(project_root, &session_dir, reviewers, outcomes)?;
+    let any_reviewer_artifact_loaded = !reviewer_artifacts.is_empty();
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
-    let parent_decision =
-        parent_review_decision(&consolidated, final_verdict, all_reviewers_unavailable);
+    let parent_decision = parent_review_decision(
+        &consolidated,
+        final_verdict,
+        all_reviewers_unavailable,
+        any_reviewer_artifact_loaded,
+    );
     let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
     let parent_artifact = parent_artifact_for_decision(&consolidated, parent_decision);
     write_consolidated_artifact(&parent_artifact, &session_dir)?;
@@ -190,11 +195,13 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     };
     let reviewer_artifacts =
         load_multi_reviewer_artifacts(ctx.project_root, &session_dir, ctx.reviewers, ctx.outcomes)?;
+    let any_reviewer_artifact_loaded = !reviewer_artifacts.is_empty();
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &target.session_id);
     let decision = parent_review_decision(
         &consolidated,
         ctx.final_verdict,
         ctx.all_reviewers_unavailable,
+        any_reviewer_artifact_loaded,
     );
     let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
     let artifact = parent_artifact_for_decision(&consolidated, decision);
@@ -387,6 +394,7 @@ fn parent_review_decision(
     artifact: &ReviewArtifact,
     final_verdict: &str,
     all_reviewers_unavailable: bool,
+    any_reviewer_artifact_loaded: bool,
 ) -> ReviewDecision {
     if all_reviewers_unavailable {
         return ReviewDecision::Unavailable;
@@ -397,6 +405,19 @@ fn parent_review_decision(
         .findings
         .iter()
         .any(|finding| is_blocking_severity(&finding.severity))
+    {
+        return ReviewDecision::Fail;
+    }
+    // #1659 false-PASS guard: a non-clean consensus with an empty consolidated artifact
+    // AND no reviewer that persisted a structured findings artifact is an UNTRUSTWORTHY
+    // "clean" signal -- the reviewers' findings never persisted (e.g. quota/auth failure
+    // forced a non-zero exit before structured output was written), so an empty/synthetic
+    // findings.toml does NOT mean "no findings exist". Fail-closed on the consensus verdict
+    // rather than promoting to PASS. A reviewer that DID persist an artifact (even an empty
+    // one) is still trusted below as a genuine "no findings" PASS, preserving #1045 et al.
+    if !any_reviewer_artifact_loaded
+        && artifact.findings.is_empty()
+        && consensus_decision == ReviewDecision::Fail
     {
         return ReviewDecision::Fail;
     }
