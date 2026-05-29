@@ -1,14 +1,13 @@
-use regex::{Regex, RegexBuilder};
-use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{
-    Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::{Duration, SystemTime};
+
+#[path = "tool_liveness_fatal_error.rs"]
+mod fatal_error;
+use fatal_error::has_fatal_error_signal;
+#[cfg(test)]
+use fatal_error::{build_fatal_error_regex, has_fatal_error_signal_in_channels};
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
 const DAEMON_PID_FILE: &str = "daemon.pid";
@@ -17,7 +16,6 @@ const STDERR_LOG_FILE: &str = "stderr.log";
 const OUTPUT_LOG_FILE: &str = "output.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
 const FATAL_ERROR_MARKERS_FILE: &str = ".fatal-error-markers";
-const FATAL_ERROR_TAIL_BYTES: u64 = 4096;
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
 #[derive(Debug, Clone, Copy)]
 struct DaemonPidRecord {
@@ -400,218 +398,6 @@ fn read_legacy_daemon_pid_from_stderr(session_dir: &Path) -> Option<u32> {
     pid_str.parse::<u32>().ok()
 }
 
-#[derive(Clone)]
-struct FatalErrorRegexes {
-    all_channel: Option<Regex>,
-    stderr_only: Option<Regex>,
-}
-
-impl FatalErrorRegexes {
-    fn custom(markers: &[String]) -> Self {
-        Self {
-            all_channel: build_fatal_error_regex(markers),
-            stderr_only: None,
-        }
-    }
-}
-
-fn default_tier1_fatal_error_markers() -> Vec<String> {
-    const MARKERS: &str = "\
-rate_limit_exceeded
-insufficient_quota
-insufficient quota
-quota exceeded
-QUOTA_EXHAUSTED
-TerminalQuotaError
-overloaded_error
-invalid_api_key
-API key not found
-401 Unauthorized
-rate limit exceeded";
-    MARKERS.lines().map(str::to_string).collect()
-}
-
-fn default_tier2_http_fatal_error_markers() -> Vec<String> {
-    const STATUSES: &[(&str, &str)] = &[
-        ("400", "Bad Request"),
-        ("401", "Unauthorized"),
-        ("403", "Forbidden"),
-        ("404", "Not Found"),
-        ("408", "Request Timeout"),
-        ("409", "Conflict"),
-        ("429", "Too Many Requests"),
-        ("500", "Internal Server Error"),
-        ("502", "Bad Gateway"),
-        ("503", "Service Unavailable"),
-        ("504", "Gateway Timeout"),
-    ];
-
-    let mut markers = Vec::with_capacity(STATUSES.len() * 3);
-    for (code, name) in STATUSES {
-        markers.push(format!("HTTP {code}"));
-        markers.push(format!("status {code}"));
-        markers.push(format!("{code} {name}"));
-    }
-    markers
-}
-
-fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
-    fs::read_to_string(marker_path)
-        .ok()
-        .map(|content| {
-            content
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn has_fatal_error_signal(session_dir: &Path) -> bool {
-    let tmux_pane = capture_tmux_pane(session_dir);
-    has_fatal_error_signal_in_channels(session_dir, tmux_pane.as_deref())
-}
-
-fn has_fatal_error_signal_in_channels(session_dir: &Path, tmux_pane: Option<&str>) -> bool {
-    let regexes = fatal_error_regexes_for_session(session_dir);
-
-    read_file_tail(&session_dir.join(STDERR_LOG_FILE))
-        .ok()
-        .is_some_and(|tail| {
-            matches_fatal_error(&regexes.all_channel, &tail)
-                || matches_fatal_error(&regexes.stderr_only, &tail)
-        })
-        || read_file_tail(&session_dir.join(OUTPUT_LOG_FILE))
-            .ok()
-            .is_some_and(|tail| matches_fatal_error(&regexes.all_channel, &tail))
-        || tmux_pane.is_some_and(|pane| matches_fatal_error(&regexes.all_channel, pane))
-}
-
-fn matches_fatal_error(regex: &Option<Regex>, text: &str) -> bool {
-    regex.as_ref().is_some_and(|regex| regex.is_match(text))
-}
-
-fn fatal_error_regexes_for_session(session_dir: &Path) -> FatalErrorRegexes {
-    static SESSION_REGEX_CACHE: OnceLock<Mutex<HashMap<PathBuf, FatalErrorRegexes>>> =
-        OnceLock::new();
-
-    let cache = SESSION_REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = match cache.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    cache
-        .entry(session_dir.to_path_buf())
-        .or_insert_with(|| load_fatal_error_regexes(session_dir))
-        .clone()
-}
-
-fn load_fatal_error_regexes(session_dir: &Path) -> FatalErrorRegexes {
-    let marker_path = session_dir.join(FATAL_ERROR_MARKERS_FILE);
-    if marker_path.exists() {
-        // User-provided sidecar markers are an explicit opt-in and preserve
-        // the historical all-channel matching semantics.
-        return FatalErrorRegexes::custom(&read_fatal_error_marker_file(&marker_path));
-    }
-    default_fatal_error_regexes()
-}
-
-fn default_fatal_error_regexes() -> FatalErrorRegexes {
-    static DEFAULT_REGEXES: OnceLock<FatalErrorRegexes> = OnceLock::new();
-    DEFAULT_REGEXES
-        .get_or_init(|| FatalErrorRegexes {
-            all_channel: build_fatal_error_regex(&default_tier1_fatal_error_markers()),
-            stderr_only: build_fatal_error_regex(&default_tier2_http_fatal_error_markers()),
-        })
-        .clone()
-}
-
-fn build_fatal_error_regex(markers: &[String]) -> Option<Regex> {
-    let alternatives = markers
-        .iter()
-        .map(|marker| marker.trim())
-        .filter(|marker| !marker.is_empty())
-        .map(|marker| {
-            let boundary = |ch: Option<char>| {
-                if ch.is_some_and(|ch| ch == '_' || ch.is_alphanumeric()) {
-                    r"\b"
-                } else {
-                    ""
-                }
-            };
-            format!(
-                "{}{}{}",
-                boundary(marker.chars().next()),
-                regex::escape(marker),
-                boundary(marker.chars().next_back())
-            )
-        })
-        .collect::<Vec<_>>();
-    if alternatives.is_empty() {
-        return None;
-    }
-    let pattern = format!("(?:{})", alternatives.join("|"));
-    RegexBuilder::new(&pattern)
-        .case_insensitive(true)
-        .build()
-        .ok()
-}
-
-fn read_file_tail(path: &Path) -> std::io::Result<String> {
-    let mut file = File::open(path)?;
-    let file_len = file.metadata()?.len();
-    let tail_len = file_len.min(FATAL_ERROR_TAIL_BYTES);
-    file.seek(SeekFrom::Start(file_len.saturating_sub(tail_len)))?;
-
-    let mut buf = Vec::with_capacity(tail_len as usize);
-    file.take(tail_len).read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn capture_tmux_pane(session_dir: &Path) -> Option<String> {
-    static TMUX_AVAILABLE: AtomicBool = AtomicBool::new(true);
-    if !TMUX_AVAILABLE.load(Ordering::Relaxed) {
-        return None;
-    }
-
-    let session_id = session_dir.file_name()?.to_str()?;
-    let session_name = format!("csa-{session_id}");
-
-    if let Ok(handle) = tokio::runtime::Handle::try_current()
-        && matches!(
-            handle.runtime_flavor(),
-            tokio::runtime::RuntimeFlavor::MultiThread
-        )
-    {
-        return tokio::task::block_in_place(|| {
-            capture_tmux_pane_blocking(&session_name, &TMUX_AVAILABLE)
-        });
-    }
-
-    capture_tmux_pane_blocking(&session_name, &TMUX_AVAILABLE)
-}
-
-fn capture_tmux_pane_blocking(session_name: &str, tmux_available: &AtomicBool) -> Option<String> {
-    let output = match Command::new("tmux")
-        .args(["capture-pane", "-t", session_name, "-p", "-S", "-200"])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            tmux_available.store(false, Ordering::Relaxed);
-            return None;
-        }
-        Err(_) => return None,
-    };
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
 fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
     let output_growth = matches!(
         (
@@ -760,21 +546,6 @@ fn is_process_alive(pid: u32) -> bool {
     #[cfg(not(unix))]
     {
         std::path::Path::new(&format!("/proc/{pid}/stat")).exists()
-    }
-}
-
-#[cfg(test)]
-mod fatal_error_regex_tests {
-    use super::*;
-
-    #[test]
-    fn matches_custom_markers_with_non_word_edges() {
-        let markers = ["[ERROR]", "fatal"].map(String::from);
-        let regex = build_fatal_error_regex(&markers).expect("regex");
-
-        assert!(regex.is_match("[ERROR] unavailable"));
-        assert!(regex.is_match("fatal error"));
-        assert!(!regex.is_match("nonfatal error"));
     }
 }
 

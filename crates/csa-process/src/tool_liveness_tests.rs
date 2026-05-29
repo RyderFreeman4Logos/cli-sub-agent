@@ -255,6 +255,85 @@ fn probe_ignores_broad_http_markers_in_output_log_content() {
 }
 
 #[test]
+fn sidecar_scopes_broad_http_markers_to_stderr_only() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(
+        tmp.path(),
+        &[
+            "HTTP 404".to_string(),
+            "500 Internal Server Error".to_string(),
+            "rate_limit_exceeded".to_string(),
+        ],
+    )
+    .expect("write markers");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "docs quote HTTP 404 Not Found and 500 Internal Server Error as examples\n",
+    )
+    .expect("write output");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(!signals.fatal_error);
+}
+
+#[test]
+fn sidecar_detects_broad_http_marker_in_stderr_tail() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(
+        tmp.path(),
+        &[
+            "HTTP 404".to_string(),
+            "500 Internal Server Error".to_string(),
+            "rate_limit_exceeded".to_string(),
+        ],
+    )
+    .expect("write markers");
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "transport failed with HTTP 503\n",
+    )
+    .expect("write stderr");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(signals.fatal_error);
+}
+
+#[test]
+fn sidecar_keeps_tier1_markers_all_channel() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_fatal_error_markers(
+        tmp.path(),
+        &[
+            "HTTP 404".to_string(),
+            "500 Internal Server Error".to_string(),
+            "rate_limit_exceeded".to_string(),
+        ],
+    )
+    .expect("write markers");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "provider envelope: rate_limit_exceeded\n",
+    )
+    .expect("write output");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(signals.fatal_error);
+}
+
+#[test]
+fn matches_custom_markers_with_non_word_edges() {
+    let markers = ["[ERROR]", "fatal"].map(String::from);
+    let regex = build_fatal_error_regex(&markers).expect("regex");
+
+    assert!(regex.is_match("[ERROR] unavailable"));
+    assert!(regex.is_match("fatal error"));
+    assert!(!regex.is_match("nonfatal error"));
+}
+
+#[test]
 fn fatal_error_signal_scopes_tmux_pane_to_tier1_markers() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
@@ -313,7 +392,7 @@ fn probe_uses_custom_fatal_error_marker_sidecar() {
 }
 
 #[test]
-fn probe_reuses_cached_custom_fatal_error_marker_regex() {
+fn probe_reloads_custom_fatal_error_marker_sidecar() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_fatal_error_markers(tmp.path(), &["custom backend died".to_string()])
         .expect("write markers");
@@ -327,6 +406,14 @@ fn probe_reuses_cached_custom_fatal_error_marker_regex() {
 
     write_fatal_error_markers(tmp.path(), &["different marker".to_string()])
         .expect("rewrite markers");
+
+    assert!(!ToolLiveness::probe(tmp.path()).fatal_error);
+
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "agent ui shows: different marker\n",
+    )
+    .expect("rewrite output");
 
     assert!(ToolLiveness::probe(tmp.path()).fatal_error);
 }

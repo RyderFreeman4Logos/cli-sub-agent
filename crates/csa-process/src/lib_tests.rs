@@ -338,7 +338,7 @@ fn test_tool_liveness_matches_daemon_pid_by_session_dir_path() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut child = std::process::Command::new("sh")
         .arg("-c")
-        .arg("sleep 30")
+        .arg("while true; do sleep 1; done")
         .arg("session-runner")
         .arg(tmp.path())
         .spawn()
