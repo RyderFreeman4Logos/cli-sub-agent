@@ -171,6 +171,49 @@ fn issue_1675_fail_verdict_only_in_details_section_emits_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1675 Case 5 (review-finding follow-up): a FAIL verdict in a DUPLICATE later
+/// `details` section must fail closed. `read_section` returns only the first
+/// section per id, so an early neutral `details` followed by a later `details`
+/// holding the real FAIL verdict (persisted as `details-2.md`) could hide it.
+/// The fail-closed scan uses `read_all_sections`, so every duplicate is checked.
+#[test]
+fn issue_1675_fail_verdict_in_duplicate_later_details_section_emits_fail() {
+    let session_id = "01TEST1675DUPDETAILSFAIL000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1675-dup-details-fail", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    // Neutral summary + neutral FIRST details; the FAIL verdict lives only in the
+    // SECOND (duplicate) details section (persisted as details-2.md) and there is
+    // no full.md. read_section's first-match would miss it; read_all_sections sees it.
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nReviewed.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nLooks fine on first pass.\n<!-- CSA:SECTION:details:END -->\n<!-- CSA:SECTION:details -->\nVerdict: FAIL\n\nBlocking issue on closer inspection.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1675: FAIL verdict in a duplicate later details section must fail closed"
+    );
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 // ─── Unit tests for detect_prose_fail_conclusion ───
 
 #[test]

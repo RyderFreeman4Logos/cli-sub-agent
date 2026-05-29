@@ -167,18 +167,23 @@ pub(super) fn detect_prose_fail_conclusion(text: &str) -> bool {
 
 /// Whether the review's persisted prose affirmatively concludes FAIL.
 ///
-/// Scans every place a reviewer might record a FAIL verdict: the persisted
-/// `summary` section, then the `details` section, then `output/full.md`. This is
-/// intentionally MORE thorough than [`review_contains_prose_clean_conclusion`]
-/// (which reads only `summary` + `full.md`): a missed FAIL signal silently merges
-/// blocking findings, so the fail-closed path errs toward catching FAIL wherever
-/// it appears — including structured output that has section markers but no
-/// `full.md`, where the verdict can live only in `details` (#1675 review finding).
-/// The clean path stays stricter by design; both asymmetries err toward FAIL.
+/// Scans every place a reviewer might record a FAIL verdict: ALL persisted
+/// `summary` and `details` sections, then `output/full.md`. It uses
+/// [`csa_session::read_all_sections`] rather than [`csa_session::read_section`]
+/// because the latter returns only the FIRST section per id. Duplicate section
+/// ids persist their later copies as suffixed files (`details-2.md`, …) and
+/// caller-facing sanitization treats the last-non-empty copy as authoritative —
+/// so a FAIL verdict in a *later* duplicate must still fail closed; reading only
+/// the first copy could hide it (#1675 review finding). This is intentionally
+/// MORE thorough than [`review_contains_prose_clean_conclusion`] (which reads only
+/// `summary` + `full.md`): a missed FAIL signal silently merges blocking findings,
+/// so the fail-closed path errs toward catching FAIL wherever it appears —
+/// including structured output that has section markers but no `full.md`, where
+/// the verdict can live only in `details`. Both asymmetries err toward FAIL.
 pub(super) fn review_contains_prose_fail_conclusion(session_dir: &Path) -> Result<bool> {
-    for section_id in ["summary", "details"] {
-        if let Some(section) = csa_session::read_section(session_dir, section_id)?
-            && detect_prose_fail_conclusion(&section)
+    for (section, content) in csa_session::read_all_sections(session_dir)? {
+        if matches!(section.id.as_str(), "summary" | "details")
+            && detect_prose_fail_conclusion(&content)
         {
             return Ok(true);
         }
