@@ -11,7 +11,9 @@ use tracing::warn;
 mod execution_result;
 pub use execution_result::ExecutionResult;
 mod idle_watchdog;
-use idle_watchdog::{IdleTerminationReason, idle_timeout_note, should_terminate_for_idle};
+use idle_watchdog::{
+    idle_timeout_note, should_terminate_for_idle, should_terminate_for_initial_response,
+};
 mod persistent_rate_limit;
 use persistent_rate_limit::PersistentRateLimitTracker;
 #[path = "lib_output_helpers.rs"]

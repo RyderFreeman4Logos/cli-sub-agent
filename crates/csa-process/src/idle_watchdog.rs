@@ -19,6 +19,19 @@ pub(crate) fn idle_timeout_note(
     effective_idle: Duration,
     liveness_dead_timeout: Duration,
 ) -> (&'static str, String) {
+    if matches!(reason, IdleTerminationReason::FatalError) {
+        let progress_kind = if !received_first_output && initial_response_timeout.is_some() {
+            "stdout progress during initial response"
+        } else {
+            "output progress"
+        };
+        return (
+            "fatal backend error",
+            format!(
+                "fatal backend error: matched configured 4xx/5xx/provider marker and observed no {progress_kind} for 30s; process killed"
+            ),
+        );
+    }
     if !received_first_output && initial_response_timeout.is_some() {
         return (
             "initial_response_timeout",
@@ -26,12 +39,6 @@ pub(crate) fn idle_timeout_note(
                 "initial_response_timeout: no stdout output for {}s; process killed immediately (no liveness polling)",
                 effective_idle.as_secs(),
             ),
-        );
-    }
-    if matches!(reason, IdleTerminationReason::FatalError) {
-        return (
-            "fatal backend error",
-            "fatal backend error: matched configured 4xx/5xx/provider marker and observed no output progress for 30s; process killed".to_string(),
         );
     }
     (
@@ -42,6 +49,27 @@ pub(crate) fn idle_timeout_note(
             liveness_dead_timeout.as_secs(),
         ),
     )
+}
+
+/// Check the startup watchdog before the first stdout byte is observed.
+///
+/// Stderr-only output must not satisfy the initial response watchdog, but fatal
+/// backend errors commonly arrive on stderr.  Detect those after the same short
+/// fatal-error grace used by the normal idle watchdog instead of waiting for the
+/// full configured initial-response timeout.
+pub(crate) fn should_terminate_for_initial_response(
+    last_stdout_activity: Instant,
+    initial_response_timeout: Duration,
+    session_dir: Option<&Path>,
+) -> Option<IdleTerminationReason> {
+    let stdout_idle_for = last_stdout_activity.elapsed();
+    if stdout_idle_for >= FATAL_ERROR_PROGRESS_GRACE
+        && session_dir.is_some_and(|dir| ToolLiveness::probe(dir).fatal_error)
+    {
+        return Some(IdleTerminationReason::FatalError);
+    }
+
+    (stdout_idle_for >= initial_response_timeout).then_some(IdleTerminationReason::Idle)
 }
 
 /// Check whether an idle tool process should be terminated.
@@ -131,6 +159,65 @@ mod tests {
         assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
         assert!(dead_since.is_none());
         assert!(next_poll.is_none());
+    }
+
+    #[test]
+    fn initial_response_fast_fails_after_fatal_error_grace() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("stderr.log"), "invalid_api_key\n").expect("stderr log");
+        let last_stdout_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+
+        let should_terminate = should_terminate_for_initial_response(
+            last_stdout_activity,
+            Duration::from_secs(600),
+            Some(temp.path()),
+        );
+
+        assert_eq!(should_terminate, Some(IdleTerminationReason::FatalError));
+    }
+
+    #[test]
+    fn initial_response_ignores_nonfatal_stderr_until_configured_timeout() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("stderr.log"), "startup heartbeat\n").expect("stderr log");
+        let last_stdout_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+
+        let should_terminate = should_terminate_for_initial_response(
+            last_stdout_activity,
+            Duration::from_secs(600),
+            Some(temp.path()),
+        );
+
+        assert_eq!(should_terminate, None);
+    }
+
+    #[test]
+    fn initial_response_timeout_still_fires_without_session_dir() {
+        let last_stdout_activity = Instant::now() - Duration::from_secs(3);
+
+        let should_terminate = should_terminate_for_initial_response(
+            last_stdout_activity,
+            Duration::from_secs(2),
+            None,
+        );
+
+        assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
+    }
+
+    #[test]
+    fn fatal_error_note_takes_priority_over_initial_response_note() {
+        let (kind, note) = idle_timeout_note(
+            false,
+            Some(Duration::from_secs(600)),
+            IdleTerminationReason::FatalError,
+            Duration::from_secs(600),
+            Duration::from_secs(60),
+        );
+
+        assert_eq!(kind, "fatal backend error");
+        assert!(note.contains("fatal backend error"));
     }
 
     #[test]

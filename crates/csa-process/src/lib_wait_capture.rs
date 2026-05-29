@@ -224,8 +224,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                         effective_idle,
                     );
                     let idle_termination = if !received_first_output && initial_response_timeout.is_some() {
-                        (last_stdout_activity.elapsed() >= effective_idle)
-                            .then_some(IdleTerminationReason::Idle)
+                        should_terminate_for_initial_response(
+                            last_stdout_activity,
+                            effective_idle,
+                            session_dir,
+                        )
                     } else {
                         should_terminate_for_idle(
                             &mut last_activity,
@@ -333,8 +336,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                         effective_idle,
                     );
                     let idle_termination = if !received_first_output && initial_response_timeout.is_some() {
-                        (last_stdout_activity.elapsed() >= effective_idle)
-                            .then_some(IdleTerminationReason::Idle)
+                        should_terminate_for_initial_response(
+                            last_stdout_activity,
+                            effective_idle,
+                            session_dir,
+                        )
                     } else {
                         should_terminate_for_idle(
                             &mut last_activity,

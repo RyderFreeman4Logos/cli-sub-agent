@@ -345,10 +345,20 @@ fn test_tool_liveness_matches_daemon_pid_by_session_dir_path() {
         .expect("spawn sleeper");
     std::fs::write(tmp.path().join("daemon.pid"), child.id().to_string()).expect("write pid");
 
-    assert_eq!(ToolLiveness::live_process_pid(tmp.path()), Some(child.id()));
+    let expected_pid = child.id();
+    let mut observed_pid = None;
+    for _ in 0..20 {
+        observed_pid = ToolLiveness::live_process_pid(tmp.path());
+        if observed_pid == Some(expected_pid) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     let _ = child.kill();
     let _ = child.wait();
+
+    assert_eq!(observed_pid, Some(expected_pid));
 }
 
 #[test]
