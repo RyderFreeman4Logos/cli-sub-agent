@@ -1,8 +1,12 @@
 use regex::{Regex, RegexBuilder};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, SystemTime};
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
@@ -463,7 +467,16 @@ fn read_fatal_error_markers(session_dir: &Path) -> Vec<String> {
 }
 
 fn has_fatal_error_signal(session_dir: &Path, markers: &[String]) -> bool {
-    let Some(regex) = build_fatal_error_regex(markers) else {
+    let marker_path = session_dir.join(FATAL_ERROR_MARKERS_FILE);
+    let regex = if marker_path.exists() {
+        build_fatal_error_regex(markers)
+    } else {
+        static DEFAULT_REGEX: OnceLock<Option<Regex>> = OnceLock::new();
+        DEFAULT_REGEX
+            .get_or_init(|| build_fatal_error_regex(&default_fatal_error_markers()))
+            .clone()
+    };
+    let Some(regex) = regex else {
         return false;
     };
 
@@ -503,21 +516,55 @@ fn read_file_tail(path: &Path) -> std::io::Result<String> {
 }
 
 fn capture_tmux_pane(session_dir: &Path) -> Option<String> {
+    static TMUX_AVAILABLE: AtomicBool = AtomicBool::new(true);
+    if !TMUX_AVAILABLE.load(Ordering::Relaxed) {
+        return None;
+    }
+
     let session_id = session_dir.file_name()?.to_str()?;
     let session_name = format!("csa-{session_id}");
-    let has_session = Command::new("tmux")
-        .args(["has-session", "-t", &session_name])
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current()
+        && matches!(
+            handle.runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::MultiThread
+        )
+    {
+        return tokio::task::block_in_place(|| {
+            capture_tmux_pane_blocking(&session_name, &TMUX_AVAILABLE)
+        });
+    }
+
+    capture_tmux_pane_blocking(&session_name, &TMUX_AVAILABLE)
+}
+
+fn capture_tmux_pane_blocking(session_name: &str, tmux_available: &AtomicBool) -> Option<String> {
+    let has_session = match Command::new("tmux")
+        .args(["has-session", "-t", session_name])
         .status()
-        .ok()
-        .is_some_and(|status| status.success());
+    {
+        Ok(status) => status.success(),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            tmux_available.store(false, Ordering::Relaxed);
+            return None;
+        }
+        Err(_) => return None,
+    };
     if !has_session {
         return None;
     }
 
-    let output = Command::new("tmux")
-        .args(["capture-pane", "-t", &session_name, "-p", "-S", "-200"])
+    let output = match Command::new("tmux")
+        .args(["capture-pane", "-t", session_name, "-p", "-S", "-200"])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            tmux_available.store(false, Ordering::Relaxed);
+            return None;
+        }
+        Err(_) => return None,
+    };
     if !output.status.success() {
         return None;
     }
