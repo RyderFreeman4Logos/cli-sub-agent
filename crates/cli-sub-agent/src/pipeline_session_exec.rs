@@ -103,14 +103,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-    write_fatal_error_marker_sidecar(
-        config,
-        &session_dir,
-        project_root,
-        &mut session,
-        executor.tool_name(),
-        &mut cleanup_guard,
-    )?;
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {
@@ -143,6 +135,15 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             ));
         }
     };
+    // Lock-guarded: see `write_fatal_error_marker_sidecar` precondition (#1652).
+    write_fatal_error_marker_sidecar(
+        config,
+        &session_dir,
+        project_root,
+        &mut session,
+        executor.tool_name(),
+        &mut cleanup_guard,
+    )?;
     check_resources_before_spawn(
         config,
         executor,
