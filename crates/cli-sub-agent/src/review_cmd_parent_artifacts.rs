@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -76,8 +77,9 @@ fn load_multi_reviewer_artifacts(
     output_dir: &Path,
     reviewers: usize,
     outcomes: &[ReviewerOutcome],
-) -> Result<Vec<ReviewArtifact>> {
+) -> Result<(Vec<ReviewArtifact>, BTreeSet<usize>)> {
     let mut reviewer_artifacts = Vec::new();
+    let mut persisted_indices = BTreeSet::new();
     for reviewer_index in 1..=reviewers {
         let mut artifact_paths = vec![
             output_dir
@@ -105,10 +107,28 @@ fn load_multi_reviewer_artifacts(
                 .with_context(|| format!("failed to read {}", artifact_path.display()))?;
             let artifact = parse_reviewer_artifact(&artifact_path, &content)?;
             reviewer_artifacts.push(artifact);
+            persisted_indices.insert(reviewer_index);
             break;
         }
     }
-    Ok(reviewer_artifacts)
+    Ok((reviewer_artifacts, persisted_indices))
+}
+
+/// Whether every reviewer that voted `HAS_ISSUES` persisted a structured findings
+/// artifact. When false, at least one dissenting reviewer's findings never reached
+/// disk (e.g. quota/auth failure forced a non-zero exit before structured output was
+/// written), so an empty consolidated artifact does NOT prove "no issues exist" and the
+/// parent gate must fail-closed rather than promote to PASS. Crucially this is per-reviewer:
+/// one OTHER reviewer persisting an empty artifact must not mask an unpersisted dissenter
+/// (#1659).
+fn dissenting_findings_persisted(
+    outcomes: &[ReviewerOutcome],
+    persisted_indices: &BTreeSet<usize>,
+) -> bool {
+    outcomes
+        .iter()
+        .filter(|outcome| outcome.verdict == HAS_ISSUES)
+        .all(|outcome| persisted_indices.contains(&(outcome.reviewer_index + 1)))
 }
 
 pub(super) fn write_multi_reviewer_parent_artifacts(
@@ -122,15 +142,15 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     let Some((session_dir, session_id)) = resolve_parent_session_env() else {
         return Ok(());
     };
-    let reviewer_artifacts =
+    let (reviewer_artifacts, persisted_indices) =
         load_multi_reviewer_artifacts(project_root, &session_dir, reviewers, outcomes)?;
-    let any_reviewer_artifact_loaded = !reviewer_artifacts.is_empty();
+    let dissent_findings_persisted = dissenting_findings_persisted(outcomes, &persisted_indices);
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
     let parent_decision = parent_review_decision(
         &consolidated,
         final_verdict,
         all_reviewers_unavailable,
-        any_reviewer_artifact_loaded,
+        dissent_findings_persisted,
     );
     let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
     let parent_artifact = parent_artifact_for_decision(&consolidated, parent_decision);
@@ -193,15 +213,16 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     let Some((target, session_dir)) = resolve_standalone_consensus_carrier(ctx)? else {
         return Ok(None);
     };
-    let reviewer_artifacts =
+    let (reviewer_artifacts, persisted_indices) =
         load_multi_reviewer_artifacts(ctx.project_root, &session_dir, ctx.reviewers, ctx.outcomes)?;
-    let any_reviewer_artifact_loaded = !reviewer_artifacts.is_empty();
+    let dissent_findings_persisted =
+        dissenting_findings_persisted(ctx.outcomes, &persisted_indices);
     let consolidated = build_consolidated_artifact(reviewer_artifacts, &target.session_id);
     let decision = parent_review_decision(
         &consolidated,
         ctx.final_verdict,
         ctx.all_reviewers_unavailable,
-        any_reviewer_artifact_loaded,
+        dissent_findings_persisted,
     );
     let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
     let artifact = parent_artifact_for_decision(&consolidated, decision);
@@ -394,7 +415,7 @@ fn parent_review_decision(
     artifact: &ReviewArtifact,
     final_verdict: &str,
     all_reviewers_unavailable: bool,
-    any_reviewer_artifact_loaded: bool,
+    dissent_findings_persisted: bool,
 ) -> ReviewDecision {
     if all_reviewers_unavailable {
         return ReviewDecision::Unavailable;
@@ -408,14 +429,16 @@ fn parent_review_decision(
     {
         return ReviewDecision::Fail;
     }
-    // #1659 false-PASS guard: a non-clean consensus with an empty consolidated artifact
-    // AND no reviewer that persisted a structured findings artifact is an UNTRUSTWORTHY
-    // "clean" signal -- the reviewers' findings never persisted (e.g. quota/auth failure
-    // forced a non-zero exit before structured output was written), so an empty/synthetic
-    // findings.toml does NOT mean "no findings exist". Fail-closed on the consensus verdict
-    // rather than promoting to PASS. A reviewer that DID persist an artifact (even an empty
-    // one) is still trusted below as a genuine "no findings" PASS, preserving #1045 et al.
-    if !any_reviewer_artifact_loaded
+    // #1659 false-PASS guard: a non-clean consensus (a reviewer voted HAS_ISSUES) whose
+    // consolidated artifact is empty is only trustworthy as PASS when EVERY dissenting
+    // reviewer persisted its structured findings. If any HAS_ISSUES voter never persisted
+    // (e.g. quota/auth failure forced a non-zero exit before structured output was written),
+    // an empty/synthetic findings.toml does NOT mean "no findings exist" -- and one OTHER
+    // reviewer's empty artifact must not mask that unpersisted dissent (#1659 round-2, codex).
+    // Fail-closed on the consensus verdict rather than promoting to PASS. When every dissenter
+    // DID persist (even an empty artifact), the explicit "no findings" is trusted as a genuine
+    // PASS, preserving the #1045/#1217 zero-findings-pass behavior.
+    if !dissent_findings_persisted
         && artifact.findings.is_empty()
         && consensus_decision == ReviewDecision::Fail
     {
