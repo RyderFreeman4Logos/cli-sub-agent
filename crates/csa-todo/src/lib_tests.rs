@@ -39,22 +39,60 @@ fn test_create_plan() {
 }
 
 #[test]
-fn test_create_plan_writes_valid_attestation() {
+fn test_create_plan_leaves_attestation_unset() {
+    // #1669: create writes only placeholder TODO.md and intentionally does NOT
+    // attest it (the placeholder is always overwritten with the real plan). A
+    // freshly created plan therefore reports `Missing` (un-attested, benign),
+    // never a false `Mismatch`/`[PLAN TAMPERED]`.
     let dir = tempdir().unwrap();
     let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
 
-    let plan = manager.create("Attested Plan", None).unwrap();
+    let plan = manager.create("Unattested Plan", None).unwrap();
 
-    assert!(plan.attestation_path().exists());
+    assert!(plan.todo_md_path().exists());
+    assert!(!plan.attestation_path().exists());
+    assert_eq!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Missing
+    );
+}
+
+#[test]
+fn test_direct_write_then_attest_is_valid_not_tampered() {
+    // #1669 regression: mimics the mktd workflow Step 13 — create a plan, write
+    // the real TODO.md directly (bypassing the csa todo API), then attest (what
+    // `csa todo save` does). The un-attested intermediate state must be `Missing`,
+    // after attest it must be `Valid`, and only a genuine post-attestation edit
+    // may report `Mismatch` — never the benign draft state.
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("Repro 1669", None).unwrap();
+
+    // Direct write bypassing the csa todo API (the workflow's `printf > TODO.md`).
+    std::fs::write(
+        plan.todo_md_path(),
+        "# TODO: Repro 1669\n\n## Tasks\n\n- [ ] real task\n  DONE WHEN: shipped\n",
+    )
+    .unwrap();
+    assert_eq!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Missing,
+        "un-attested draft must be Missing, not a false [PLAN TAMPERED]"
+    );
+
+    manager.attest(&plan.timestamp).unwrap();
     assert_eq!(
         manager.verify_attestation(&plan.timestamp).unwrap(),
         TodoAttestationStatus::Valid
     );
 
-    let attestation: TodoAttestation =
-        toml::from_str(&std::fs::read_to_string(plan.attestation_path()).unwrap()).unwrap();
-    let content = std::fs::read(plan.todo_md_path()).unwrap();
-    assert_eq!(attestation.hash, hash_todo_content(&content));
+    // A genuine post-attestation edit must still surface as tampering.
+    std::fs::write(plan.todo_md_path(), "# tampered\n").unwrap();
+    assert!(matches!(
+        manager.verify_attestation(&plan.timestamp).unwrap(),
+        TodoAttestationStatus::Mismatch { .. }
+    ));
 }
 
 #[test]
@@ -243,6 +281,8 @@ fn test_verify_attestation_detects_manual_tamper() {
     let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
 
     let plan = manager.create("Tamper Test", None).unwrap();
+    // Establish a real attestation baseline (what `csa todo save` does), then tamper.
+    manager.attest(&plan.timestamp).unwrap();
     std::fs::write(plan.todo_md_path(), "# Tampered\n").unwrap();
 
     match manager.verify_attestation(&plan.timestamp).unwrap() {
@@ -260,6 +300,8 @@ fn test_attest_repairs_manual_tamper() {
     let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
 
     let plan = manager.create("Repair Test", None).unwrap();
+    // Attest a baseline first; only a post-attestation edit counts as tamper.
+    manager.attest(&plan.timestamp).unwrap();
     let edited = "# Legitimate manual edit\n";
     std::fs::write(plan.todo_md_path(), edited).unwrap();
 
