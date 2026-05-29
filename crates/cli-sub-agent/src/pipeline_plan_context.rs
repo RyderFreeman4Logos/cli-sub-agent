@@ -254,6 +254,10 @@ mod tests {
         let plan = manager
             .create("Protected plan", Some("feat/tamper"))
             .expect("plan");
+        // Establish a real attestation baseline (what `csa todo save` does); only a
+        // post-attestation edit is tamper. A freshly created, un-attested draft is
+        // `Missing` and is loaded normally (#1669), not refused.
+        manager.attest(&plan.timestamp).expect("attest");
         std::fs::write(plan.todo_md_path(), "# Tampered\n").expect("tamper");
 
         assert!(load_plan_context_for_branch(&manager, "feat/tamper").is_none());

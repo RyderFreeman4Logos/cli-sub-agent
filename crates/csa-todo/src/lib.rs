@@ -519,10 +519,11 @@ impl TodoManager {
             return Err(e.context("Failed to write TODO.md (rolled back plan directory)"));
         }
 
-        if let Err(e) = self.write_attestation_for_content(&plan, initial_content.as_bytes()) {
-            let _ = std::fs::remove_dir_all(&plan.todo_dir);
-            return Err(e.context("Failed to write TODO attestation (rolled back plan directory)"));
-        }
+        // #1669: do NOT attest the placeholder here. It is always overwritten by
+        // the real plan (the mktd workflow writes TODO.md directly, then
+        // `csa todo save` attests). Attesting the throwaway placeholder would make
+        // every not-yet-finalized plan report a false `Mismatch` ("[PLAN TAMPERED]");
+        // leaving it unset reports the benign `Missing` until real content is attested.
 
         Ok(plan)
     }
