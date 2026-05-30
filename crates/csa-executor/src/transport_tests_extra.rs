@@ -325,6 +325,8 @@ fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() 
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     };
     let toml = toml::to_string_pretty(&result).expect("serialize session result");

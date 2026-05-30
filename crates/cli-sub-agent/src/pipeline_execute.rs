@@ -214,6 +214,8 @@ pub(crate) async fn execute_transport_with_signal(
                 peak_memory_mb,
                 fallback_chain: None,
                 gate_timeout: false,
+                warnings: Vec::new(),
+                raw_process_exit_code: None,
                 manager_fields: Default::default(),
             };
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
@@ -340,6 +342,8 @@ fn record_session_termination(
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     };
     if let Err(e) = save_result(project_root, &session.meta_session_id, &updated_result) {

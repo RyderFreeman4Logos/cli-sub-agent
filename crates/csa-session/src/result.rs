@@ -199,6 +199,18 @@ pub struct SessionResult {
     /// Only set when post-exec gate times out; false otherwise.
     #[serde(default, skip_serializing_if = "is_false")]
     pub gate_timeout: bool,
+    /// Non-fatal warnings attached to a `success` status. Populated when the
+    /// effective-outcome classifier downgrades an incidental nonzero exit on a
+    /// completed turn to success (#161): the session achieved its purpose, but
+    /// a hook or in-turn command exited nonzero. Empty for clean sessions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// The raw tool-process exit code, preserved as a diagnostic when it differs
+    /// from the effective `exit_code` (i.e. when an incidental nonzero exit was
+    /// downgraded to success). `None` when the raw exit matched the effective
+    /// status, so existing clean envelopes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_process_exit_code: Option<i32>,
     /// Manager-facing data loaded from `output/result.toml` sidecars at read time.
     /// This is intentionally read-only metadata and is never serialized back into
     /// the runtime `result.toml` envelope.
@@ -242,6 +254,8 @@ mod tests {
             peak_memory_mb: None,
             fallback_chain: None,
             gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         };
 
@@ -275,6 +289,8 @@ mod tests {
             peak_memory_mb: None,
             fallback_chain: None,
             gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         };
 
@@ -362,6 +378,8 @@ artifacts = ["output/a.txt", "output/b.txt"]
             peak_memory_mb: None,
             fallback_chain: None,
             gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         };
 

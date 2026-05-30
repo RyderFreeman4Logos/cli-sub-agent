@@ -49,7 +49,9 @@ pub struct ExecutionResult {
     /// worker-blocked / no-progress / tool exhaustion) fired and the nonzero
     /// `exit_code` is authoritative-fatal — NOT an incidental hook / in-turn-command
     /// exit. The outcome classifier treats this as a hard failure regardless of
-    /// `model_completed`. Set via [`ExecutionResult::mark_gate_failure`].
+    /// `model_completed`. Set via [`ExecutionResult::mark_gate_failure`] (forces
+    /// `exit_code` to `1`) or [`ExecutionResult::note_gate_failure`] (preserves a
+    /// pre-existing nonzero exit code).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csa_gate_failure: Option<String>,
     /// Non-fatal warnings recorded during execution / outcome classification — e.g.
@@ -75,19 +77,21 @@ impl ExecutionResult {
         }
     }
 
-    /// Record the raw transport exit code, model-completion signal, and terminal
-    /// reason at the transport boundary, before any CSA-own gate can rewrite
-    /// `exit_code`. Sets `exit_code` to `raw_exit_code` as the initial effective value.
-    pub fn set_transport_outcome(
-        &mut self,
-        raw_exit_code: i32,
-        model_completed: Option<bool>,
-        terminal_reason: Option<String>,
-    ) {
-        self.exit_code = raw_exit_code;
-        self.raw_process_exit_code = Some(raw_exit_code);
-        self.model_completed = model_completed;
-        self.terminal_reason = terminal_reason;
+    /// Record a CSA-own gate failure while preserving a more specific pre-existing
+    /// failure exit code. Like [`Self::mark_gate_failure`], but escalates `exit_code`
+    /// to `1` only when it is currently `0`: a commit policy firing on top of an
+    /// already-failed run (e.g. the tool itself exited `2`) keeps the original code
+    /// for diagnostics. Still records the explicit gate marker (first reason wins)
+    /// and clears non-fatal warnings, so the outcome classifier treats the session
+    /// as authoritative-fatal.
+    pub fn note_gate_failure(&mut self, reason: impl Into<String>) {
+        if self.exit_code == 0 {
+            self.exit_code = 1;
+        }
+        self.warnings.clear();
+        if self.csa_gate_failure.is_none() {
+            self.csa_gate_failure = Some(reason.into());
+        }
     }
 }
 

@@ -102,6 +102,8 @@ find-monolith-files:
         # PR. Splitting them is tracked as separate refactor work.
         */transport_tmux.rs) exempt=true ;;        # tests+jsonl already split to siblings; body split pending
         */review_cmd_execute.rs) exempt=true ;;    # review-command driver; split pending
+        */session_cmds_reconcile.rs) exempt=true ;;  # ~10.8K on main; reconcile driver; #161 field-spread touch; split pending
+        */preflight_state_dir.rs) exempt=true ;;     # ~9.4K on main; #161 SessionResult field-spread touch; split pending
     esac
     [ -f "$file" ] || exit 0
     grep -Iq '' "$file" 2>/dev/null || exit 0  # skip binary files

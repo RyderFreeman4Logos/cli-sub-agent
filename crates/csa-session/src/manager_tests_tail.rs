@@ -45,6 +45,8 @@ fn test_save_and_load_result() {
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(td.path(), &state.meta_session_id, &result, crate::SaveOptions::default())
@@ -97,6 +99,8 @@ fn test_save_session_and_result_preserve_legacy_symlink_root() {
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     let canonical_project = project.canonicalize().unwrap();
@@ -159,6 +163,8 @@ name = "gemini-cli"
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -226,6 +232,8 @@ artifacts = [1, 2]
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -288,6 +296,8 @@ name = "gemini-cli"
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -313,6 +323,8 @@ name = "gemini-cli"
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -374,6 +386,8 @@ done = false
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     let err = save_result_in(
@@ -407,6 +421,8 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(
@@ -432,6 +448,8 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
     };
     save_result_in(

@@ -66,6 +66,8 @@ fn setup_unrelated_debate_session(
             peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         },
     )
@@ -230,6 +232,8 @@ fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
             peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         },
     )
@@ -305,6 +309,8 @@ fn debate_nonzero_with_revise_artifact_exits_failure() {
             peak_memory_mb: None,
             fallback_chain: None,
         gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         },
     )

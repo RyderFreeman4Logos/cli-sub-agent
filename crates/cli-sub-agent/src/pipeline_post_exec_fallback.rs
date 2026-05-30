@@ -121,6 +121,8 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     };
 
