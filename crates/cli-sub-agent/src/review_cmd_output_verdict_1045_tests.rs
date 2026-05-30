@@ -456,13 +456,13 @@ fn issue_1217_synthetic_empty_toml_unstructured_full_md_preserves_meta_pass() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
-/// Case 10 (#1045 round 3, superseded by #1362): synthetic-empty findings.toml
-/// + NO review-findings.json + empty full.md → decision=pass.
+/// Case 10 (#1045 round 3, superseded by R2-001): synthetic-empty findings.toml
+/// + NO review-findings.json + empty full.md + Uncertain meta → fail closed.
 ///
-/// Empty findings + zero severity counts are the primary signal; missing
-/// summary/details/full output must not fall through to stale meta failure.
+/// Synthetic empty findings are not positive evidence that the reviewer
+/// completed successfully.
 #[test]
-fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_pass() {
+fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_fails_closed() {
     let session_id = "01TEST1045R3SYNTHNOJSEMPTY0";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1045-r3-synth-no-json-empty-full", session_id);
@@ -492,10 +492,10 @@ fn issue_1045_r3_synthetic_empty_toml_missing_json_empty_full_md_emits_pass() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1362: synthetic-empty TOML + missing JSON + empty/missing full.md must yield Pass"
+        ReviewDecision::Uncertain,
+        "R2-001: synthetic-empty TOML + missing JSON + empty/missing full.md must fail closed"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");

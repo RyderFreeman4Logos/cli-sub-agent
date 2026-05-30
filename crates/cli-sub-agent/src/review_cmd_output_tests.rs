@@ -630,10 +630,9 @@ fn persist_review_verdict_concrete_findings_override_uncertain_token() {
 }
 
 #[test]
-fn persist_review_verdict_empty_structured_findings_uncertain_meta_emits_pass() {
-    // #1349: empty findings + zero counts is conclusive Pass, even for Uncertain meta.
-    // The prior behaviour (preserve Uncertain unless prose says PASS/CLEAN) is superseded:
-    // structured evidence (zero findings, zero counts) is authoritative.
+fn persist_review_verdict_empty_structured_findings_uncertain_meta_fails_closed() {
+    // R2-001: Uncertain reviewer outcome means the review did not complete with
+    // positive pass evidence. Empty findings alone cannot synthesize Pass.
     let session_id = "01TESTEMPTYFINDINGSUNCERTAIN";
     let (_env_lock, project_root, session_dir) = lock_test_session(
         "persist-review-verdict-empty-findings-uncertain",
@@ -666,10 +665,10 @@ fn persist_review_verdict_empty_structured_findings_uncertain_meta_emits_pass() 
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1349: empty findings + zero counts must yield Pass even for Uncertain meta"
+        ReviewDecision::Uncertain,
+        "R2-001: empty findings + zero counts must not promote Uncertain meta to Pass"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");

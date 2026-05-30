@@ -43,6 +43,49 @@ fn issue_1716_failed_final_reviewer_with_synthetic_empty_findings_is_unavailable
 }
 
 #[test]
+fn issue_1716_unavailable_nonzero_empty_failure_metadata_is_unavailable() {
+    let session_id = "01TEST1716UNAVAILABLEEMPTY00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1716-unavailable-empty-meta", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    fs::write(
+        session_dir.join("output").join(".findings.toml.synthetic"),
+        "",
+    )
+    .expect("write synthetic marker");
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        "reviewer infrastructure became unavailable before producing a verdict\n",
+    )
+    .expect("write setup-only output");
+
+    let mut meta =
+        make_review_meta_with_decision(session_id, ReviewDecision::Unavailable, "UNAVAILABLE");
+    meta.exit_code = 1;
+    meta.status_reason = None;
+    meta.primary_failure = None;
+    meta.failure_reason = None;
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Unavailable);
+    assert_eq!(artifact.verdict_legacy, "UNAVAILABLE");
+    assert_ne!(artifact.decision, ReviewDecision::Pass);
+    assert_ne!(artifact.verdict_legacy, "CLEAN");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_1716_successful_zero_findings_fallback_with_prior_failure_still_passes() {
     let session_id = "01TEST1716SUCCESSFALLBACK00";
     let (_env_lock, project_root, session_dir) =

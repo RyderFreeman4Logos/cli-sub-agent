@@ -114,14 +114,10 @@ fn persist_review_verdict_fail_meta_without_prose_clean_marker_emits_pass() {
 }
 
 #[test]
-fn persist_review_verdict_uncertain_meta_with_pass_prose_emits_pass_post_crash() {
-    // #1140: when an upstream crash (e.g. claude-code reviewer-1 EROFS writing
-    // /home/obj/.claude.json after the structured verdict has already been
-    // emitted) flips meta.decision to Uncertain, the synthesizer must trust
-    // the existing severity_counts (all zero) + findings.toml (empty) +
-    // explicit "Verdict: PASS" prose to recover the real verdict. Previously
-    // any Uncertain meta short-circuited the synthesizer and propagated as
-    // Uncertain regardless of the unambiguous structured signals.
+fn persist_review_verdict_uncertain_meta_with_pass_prose_fails_closed_post_crash() {
+    // R2-001: when reviewer metadata says Uncertain, the reviewer did not
+    // complete with a trustworthy pass outcome. Even explicit PASS prose cannot
+    // override the incomplete review outcome.
     let session_id = "01TESTUNCERTAINPASSCRASH000";
     let (_env_lock, project_root, session_dir) = lock_test_session(
         "persist-review-verdict-uncertain-meta-pass-prose",
@@ -154,20 +150,19 @@ fn persist_review_verdict_uncertain_meta_with_pass_prose_emits_pass_post_crash()
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "Uncertain meta + zero severity + empty findings + 'Verdict: PASS' prose must downgrade to Pass"
+        ReviewDecision::Uncertain,
+        "R2-001: Uncertain meta must fail closed despite PASS prose"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
     assert!(artifact.severity_counts.values().all(|value| *value == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
 #[test]
-fn persist_review_verdict_uncertain_meta_without_pass_prose_emits_pass() {
-    // #1349: empty findings + zero counts is conclusive Pass, even for Uncertain meta
-    // with no PASS/CLEAN prose. The structured evidence (zero findings) wins over
-    // meta_decision. Prior #1140-inverse behaviour is superseded by #1349.
+fn persist_review_verdict_uncertain_meta_without_pass_prose_fails_closed() {
+    // R2-001: empty findings are not positive proof of success when the review
+    // outcome is Uncertain.
     let session_id = "01TESTUNCERTAINNOSIGNAL0000";
     let (_env_lock, project_root, session_dir) = lock_test_session(
         "persist-review-verdict-uncertain-meta-no-signal",
@@ -200,10 +195,10 @@ fn persist_review_verdict_uncertain_meta_without_pass_prose_emits_pass() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1349: Uncertain meta + empty findings + zero counts must yield Pass"
+        ReviewDecision::Uncertain,
+        "R2-001: Uncertain meta + empty findings must fail closed"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
