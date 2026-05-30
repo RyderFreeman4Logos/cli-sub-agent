@@ -171,6 +171,7 @@ pub(super) async fn run_acp_sandboxed(
                 events: prompt_result.events,
                 session_id: acp_session_id,
                 exit_code,
+                exit_reason: prompt_result.exit_reason,
                 metadata: prompt_result.metadata,
                 peak_memory_mb,
             })

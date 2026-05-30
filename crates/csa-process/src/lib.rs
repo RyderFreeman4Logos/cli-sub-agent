@@ -9,7 +9,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::warn;
 #[path = "lib_execution_result.rs"]
 mod execution_result;
-pub use execution_result::ExecutionResult;
+pub use execution_result::{ExecutionResult, model_completed_from_terminal_reason};
 mod idle_watchdog;
 use idle_watchdog::{
     idle_timeout_note, should_terminate_for_idle, should_terminate_for_initial_response,

@@ -91,6 +91,31 @@ impl ExecutionResult {
     }
 }
 
+/// Map a transport terminal reason to a model-turn completion signal for the
+/// session-outcome classifier.
+///
+/// - `Some(true)` — the turn reached a normal/defined terminal state (ACP
+///   `end_turn` / `max_tokens` / `max_turn_requests` / `refusal`; legacy
+///   `turn.completed` / `completed` / `success`). An incidental nonzero process
+///   exit on such a turn may be downgraded to success-with-warnings.
+/// - `Some(false)` — the turn was cut short (`cancelled`, `idle_timeout`,
+///   `initial_response_timeout`, `error`, `failed`).
+/// - `None` — unrecognized or absent reason; the transport could not determine
+///   completion, so the classifier must rely on other signals (e.g. final-output
+///   presence).
+pub fn model_completed_from_terminal_reason(reason: Option<&str>) -> Option<bool> {
+    match reason {
+        Some(
+            "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "turn.completed"
+            | "completed" | "success",
+        ) => Some(true),
+        Some("cancelled" | "idle_timeout" | "initial_response_timeout" | "error" | "failed") => {
+            Some(false)
+        }
+        _ => None,
+    }
+}
+
 impl ExecutionResult {
     /// Consolidate consecutive retry/quota-exhaustion messages in stderr to
     /// reduce noise for orchestrators.  Replaces N consecutive retry lines with

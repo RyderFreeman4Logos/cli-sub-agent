@@ -29,6 +29,10 @@ pub struct AcpOutput {
     pub events: Vec<SessionEvent>,
     pub session_id: String,
     pub exit_code: i32,
+    /// Raw ACP stop reason for the turn (`end_turn`, `max_tokens`, `cancelled`,
+    /// `idle_timeout`, …). `None` when no terminal reason was recorded. Carried
+    /// to the session-outcome classifier as the model-completion signal.
+    pub exit_reason: Option<String>,
     pub metadata: crate::client::StreamingMetadata,
     /// Peak memory usage in MB from cgroup `memory.peak`.
     /// `None` when cgroup monitoring is unavailable.
@@ -328,6 +332,7 @@ pub async fn run_prompt_with_io(
         events: result.events,
         session_id: session.session_id().to_string(),
         exit_code,
+        exit_reason: result.exit_reason,
         metadata: result.metadata,
         peak_memory_mb: None,
     })
