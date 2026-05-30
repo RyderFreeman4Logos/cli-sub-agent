@@ -172,7 +172,7 @@ fn issue_1657_unavailable_reviewer_plus_blocking_reviewer_fails() {
 }
 
 #[test]
-fn issue_1657_all_unavailable_reviewers_fail_closed() {
+fn issue_1657_all_unavailable_reviewers_are_uncertain_and_fail_closed() {
     let outcomes = vec![
         reviewer_outcome(0, ToolName::GeminiCli, UNAVAILABLE, Some("quota exhausted")),
         reviewer_outcome(1, ToolName::Codex, UNAVAILABLE, Some("tool unavailable")),
@@ -180,8 +180,11 @@ fn issue_1657_all_unavailable_reviewers_fail_closed() {
 
     let verdict = parent_verdict_for_outcomes(&outcomes, UNAVAILABLE, true);
 
-    assert_eq!(verdict.decision, ReviewDecision::Fail);
-    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
+    assert_eq!(verdict.decision, ReviewDecision::Uncertain);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_ne!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, UNAVAILABLE);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
 }
 
 #[test]
@@ -841,6 +844,7 @@ fn parent_review_decision_fails_closed_on_unbacked_has_issues_consensus() {
             &empty,
             crate::review_consensus::HAS_ISSUES,
             &fail_outcomes,
+            false,
             false
         ),
         ReviewDecision::Fail,
@@ -851,13 +855,20 @@ fn parent_review_decision_fails_closed_on_unbacked_has_issues_consensus() {
             &empty,
             crate::review_consensus::CLEAN,
             &clean_outcomes,
+            false,
             false
         ),
         ReviewDecision::Pass,
         "a clean consensus with no artifacts must not fail-closed"
     );
     assert_eq!(
-        parent_review_decision(&empty, crate::review_consensus::HAS_ISSUES, &[], true),
+        parent_review_decision(
+            &empty,
+            crate::review_consensus::HAS_ISSUES,
+            &[],
+            false,
+            true
+        ),
         ReviewDecision::Fail,
         "empty produced set must fail-closed"
     );
@@ -1127,8 +1138,11 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
             .expect("review-verdict.json should exist"),
     )
     .expect("review verdict should parse");
-    assert_eq!(verdict.decision, ReviewDecision::Fail);
-    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
+    assert_eq!(verdict.decision, ReviewDecision::Uncertain);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_ne!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, UNAVAILABLE);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
 }
 
 #[test]
@@ -1273,6 +1287,7 @@ proptest! {
             &consolidated,
             crate::review_consensus::CLEAN,
             &outcomes,
+            states.iter().all(|state| matches!(state, ReviewerState::Unavailable)),
             true,
         );
         let parent_artifact = parent_artifact_for_decision(&consolidated, decision);
@@ -1290,7 +1305,7 @@ proptest! {
             );
         }
         if states.iter().all(|state| matches!(state, ReviewerState::Unavailable)) {
-            prop_assert_eq!(decision, ReviewDecision::Fail);
+            prop_assert_eq!(decision, ReviewDecision::Uncertain);
         } else if expected_blocking_ids.is_empty() {
             prop_assert!(
                 decision != ReviewDecision::Fail,

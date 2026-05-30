@@ -492,8 +492,7 @@ fn review_meta_or_artifact_is_pass(
             .with_context(|| format!("failed to read {}", verdict_path.display()))?;
         let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
-        let artifact_pass = artifact.decision == ReviewDecision::Pass
-            || verdict_token_is_pass(&artifact.verdict_legacy);
+        let artifact_pass = artifact.decision == ReviewDecision::Pass;
         debug!(
             session_id = %meta.session_id,
             meta_decision = %meta.decision,
@@ -529,9 +528,7 @@ fn review_meta_is_pass(meta: &ReviewSessionMeta) -> bool {
         return false;
     }
 
-    ReviewDecision::from_str(&meta.decision).is_ok_and(|decision| {
-        decision == ReviewDecision::Pass || verdict_token_is_pass(&meta.verdict)
-    }) || verdict_token_is_pass(&meta.verdict)
+    ReviewDecision::from_str(&meta.decision).is_ok_and(|decision| decision == ReviewDecision::Pass)
 }
 
 fn verdict_token_is_pass(verdict: &str) -> bool {

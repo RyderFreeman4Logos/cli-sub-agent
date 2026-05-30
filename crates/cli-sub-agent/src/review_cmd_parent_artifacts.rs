@@ -173,7 +173,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     reviewers: usize,
     outcomes: &[ReviewerOutcome],
     final_verdict: &str,
-    _all_reviewers_unavailable: bool,
+    all_reviewers_unavailable: bool,
     parent_review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<()> {
     let Some((session_dir, session_id)) = resolve_parent_session_env() else {
@@ -187,6 +187,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
         &consolidated,
         final_verdict,
         outcomes,
+        all_reviewers_unavailable,
         dissent_findings_persisted,
     );
     let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
@@ -259,6 +260,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         &consolidated,
         ctx.final_verdict,
         ctx.outcomes,
+        ctx.all_reviewers_unavailable,
         dissent_findings_persisted,
     );
     let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
@@ -452,10 +454,14 @@ fn parent_review_decision(
     artifact: &ReviewArtifact,
     final_verdict: &str,
     outcomes: &[ReviewerOutcome],
+    all_reviewers_unavailable: bool,
     dissent_findings_persisted: bool,
 ) -> ReviewDecision {
     let produced_decision = review_decision_from_produced_outcomes(outcomes);
     let Some(produced_decision) = produced_decision else {
+        if all_reviewers_unavailable {
+            return ReviewDecision::Uncertain;
+        }
         return ReviewDecision::Fail;
     };
     if produced_decision == ReviewDecision::Fail {

@@ -587,6 +587,8 @@ fn check_verdict_rejects_non_pass_artifact_even_when_meta_is_pass() {
     for (decision, legacy_verdict) in [
         (ReviewDecision::Fail, "HAS_ISSUES"),
         (ReviewDecision::Uncertain, "UNCERTAIN"),
+        (ReviewDecision::Uncertain, "UNAVAILABLE"),
+        (ReviewDecision::Uncertain, "CLEAN"),
         (ReviewDecision::Skip, "SKIP"),
         (ReviewDecision::Unavailable, "UNAVAILABLE"),
     ] {
