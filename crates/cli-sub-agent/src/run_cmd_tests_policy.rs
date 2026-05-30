@@ -203,6 +203,7 @@ fn apply_post_run_commit_policy_sets_failure_when_policy_requires_commit() {
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
@@ -228,6 +229,7 @@ fn apply_post_run_commit_policy_keeps_success_when_policy_disabled() {
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
@@ -269,6 +271,7 @@ fn apply_unverifiable_commit_policy_sets_failure_when_verification_is_unavailabl
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     apply_unverifiable_commit_policy(&mut result, &OutputFormat::Json, true);
@@ -293,6 +296,7 @@ fn apply_unverifiable_commit_policy_is_noop_when_verification_is_available() {
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     apply_unverifiable_commit_policy(&mut result, &OutputFormat::Json, false);
@@ -324,6 +328,7 @@ fn apply_no_verify_commit_policy_sets_failure_when_forbidden_flag_detected() {
         summary: "commit completed".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit --no-verify -m \"feat: unsafe\"".to_string()];
 

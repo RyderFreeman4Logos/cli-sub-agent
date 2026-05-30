@@ -308,6 +308,7 @@ mod tests {
             summary: "ok".to_string(),
             exit_code: 0,
             peak_memory_mb: None,
+            ..Default::default()
         }
     }
 

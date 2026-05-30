@@ -48,6 +48,7 @@ fn build_test_result(summary: &str) -> csa_process::ExecutionResult {
         summary: summary.to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     }
 }
 
@@ -58,6 +59,7 @@ fn build_failed_test_result(summary: &str, stderr: &str) -> csa_process::Executi
         summary: summary.to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     }
 }
 

@@ -249,6 +249,7 @@ Verdict: APPROVE
                 summary: "debate verdict produced".to_string(),
                 exit_code: 1,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             meta_session_id: session.meta_session_id.clone(),
             provider_session_id: None,
@@ -323,6 +324,7 @@ Verdict: REVISE
                 summary: "debate verdict produced".to_string(),
                 exit_code: 1,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             meta_session_id: session.meta_session_id.clone(),
             provider_session_id: None,

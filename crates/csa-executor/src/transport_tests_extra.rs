@@ -126,6 +126,7 @@ fn test_classify_codex_exec_initial_stall_xhigh_retries_once() {
         summary: "initial_response_timeout: no stdout output for 300s".to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     let classification = super::classify_codex_exec_initial_stall(&executor, &execution, Some(300))
@@ -154,6 +155,7 @@ fn test_classify_codex_exec_initial_stall_high_does_not_retry() {
         summary: "initial_response_timeout: no stdout output for 300s".to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     let classification = super::classify_codex_exec_initial_stall(&executor, &execution, Some(300))
@@ -178,6 +180,7 @@ fn test_classify_codex_exec_initial_stall_ignores_first_byte_before_deadline() {
         summary: "partial".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(
@@ -298,6 +301,7 @@ fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() 
         summary: String::new(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
     super::apply_codex_exec_initial_stall_summary(
         &mut execution,

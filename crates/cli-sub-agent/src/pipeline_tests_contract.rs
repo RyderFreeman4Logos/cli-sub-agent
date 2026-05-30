@@ -28,6 +28,7 @@ fn result_toml_path_contract_extracts_embedded_path() {
         summary: "completed all tasks successfully".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -58,6 +59,7 @@ fn result_toml_path_contract_accepts_output_result_artifact_path() {
         summary: "completed all tasks successfully".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -91,6 +93,7 @@ fn result_toml_path_contract_accepts_verified_session_result_fallback() {
         summary: "All tasks completed successfully, see session directory for details".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -161,6 +164,7 @@ fn result_toml_path_contract_handles_verbose_multiline_output() {
         summary: long_summary,
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -218,6 +222,7 @@ test_added = true
         summary: "Binary install running in background.".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -264,6 +269,7 @@ fn result_toml_path_contract_accepts_flat_schema_status_success_artifact() {
         summary: "trailing prose summary".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -291,6 +297,7 @@ fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_e
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -326,6 +333,7 @@ fn result_toml_path_contract_fails_when_output_summary_empty_and_no_disk_file() 
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(

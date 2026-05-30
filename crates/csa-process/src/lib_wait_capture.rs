@@ -480,5 +480,6 @@ pub async fn wait_and_capture_with_idle_timeout(
         summary,
         exit_code,
         peak_memory_mb: None,
+        ..Default::default()
     })
 }

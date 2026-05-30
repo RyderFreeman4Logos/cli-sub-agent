@@ -124,6 +124,7 @@ fn test_classify_gemini_acp_initial_stall_detects_first_response_timeout() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     let classification = classify_gemini_acp_initial_stall(&execution, Some(180))
@@ -145,6 +146,7 @@ fn test_classify_gemini_acp_initial_stall_preserves_specific_stderr() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     let classification = classify_gemini_acp_initial_stall(&execution, Some(180));
@@ -161,6 +163,7 @@ fn test_apply_gemini_acp_initial_stall_summary_rewrites_summary() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let classification = classify_gemini_acp_initial_stall(&execution, Some(180))
         .expect("gemini ACP initial timeout should classify");
@@ -194,6 +197,7 @@ fn test_classify_gemini_legacy_initial_stall_detects_first_response_timeout() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     let classification = classify_gemini_legacy_initial_stall(&executor, &execution, Some(120))
@@ -216,6 +220,7 @@ fn test_classify_gemini_legacy_initial_stall_uses_600s_default() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     // Pass None to test the default timeout behavior
@@ -240,6 +245,7 @@ fn test_classify_gemini_legacy_initial_stall_is_gemini_only() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(
@@ -262,6 +268,7 @@ fn test_classify_gemini_legacy_initial_stall_requires_silent_output() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(
@@ -284,6 +291,7 @@ fn test_classify_gemini_legacy_initial_stall_requires_exit_137() {
             .to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(
@@ -306,6 +314,7 @@ fn test_apply_gemini_legacy_initial_stall_summary_rewrites_summary() {
             .to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let classification = classify_gemini_legacy_initial_stall(&executor, &execution, Some(120))
         .expect("gemini legacy initial timeout should classify");

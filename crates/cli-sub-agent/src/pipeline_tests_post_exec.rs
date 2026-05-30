@@ -281,6 +281,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     process_execution_result(disabled_ctx, &mut disabled_session, &mut disabled_result)
@@ -325,6 +326,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     process_execution_result(enabled_ctx, &mut enabled_session, &mut enabled_result)
@@ -529,6 +531,7 @@ auto_capture = true
         summary: "captured via session complete".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     process_execution_result(ctx, &mut session, &mut result)

@@ -12,6 +12,7 @@ fn codex_acp_stall_result(events: Vec<SessionEvent>) -> super::TransportResult {
                     .to_string(),
             exit_code: 137,
             peak_memory_mb: None,
+            ..Default::default()
         },
         provider_session_id: Some("provider-session".to_string()),
         events,
@@ -105,6 +106,7 @@ fn codex_acp_stall_retry_budget_respected() {
         stderr_output: "initial response timeout: raw".to_string(),
         exit_code: 137,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     super::transport_acp_crash_retry::apply_codex_acp_initial_stall_summary(

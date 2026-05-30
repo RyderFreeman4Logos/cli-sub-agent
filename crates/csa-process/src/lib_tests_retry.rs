@@ -10,6 +10,7 @@ fn test_consolidate_retries_empty() {
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert_eq!(r.stderr_output, "");
@@ -23,6 +24,7 @@ fn test_consolidate_retries_no_match() {
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert_eq!(r.stderr_output, "some normal message\nanother line\n");
@@ -37,6 +39,7 @@ fn test_consolidate_retries_non_gemini_not_matched() {
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert!(
@@ -55,6 +58,7 @@ fn test_consolidate_retries_single_gemini() {
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert!(
@@ -81,6 +85,7 @@ Attempt 2 failed: You have exhausted your capacity. Retrying after 11411ms...
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert!(
@@ -108,6 +113,7 @@ Attempt 3 failed: You have exhausted your capacity. Retrying after 15s...
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert!(
@@ -135,6 +141,7 @@ You have exhausted your capacity on this model. Your quota will reset after 1s.
         summary: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     r.consolidate_stderr_retries();
     assert!(

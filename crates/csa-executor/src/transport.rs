@@ -417,6 +417,7 @@ impl AcpTransport {
             stderr_output: output.stderr,
             exit_code: output.exit_code,
             peak_memory_mb: output.peak_memory_mb,
+            ..Default::default()
         };
         if let Some(warning_summary) = gemini_warning_summary.as_deref() {
             apply_gemini_mcp_warning_summary(&mut execution, warning_summary);

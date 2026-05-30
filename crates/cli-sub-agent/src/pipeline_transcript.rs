@@ -99,6 +99,7 @@ mod tests {
                 summary: String::new(),
                 exit_code: 0,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             provider_session_id: None,
             events,

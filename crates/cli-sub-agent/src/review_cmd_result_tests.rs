@@ -12,6 +12,7 @@ fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
                 summary: String::new(),
                 exit_code,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             meta_session_id: "01TESTRESULT".to_string(),
             provider_session_id: None,
