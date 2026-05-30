@@ -5,7 +5,8 @@ use csa_session::state::ReviewSessionMeta;
 use super::execute;
 use super::findings_toml::persist_review_findings_toml;
 use super::output::{
-    persist_review_meta, persist_review_verdict, persisted_review_verdict_exit_code,
+    fail_closed_review_meta, persist_review_meta, persist_review_verdict,
+    persisted_review_verdict_exit_code,
 };
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
@@ -36,10 +37,11 @@ pub(crate) fn persist_review_sidecars_if_session_exists(
     persistable_session_id: Option<&str>,
 ) -> Option<i32> {
     let persistable_session_id = persistable_session_id?;
+    let effective_meta = fail_closed_review_meta(project_root, meta);
 
-    persist_review_meta(project_root, meta);
-    persist_review_findings_toml(project_root, meta);
-    persist_review_verdict(project_root, meta, &[], Vec::new());
+    persist_review_meta(project_root, &effective_meta);
+    persist_review_findings_toml(project_root, &effective_meta);
+    persist_review_verdict(project_root, &effective_meta, &[], Vec::new());
     let verdict_exit_code =
         persisted_review_verdict_exit_code(project_root, persistable_session_id);
     if verdict_exit_code == 0 {

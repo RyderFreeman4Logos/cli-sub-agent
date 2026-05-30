@@ -27,6 +27,18 @@ pub(super) const FINDINGS_TOML_SYNTHETIC_MARKER: &str = ".findings.toml.syntheti
 pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSessionMeta) {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
+            if meta.requires_fail_closed_verdict() {
+                let marker_path = session_dir
+                    .join("output")
+                    .join(FINDINGS_TOML_SYNTHETIC_MARKER);
+                let _ = fs::remove_file(&marker_path);
+                debug!(
+                    session_id = %meta.session_id,
+                    "Skipped synthetic findings.toml for failed review execution"
+                );
+                return;
+            }
+
             let (artifact, warning_reason) = match derive_findings_toml_artifact(&session_dir) {
                 Ok(artifact) => artifact,
                 Err(error) => {

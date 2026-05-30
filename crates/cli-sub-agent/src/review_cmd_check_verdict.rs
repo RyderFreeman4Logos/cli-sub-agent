@@ -458,6 +458,18 @@ fn diff_fingerprint_matches(
 }
 
 fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta) -> Result<bool> {
+    if meta.requires_fail_closed_verdict() {
+        debug!(
+            session_id = %meta.session_id,
+            meta_decision = %meta.decision,
+            meta_verdict = %meta.verdict,
+            meta_exit_code = meta.exit_code,
+            primary_failure = meta.primary_failure.as_deref().unwrap_or(""),
+            "Rejecting review verdict because review metadata records reviewer failure"
+        );
+        return Ok(false);
+    }
+
     let meta_pass = review_meta_is_pass(meta);
     let verdict_path = session_dir.join("output").join("review-verdict.json");
     if verdict_path.exists() {
@@ -492,6 +504,10 @@ fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta)
 }
 
 fn review_meta_is_pass(meta: &ReviewSessionMeta) -> bool {
+    if meta.requires_fail_closed_verdict() {
+        return false;
+    }
+
     ReviewDecision::from_str(&meta.decision).is_ok_and(|decision| {
         decision == ReviewDecision::Pass || verdict_token_is_pass(&meta.verdict)
     }) || verdict_token_is_pass(&meta.verdict)

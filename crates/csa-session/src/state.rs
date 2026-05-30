@@ -2,6 +2,7 @@
 
 use crate::output_section::ReturnPacketRef;
 use chrono::{DateTime, Utc};
+use csa_core::types::ReviewDecision;
 use csa_core::vcs::{VcsIdentity, VcsKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -214,6 +215,28 @@ pub struct ReviewSessionMeta {
     /// can reuse a previous review without re-running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_fingerprint: Option<String>,
+}
+
+impl ReviewSessionMeta {
+    /// Returns true when review metadata represents an incomplete or failed
+    /// reviewer execution that must not be treated as a clean verdict.
+    pub fn requires_fail_closed_verdict(&self) -> bool {
+        match self.decision.parse::<ReviewDecision>() {
+            Ok(ReviewDecision::Unavailable | ReviewDecision::Uncertain) | Err(_) => return true,
+            Ok(ReviewDecision::Pass | ReviewDecision::Fail | ReviewDecision::Skip) => {}
+        }
+
+        if self.status_reason.is_some() || self.failure_reason.is_some() {
+            return true;
+        }
+
+        let has_primary_failure = self
+            .primary_failure
+            .as_deref()
+            .is_some_and(|failure| !failure.trim().is_empty());
+
+        has_primary_failure && self.exit_code != 0
+    }
 }
 
 /// Write review session metadata to the session directory.

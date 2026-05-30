@@ -1,15 +1,17 @@
 use super::*;
 
-// ─── #1340 regression tests: Unavailable meta_decision must not override empty findings ─
+// ─── #1340/R2-001 regression tests: Unavailable meta fails closed ─
 
 /// #1340 Case 1: meta.decision=unavailable (from text-parse noise) + empty
-/// findings.toml → review-verdict.json must write decision=pass.
+/// findings.toml now fails closed instead of promoting to Pass.
 ///
 /// Regression: UNAVAILABLE token in prompt-injection text caused
 /// parse_review_decision_token to return Unavailable, which then propagated
 /// through derive_decision_from_severity_counts even though findings were empty.
+/// R2-001 supersedes that recovery: unavailable reviewer outcome is incomplete
+/// reviewer evidence, so empty findings cannot synthesize a clean artifact.
 #[test]
-fn issue_1340_unavailable_meta_with_empty_findings_toml_emits_pass() {
+fn issue_1340_unavailable_meta_with_empty_findings_toml_fails_closed() {
     let session_id = "01TEST1340UNAVAILABLEFINDS0";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1340-unavailable-empty-findings", session_id);
@@ -38,19 +40,19 @@ fn issue_1340_unavailable_meta_with_empty_findings_toml_emits_pass() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1340: Unavailable meta + empty findings.toml must yield pass, not unavailable"
+        ReviewDecision::Unavailable,
+        "R2-001: Unavailable meta + empty findings.toml must fail closed"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "UNAVAILABLE");
     assert!(artifact.severity_counts.values().all(|v| *v == 0));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
 /// #1340 Case 2: meta.decision=unavailable + empty findings.toml + no summary section
-/// → still emits pass (zero-findings default, not text-parse dependent).
+/// → fail closed (zero-findings is not proof that unavailable reviewer ran).
 #[test]
-fn issue_1340_unavailable_meta_with_empty_findings_toml_no_summary_emits_pass() {
+fn issue_1340_unavailable_meta_with_empty_findings_toml_no_summary_fails_closed() {
     let session_id = "01TEST1340UNAVAILABLENOSUM0";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1340-unavailable-no-summary", session_id);
@@ -61,7 +63,7 @@ fn issue_1340_unavailable_meta_with_empty_findings_toml_no_summary_emits_pass() 
         "findings = []\n",
     )
     .expect("write findings.toml");
-    // No summary.md — verdict must still be Pass from zero-findings evidence alone
+    // No summary.md — unavailable meta must not be promoted by zero-findings alone.
 
     let meta =
         make_review_meta_with_decision(session_id, ReviewDecision::Unavailable, "UNAVAILABLE");
@@ -73,10 +75,10 @@ fn issue_1340_unavailable_meta_with_empty_findings_toml_no_summary_emits_pass() 
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1340: Unavailable meta + empty findings.toml (no summary) must still yield pass"
+        ReviewDecision::Unavailable,
+        "R2-001: Unavailable meta + empty findings.toml (no summary) must fail closed"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "UNAVAILABLE");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
@@ -119,9 +121,9 @@ fn issue_1340_status_reason_set_preserves_unavailable() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
-/// #1340 Case 4: actual fail with HIGH findings is unaffected by the fix.
+/// #1340 Case 4: unavailable meta still fails closed before findings promotion.
 #[test]
-fn issue_1340_high_finding_with_unavailable_meta_emits_fail() {
+fn issue_1340_high_finding_with_unavailable_meta_fails_closed() {
     let session_id = "01TEST1340HIGHFINDINGUNAVAIL";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1340-high-finding-unavailable-meta", session_id);
@@ -148,11 +150,10 @@ fn issue_1340_high_finding_with_unavailable_meta_emits_fail() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Fail,
-        "#1340: HIGH finding with Unavailable meta must still yield Fail"
+        ReviewDecision::Unavailable,
+        "R2-001: HIGH finding with Unavailable meta must preserve unavailable"
     );
-    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
-    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(artifact.verdict_legacy, "UNAVAILABLE");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

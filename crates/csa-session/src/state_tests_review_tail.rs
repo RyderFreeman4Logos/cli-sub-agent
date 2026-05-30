@@ -205,3 +205,57 @@ fn review_session_meta_missing_review_iterations_defaults_to_one() {
     let decoded: ReviewSessionMeta = serde_json::from_str(json).expect("parse");
     assert_eq!(decoded.review_iterations, 1);
 }
+
+fn review_meta_with_decision(decision: &str, verdict: &str, exit_code: i32) -> ReviewSessionMeta {
+    ReviewSessionMeta {
+        session_id: "SESSION1".to_string(),
+        head_sha: "aaa".to_string(),
+        decision: decision.to_string(),
+        verdict: verdict.to_string(),
+        status_reason: None,
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
+        tool: "codex".to_string(),
+        scope: "base:main".to_string(),
+        exit_code,
+        fix_attempted: false,
+        fix_rounds: 0,
+        review_iterations: 1,
+        timestamp: chrono::Utc::now(),
+        diff_fingerprint: None,
+    }
+}
+
+#[test]
+fn review_session_meta_fail_closes_unavailable_nonzero_with_empty_failure_metadata() {
+    let meta = review_meta_with_decision("unavailable", "UNAVAILABLE", 1);
+
+    assert!(meta.status_reason.is_none());
+    assert!(meta.primary_failure.is_none());
+    assert!(meta.failure_reason.is_none());
+    assert!(meta.requires_fail_closed_verdict());
+}
+
+#[test]
+fn review_session_meta_fail_closes_incomplete_or_unknown_decisions() {
+    for (decision, verdict) in [
+        ("unavailable", "UNAVAILABLE"),
+        ("uncertain", "UNCERTAIN"),
+        ("not-a-real-decision", "CLEAN"),
+    ] {
+        let meta = review_meta_with_decision(decision, verdict, 0);
+
+        assert!(
+            meta.requires_fail_closed_verdict(),
+            "{decision} must fail closed"
+        );
+    }
+}
+
+#[test]
+fn review_session_meta_allows_explicit_pass_zero_exit() {
+    let meta = review_meta_with_decision("pass", "CLEAN", 0);
+
+    assert!(!meta.requires_fail_closed_verdict());
+}

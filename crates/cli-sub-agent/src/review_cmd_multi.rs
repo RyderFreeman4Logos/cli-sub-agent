@@ -370,9 +370,10 @@ pub(super) fn persist_multi_review_sidecars(
             timestamp: review_meta_timestamp,
             diff_fingerprint: diff_fingerprint.clone(),
         };
-        persist_review_meta(project_root, &review_meta);
-        super::findings_toml::persist_review_findings_toml(project_root, &review_meta);
-        persist_review_verdict(project_root, &review_meta, &[], Vec::new());
+        let effective_meta = super::output::fail_closed_review_meta(project_root, &review_meta);
+        persist_review_meta(project_root, &effective_meta);
+        super::findings_toml::persist_review_findings_toml(project_root, &effective_meta);
+        persist_review_verdict(project_root, &effective_meta, &[], Vec::new());
     }
 }
 
