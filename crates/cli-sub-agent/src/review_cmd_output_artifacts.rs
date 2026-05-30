@@ -7,6 +7,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
+use crate::review_cmd::artifact_parse::parse_review_artifact_fields_lossy;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct PersistedReviewArtifact {
@@ -36,6 +37,18 @@ pub(super) fn load_review_artifact_from_output(
     match serde_json::from_str::<PersistedReviewArtifact>(&contents) {
         Ok(artifact) => Ok(Some(artifact)),
         Err(error) => {
+            if let Ok(fields) = parse_review_artifact_fields_lossy(&contents) {
+                warn!(
+                    path = %findings_path.display(),
+                    error = %error,
+                    "Parsed review artifact JSON lossily; ignored findings with unsupported severities"
+                );
+                return Ok(Some(PersistedReviewArtifact {
+                    findings: fields.findings,
+                    severity_summary: fields.severity_summary,
+                    overall_risk: fields.overall_risk,
+                }));
+            }
             warn!(
                 path = %findings_path.display(),
                 error = %error,

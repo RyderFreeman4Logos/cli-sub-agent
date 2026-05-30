@@ -4,6 +4,7 @@ use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 use csa_core::vcs::{VcsIdentity, VcsKind};
+use csa_session::Finding;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -112,6 +113,50 @@ fn write_review_session_with_description(
     session.meta_session_id
 }
 
+fn write_review_session_with_findings(
+    project_root: &Path,
+    branch: &str,
+    head_sha: &str,
+    scope: &str,
+    decision: ReviewDecision,
+    legacy_verdict: &str,
+    findings: &[Finding],
+) -> String {
+    let session_id = write_review_session(
+        project_root,
+        branch,
+        head_sha,
+        scope,
+        decision,
+        legacy_verdict,
+    );
+    let session_dir = csa_session::get_session_dir(project_root, &session_id).unwrap();
+    csa_session::write_review_verdict(
+        &session_dir,
+        &ReviewVerdictArtifact::from_parts(
+            session_id.clone(),
+            decision,
+            legacy_verdict,
+            findings,
+            Vec::new(),
+        ),
+    )
+    .expect("write review verdict with findings");
+    session_id
+}
+
+fn finding_with_severity(severity: Severity, fid: &str) -> Finding {
+    Finding {
+        severity,
+        fid: fid.to_string(),
+        file: "src/lib.rs".to_string(),
+        line: Some(7),
+        rule_id: format!("rule.review.{fid}"),
+        summary: "review finding".to_string(),
+        engine: "reviewer".to_string(),
+    }
+}
+
 fn set_task_type(project_root: &Path, session_id: &str, task_type: &str) {
     let mut session = csa_session::load_session(project_root, session_id).expect("load session");
     session.task_context.task_type = Some(task_type.to_string());
@@ -214,6 +259,59 @@ fn check_verdict_finds_pass_for_current_branch_head_and_full_diff() {
     .unwrap()
     .expect("expected matching verdict");
     assert_eq!(found.session_id, session_id);
+}
+
+#[test]
+fn issue_1696_check_verdict_pass_message_surfaces_nonblocking_counts() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = setup_git_repo();
+    let state_home = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", state_home.path());
+    run_git(temp.path(), &["checkout", "-b", "feature"]);
+    let branch = run_git(temp.path(), &["branch", "--show-current"]);
+    let head_sha = csa_session::detect_git_head(temp.path()).unwrap();
+    let findings = vec![
+        finding_with_severity(Severity::Medium, "FID-MEDIUM"),
+        finding_with_severity(Severity::Low, "FID-LOW-1"),
+        finding_with_severity(Severity::Low, "FID-LOW-2"),
+        finding_with_severity(Severity::Low, "FID-LOW-3"),
+    ];
+    let session_id = write_review_session_with_findings(
+        temp.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+        &findings,
+    );
+
+    let found = check_review_verdict_for_target(
+        temp.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+    )
+    .unwrap()
+    .expect("expected matching verdict");
+    assert_eq!(found.session_id, session_id);
+    assert_eq!(found.severity_counts.get(&Severity::Medium), Some(&1));
+    assert_eq!(found.severity_counts.get(&Severity::Low), Some(&3));
+
+    let message = format_review_verdict_pass_message(&found, &branch);
+    assert!(
+        message.contains("PASS/CLEAN"),
+        "pass verdict must remain visible: {message}"
+    );
+    assert!(
+        message.contains("non-blocking findings: 1 medium, 3 low"),
+        "non-blocking findings must be surfaced: {message}"
+    );
+
+    let args = parse_review_args(&["csa", "review", "--check-verdict"]);
+    let exit = handle_check_verdict(temp.path(), &args).unwrap();
+    assert_eq!(exit, 0);
 }
 
 #[test]

@@ -1,7 +1,8 @@
 use super::{
     MultiReviewerConsensusArtifacts, clear_multi_reviewer_artifact_dirs,
     parent_artifact_for_decision, parent_consensus_review_meta, parent_review_decision,
-    write_multi_reviewer_consensus_artifacts, write_multi_reviewer_parent_artifacts,
+    parse_reviewer_artifact, write_multi_reviewer_consensus_artifacts,
+    write_multi_reviewer_parent_artifacts, write_parent_review_verdict,
     write_standalone_consensus_review_artifacts,
 };
 use crate::review_consensus::UNAVAILABLE;
@@ -35,6 +36,19 @@ fn blocking_finding(fid: impl Into<String>) -> Finding {
     }
 }
 
+fn finding_with_severity(severity: Severity, fid: impl Into<String>) -> Finding {
+    let fid = fid.into();
+    Finding {
+        severity,
+        fid: fid.clone(),
+        file: "src/lib.rs".to_string(),
+        line: Some(7),
+        rule_id: format!("rule.review.{fid}"),
+        summary: "review finding".to_string(),
+        engine: "reviewer".to_string(),
+    }
+}
+
 fn write_parent_reviewer_artifact(
     session_dir: &std::path::Path,
     reviewer_index: usize,
@@ -56,6 +70,123 @@ fn write_parent_reviewer_artifact(
         serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
     )
     .expect("review artifact should be written");
+}
+
+#[test]
+fn issue_1696_parent_verdict_counts_all_reviewer_findings_when_decision_passes() {
+    let temp = tempdir().expect("tempdir should be created");
+    let findings = vec![
+        finding_with_severity(Severity::Medium, "FID-MEDIUM"),
+        finding_with_severity(Severity::Low, "FID-LOW-1"),
+        finding_with_severity(Severity::Low, "FID-LOW-2"),
+        finding_with_severity(Severity::Low, "FID-LOW-3"),
+    ];
+    let consolidated = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: "01PARENTSESSION000000000000".to_string(),
+        timestamp: chrono::Utc::now(),
+    };
+    let decision = ReviewDecision::Pass;
+    let parent_artifact = parent_artifact_for_decision(&consolidated, decision);
+
+    write_parent_review_verdict(
+        temp.path(),
+        "01PARENTSESSION000000000000",
+        &consolidated.findings,
+        decision,
+        crate::review_consensus::CLEAN,
+    )
+    .expect("parent review verdict should be written");
+
+    let verdict_path = temp.path().join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_slice(&fs::read(verdict_path).expect("read review verdict"))
+            .expect("review verdict should parse");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, crate::review_consensus::CLEAN);
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&3));
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&0));
+    assert_eq!(
+        parent_artifact.findings.len(),
+        3,
+        "the parent artifact may stay filtered while verdict counts remain descriptive"
+    );
+}
+
+#[test]
+fn issue_1696_reviewer_artifact_ignores_info_without_dropping_countable_findings() {
+    let temp = tempdir().expect("tempdir should be created");
+    let reviewer_dir = temp.path().join("reviewer-3");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let artifact_path = reviewer_dir.join("review-findings.json");
+    let content = r#"{
+        "findings": [
+            {
+                "severity": "medium",
+                "fid": "FID-MEDIUM",
+                "file": "src/lib.rs",
+                "line": 7,
+                "rule_id": "rule.review.medium",
+                "summary": "medium finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "low",
+                "fid": "FID-LOW-1",
+                "file": "src/lib.rs",
+                "line": 8,
+                "rule_id": "rule.review.low1",
+                "summary": "low finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "low",
+                "fid": "FID-LOW-2",
+                "file": "src/lib.rs",
+                "line": 9,
+                "rule_id": "rule.review.low2",
+                "summary": "low finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "low",
+                "fid": "FID-LOW-3",
+                "file": "src/lib.rs",
+                "line": 10,
+                "rule_id": "rule.review.low3",
+                "summary": "low finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "info",
+                "fid": "FID-INFO",
+                "file": "src/lib.rs",
+                "line": 11,
+                "rule_id": "rule.review.info",
+                "summary": "informational note",
+                "engine": "reviewer"
+            }
+        ],
+        "severity_summary": {
+            "critical": 0,
+            "high": 0,
+            "medium": 1,
+            "low": 3
+        }
+    }"#;
+
+    let artifact =
+        parse_reviewer_artifact(&artifact_path, content).expect("reviewer artifact should parse");
+    assert_eq!(artifact.findings.len(), 4);
+    assert_eq!(artifact.severity_summary.medium, 1);
+    assert_eq!(artifact.severity_summary.low, 3);
+    assert_eq!(artifact.severity_summary.high, 0);
+    assert_eq!(artifact.severity_summary.critical, 0);
 }
 
 #[test]
