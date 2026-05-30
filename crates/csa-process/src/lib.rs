@@ -9,7 +9,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::warn;
 #[path = "lib_execution_result.rs"]
 mod execution_result;
-pub use execution_result::ExecutionResult;
+pub use execution_result::{ExecutionResult, model_completed_from_terminal_reason};
 mod idle_watchdog;
 use idle_watchdog::{
     idle_timeout_note, should_terminate_for_idle, should_terminate_for_initial_response,
@@ -34,8 +34,8 @@ use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr,
     append_actionable_detail_for_opaque_payload, drain_if_over_high_water, extract_summary,
     failure_summary, flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat,
-    resolve_actionable_failure_detail, resolve_heartbeat_interval, sanitize_opaque_object_payloads,
-    spool_chunk,
+    parse_legacy_terminal_reason, resolve_actionable_failure_detail, resolve_heartbeat_interval,
+    sanitize_opaque_object_payloads, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};

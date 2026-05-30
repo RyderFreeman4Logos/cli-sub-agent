@@ -242,6 +242,7 @@ mod tests {
                 summary: "ok".to_string(),
                 exit_code: 0,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             provider_session_id: Some("thread_from_transport".to_string()),
             events: Vec::new(),
@@ -266,6 +267,7 @@ mod tests {
                 summary: "ok".to_string(),
                 exit_code: 0,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             provider_session_id: None,
             events: Vec::new(),

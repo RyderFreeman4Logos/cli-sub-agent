@@ -72,6 +72,8 @@ fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     };
     save_result(project_root, &session.meta_session_id, &existing).expect("write existing result");
@@ -281,6 +283,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     process_execution_result(disabled_ctx, &mut disabled_session, &mut disabled_result)
@@ -325,6 +328,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     process_execution_result(enabled_ctx, &mut enabled_session, &mut enabled_result)
@@ -371,6 +375,8 @@ fn codex_exec_initial_stall_summary_forces_failure_status_in_result_toml() {
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     };
 
@@ -529,6 +535,7 @@ auto_capture = true
         summary: "captured via session complete".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     process_execution_result(ctx, &mut session, &mut result)

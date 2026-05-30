@@ -10,6 +10,7 @@ fn test_should_retry_gemini_rate_limited_until_final_attempt() {
         stderr_output: "HTTP 429 Too Many Requests".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(
@@ -41,6 +42,7 @@ fn test_should_not_retry_on_success_exit_code() {
         stderr_output: String::new(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
     assert!(
         transport
@@ -61,6 +63,7 @@ fn test_should_retry_generic_quota_exhausted_marker() {
         stderr_output: "reason: 'QUOTA_EXHAUSTED'".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     assert!(
         transport
@@ -85,6 +88,7 @@ fn test_should_retry_transient_429_too_many_requests() {
         stderr_output: "HTTP 429 Too Many Requests".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     assert!(
         transport
@@ -114,6 +118,7 @@ fn test_should_retry_codex_transient_429_until_retry_budget_exhausted() {
             "HTTP 429 Too Many Requests; Retry-After: 30".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert_eq!(
@@ -158,6 +163,7 @@ fn test_should_not_retry_codex_explicit_usage_limit() {
             .to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(
@@ -176,6 +182,7 @@ fn test_codex_retry_exhausted_summary_marks_permanent_after_backoff_budget() {
         stderr_output: String::new(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     apply_codex_rate_limit_retry_exhausted_summary(&mut execution, CODEX_RATE_LIMIT_MAX_RETRIES);
@@ -243,6 +250,7 @@ fn test_no_flash_fallback_stops_retry_after_attempt_2() {
         stderr_output: "HTTP 429 Too Many Requests".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut env = HashMap::new();
     env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
@@ -275,6 +283,7 @@ fn test_no_failover_stops_retry_after_attempt_1() {
         stderr_output: "HTTP 429 Too Many Requests".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut env = HashMap::new();
     env.insert("_CSA_NO_FAILOVER".to_string(), "1".to_string());

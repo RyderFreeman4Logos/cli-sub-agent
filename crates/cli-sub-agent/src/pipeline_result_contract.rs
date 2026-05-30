@@ -44,7 +44,9 @@ pub(crate) fn enforce_result_toml_path_contract(
         result.stderr_output.push_str(&reason);
         result.stderr_output.push('\n');
         result.summary = reason;
-        result.exit_code = 1;
+        // CSA-own gate: result.toml path contract violation is a real failure
+        // (#161); mark it so the effective-outcome classifier never downgrades it.
+        result.mark_gate_failure("result-toml-contract");
         return;
     }
 
@@ -171,7 +173,9 @@ pub(crate) fn enforce_result_toml_path_contract(
     result.stderr_output.push_str(&reason);
     result.stderr_output.push('\n');
     result.summary = reason;
-    result.exit_code = 1;
+    // CSA-own gate: result.toml path contract violation is a real failure
+    // (#161); mark it so the effective-outcome classifier never downgrades it.
+    result.mark_gate_failure("result-toml-contract");
 }
 
 fn rewrite_contract_output_last_line(result: &mut ExecutionResult, accepted_path: &Path) {

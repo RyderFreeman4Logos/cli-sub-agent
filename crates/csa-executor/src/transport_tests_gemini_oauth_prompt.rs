@@ -21,6 +21,7 @@ fn test_detect_gemini_oauth_prompt_result_handles_guarded_browser_prompt_variant
         .to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     assert!(is_gemini_oauth_prompt_result(&execution));

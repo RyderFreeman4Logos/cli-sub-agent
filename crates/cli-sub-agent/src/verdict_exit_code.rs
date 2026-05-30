@@ -28,7 +28,7 @@ fn token_is_success(token: Option<&str>) -> bool {
     token.is_some_and(|token| {
         matches!(
             token.trim().to_ascii_uppercase().as_str(),
-            "APPROVE" | "PASS" | "CLEAN"
+            "APPROVE" | "PASS" | "CLEAN" | "CONFIRMED"
         )
     })
 }
@@ -64,6 +64,13 @@ mod tests {
     #[test]
     fn debate_revise_maps_to_one() {
         assert_eq!(exit_code_from_debate_verdict("REVISE", None), 1);
+    }
+
+    #[test]
+    fn debate_confirmed_maps_to_zero() {
+        // `CSA_VERDICT: CONFIRMED` normalizes to a `CONFIRMED` verdict token.
+        assert_eq!(exit_code_from_debate_verdict("CONFIRMED", None), 0);
+        assert_eq!(exit_code_from_debate_verdict("MAYBE", Some("confirmed")), 0);
     }
 
     #[test]

@@ -456,6 +456,8 @@ mod tests {
             peak_memory_mb: None,
             fallback_chain: None,
             gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         };
         std::fs::write(

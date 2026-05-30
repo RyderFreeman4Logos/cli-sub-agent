@@ -473,6 +473,7 @@ fn make_transport_result(exit_code: i32, stderr: &str) -> TransportResult {
             summary: String::new(),
             exit_code,
             peak_memory_mb: None,
+            ..Default::default()
         },
         provider_session_id: None,
         events: Vec::new(),

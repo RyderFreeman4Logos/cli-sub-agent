@@ -44,9 +44,10 @@ pub(crate) fn apply_post_run_commit_policy(
 
     if enforce_closed_policy {
         let previous_summary = result.summary.clone();
-        if result.exit_code == 0 {
-            result.exit_code = 1;
-        }
+        // CSA-own gate: workspace mutated without commit. Mark it so the #161
+        // classifier treats the exit as authoritative-fatal, preserving a more
+        // specific pre-existing failure exit code if the run already failed.
+        result.note_gate_failure("commit-policy-uncommitted");
         if !previous_summary.trim().is_empty()
             && previous_summary != POST_RUN_POLICY_BLOCKED_SUMMARY
         {
@@ -74,9 +75,10 @@ pub(crate) fn apply_unverifiable_commit_policy(
     }
 
     let previous_summary = result.summary.clone();
-    if result.exit_code == 0 {
-        result.exit_code = 1;
-    }
+    // CSA-own gate: unable to verify workspace mutation state. Mark it so the
+    // #161 classifier treats the exit as authoritative-fatal, preserving a more
+    // specific pre-existing failure exit code if the run already failed.
+    result.note_gate_failure("commit-policy-unverifiable");
     if !previous_summary.trim().is_empty()
         && previous_summary != POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
     {
@@ -118,9 +120,10 @@ pub(crate) fn apply_no_verify_commit_policy(
     }
 
     let previous_summary = result.summary.clone();
-    if result.exit_code == 0 {
-        result.exit_code = 1;
-    }
+    // CSA-own gate: forbidden `git commit --no-verify` detected. Mark it so the
+    // #161 classifier treats the exit as authoritative-fatal, preserving a more
+    // specific pre-existing failure exit code if the run already failed.
+    result.note_gate_failure("commit-policy-no-verify");
     if !previous_summary.trim().is_empty()
         && previous_summary != POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY
     {
@@ -167,9 +170,10 @@ pub(crate) fn apply_lefthook_bypass_policy(
     }
 
     let previous_summary = result.summary.clone();
-    if result.exit_code == 0 {
-        result.exit_code = 1;
-    }
+    // CSA-own gate: forbidden LEFTHOOK bypass detected. Mark it so the #161
+    // classifier treats the exit as authoritative-fatal, preserving a more
+    // specific pre-existing failure exit code if the run already failed.
+    result.note_gate_failure("commit-policy-lefthook-bypass");
     if !previous_summary.trim().is_empty()
         && previous_summary != POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY
     {

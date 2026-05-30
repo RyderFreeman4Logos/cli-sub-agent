@@ -366,6 +366,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                                 stderr_output: error_text,
                                 summary: "Review unavailable".to_string(),
                                 peak_memory_mb: None,
+                                ..Default::default()
                             },
                             meta_session_id: extract_meta_session_id_from_error(&err)
                                 .unwrap_or_else(|| "unknown".to_string()),

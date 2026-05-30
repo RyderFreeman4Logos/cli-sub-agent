@@ -44,6 +44,12 @@ pub(crate) fn maybe_mark_no_progress_session(
     session_result.status = NO_PROGRESS_STATUS.to_string();
     session_result.summary = diagnostic.clone();
     result.summary = diagnostic.clone();
+    // CSA-own gate (#161): mark the outcome explicitly so the effective-outcome
+    // classifier never treats this as an incidental-downgrade success. This
+    // keeps the established `no_progress` status + exit 0 (a soft signal, not a
+    // hard failure) while clearing any pending incidental-downgrade warning.
+    result.csa_gate_failure = Some(NO_PROGRESS_STATUS.to_string());
+    result.warnings.clear();
     session.termination_reason = Some(NO_PROGRESS_STATUS.to_string());
     if let Some(tool_state) = session.tools.get_mut(session_result.tool.as_str()) {
         tool_state.last_action_summary = diagnostic;

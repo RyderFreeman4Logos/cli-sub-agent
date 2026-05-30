@@ -14,13 +14,17 @@ use csa_hooks::{HookEvent, run_hooks_for_event};
 #[cfg(test)]
 use csa_session::load_result;
 use csa_session::{
-    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, TokenUsage,
-    ToolState, get_session_dir, save_result, save_session,
+    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, save_result,
+    save_session,
 };
 
 use crate::memory_capture;
 use crate::pipeline_handoff::write_handoff_artifact;
 use crate::run_helpers::{is_compress_command, parse_token_usage};
+use crate::session_outcome::{
+    EffectiveOutcome, classify_effective_session_outcome, incidental_downgrade_note,
+    task_kind_from_task_type,
+};
 #[path = "pipeline_post_exec_audit.rs"]
 mod audit;
 
@@ -33,12 +37,20 @@ pub(crate) use fallback::{
     ensure_terminal_result_for_session_on_post_exec_error,
     ensure_terminal_result_on_post_exec_error,
 };
+#[path = "pipeline_post_exec_helpers.rs"]
+mod helpers;
 #[path = "pipeline_post_exec_no_op.rs"]
 mod no_op;
 #[path = "pipeline_post_exec_progress.rs"]
 mod progress;
 #[path = "pipeline_post_exec_result_sidecar.rs"]
 mod result_sidecar;
+// Re-exported privately so existing call sites (and the test submodule's
+// `use super::*`) reach these mechanical helpers unqualified.
+use helpers::{
+    is_codex_exec_initial_stall_summary, maybe_compress_tool_output, update_cumulative_tokens,
+    update_tool_state,
+};
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
     pub executor: &'a Executor,
@@ -163,6 +175,8 @@ pub(crate) async fn process_execution_result(
         peak_memory_mb: result.peak_memory_mb,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
@@ -183,10 +197,16 @@ pub(crate) async fn process_execution_result(
         }
     }
     if classified_codex_exec_initial_stall {
-        session_result.status = SessionResult::status_from_exit_code(1);
+        // CSA-own gate: an initial stall is a real failure. Mark it explicitly so
+        // the effective-outcome classifier (#161) never downgrades it, and force
+        // a nonzero exit (a stall can otherwise exit 0).
+        result.mark_gate_failure(CODEX_EXEC_INITIAL_STALL_REASON);
+        session_result.exit_code = result.exit_code;
+        session_result.status = SessionResult::status_from_exit_code(result.exit_code);
         session_result.summary = classified_summary.clone();
         result.summary = classified_summary.clone();
         if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+            tool_state.last_exit_code = result.exit_code;
             tool_state.last_action_summary = classified_summary;
         }
     }
@@ -199,7 +219,9 @@ pub(crate) async fn process_execution_result(
             ctx.executor.tool_name(),
             &exhaustion.matched_pattern,
         );
-        result.exit_code = 1;
+        // CSA-own gate: permanent tool exhaustion (quota/rate-limit) is a real
+        // failure; mark it so the #161 classifier treats the exit as fatal.
+        result.mark_gate_failure("tool-exhaustion");
         result.summary = exhausted_summary.clone();
         if !result.stderr_output.contains(&exhausted_summary) {
             if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
@@ -224,6 +246,55 @@ pub(crate) async fn process_execution_result(
             tool_state.last_exit_code = 1;
             tool_state.last_action_summary = exhausted_summary;
         }
+    }
+    // Effective-outcome classification (#161): a model turn that COMPLETED must
+    // not be flipped to `failure` solely because a hook or in-turn command
+    // exited nonzero. The CSA-own gates above set `csa_gate_failure`; the
+    // classifier treats those (and timeout/signal exits) as authoritative-fatal
+    // and only downgrades a genuinely incidental nonzero exit on a completed
+    // turn. The downgrade runs BEFORE the false-success gates below so they can
+    // re-examine the now-zero exit; if one re-flags a real failure it calls
+    // `mark_gate_failure`, which clears the incidental warning.
+    let task_kind = task_kind_from_task_type(ctx.task_type);
+    let final_output_present =
+        !result.output.trim().is_empty() || !result.summary.trim().is_empty();
+    let mut pending_incidental_warning: Option<(String, i32)> = None;
+    match classify_effective_session_outcome(
+        result.model_completed,
+        result.exit_code,
+        result.csa_gate_failure.as_deref(),
+        task_kind,
+        final_output_present,
+    ) {
+        EffectiveOutcome::IncidentalDowngrade { raw_exit_code } => {
+            let note = incidental_downgrade_note(raw_exit_code, result.terminal_reason.as_deref());
+            warn!(
+                session = %session.meta_session_id,
+                raw_exit_code,
+                "Completed turn exited nonzero for an incidental reason — downgrading to success (#161)"
+            );
+            result.exit_code = 0;
+            session_result.exit_code = 0;
+            session_result.status = SessionResult::status_from_exit_code(0);
+            if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+                tool_state.last_exit_code = 0;
+            }
+            result.warnings.push(note.clone());
+            pending_incidental_warning = Some((note, raw_exit_code));
+        }
+        EffectiveOutcome::ForceFailure => {
+            warn!(
+                session = %session.meta_session_id,
+                "Model did not complete and produced no final output — forcing failure (#161)"
+            );
+            result.mark_gate_failure("model-incomplete-no-output");
+            session_result.exit_code = result.exit_code;
+            session_result.status = SessionResult::status_from_exit_code(result.exit_code);
+            if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+                tool_state.last_exit_code = result.exit_code;
+            }
+        }
+        EffectiveOutcome::ExitCodeAuthoritative => {}
     }
     // No-op exit gate: detect sa-mode sessions that reported success but
     // produced zero useful work (single turn, no tool calls, very short
@@ -254,7 +325,8 @@ pub(crate) async fn process_execution_result(
         session_result.status = SessionResult::status_from_exit_code(1);
         session_result.summary = no_op_summary.clone();
         result.summary = no_op_summary.clone();
-        result.exit_code = 1;
+        // CSA-own gate: a SA-mode no-op (zero useful work) is a real failure.
+        result.mark_gate_failure("no-op-exit");
         // Sync tool_state so state.toml agrees with result.toml after rewrite.
         if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
             tool_state.last_exit_code = 1;
@@ -279,7 +351,8 @@ pub(crate) async fn process_execution_result(
         session_result.exit_code = 1;
         session_result.status = csa_session::SessionResult::status_from_exit_code(1);
         session_result.summary = blocked_summary.clone();
-        result.exit_code = 1;
+        // CSA-own gate: worker reported STATUS: BLOCKED — a real failure.
+        result.mark_gate_failure("worker-blocked");
         result.summary = blocked_summary.clone();
         if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
             tool_state.last_exit_code = 1;
@@ -306,6 +379,18 @@ pub(crate) async fn process_execution_result(
             error = %err,
             "Skipping post-session no-progress detection; preserving success status"
         );
+    }
+    // Finalize the #161 incidental downgrade: if the success survived every
+    // false-success gate above (exit still 0, no gate fired), record the raw
+    // exit code and warning as diagnostics on the persisted envelope. If a gate
+    // re-flagged the session, `mark_gate_failure` already cleared the warning on
+    // `result`, so we drop the incidental note here too.
+    if let Some((note, raw_exit_code)) = pending_incidental_warning
+        && session_result.status == "success"
+        && result.csa_gate_failure.is_none()
+    {
+        session_result.raw_process_exit_code = Some(raw_exit_code);
+        session_result.warnings.push(note);
     }
     crate::pipeline_jj_journal::maybe_record_post_run_snapshot(
         ctx.config.map(|config| &config.vcs),
@@ -436,133 +521,6 @@ pub(crate) async fn process_execution_result(
     maybe_compress_tool_output(ctx.config, ctx.project_root, session, result)?;
 
     Ok(())
-}
-
-fn is_codex_exec_initial_stall_summary(tool_name: &str, exit_code: i32, summary: &str) -> bool {
-    tool_name == "codex"
-        && exit_code == 137
-        && summary.starts_with(&format!(
-            "{CODEX_EXEC_INITIAL_STALL_REASON}: no stdout within "
-        ))
-        && summary.contains(" (effort=")
-}
-
-/// If tool output compression is enabled, persist the original output to
-/// `{session_dir}/tool_outputs/` and replace `result.output` with a compact
-/// placeholder.
-fn maybe_compress_tool_output(
-    config: Option<&ProjectConfig>,
-    project_root: &Path,
-    session: &MetaSessionState,
-    result: &mut csa_process::ExecutionResult,
-) -> anyhow::Result<()> {
-    let Some(cfg) = config else { return Ok(()) };
-    if !cfg.session.tool_output_compression {
-        return Ok(());
-    }
-    let threshold = cfg.session.tool_output_threshold_bytes;
-    if let csa_process::CompressDecision::Compress {
-        original_bytes,
-        replacement: _,
-    } = csa_process::should_compress_output(&result.output, threshold)
-    {
-        let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-        let store = csa_session::tool_output_store::ToolOutputStore::new(&session_dir)?;
-        let index = session.turn_count.saturating_sub(1);
-        store.store(index, result.output.as_bytes())?;
-        store.append_manifest(index, original_bytes as u64)?;
-        info!(
-            session = %session.meta_session_id,
-            original_bytes,
-            index,
-            "Compressed tool output stored"
-        );
-        // Override generic placeholder with session-specific one for recoverability.
-        result.output = format!(
-            "[Tool output compressed: {original_bytes} bytes → csa session tool-output {} {index}]",
-            session.meta_session_id
-        );
-    }
-    Ok(())
-}
-
-fn update_tool_state(
-    session: &mut MetaSessionState,
-    tool_name: &str,
-    provider_session_id: &Option<String>,
-    result: &csa_process::ExecutionResult,
-    token_usage: &Option<TokenUsage>,
-) {
-    session
-        .tools
-        .entry(tool_name.to_string())
-        .and_modify(|t| {
-            if let Some(session_id) = provider_session_id {
-                t.provider_session_id = Some(session_id.clone());
-            }
-            t.last_action_summary = result.summary.clone();
-            t.last_exit_code = result.exit_code;
-            t.updated_at = chrono::Utc::now();
-
-            if let Some(usage) = token_usage {
-                t.token_usage = Some(usage.clone());
-            }
-        })
-        .or_insert_with(|| ToolState {
-            provider_session_id: provider_session_id.clone(),
-            last_action_summary: result.summary.clone(),
-            last_exit_code: result.exit_code,
-            updated_at: chrono::Utc::now(),
-            tool_version: None,
-            token_usage: token_usage.clone(),
-        });
-}
-
-fn update_cumulative_tokens(session: &mut MetaSessionState, token_usage: Option<TokenUsage>) {
-    let Some(new_usage) = token_usage else {
-        return;
-    };
-
-    let cumulative = session
-        .total_token_usage
-        .get_or_insert(TokenUsage::default());
-    cumulative.input_tokens =
-        Some(cumulative.input_tokens.unwrap_or(0) + new_usage.input_tokens.unwrap_or(0));
-    cumulative.output_tokens =
-        Some(cumulative.output_tokens.unwrap_or(0) + new_usage.output_tokens.unwrap_or(0));
-    cumulative.total_tokens =
-        Some(cumulative.total_tokens.unwrap_or(0) + new_usage.total_tokens.unwrap_or(0));
-    cumulative.estimated_cost_usd = Some(
-        cumulative.estimated_cost_usd.unwrap_or(0.0) + new_usage.estimated_cost_usd.unwrap_or(0.0),
-    );
-    // Accumulate cache-read tokens only when the new usage reports a value;
-    // missing fields must not zero out a previously recorded total.
-    if let Some(new_cache_read) = new_usage.cache_read_input_tokens {
-        cumulative.cache_read_input_tokens =
-            Some(cumulative.cache_read_input_tokens.unwrap_or(0) + new_cache_read);
-    }
-
-    // Update token budget tracking
-    if let Some(ref mut budget) = session.token_budget {
-        let tokens_used = new_usage.total_tokens.unwrap_or(0);
-        budget.record_usage(tokens_used);
-        if budget.is_hard_exceeded() {
-            warn!(
-                session = %session.meta_session_id,
-                used = budget.used,
-                allocated = budget.allocated,
-                "Token budget hard threshold reached — advisory only"
-            );
-        } else if budget.is_soft_exceeded() {
-            warn!(
-                session = %session.meta_session_id,
-                used = budget.used,
-                allocated = budget.allocated,
-                remaining = budget.remaining(),
-                "Token budget soft threshold reached"
-            );
-        }
-    }
 }
 
 fn write_prompt_audit(session_dir: &Path, effective_prompt: &str) {

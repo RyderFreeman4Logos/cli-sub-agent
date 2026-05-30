@@ -324,6 +324,50 @@ pub(super) fn extract_summary(output: &str) -> String {
     truncate_line(last_non_empty_line(output), 200)
 }
 
+/// Best-effort extraction of a terminal reason from a legacy CLI tool's final
+/// JSON envelope, for the session-outcome classifier.
+///
+/// Scans output lines in reverse for the last JSON object carrying a recognized
+/// completion marker:
+/// - codex exec `{"type":"turn.completed"}` / `{"type":"turn.failed"}`
+/// - claude-code stream-json `{"type":"result","subtype":...,"is_error":...}`
+///
+/// Returns a token understood by [`crate::model_completed_from_terminal_reason`]
+/// (`turn.completed`, `success`, `error`, …), or `None` when the output carries
+/// no recognizable terminal envelope (e.g. gemini-cli, which emits none) — the
+/// classifier then falls back to exit code and final-output presence.
+pub(super) fn parse_legacy_terminal_reason(output: &str) -> Option<String> {
+    for line in output.lines().rev() {
+        let line = line.trim();
+        if !(line.starts_with('{') && line.ends_with('}')) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("turn.completed") => return Some("turn.completed".to_string()),
+            Some("turn.failed") => return Some("failed".to_string()),
+            Some("result") => {
+                let subtype = value.get("subtype").and_then(serde_json::Value::as_str);
+                let is_error = value
+                    .get("is_error")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                return Some(match subtype {
+                    Some("success") => "success".to_string(),
+                    Some(other) if other.starts_with("error") => "error".to_string(),
+                    _ if is_error => "error".to_string(),
+                    Some(other) => other.to_string(),
+                    None => "completed".to_string(),
+                });
+            }
+            _ => continue,
+        }
+    }
+    None
+}
+
 /// Build summary for failed executions (exit_code != 0).
 ///
 /// Priority chain:

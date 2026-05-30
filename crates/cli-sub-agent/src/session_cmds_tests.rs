@@ -58,6 +58,8 @@ fn make_result(status: &str, exit_code: i32) -> SessionResult {
         peak_memory_mb: None,
         fallback_chain: None,
         gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
         manager_fields: Default::default(),
     }
 }

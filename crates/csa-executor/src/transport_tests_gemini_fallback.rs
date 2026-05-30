@@ -412,6 +412,7 @@ fn test_is_gemini_rate_limited_result_matches_capacity_in_stdout() {
         stderr_output: String::new(),
         exit_code: 1,
             peak_memory_mb: None,
+        ..Default::default()
     };
     assert!(
         is_gemini_rate_limited_result(&execution),
@@ -427,6 +428,7 @@ fn test_is_gemini_rate_limited_result_matches_capacity_in_stderr() {
         stderr_output: "No capacity available for model gemini-3.1-pro-preview".to_string(),
         exit_code: 1,
             peak_memory_mb: None,
+        ..Default::default()
     };
     assert!(
         is_gemini_rate_limited_result(&execution),
@@ -442,6 +444,7 @@ fn test_is_gemini_rate_limited_result_ignores_success_exit_code() {
         stderr_output: String::new(),
         exit_code: 0,
             peak_memory_mb: None,
+        ..Default::default()
     };
     assert!(
         !is_gemini_rate_limited_result(&execution),

@@ -587,6 +587,8 @@ fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
             peak_memory_mb: None,
             fallback_chain: None,
             gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
             manager_fields: Default::default(),
         },
     )

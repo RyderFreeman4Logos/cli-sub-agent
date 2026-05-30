@@ -359,6 +359,7 @@ fn evaluate_rate_limit_failover_skips_rate_limit_without_active_tier_routing() {
         summary: "rate limited".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
@@ -411,6 +412,7 @@ fn evaluate_rate_limit_failover_continues_past_permanent_quota_to_next_provider(
         summary: "monthly spending cap reached".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
@@ -839,6 +841,7 @@ fn evaluate_rate_limit_failover_gemini_quota_skips_antigravity_picks_codex() {
         summary: "daily quota for project exceeded".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
@@ -886,6 +889,7 @@ fn evaluate_rate_limit_failover_chained_google_pool_exhaustion_continues_past() 
         summary: "Google quota pool exhausted".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut tried_tools = vec!["gemini-cli".to_string()];
     let mut tried_specs = vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()];

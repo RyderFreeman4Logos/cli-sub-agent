@@ -38,11 +38,14 @@ mod session_exec_pre_exec;
 mod session_exec_prompt_guard;
 #[path = "pipeline_session_exec_tool_state.rs"]
 mod session_exec_tool_state;
+#[path = "pipeline_session_exec_write_guard.rs"]
+mod session_exec_write_guard;
 use self::session_exec_pre_exec::{
     check_resources_before_spawn, persist_pipeline_pre_exec_failure,
     write_fatal_error_marker_sidecar,
 };
 use self::session_exec_tool_state::ensure_tool_state_initialized;
+use self::session_exec_write_guard::apply_write_restriction_violations;
 pub(crate) use session_exec_api::{execute_with_session, execute_with_session_and_meta};
 
 #[allow(clippy::too_many_arguments)]
@@ -448,52 +451,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         result_file_cleared,
         &mut result,
     );
-    if let Some(guard) = edit_guard
-        && let Some(violation) = guard.enforce_and_restore()?
-    {
-        let violation_summary = violation.summary();
-        let violation_details = violation.detail_message();
-        let previous_summary = result.summary.clone();
-        warn!(tool = %executor.tool_name(), "Edit restriction: reverted {n} files", n = violation.modified_paths.len());
-        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        if !previous_summary.trim().is_empty() {
-            result.stderr_output.push_str(&format!(
-                "Original summary before restriction guard: {previous_summary}\n"
-            ));
-        }
-        result.stderr_output.push_str(&violation_details);
-        if !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        result.summary = violation_summary;
-        result.exit_code = 1;
-    }
-    if let Some(guard) = new_file_guard
-        && let Some(violation) = guard.enforce_and_remove()?
-    {
-        let violation_summary = violation.summary();
-        let violation_details = violation.detail_message();
-        warn!(
-            tool = %executor.tool_name(),
-            new_files = violation.new_paths.len(),
-            removed = violation.removed_paths.len(),
-            "Detected and removed new files created under write restriction"
-        );
-        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        result.stderr_output.push_str(&violation_details);
-        if !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        // Only override summary/exit if edit guard didn't already fail.
-        if result.exit_code == 0 {
-            result.summary = violation_summary;
-        }
-        result.exit_code = 1;
-    }
+    apply_write_restriction_violations(edit_guard, new_file_guard, executor, &mut result)?;
     if result.exit_code != 0 {
         crate::error_hints::append_sandbox_fs_denial_hint(
             &mut result.stderr_output,

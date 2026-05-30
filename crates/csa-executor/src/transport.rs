@@ -381,7 +381,7 @@ impl AcpTransport {
                 .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb),
         };
 
-        let (output, gemini_warning_summary) = if self.tool_name == "gemini-cli" {
+        let (mut output, gemini_warning_summary) = if self.tool_name == "gemini-cli" {
             let runtime_home = gemini_runtime_home
                 .clone()
                 .expect("gemini runtime home should exist for ACP execution");
@@ -411,12 +411,24 @@ impl AcpTransport {
         } else {
             (Self::run_acp_prompt(spawn_request).await?, None)
         };
+        // Carry the ACP terminal reason to the session-outcome classifier: the raw
+        // process exit_code stays authoritative here, but model_completed lets the
+        // classifier downgrade an incidental nonzero exit (e.g. a failing hook) on
+        // an otherwise-completed turn rather than flipping the session to failure.
+        let raw_process_exit_code = output.exit_code;
+        let terminal_reason = output.exit_reason.take();
+        let model_completed =
+            csa_process::model_completed_from_terminal_reason(terminal_reason.as_deref());
         let mut execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
             output: output.output,
             stderr_output: output.stderr,
             exit_code: output.exit_code,
+            raw_process_exit_code: Some(raw_process_exit_code),
+            model_completed,
+            terminal_reason,
             peak_memory_mb: output.peak_memory_mb,
+            ..Default::default()
         };
         if let Some(warning_summary) = gemini_warning_summary.as_deref() {
             apply_gemini_mcp_warning_summary(&mut execution, warning_summary);

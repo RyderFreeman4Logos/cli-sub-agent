@@ -164,6 +164,7 @@ fn evaluate_rate_limit_failover_retries_on_http_500_init_result() {
         summary: "HTTP 500 Internal Server Error".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
@@ -208,6 +209,7 @@ fn evaluate_rate_limit_failover_skips_http_500_after_init_window() {
         summary: "HTTP 500 Internal Server Error".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
+        ..Default::default()
     };
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();

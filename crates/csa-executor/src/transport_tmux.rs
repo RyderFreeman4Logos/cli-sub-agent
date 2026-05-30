@@ -624,6 +624,7 @@ impl TmuxTransport {
                 stderr_output: String::new(),
                 exit_code: 0,
                 peak_memory_mb: None,
+                ..Default::default()
             },
             provider_session_id: Some(provider_session_id),
             events: Vec::new(),

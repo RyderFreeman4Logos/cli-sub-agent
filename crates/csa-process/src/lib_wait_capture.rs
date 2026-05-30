@@ -442,6 +442,29 @@ pub async fn wait_and_capture_with_idle_timeout(
     } else {
         failure_summary(&output, &stderr_output, exit_code)
     };
+
+    // Session-outcome signals for the classifier, derived from the raw output
+    // before sanitization. Timeouts force non-completion (we killed the turn);
+    // otherwise an explicit terminal envelope (codex `turn.completed`,
+    // claude-code `result`) is authoritative, even if the process then exited
+    // "early". With no envelope and an early exit the turn did not complete; a
+    // clean exit with no envelope (e.g. gemini-cli) stays undetermined (`None`).
+    let raw_process_exit_code = exit_code;
+    let terminal_reason = if idle_timed_out || workspace_boundary_timed_out {
+        Some("idle_timeout".to_string())
+    } else {
+        parse_legacy_terminal_reason(&output)
+    };
+    let model_completed = if idle_timed_out || workspace_boundary_timed_out {
+        Some(false)
+    } else if terminal_reason.is_some() {
+        crate::model_completed_from_terminal_reason(terminal_reason.as_deref())
+    } else if child_exited_early {
+        Some(false)
+    } else {
+        None
+    };
+
     let output = sanitize_opaque_object_payloads(&output);
     let mut stderr_output = sanitize_opaque_object_payloads(&stderr_output);
     let actionable_detail = resolve_actionable_failure_detail(&summary, exit_code);
@@ -479,6 +502,10 @@ pub async fn wait_and_capture_with_idle_timeout(
         stderr_output,
         summary,
         exit_code,
+        raw_process_exit_code: Some(raw_process_exit_code),
+        model_completed,
+        terminal_reason,
         peak_memory_mb: None,
+        ..Default::default()
     })
 }

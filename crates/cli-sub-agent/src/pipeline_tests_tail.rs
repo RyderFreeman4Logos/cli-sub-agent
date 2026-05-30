@@ -94,6 +94,7 @@ fn result_toml_path_contract_not_applied_without_prompt_marker() {
         summary: "/tmp/missing/result.toml".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now("normal prompt", "normal prompt", temp.path(), &mut result);
@@ -112,6 +113,7 @@ fn result_toml_path_contract_not_applied_when_marker_only_in_effective_prompt() 
         summary: "/tmp/missing/result.toml".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -137,6 +139,7 @@ fn result_toml_path_contract_fails_closed_when_preclear_failed() {
         summary: result_path.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_path_contract(
@@ -168,6 +171,7 @@ fn result_toml_path_contract_accepts_existing_absolute_result_file() {
         summary: result_path.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -198,6 +202,7 @@ fn result_toml_path_contract_rejects_hardlinked_session_result_file() {
         summary: session_result.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -222,6 +227,7 @@ fn result_toml_path_contract_coerces_missing_file_to_failure() {
         summary: missing.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -251,6 +257,7 @@ fn result_toml_path_contract_uses_untruncated_output_path_over_summary() {
         summary: truncated_summary,
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -278,6 +285,7 @@ fn result_toml_path_contract_rejects_existing_result_file_outside_session_dir() 
         summary: external_result_path.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -306,6 +314,7 @@ fn result_toml_path_contract_accepts_quoted_output_path_with_trailing_markers() 
         summary: "<!-- CSA:SECTION:details:END -->".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -332,6 +341,7 @@ fn result_toml_path_contract_prefers_summary_path_when_output_has_no_path() {
         summary: result_path.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -364,6 +374,7 @@ summary = "ok"
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -397,6 +408,7 @@ summary = "ok"
         summary: "not-a-path".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -433,6 +445,7 @@ fn result_toml_path_contract_rejects_invalid_user_result_fallback() {
         summary: "still-not-a-path".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -455,6 +468,7 @@ fn result_toml_path_contract_ignores_embedded_marker_substring() {
         summary: "/tmp/missing/result.toml".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -478,6 +492,7 @@ fn result_toml_path_contract_applies_with_markdown_marker_list_item() {
         summary: "/tmp/missing/result.toml".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -510,6 +525,7 @@ fn result_toml_path_contract_rejects_symlinked_session_result_file() {
         summary: session_result.display().to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -537,6 +553,7 @@ fn execute_with_session_and_meta_contract_rejects_illegal_result_toml_path() {
         summary: "ok".to_string(),
         exit_code: 0,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -562,6 +579,7 @@ fn execute_with_session_and_meta_contract_preserves_existing_failure_exit_code()
         summary: original_summary.clone(),
         exit_code: 7,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(
@@ -587,6 +605,7 @@ fn result_toml_path_contract_not_applied_when_exit_code_nonzero_even_with_marker
         summary: original_summary.clone(),
         exit_code: 2,
         peak_memory_mb: None,
+        ..Default::default()
     };
 
     enforce_result_toml_contract_now(

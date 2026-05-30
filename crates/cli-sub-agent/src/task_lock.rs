@@ -83,13 +83,11 @@ impl TaskLock {
     }
 
     pub fn release(&self) {
-        if self.lock_path.as_os_str().is_empty() {
-            return;
-        }
-
-        #[cfg(feature = "parallel-tasks")]
-        {
-            let _ = fs::remove_file(&self.lock_path);
+        if !self.lock_path.as_os_str().is_empty() {
+            #[cfg(feature = "parallel-tasks")]
+            {
+                let _ = fs::remove_file(&self.lock_path);
+            }
         }
     }
 }
