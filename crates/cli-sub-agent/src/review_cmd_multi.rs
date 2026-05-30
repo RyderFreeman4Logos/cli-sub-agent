@@ -292,7 +292,7 @@ fn consensus_response_from_outcome(outcome: &ReviewerOutcome) -> AgentResponse {
         ),
         content: outcome.verdict.to_string(),
         weight: 1.0,
-        timed_out: outcome.verdict == UNAVAILABLE,
+        timed_out: !outcome.produced_usable_verdict(),
     }
 }
 

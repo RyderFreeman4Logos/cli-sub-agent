@@ -173,7 +173,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     reviewers: usize,
     outcomes: &[ReviewerOutcome],
     final_verdict: &str,
-    all_reviewers_unavailable: bool,
+    _all_reviewers_unavailable: bool,
     parent_review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<()> {
     let Some((session_dir, session_id)) = resolve_parent_session_env() else {
@@ -186,7 +186,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     let parent_decision = parent_review_decision(
         &consolidated,
         final_verdict,
-        all_reviewers_unavailable,
+        outcomes,
         dissent_findings_persisted,
     );
     let parent_verdict = parent_legacy_verdict(parent_decision, final_verdict);
@@ -258,7 +258,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     let decision = parent_review_decision(
         &consolidated,
         ctx.final_verdict,
-        ctx.all_reviewers_unavailable,
+        ctx.outcomes,
         dissent_findings_persisted,
     );
     let verdict = parent_legacy_verdict(decision, ctx.final_verdict);
@@ -451,11 +451,15 @@ fn parent_artifact_for_decision(
 fn parent_review_decision(
     artifact: &ReviewArtifact,
     final_verdict: &str,
-    all_reviewers_unavailable: bool,
+    outcomes: &[ReviewerOutcome],
     dissent_findings_persisted: bool,
 ) -> ReviewDecision {
-    if all_reviewers_unavailable {
-        return ReviewDecision::Unavailable;
+    let produced_decision = review_decision_from_produced_outcomes(outcomes);
+    let Some(produced_decision) = produced_decision else {
+        return ReviewDecision::Fail;
+    };
+    if produced_decision == ReviewDecision::Fail {
+        return ReviewDecision::Fail;
     }
     let consensus_decision =
         ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain);
@@ -496,6 +500,20 @@ fn parent_review_decision(
         return ReviewDecision::Pass;
     }
     consensus_decision
+}
+
+fn review_decision_from_produced_outcomes(outcomes: &[ReviewerOutcome]) -> Option<ReviewDecision> {
+    let mut saw_produced = false;
+    for outcome in outcomes
+        .iter()
+        .filter(|outcome| outcome.produced_usable_verdict())
+    {
+        saw_produced = true;
+        if outcome.verdict == HAS_ISSUES {
+            return Some(ReviewDecision::Fail);
+        }
+    }
+    saw_produced.then_some(ReviewDecision::Pass)
 }
 
 fn is_blocking_severity(severity: &Severity) -> bool {
