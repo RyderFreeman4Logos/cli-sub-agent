@@ -9,12 +9,22 @@ const CODEX_DEFAULT_HOME_REL: &str = ".codex";
 const CODEX_SANDBOX_CONFIG_HINT: &str =
     "[tools.codex].filesystem_sandbox.writable_paths or [filesystem_sandbox].extra_writable";
 
+/// A directory that MUST be writable before spawning a tool, validated
+/// fail-fast in `IsolationPlanBuilder::build`.
+///
+/// Shared across tool-home preflights — the codex home (`~/.codex`) and the
+/// claude home (`~/.claude`, see `isolation_plan_claude.rs`).  `tool_label`
+/// selects the wording so a single probe reports the owning tool correctly.
+/// Fields are `pub(super)` so the sibling claude helper module can construct
+/// and inspect entries.
 #[derive(Debug, Clone)]
 pub(super) struct RequiredWritableDir {
-    path: PathBuf,
-    source: &'static str,
-    purpose: &'static str,
-    config_hint: &'static str,
+    pub(super) path: PathBuf,
+    pub(super) source: &'static str,
+    pub(super) purpose: &'static str,
+    pub(super) config_hint: &'static str,
+    /// Lowercase tool identifier ("codex" / "claude") used in error wording.
+    pub(super) tool_label: &'static str,
 }
 
 pub(super) fn add_codex_home_for_tool(
@@ -33,6 +43,7 @@ pub(super) fn add_codex_home_for_tool(
             source: codex_home_source,
             purpose: "Codex rollout recorder and arg0 PATH shim",
             config_hint: CODEX_SANDBOX_CONFIG_HINT,
+            tool_label: "codex",
         });
     } else if codex_home.is_absolute() && has_codex_on_path() {
         // Codex is installed — route through `add_dir_or_creatable_parent` so
@@ -93,10 +104,11 @@ fn validate_required_writable_dir(
     writable_paths: &[PathBuf],
 ) -> anyhow::Result<()> {
     let path = &required.path;
+    let label = required.tool_label;
 
     if !path.is_absolute() {
         anyhow::bail!(
-            "codex sandbox preflight failed: required writable path {} ({}, source: {}) is not absolute. \
+            "{label} sandbox preflight failed: required writable path {} ({}, source: {}) is not absolute. \
              Sandbox config key: {}",
             path.display(),
             required.purpose,
@@ -107,7 +119,7 @@ fn validate_required_writable_dir(
 
     if !path_is_covered_by_writable_mount(path, writable_paths) {
         anyhow::bail!(
-            "codex sandbox preflight failed: required writable path {} ({}, source: {}) is missing from IsolationPlan.writable_paths. \
+            "{label} sandbox preflight failed: required writable path {} ({}, source: {}) is missing from IsolationPlan.writable_paths. \
              Sandbox config key: {}",
             path.display(),
             required.purpose,
@@ -118,7 +130,7 @@ fn validate_required_writable_dir(
 
     if super::is_sensitive_system_path(path) {
         anyhow::bail!(
-            "codex sandbox preflight failed: required writable path {} ({}, source: {}) is under a sensitive system directory. \
+            "{label} sandbox preflight failed: required writable path {} ({}, source: {}) is under a sensitive system directory. \
              Sandbox config key: {}",
             path.display(),
             required.purpose,
@@ -129,7 +141,7 @@ fn validate_required_writable_dir(
 
     if let Err(error) = fs::create_dir_all(path) {
         anyhow::bail!(
-            "codex sandbox preflight failed: required writable path {} ({}, source: {}) could not be created before spawning Codex: {}. \
+            "{label} sandbox preflight failed: required writable path {} ({}, source: {}) could not be created before spawning {label}: {}. \
              Sandbox config key: {}",
             path.display(),
             required.purpose,
@@ -143,7 +155,7 @@ fn validate_required_writable_dir(
         Ok(metadata) => metadata,
         Err(error) => {
             anyhow::bail!(
-                "codex sandbox preflight failed: required writable path {} ({}, source: {}) could not be inspected before spawning Codex: {}. \
+                "{label} sandbox preflight failed: required writable path {} ({}, source: {}) could not be inspected before spawning {label}: {}. \
                  Sandbox config key: {}",
                 path.display(),
                 required.purpose,
@@ -155,7 +167,7 @@ fn validate_required_writable_dir(
     };
     if !metadata.is_dir() {
         anyhow::bail!(
-            "codex sandbox preflight failed: required writable path {} ({}, source: {}) exists but is not a directory. \
+            "{label} sandbox preflight failed: required writable path {} ({}, source: {}) exists but is not a directory. \
              Sandbox config key: {}",
             path.display(),
             required.purpose,
@@ -168,6 +180,7 @@ fn validate_required_writable_dir(
 }
 
 fn probe_writable_dir(path: &Path, required: &RequiredWritableDir) -> anyhow::Result<()> {
+    let label = required.tool_label;
     for attempt in 0..16 {
         let probe = path.join(format!(".csa-write-probe-{}-{attempt}", std::process::id()));
         match OpenOptions::new().write(true).create_new(true).open(&probe) {
@@ -187,8 +200,8 @@ fn probe_writable_dir(path: &Path, required: &RequiredWritableDir) -> anyhow::Re
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 anyhow::bail!(
-                    "codex sandbox preflight failed: required writable path {} ({}, source: {}) is not writable before spawning Codex: {}. \
-                     Sandbox config key: {}. If this is a nested CSA session, ensure the parent filesystem sandbox also exposes this same canonical Codex home path.",
+                    "{label} sandbox preflight failed: required writable path {} ({}, source: {}) is not writable before spawning {label}: {}. \
+                     Sandbox config key: {}. If this is a nested CSA session, ensure the parent filesystem sandbox also exposes this same canonical {label} home path.",
                     path.display(),
                     required.purpose,
                     required.source,
@@ -200,7 +213,7 @@ fn probe_writable_dir(path: &Path, required: &RequiredWritableDir) -> anyhow::Re
     }
 
     anyhow::bail!(
-        "codex sandbox preflight failed: could not allocate a unique write probe under {} ({}, source: {}). \
+        "{label} sandbox preflight failed: could not allocate a unique write probe under {} ({}, source: {}). \
          Sandbox config key: {}",
         path.display(),
         required.purpose,
