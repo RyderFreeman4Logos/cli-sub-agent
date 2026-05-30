@@ -198,6 +198,7 @@ pub(crate) fn handle_session_result(
             } else {
                 display_result_text(
                     &resolved_id,
+                    &session_dir,
                     &result_view,
                     transcript_summary.as_ref(),
                     review_meta.as_ref(),
@@ -240,6 +241,7 @@ fn display_result_json(
 
 fn display_result_text(
     session_id: &str,
+    session_dir: &Path,
     result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
@@ -252,7 +254,14 @@ fn display_result_text(
     println!("Tool:    {}", envelope.tool);
     println!("Started: {}", envelope.started_at);
     println!("Ended:   {}", envelope.completed_at);
-    println!("Summary: {}", envelope.summary);
+    // Match `csa session wait`: prefer `output/summary.md` and suppress raw JSON
+    // event envelopes (e.g. codex `turn.completed`) rather than printing machine
+    // JSON as the human Summary line (#161 / #1682).
+    if let Some(summary) =
+        crate::session_summary_text::human_session_summary(session_dir, &envelope.summary)
+    {
+        println!("Summary: {summary}");
+    }
     if !envelope.artifacts.is_empty() {
         println!("Artifacts:");
         for a in &envelope.artifacts {

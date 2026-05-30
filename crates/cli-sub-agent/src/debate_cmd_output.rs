@@ -53,17 +53,36 @@ pub(crate) fn extract_debate_summary(
     fallback_summary: &str,
     mode: DebateMode,
 ) -> DebateSummary {
-    let summary = extract_one_line_summary(tool_output, fallback_summary);
-    let key_points = extract_key_points(tool_output, summary.as_str());
+    // Prefer the final assistant message(s): when the tool emitted a codex-style
+    // JSON event transcript, summary/verdict must come from the assistant text,
+    // not from protocol JSON / hook events / tool_result noise (#161). Fall back
+    // to the raw output only when no assistant text could be extracted.
+    let assistant_text = extract_final_assistant_text(tool_output);
+    let source = assistant_text.as_deref().unwrap_or(tool_output);
+    let summary = extract_one_line_summary(source, fallback_summary);
+    let key_points = extract_key_points(source, summary.as_str());
     DebateSummary {
-        verdict: extract_verdict(tool_output).to_string(),
+        verdict: extract_verdict(source).to_string(),
         decision: None,
-        confidence: extract_confidence(tool_output).to_string(),
+        confidence: extract_confidence(source).to_string(),
         summary,
         key_points,
         failure_reason: None,
         mode,
     }
+}
+
+/// Extract the assistant-authored text from a tool output, dropping protocol
+/// JSON, hook events, and tool_result envelopes. Returns `Some(text)` only when
+/// the output was a codex JSON event transcript that yielded non-empty assistant
+/// content; otherwise `None` so the caller keeps the raw (already-prose) output.
+fn extract_final_assistant_text(tool_output: &str) -> Option<String> {
+    if !crate::codex_transcript_filter::first_non_empty_line_is_thread_started(tool_output) {
+        return None;
+    }
+    crate::codex_transcript_filter::extract_codex_json_event_text(tool_output)
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
 }
 
 pub(crate) fn persist_debate_output_artifacts(
@@ -247,6 +266,14 @@ pub(crate) fn extract_verdict(output: &str) -> &'static str {
             continue;
         }
 
+        // `CSA_VERDICT: CONFIRMED` is the structured success marker emitted by
+        // debate participants; treat it as a success verdict (#161). It carries
+        // through to `exit_code_from_debate_verdict`, where `CONFIRMED` maps to 0.
+        if normalized.contains("CSA_VERDICT") && normalized.contains("CONFIRMED") {
+            matched = Some("CONFIRMED");
+            continue;
+        }
+
         let has_verdict_hint = normalized.contains("VERDICT")
             || normalized.contains("FINAL DECISION")
             || normalized.contains("DECISION")
@@ -255,6 +282,8 @@ pub(crate) fn extract_verdict(output: &str) -> &'static str {
         if has_verdict_hint {
             if normalized.contains("APPROVE") {
                 matched = Some("APPROVE");
+            } else if normalized.contains("CONFIRMED") {
+                matched = Some("CONFIRMED");
             } else if normalized.contains("REJECT") {
                 matched = Some("REJECT");
             } else if normalized.contains("REVISE") {
@@ -267,6 +296,7 @@ pub(crate) fn extract_verdict(output: &str) -> &'static str {
 
         match normalized.as_str() {
             "APPROVE" => matched = Some("APPROVE"),
+            "CONFIRMED" => matched = Some("CONFIRMED"),
             "REVISE" => matched = Some("REVISE"),
             "REJECT" => matched = Some("REJECT"),
             _ => {}
@@ -406,6 +436,21 @@ fn is_non_summary_line(line: &str) -> bool {
         || line.starts_with("Key Arguments:")
         || line.starts_with("Implementation:")
         || line.starts_with("Anticipated Counterarguments:")
+        || is_protocol_or_hook_envelope(line)
+}
+
+/// Whether `line` is a machine protocol/hook event envelope rather than prose:
+/// a raw JSON object carrying a `type` field (e.g. codex `thread.started` /
+/// `turn.completed`, claude-code stream events) or such an envelope wrapped in a
+/// CSA `[other] {...}` event label (e.g. `[other] {"type":"hook_started"}`).
+/// These must never be selected as a debate summary line (#161).
+fn is_protocol_or_hook_envelope(line: &str) -> bool {
+    let candidate = line
+        .trim()
+        .strip_prefix("[other]")
+        .map(str::trim)
+        .unwrap_or_else(|| line.trim());
+    crate::session_summary_text::is_json_event_envelope(candidate)
 }
 
 fn normalize_whitespace(input: &str) -> String {

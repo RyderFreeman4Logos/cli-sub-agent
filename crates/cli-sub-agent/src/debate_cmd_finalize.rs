@@ -56,93 +56,114 @@ pub(crate) fn finalize_debate_outcome(
     execution: Option<crate::pipeline::SessionExecutionResult>,
     context: DebateFinalizeContext<'_>,
 ) -> Result<FinalizedDebateOutcome> {
-    let (_exit_code, meta_session_id, persisted_session_id, output, debate_summary) =
-        match (context.all_tier_models_failed, execution) {
-            (true, Some(execution)) => {
-                let persisted_session_id = resolve_persisted_debate_session_id(
-                    project_root,
-                    &execution.meta_session_id,
-                    true,
-                )?;
-                let output = render_debate_output(
-                    &execution.execution.output,
-                    persisted_session_id
-                        .as_deref()
-                        .unwrap_or(execution.meta_session_id.as_str()),
-                    execution.provider_session_id.as_deref(),
-                );
-                (
-                    execution.execution.exit_code,
-                    execution.meta_session_id,
-                    persisted_session_id,
-                    output,
-                    build_unavailable_debate_summary(
-                        context.resolved_tier_name,
-                        context.failures,
-                        context.debate_mode,
-                    ),
-                )
-            }
-            (true, None) => {
-                let meta_session_id = "unknown".to_string();
-                let output = render_debate_output("", &meta_session_id, None);
-                (
-                    1,
-                    meta_session_id,
-                    None,
-                    output,
-                    build_unavailable_debate_summary(
-                        context.resolved_tier_name,
-                        context.failures,
-                        context.debate_mode,
-                    ),
-                )
-            }
-            (false, Some(execution)) => {
-                let persisted_session_id = resolve_persisted_debate_session_id(
-                    project_root,
-                    &execution.meta_session_id,
-                    false,
-                )?;
-                let output = render_debate_output(
-                    &execution.execution.output,
-                    persisted_session_id
-                        .as_deref()
-                        .unwrap_or(execution.meta_session_id.as_str()),
-                    execution.provider_session_id.as_deref(),
-                );
-                let debate_summary = extract_debate_summary(
-                    &output,
-                    execution.execution.summary.as_str(),
+    // `verdict_success_from_output`: a completed debate whose rendered output
+    // carries an explicit success verdict. When the tool *process* exited
+    // nonzero for an incidental reason (hook noise / in-turn command) but the
+    // debate reached a success verdict, the debate IS the product — it must not
+    // be reported as failure (#161). This flag is the authoritative success
+    // signal we previously computed and then discarded into `_exit_code`.
+    let (
+        verdict_success_from_output,
+        meta_session_id,
+        persisted_session_id,
+        output,
+        debate_summary,
+    ) = match (context.all_tier_models_failed, execution) {
+        (true, Some(execution)) => {
+            let persisted_session_id = resolve_persisted_debate_session_id(
+                project_root,
+                &execution.meta_session_id,
+                true,
+            )?;
+            let output = render_debate_output(
+                &execution.execution.output,
+                persisted_session_id
+                    .as_deref()
+                    .unwrap_or(execution.meta_session_id.as_str()),
+                execution.provider_session_id.as_deref(),
+            );
+            (
+                false,
+                execution.meta_session_id,
+                persisted_session_id,
+                output,
+                build_unavailable_debate_summary(
+                    context.resolved_tier_name,
+                    context.failures,
                     context.debate_mode,
-                );
-                let exit_code = if execution.execution.exit_code != 0
-                    && output_has_explicit_debate_verdict(&output)
-                {
-                    0
-                } else {
-                    execution.execution.exit_code
-                };
-                (
-                    exit_code,
-                    execution.meta_session_id,
-                    persisted_session_id,
-                    output,
-                    debate_summary,
-                )
-            }
-            (false, None) => unreachable!("debate tier candidate list is never empty"),
-        };
+                ),
+            )
+        }
+        (true, None) => {
+            let meta_session_id = "unknown".to_string();
+            let output = render_debate_output("", &meta_session_id, None);
+            (
+                false,
+                meta_session_id,
+                None,
+                output,
+                build_unavailable_debate_summary(
+                    context.resolved_tier_name,
+                    context.failures,
+                    context.debate_mode,
+                ),
+            )
+        }
+        (false, Some(execution)) => {
+            let persisted_session_id = resolve_persisted_debate_session_id(
+                project_root,
+                &execution.meta_session_id,
+                false,
+            )?;
+            let output = render_debate_output(
+                &execution.execution.output,
+                persisted_session_id
+                    .as_deref()
+                    .unwrap_or(execution.meta_session_id.as_str()),
+                execution.provider_session_id.as_deref(),
+            );
+            let debate_summary = extract_debate_summary(
+                &output,
+                execution.execution.summary.as_str(),
+                context.debate_mode,
+            );
+            // A success verdict drives the outcome regardless of an incidental
+            // nonzero tool-process exit; a non-success verdict (REVISE/REJECT)
+            // keeps the artifact authority (legitimate exit 1).
+            let verdict_success = output_has_explicit_debate_verdict(&output)
+                && crate::verdict_exit_code::exit_code_from_debate_verdict(
+                    debate_summary.verdict.as_str(),
+                    debate_summary.decision.as_deref(),
+                ) == 0;
+            (
+                verdict_success,
+                execution.meta_session_id,
+                persisted_session_id,
+                output,
+                debate_summary,
+            )
+        }
+        (false, None) => unreachable!("debate tier candidate list is never empty"),
+    };
 
     let final_exit_code = if let Some(session_id) = persisted_session_id.as_deref() {
         let session_dir = csa_session::get_session_dir(project_root, session_id)?;
         let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
+        // The persisted verdict artifact is the verdict authority; but if the
+        // debate reached an explicit success verdict, never report failure — this
+        // both recovers from an unreadable artifact (infra code 2) and honours an
+        // incidental nonzero tool-process exit on a successful debate (#161).
         let artifact_exit_code = persisted_debate_verdict_exit_code(&session_dir);
+        let resolved_exit_code = if verdict_success_from_output {
+            0
+        } else {
+            artifact_exit_code
+        };
         append_debate_artifacts_to_result(project_root, session_id, &artifacts, &debate_summary)?;
         persist_debate_exit_code(
             project_root,
             session_id,
-            artifact_exit_code,
+            resolved_exit_code,
             &debate_summary.summary,
         )?;
         if let (Some(original_tool), Some(fallback_tool)) =
@@ -156,7 +177,9 @@ pub(crate) fn finalize_debate_outcome(
                 context.fallback_reason,
             );
         }
-        artifact_exit_code
+        resolved_exit_code
+    } else if verdict_success_from_output {
+        0
     } else {
         crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE
     };
@@ -211,6 +234,7 @@ fn output_has_explicit_debate_verdict(output: &str) -> bool {
         normalized.starts_with("verdict:")
             || normalized.starts_with("decision:")
             || normalized.starts_with("final decision:")
+            || normalized.starts_with("csa_verdict:")
     })
 }
 
