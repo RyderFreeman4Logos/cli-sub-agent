@@ -42,7 +42,7 @@ pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
 pub(super) use fail_closed::fail_closed_review_meta;
-use fail_closed::{fail_closed_review_verdict_artifact, review_meta_requires_fail_closed};
+use fail_closed::fail_closed_review_verdict_artifact;
 pub(super) use sections::{
     derive_review_result_summary, has_structured_review_content, sanitize_review_output,
 };
@@ -109,20 +109,8 @@ pub(super) fn persist_review_verdict(
 ) {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
-            let mut artifact = if review_meta_requires_fail_closed(meta) {
+            let mut artifact = if meta.requires_fail_closed_verdict() {
                 fail_closed_review_verdict_artifact(meta, findings, prior_round_refs.clone())
-            } else if meta.status_reason.is_some() {
-                let mut artifact = ReviewVerdictArtifact::from_parts(
-                    meta.session_id.clone(),
-                    ReviewDecision::from_str(&meta.decision).unwrap_or(ReviewDecision::Uncertain),
-                    meta.verdict.clone(),
-                    findings,
-                    prior_round_refs.clone(),
-                );
-                artifact.routed_to = meta.routed_to.clone();
-                artifact.primary_failure = meta.primary_failure.clone();
-                artifact.failure_reason = meta.failure_reason.clone();
-                artifact
             } else {
                 match derive_review_verdict_artifact(&session_dir, meta, findings) {
                     Ok(mut artifact) => {

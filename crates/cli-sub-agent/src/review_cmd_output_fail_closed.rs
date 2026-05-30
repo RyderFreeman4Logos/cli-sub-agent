@@ -12,7 +12,7 @@ pub(in crate::review_cmd) fn fail_closed_review_meta(
     if csa_session::get_session_dir(project_root, &meta.session_id).is_err() {
         return meta.clone();
     }
-    if !review_meta_requires_fail_closed(meta) {
+    if !meta.requires_fail_closed_verdict() {
         return meta.clone();
     }
 
@@ -43,22 +43,6 @@ pub(super) fn fail_closed_review_verdict_artifact(
     artifact.primary_failure = meta.primary_failure.clone();
     artifact.failure_reason = meta.failure_reason.clone();
     artifact
-}
-
-pub(super) fn review_meta_requires_fail_closed(meta: &ReviewSessionMeta) -> bool {
-    if meta.status_reason.is_some() || meta.failure_reason.is_some() {
-        return true;
-    }
-
-    let has_primary_failure = meta
-        .primary_failure
-        .as_deref()
-        .is_some_and(|failure| !failure.trim().is_empty());
-    if !has_primary_failure {
-        return false;
-    }
-
-    meta.exit_code != 0
 }
 
 fn fail_closed_decision_for_meta(meta: &ReviewSessionMeta) -> ReviewDecision {

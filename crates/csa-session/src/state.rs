@@ -216,6 +216,23 @@ pub struct ReviewSessionMeta {
     pub diff_fingerprint: Option<String>,
 }
 
+impl ReviewSessionMeta {
+    /// Returns true when review metadata represents an incomplete or failed
+    /// reviewer execution that must not be treated as a clean verdict.
+    pub fn requires_fail_closed_verdict(&self) -> bool {
+        if self.status_reason.is_some() || self.failure_reason.is_some() {
+            return true;
+        }
+
+        let has_primary_failure = self
+            .primary_failure
+            .as_deref()
+            .is_some_and(|failure| !failure.trim().is_empty());
+
+        has_primary_failure && self.exit_code != 0
+    }
+}
+
 /// Write review session metadata to the session directory.
 ///
 /// Creates or overwrites `{session_dir}/review_meta.json`.
