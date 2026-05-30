@@ -495,3 +495,7 @@ mod tests;
 #[cfg(test)]
 #[path = "isolation_plan_path_tests.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "isolation_plan_claude_tests.rs"]
+mod claude_tests;
