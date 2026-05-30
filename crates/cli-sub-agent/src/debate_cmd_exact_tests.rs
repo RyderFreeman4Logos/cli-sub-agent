@@ -204,6 +204,80 @@ fn debate_pre_session_all_fail_yields_unavailable() {
 }
 
 #[test]
+fn debate_extractor_uses_final_assistant_message_over_protocol_and_hook_noise() {
+    // Spec test #3: a codex-style JSON event transcript whose first non-empty
+    // line is `thread.started`, interleaved with a `[other] {...hook...}` event
+    // envelope and a `tool_result` item, ending with the final assistant message
+    // carrying the structured `CSA_VERDICT: CONFIRMED` success marker. The
+    // extractor MUST source summary/verdict from the assistant message, never
+    // from the protocol JSON / hook / tool_result lines (#161).
+    let transcript = [
+        r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+        r#"[other] {"type":"hook_started","hook":"SessionStart"}"#,
+        r#"{"type":"item.completed","item":{"id":"i1","type":"tool_result","text":"secret shell output that must not leak into the summary"}}"#,
+        r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Summary: both reviewers agree the fix is sound.\nCSA_VERDICT: CONFIRMED"}}"#,
+    ]
+    .join("\n");
+
+    let summary = crate::debate_cmd_output::extract_debate_summary(
+        &transcript,
+        "fallback summary must not be used",
+        debate_cmd::DebateMode::Heterogeneous,
+    );
+
+    // Summary comes from the assistant message, not protocol/hook/tool_result.
+    assert_eq!(summary.summary, "both reviewers agree the fix is sound.");
+    assert!(!summary.summary.contains("secret shell output"));
+    assert!(!summary.summary.contains("thread.started"));
+    assert!(!summary.summary.contains("hook_started"));
+    assert!(!summary.summary.contains("fallback summary"));
+
+    // `CSA_VERDICT: CONFIRMED` is recognized as the success verdict.
+    assert_eq!(summary.verdict, "CONFIRMED");
+    assert_eq!(
+        crate::debate_cmd_output::extract_verdict(
+            "Summary: both reviewers agree the fix is sound.\nCSA_VERDICT: CONFIRMED"
+        ),
+        "CONFIRMED"
+    );
+
+    // The recognized verdict maps to a success exit code (#161).
+    assert_eq!(
+        crate::verdict_exit_code::exit_code_from_debate_verdict(summary.verdict.as_str(), None),
+        0
+    );
+}
+
+#[test]
+fn debate_extractor_rejects_bare_protocol_envelope_in_prose_output() {
+    // Companion to spec test #3: when the output is NOT a codex transcript
+    // (first line is plain prose), the raw-prose summary scan must still skip a
+    // bare `[other] {...event...}` / `{"type":...}` envelope line and pick the
+    // real prose line instead (#161).
+    let output = [
+        "Both models converged on the same recommendation.",
+        r#"[other] {"type":"hook_completed"}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":10}}"#,
+        "Verdict: CONFIRMED",
+    ]
+    .join("\n");
+
+    let summary = crate::debate_cmd_output::extract_debate_summary(
+        &output,
+        "unused fallback",
+        debate_cmd::DebateMode::Heterogeneous,
+    );
+
+    assert_eq!(
+        summary.summary,
+        "Both models converged on the same recommendation."
+    );
+    assert!(!summary.summary.contains("hook_completed"));
+    assert!(!summary.summary.contains("turn.completed"));
+    assert_eq!(summary.verdict, "CONFIRMED");
+}
+
+#[test]
 fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
     let temp = tempfile::TempDir::new().unwrap();
     let _env_lock = test_env_lock::TEST_ENV_LOCK.blocking_lock();
