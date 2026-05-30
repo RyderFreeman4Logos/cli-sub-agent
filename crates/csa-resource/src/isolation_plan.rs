@@ -8,6 +8,8 @@ use crate::sandbox::ResourceCapability;
 
 pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 
+#[path = "isolation_plan_claude.rs"]
+mod claude_paths;
 #[path = "isolation_plan_codex.rs"]
 mod codex_paths;
 #[path = "isolation_plan_runtime_path.rs"]
@@ -317,15 +319,20 @@ impl IsolationPlanBuilder {
                 &mut self.required_writable_dirs,
             );
 
-            // claude-code may cold-start by creating ~/.claude/session-env/<uuid>
-            // during review; pre-create ~/.claude so HOME does not stay read-only.
+            // Expose the claude home (~/.claude or $CLAUDE_CONFIG_DIR) writable
+            // for every sandboxed parent so a nested claude-code CSA child can
+            // create ~/.claude/session-env/<id> instead of hitting EROFS under a
+            // read-only HOME. Mirrors the codex helper above; see
+            // isolation_plan_claude.rs for the #1683 root cause and the ~/.codex
+            // symmetry justification.
+            claude_paths::add_claude_home_for_tool(
+                tool_name,
+                &home,
+                &mut self.writable_paths,
+                &mut self.required_writable_dirs,
+            );
+
             match tool_name {
-                "claude-code" => {
-                    let claude_dir = home.join(".claude");
-                    let claude_state_file = home.join(".claude.json");
-                    add_dir_or_creatable_parent(&mut self.writable_paths, &claude_dir);
-                    self.writable_paths.push(claude_state_file);
-                }
                 "gemini-cli" => [".gemini", ".config/gemini-cli"]
                     .into_iter()
                     .map(|rel| home.join(rel))
