@@ -787,3 +787,6 @@ mod verdict_1480_tests;
 
 #[path = "review_cmd_output_verdict_1675_tests.rs"]
 mod verdict_1675_tests;
+
+#[path = "review_cmd_output_verdict_1716_tests.rs"]
+mod verdict_1716_tests;

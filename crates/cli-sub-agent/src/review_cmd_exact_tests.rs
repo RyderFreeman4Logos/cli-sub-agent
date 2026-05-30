@@ -278,6 +278,57 @@ fn persist_review_sidecars_returns_fail_exit_for_has_issues_artifact() {
 }
 
 #[test]
+fn issue_1716_sidecars_fail_closed_and_agree_when_final_reviewer_failed() {
+    let project_dir = exact_test_setup_git_repo();
+    let _state_home = test_env_lock::ScopedTestEnvVar::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let session_id = "01TEST1716SIDECARAGREE000";
+    let session_dir = csa_session::get_session_dir(project_dir.path(), session_id)
+        .expect("resolve session dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    std::fs::write(
+        session_dir.join("output").join("full.md"),
+        "I'll inspect the diff and then produce findings.\n",
+    )
+    .expect("write setup-only output");
+
+    let mut meta = exact_test_make_review_meta(session_id, ReviewDecision::Pass, "CLEAN");
+    meta.exit_code = 137;
+    meta.primary_failure = Some("API key not found".to_string());
+
+    let persisted_exit_code = review_cmd::persist_review_sidecars_if_session_exists(
+        project_dir.path(),
+        &meta,
+        Some(session_id),
+    );
+
+    assert_eq!(persisted_exit_code, Some(1));
+    assert!(
+        !session_dir
+            .join("output")
+            .join(".findings.toml.synthetic")
+            .exists(),
+        "failed final reviewer must not get a synthetic empty-CLEAN marker"
+    );
+
+    let persisted_meta: ReviewSessionMeta =
+        serde_json::from_str(&std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap())
+            .unwrap();
+    let artifact: ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(persisted_meta.decision, ReviewDecision::Unavailable.as_str());
+    assert_eq!(persisted_meta.verdict, "UNAVAILABLE");
+    assert_eq!(artifact.decision, ReviewDecision::Unavailable);
+    assert_eq!(artifact.verdict_legacy, "UNAVAILABLE");
+    assert_eq!(persisted_meta.primary_failure, artifact.primary_failure);
+}
+
+#[test]
 fn issue_1593_clean_verdict_artifact_writes_gate_marker_despite_stale_fail_meta() {
     let project_dir = exact_test_setup_git_repo();
     exact_test_run_git(project_dir.path(), &["checkout", "-b", "fix-1593-test"]);

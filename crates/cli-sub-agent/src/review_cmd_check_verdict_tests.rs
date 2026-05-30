@@ -534,6 +534,37 @@ fn check_verdict_rejects_non_pass_artifact_even_when_meta_is_pass() {
 }
 
 #[test]
+fn issue_1716_check_verdict_rejects_failed_reviewer_meta_even_when_artifact_says_pass() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = setup_git_repo();
+    let state_home = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", state_home.path());
+    run_git(temp.path(), &["checkout", "-b", "feature"]);
+    let branch = run_git(temp.path(), &["branch", "--show-current"]);
+    let head_sha = csa_session::detect_git_head(temp.path()).unwrap();
+
+    let session_id = write_review_session(
+        temp.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    let session_dir = csa_session::get_session_dir(temp.path(), &session_id).unwrap();
+    let mut meta = read_review_meta(&session_dir)
+        .unwrap()
+        .expect("review meta should exist");
+    meta.exit_code = 137;
+    meta.primary_failure = Some("API key not found".to_string());
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+
+    let args = parse_review_args(&["csa", "review", "--check-verdict"]);
+    let exit = handle_check_verdict(temp.path(), &args).unwrap();
+    assert_eq!(exit, 1);
+}
+
+#[test]
 fn check_verdict_does_not_recover_or_rewrite_corrupt_session_state() {
     let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
     let temp = TempDir::new().unwrap();

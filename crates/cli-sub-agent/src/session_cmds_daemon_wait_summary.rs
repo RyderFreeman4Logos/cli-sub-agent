@@ -76,7 +76,7 @@ fn render_wait_result_summary(
         lines.push(format!("Tokens: {}", tokens.render_text()));
     }
 
-    if let Some(verdict) = read_review_verdict_label(session_dir) {
+    if let Some(verdict) = read_review_verdict_label(session_dir, result) {
         lines.push(format!("Review verdict: {verdict}"));
     }
 
@@ -110,7 +110,7 @@ fn render_wait_result_json(
         "tool": wait_result_tool_label(result),
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,
-        "review_verdict": read_review_verdict_label(session_dir),
+        "review_verdict": read_review_verdict_label(session_dir, result),
         "summary": crate::session_summary_text::human_session_summary(session_dir, &result.summary)
             .and_then(|text| compact_wait_summary_text(&text)),
     });
@@ -218,7 +218,10 @@ fn compact_wait_summary_text(summary: &str) -> Option<String> {
     Some(compact)
 }
 
-fn read_review_verdict_label(session_dir: &Path) -> Option<String> {
+fn read_review_verdict_label(
+    session_dir: &Path,
+    result: &csa_session::SessionResult,
+) -> Option<String> {
     let verdict_path = session_dir.join("output").join("review-verdict.json");
     if verdict_path.is_file()
         && let Ok(raw) = std::fs::read_to_string(&verdict_path)
@@ -232,7 +235,7 @@ fn read_review_verdict_label(session_dir: &Path) -> Option<String> {
                     .get("verdict_legacy")
                     .and_then(serde_json::Value::as_str)
             })
-            .map(normalize_review_verdict_label);
+            .map(|value| normalize_review_verdict_label(value, result));
     }
 
     let meta_path = session_dir.join("review_meta.json");
@@ -244,14 +247,15 @@ fn read_review_verdict_label(session_dir: &Path) -> Option<String> {
             .get("decision")
             .and_then(serde_json::Value::as_str)
             .or_else(|| value.get("verdict").and_then(serde_json::Value::as_str))
-            .map(normalize_review_verdict_label);
+            .map(|value| normalize_review_verdict_label(value, result));
     }
 
     None
 }
 
-fn normalize_review_verdict_label(value: &str) -> String {
+fn normalize_review_verdict_label(value: &str, result: &csa_session::SessionResult) -> String {
     match value.trim().to_ascii_uppercase().as_str() {
+        "PASS" | "CLEAN" if result.exit_code != 0 => "UNAVAILABLE".to_string(),
         "PASS" | "CLEAN" => "PASS".to_string(),
         "FAIL" | "FAILED" | "HAS_ISSUES" => "FAIL".to_string(),
         other => other.to_string(),
@@ -396,5 +400,43 @@ mod wait_output_tests {
         assert!(summary.contains("Elapsed: 1m 5s"));
         assert!(summary.contains("Tokens: input=100, output=25, total=125, cache_read=40"));
         assert!(summary.contains("Review verdict: PASS"));
+    }
+
+    #[test]
+    fn compact_summary_does_not_print_pass_when_result_failed() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let output_dir = temp.path().join("output");
+        std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+        std::fs::write(
+            output_dir.join("review-verdict.json"),
+            r#"{"decision":"pass","verdict_legacy":"CLEAN"}"#,
+        )
+        .expect("review verdict should be written");
+        let now = Utc::now();
+        let result = csa_session::SessionResult {
+            status: "failed".to_string(),
+            exit_code: 137,
+            summary: "fatal backend error: process killed".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now + chrono::TimeDelta::seconds(65),
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            manager_fields: Default::default(),
+        };
+
+        let summary = render_wait_result_summary(temp.path(), "01TESTWAITFAILPASS", &result);
+
+        assert!(!summary.contains("Review verdict: PASS"));
+        assert!(summary.contains("Review verdict: UNAVAILABLE"));
+        assert!(summary.contains("Summary: fatal backend error: process killed"));
     }
 }
