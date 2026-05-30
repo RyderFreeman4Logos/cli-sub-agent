@@ -460,7 +460,7 @@ fn parent_review_decision(
     let produced_decision = review_decision_from_produced_outcomes(outcomes);
     let Some(produced_decision) = produced_decision else {
         if all_reviewers_unavailable {
-            return ReviewDecision::Uncertain;
+            return ReviewDecision::Unavailable;
         }
         return ReviewDecision::Fail;
     };
