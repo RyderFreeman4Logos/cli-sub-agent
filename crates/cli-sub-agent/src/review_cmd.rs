@@ -331,6 +331,35 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
+        // Ask 3 (#1714): consume the persisted fallback chain built by the
+        // central tier helper so build-time exclusions and runtime failures
+        // drive the same diversity warning path.
+        let fallback_chain = result
+            .persistable_session_id
+            .as_deref()
+            .and_then(|session_id| {
+                csa_session::load_result(&project_root, session_id)
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|saved| saved.fallback_chain)
+            .unwrap_or_default();
+        if let Some(diversity_warning) = crate::failover_trace::writer_family_diversity_warning(
+            parent_tool.as_deref(),
+            result.executed_tool,
+            &fallback_chain,
+        ) {
+            warn!(warning = %diversity_warning, "Review heterogeneity diversity guard (#1714)");
+            eprintln!("warning: {diversity_warning}");
+            if let Some(session_id) = result.persistable_session_id.as_deref() {
+                crate::tier_model_fallback::persist_result_warning(
+                    &project_root,
+                    session_id,
+                    &diversity_warning,
+                );
+            }
+        }
+
         let resolved =
             resolve_single_review_result(&result, result.executed_tool, &scope, &project_root);
         let sanitized = resolved.sanitized;

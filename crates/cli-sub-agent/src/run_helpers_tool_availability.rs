@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use csa_config::{ProjectConfig, TransportKind};
+use csa_config::{ProjectConfig, TransportKind, default_transport_for_tool};
 use csa_executor::{ClaudeCodeTransport, CodexTransport, install_hint_for_known_tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,13 +37,21 @@ fn assume_tool_binaries_available_for_tests() -> bool {
 pub(crate) fn resolved_codex_transport(config: Option<&ProjectConfig>) -> CodexTransport {
     config
         .and_then(|cfg| cfg.tool_transport("codex"))
+        // No per-tool transport configured: mirror the EXECUTION-time routing
+        // default (`default_transport_for_tool` = Cli), NOT the metadata build
+        // default (`CodexTransport::default_for_build` = Acp). The two diverge —
+        // `TransportFactory::mode_for_executor` routes codex through the `codex`
+        // CLI, while the build default names the `codex-acp` binary. Probing
+        // `codex-acp` for availability is a false-negative that silently drops
+        // codex from tier failover (#1714).
+        .or_else(|| default_transport_for_tool("codex"))
         .map(|transport| match transport {
             TransportKind::Cli => CodexTransport::Cli,
             TransportKind::Acp => CodexTransport::Acp,
-            TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
+            TransportKind::Auto => unreachable!("resolved transports never include Auto"),
             TransportKind::Tmux => unreachable!("codex does not support tmux transport"),
         })
-        .unwrap_or_else(CodexTransport::default_for_build)
+        .unwrap_or(CodexTransport::Cli)
 }
 
 pub(crate) fn resolved_claude_code_transport(
@@ -51,13 +59,17 @@ pub(crate) fn resolved_claude_code_transport(
 ) -> ClaudeCodeTransport {
     config
         .and_then(|cfg| cfg.tool_transport("claude-code"))
+        // See `resolved_codex_transport`: fall back to the execution-time routing
+        // default (Cli), not the metadata build default (Acp = `claude-code-acp`),
+        // so availability probing matches how the tool actually runs (#1714).
+        .or_else(|| default_transport_for_tool("claude-code"))
         .map(|transport| match transport {
             TransportKind::Cli => ClaudeCodeTransport::Cli,
             TransportKind::Acp => ClaudeCodeTransport::Acp,
             TransportKind::Tmux => ClaudeCodeTransport::Tmux,
-            TransportKind::Auto => unreachable!("tool_transport() returns resolved transports"),
+            TransportKind::Auto => unreachable!("resolved transports never include Auto"),
         })
-        .unwrap_or_else(ClaudeCodeTransport::default_for_build)
+        .unwrap_or(ClaudeCodeTransport::Cli)
 }
 
 pub(crate) fn resolved_tool_binary_name(
@@ -134,4 +146,38 @@ pub(crate) fn is_tool_binary_available_for_config(
     config: Option<&ProjectConfig>,
 ) -> bool {
     tool_binary_availability(tool_name, config).is_available()
+}
+
+#[cfg(test)]
+mod failover_detection_tests {
+    use super::*;
+
+    // Regression for #1714: with no project config, availability probing MUST
+    // mirror execution-time transport routing (`default_transport_for_tool` →
+    // CLI), not the metadata build default (`default_for_build` → ACP). Probing
+    // the ACP binary names ("codex-acp" / "claude-code-acp") when execution
+    // actually uses the CLI binaries is a false-negative availability miss that
+    // silently drops codex/claude-code from tier failover candidate lists.
+    #[test]
+    fn resolved_codex_transport_defaults_to_cli_without_config() {
+        assert_eq!(resolved_codex_transport(None), CodexTransport::Cli);
+    }
+
+    #[test]
+    fn resolved_claude_code_transport_defaults_to_cli_without_config() {
+        assert_eq!(
+            resolved_claude_code_transport(None),
+            ClaudeCodeTransport::Cli
+        );
+    }
+
+    #[test]
+    fn resolved_binary_name_uses_cli_default_when_config_absent() {
+        // Before the fix these returned "codex-acp" / "claude-code-acp".
+        assert_eq!(resolved_tool_binary_name("codex", None), Some("codex"));
+        assert_eq!(
+            resolved_tool_binary_name("claude-code", None),
+            Some("claude")
+        );
+    }
 }

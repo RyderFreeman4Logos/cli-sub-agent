@@ -233,14 +233,17 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         TierAttemptFailure {
             model_spec: "bad_pre_session_a".to_string(),
             reason: "AUTH_EXPIRED".to_string(),
+            quota_exhausted: None,
         },
         TierAttemptFailure {
             model_spec: "bad_pre_session_b".to_string(),
             reason: "QUOTA_EXHAUSTED".to_string(),
+            quota_exhausted: None,
         },
         TierAttemptFailure {
             model_spec: "bad_pre_session_c".to_string(),
             reason: "PERMISSION_DENIED".to_string(),
+            quota_exhausted: None,
         },
     ];
     let finalized = finalize_debate_outcome(
@@ -249,13 +252,16 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         None,
         DebateFinalizeContext {
             all_tier_models_failed: true,
+            project_config: None,
             resolved_tier_name: Some("quality"),
+            tier_filter: None,
             failures: &failures,
             debate_mode: DebateMode::Heterogeneous,
             output_header: None,
             original_tool: None,
             fallback_tool: None,
             fallback_reason: None,
+            selected_model_spec: None,
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");

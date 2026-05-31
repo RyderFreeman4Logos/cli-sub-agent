@@ -1,9 +1,5 @@
-use std::io::IsTerminal;
-
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::path::Path;
-use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
@@ -17,9 +13,7 @@ use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_e
 use crate::run_helpers::resolve_prompt_with_file;
 use csa_core::types::OutputFormat;
 
-use crate::debate_cmd_output::{
-    DebateOutputHeader, format_debate_stdout_text, render_debate_stdout_json,
-};
+use crate::debate_cmd_output::DebateOutputHeader;
 use crate::tier_model_fallback::{self, TierAttemptFailure};
 
 #[path = "debate_cmd_finalize.rs"]
@@ -36,10 +30,24 @@ use dry_run::{DebateDryRunSummary, create_debate_dry_run_session, render_debate_
 mod fast_mode;
 use fast_mode::{debate_execution_env_options, warn_if_fast_mode_has_no_codex_debate_candidate};
 
+#[path = "debate_cmd_gate.rs"]
+mod gate;
+use gate::run_pre_debate_quality_gate;
+
 #[path = "debate_cmd_readonly.rs"]
 mod readonly;
 use readonly::build_debate_instruction;
 pub(crate) use readonly::with_readonly_session_env;
+
+#[path = "debate_cmd_runtime.rs"]
+mod runtime;
+#[cfg(test)]
+use runtime::STILL_WORKING_BACKOFF;
+use runtime::{
+    ensure_debate_wall_clock_within_timeout, render_debate_cli_output, resolve_debate_stream_mode,
+    resolve_debate_thinking, resolve_debate_timeout_seconds, should_retry_debate_after_error,
+    verify_debate_skill_available, wait_for_still_working_backoff,
+};
 
 /// Debate execution mode indicating model diversity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -76,99 +84,7 @@ pub(crate) async fn handle_debate(
     // shared pre-execution quality check (lint/test) that applies equally to
     // both review and debate workflows.
     if !args.dry_run {
-        let gate_steps = global_config.review.effective_gate_steps();
-        let gate_timeout = config
-            .as_ref()
-            .and_then(|c| c.review.as_ref())
-            .map(|r| r.gate_timeout_secs)
-            .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
-        let gate_mode = &global_config.review.gate_mode;
-
-        if gate_steps.is_empty() {
-            // Legacy single-command path
-            let gate_command = config
-                .as_ref()
-                .and_then(|c| c.review.as_ref())
-                .and_then(|r| r.gate_command.as_deref());
-            let gate_result = crate::pipeline::gate::evaluate_quality_gate(
-                &project_root,
-                gate_command,
-                gate_timeout,
-                gate_mode,
-            )
-            .await?;
-
-            if gate_result.skipped {
-                debug!(
-                    reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
-                    "Quality gate skipped"
-                );
-            } else if !gate_result.passed() {
-                match gate_mode {
-                    csa_config::GateMode::Monitor => {
-                        warn!(
-                            command = %gate_result.command,
-                            exit_code = ?gate_result.exit_code,
-                            "Quality gate failed (monitor mode — continuing with debate)"
-                        );
-                    }
-                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
-                        let mut msg = format!(
-                            "Pre-debate quality gate failed (mode={gate_mode:?}).\n\
-                             Command: {}\nExit code: {:?}",
-                            gate_result.command, gate_result.exit_code
-                        );
-                        if !gate_result.stdout.is_empty() {
-                            msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
-                        }
-                        if !gate_result.stderr.is_empty() {
-                            msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
-                        }
-                        anyhow::bail!(msg);
-                    }
-                }
-            } else {
-                debug!(command = %gate_result.command, "Quality gate passed");
-            }
-        } else {
-            // Multi-step pipeline
-            let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
-                &project_root,
-                &gate_steps,
-                gate_timeout,
-                gate_mode,
-            )
-            .await?;
-
-            if pipeline_result.passed {
-                debug!("Quality gate pipeline passed");
-            } else {
-                match gate_mode {
-                    csa_config::GateMode::Monitor => {
-                        warn!("Quality gate pipeline failed (monitor mode — continuing)");
-                    }
-                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
-                        let failed = pipeline_result.failed_step.as_deref().unwrap_or("unknown");
-                        let mut msg = format!(
-                            "Pre-debate quality gate pipeline FAILED at step: {failed}\n\
-                             (mode={gate_mode:?})\n"
-                        );
-                        for step in &pipeline_result.steps {
-                            if !step.passed() {
-                                msg.push_str(&format!(
-                                    "\nL{} {} ({}): exit {:?}",
-                                    step.level, step.name, step.command, step.exit_code
-                                ));
-                                if !step.stderr.is_empty() {
-                                    msg.push_str(&format!("\n  stderr: {}", step.stderr));
-                                }
-                            }
-                        }
-                        anyhow::bail!(msg);
-                    }
-                }
-            }
-        }
+        run_pre_debate_quality_gate(&project_root, config.as_ref(), &global_config).await?;
     }
 
     // 3. Read question (from --prompt-file, positional arg, --topic, or stdin)
@@ -404,6 +320,7 @@ pub(crate) async fn handle_debate(
     let mut execution = None;
     let mut failures = Vec::new();
     let mut final_tool = None;
+    let mut final_model_spec: Option<String> = None;
 
     'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
         candidates.iter().enumerate()
@@ -501,10 +418,10 @@ pub(crate) async fn handle_debate(
                         let model_label = attempt_model_spec
                             .clone()
                             .unwrap_or_else(|| attempt_tool.as_str().to_string());
-                        failures.push(TierAttemptFailure {
-                            model_spec: model_label.clone(),
-                            reason: detected.reason.clone(),
-                        });
+                        failures.push(TierAttemptFailure::from_rate_limit(
+                            model_label.clone(),
+                            &detected,
+                        ));
                         warn!(
                             failed_tool = %attempt_tool,
                             failed_model = %model_label,
@@ -549,6 +466,7 @@ pub(crate) async fn handle_debate(
             resume_session = Some(executed.meta_session_id.clone());
             if executed.execution.exit_code == 0 {
                 final_tool = Some(*attempt_tool);
+                final_model_spec = attempt_model_spec.clone();
                 execution = Some(executed);
                 break 'tier_attempts;
             }
@@ -564,10 +482,10 @@ pub(crate) async fn handle_debate(
                 let model_label = attempt_model_spec
                     .clone()
                     .unwrap_or_else(|| attempt_tool.as_str().to_string());
-                failures.push(TierAttemptFailure {
-                    model_spec: model_label.clone(),
-                    reason: detected.reason.clone(),
-                });
+                failures.push(TierAttemptFailure::from_rate_limit(
+                    model_label.clone(),
+                    &detected,
+                ));
                 warn!(
                     failed_tool = %attempt_tool,
                     failed_model = %model_label,
@@ -624,12 +542,14 @@ pub(crate) async fn handle_debate(
                     }
                     warn!("Debate ended after transient failure: {reason}");
                     final_tool = Some(*attempt_tool);
+                    final_model_spec = attempt_model_spec.clone();
                     execution = Some(executed);
                     break 'tier_attempts;
                 }
                 DebateErrorKind::Deterministic(reason) => {
                     debug!("Debate finished with deterministic non-zero outcome: {reason}");
                     final_tool = Some(*attempt_tool);
+                    final_model_spec = attempt_model_spec.clone();
                     execution = Some(executed);
                     break 'tier_attempts;
                 }
@@ -645,7 +565,9 @@ pub(crate) async fn handle_debate(
         execution,
         DebateFinalizeContext {
             all_tier_models_failed,
+            project_config: config.as_ref(),
             resolved_tier_name: resolved_tier_name.as_deref(),
+            tier_filter: tier_filter.as_ref(),
             failures: &failures,
             debate_mode,
             output_header: Some(DebateOutputHeader {
@@ -654,6 +576,7 @@ pub(crate) async fn handle_debate(
             original_tool: Some(tool),
             fallback_tool: final_tool,
             fallback_reason,
+            selected_model_spec: final_model_spec.as_deref(),
         },
     )?;
     let rendered_output = finalized.rendered_output;
@@ -664,122 +587,6 @@ pub(crate) async fn handle_debate(
     }
 
     Ok(finalized.exit_code)
-}
-
-fn render_debate_cli_output(
-    output_format: OutputFormat,
-    debate_summary: &crate::debate_cmd_output::DebateSummary,
-    transcript: &str,
-    meta_session_id: &str,
-    output_header: Option<DebateOutputHeader>,
-) -> Result<String> {
-    match output_format {
-        OutputFormat::Text => Ok(format_debate_stdout_text(
-            debate_summary,
-            transcript,
-            output_header,
-        )),
-        OutputFormat::Json => {
-            render_debate_stdout_json(debate_summary, transcript, meta_session_id, output_header)
-        }
-    }
-}
-
-const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);
-
-/// Verify the debate pattern is installed before attempting execution.
-///
-/// Fails fast with actionable install guidance if the pattern is missing,
-/// preventing silent degradation where the tool runs without skill context.
-fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
-    match crate::pattern_resolver::resolve_pattern("debate", project_root) {
-        Ok(resolved) => {
-            debug!(
-                pattern_dir = %resolved.dir.display(),
-                has_config = resolved.config.is_some(),
-                skill_md_len = resolved.skill_md.len(),
-                "Debate pattern resolved"
-            );
-            Ok(())
-        }
-        Err(resolve_err) => {
-            anyhow::bail!(
-                "Debate pattern not found — `csa debate` requires the 'debate' pattern.\n\n\
-                 {resolve_err}\n\n\
-                 Install the debate pattern with one of:\n\
-                 1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place skills/debate/SKILL.md (or PATTERN.md) inside .csa/patterns/debate/ or patterns/debate/\n\n\
-                 Without the pattern, the debate tool cannot follow the structured debate protocol."
-            )
-        }
-    }
-}
-
-/// Resolve stream mode for debate command.
-///
-/// - `--stream-stdout` forces TeeToStderr (progressive output)
-/// - `--no-stream-stdout` forces BufferOnly (silent until complete)
-/// - Default: auto-detect TTY on stderr -> TeeToStderr if interactive,
-///   BufferOnly otherwise. Symmetric with review's behavior (#139).
-fn resolve_debate_stream_mode(
-    stream_stdout: bool,
-    no_stream_stdout: bool,
-) -> csa_process::StreamMode {
-    if no_stream_stdout {
-        csa_process::StreamMode::BufferOnly
-    } else if stream_stdout || std::io::stderr().is_terminal() {
-        csa_process::StreamMode::TeeToStderr
-    } else {
-        csa_process::StreamMode::BufferOnly
-    }
-}
-
-fn resolve_debate_thinking(
-    cli_thinking: Option<&str>,
-    config_thinking: Option<&str>,
-    model_spec_active: bool,
-) -> Option<String> {
-    cli_thinking.map(str::to_string).or_else(|| {
-        (!model_spec_active)
-            .then_some(config_thinking)
-            .flatten()
-            .map(str::to_string)
-    })
-}
-
-fn resolve_debate_timeout_seconds(
-    cli_timeout_seconds: Option<u64>,
-    global_timeout_seconds: Option<u64>,
-) -> Option<u64> {
-    cli_timeout_seconds.or(global_timeout_seconds)
-}
-
-fn ensure_debate_wall_clock_within_timeout(
-    wall_clock_start: Instant,
-    timeout_seconds: Option<u64>,
-) -> Result<()> {
-    if let Some(timeout_secs) = timeout_seconds
-        && wall_clock_start.elapsed() > Duration::from_secs(timeout_secs)
-    {
-        anyhow::bail!("Wall-clock timeout exceeded ({timeout_secs}s)");
-    }
-    Ok(())
-}
-
-fn should_retry_debate_after_error(
-    kind: &DebateErrorKind,
-    retry_count: u8,
-    no_failover: bool,
-) -> bool {
-    if no_failover {
-        return false;
-    }
-    matches!(kind, DebateErrorKind::Transient(_)) && retry_count < 1
-}
-
-async fn wait_for_still_working_backoff() {
-    tracing::info!("Tool still working, waiting before next attempt...");
-    tokio::time::sleep(STILL_WORKING_BACKOFF).await;
 }
 
 #[cfg(test)]

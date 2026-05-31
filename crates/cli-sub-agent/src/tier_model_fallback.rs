@@ -1,5 +1,5 @@
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolName;
+use csa_core::types::{FallbackAttempt, ToolName};
 use csa_scheduler::RateLimitDetected;
 use std::path::Path;
 use std::time::Duration;
@@ -23,7 +23,7 @@ impl TierFilter {
         Self::Whitelist(tools.into_iter().map(Into::into).collect())
     }
 
-    fn whitelist_slice(&self) -> Option<&[String]> {
+    pub(crate) fn whitelist_slice(&self) -> Option<&[String]> {
         match self {
             Self::All => None,
             Self::Whitelist(tools) => Some(tools.as_slice()),
@@ -35,6 +35,31 @@ impl TierFilter {
 pub(crate) struct TierAttemptFailure {
     pub(crate) model_spec: String,
     pub(crate) reason: String,
+    /// Authoritative permanent-quota flag, when this failure came from a runtime
+    /// [`RateLimitDetected`]. The scheduler's `rate_limit` table already decided
+    /// permanent (monthly / spending-cap) vs. transient exhaustion BEFORE
+    /// normalizing the human-readable `reason` (e.g. it maps "monthly spending
+    /// cap" to `reason = "QUOTA_EXHAUSTED"` while keeping `quota_exhausted =
+    /// true`). Re-deriving from that lossy normalized `reason` via
+    /// [`crate::failover_trace::FailoverSkipKind::classify`] would mislabel it as
+    /// transient (#1714), so the structured boolean is carried straight through
+    /// to [`csa_core::types::FallbackAttempt::quota_exhausted`]. `None` for
+    /// build-time exclusions (disabled / undetected / whitelist-filtered specs
+    /// that never produced a `RateLimitDetected`); those keep classifying from
+    /// `reason`.
+    pub(crate) quota_exhausted: Option<bool>,
+}
+
+impl TierAttemptFailure {
+    /// Construct from a runtime [`RateLimitDetected`], capturing the scheduler's
+    /// authoritative `quota_exhausted` flag alongside the normalized reason.
+    pub(crate) fn from_rate_limit(model_spec: String, detected: &RateLimitDetected) -> Self {
+        Self {
+            model_spec,
+            reason: detected.reason.clone(),
+            quota_exhausted: Some(detected.quota_exhausted),
+        }
+    }
 }
 
 pub(crate) fn ordered_tier_candidates(
@@ -87,6 +112,55 @@ pub(crate) fn ordered_tier_candidates(
     }
 
     ordered
+}
+
+/// Build the persisted per-tool failover chain for a tier result.
+///
+/// Includes both candidate-build exclusions and runtime attempt failures so a
+/// successful later candidate still leaves a trace for earlier build-time skips.
+///
+/// `selected_model_spec` is the WINNING model (when the run succeeded). It bounds
+/// the emitted build-time exclusions to tier specs BEFORE the winner so a
+/// first-choice success does not falsely persist later, never-reached tier
+/// models as skips (#1714). Pass `None` on the all-models-failed path (no
+/// winner) to keep the full chain.
+pub(crate) fn build_fallback_chain_for_result(
+    project_config: Option<&ProjectConfig>,
+    tier_name: Option<&str>,
+    tier_filter: Option<&TierFilter>,
+    failures: &[TierAttemptFailure],
+    selected_model_spec: Option<&str>,
+) -> Vec<FallbackAttempt> {
+    let ordered_specs: Vec<String> = tier_name
+        .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
+        .map(|tier| tier.models.clone())
+        .unwrap_or_default();
+    let exclusions = match (tier_name, project_config) {
+        (Some(name), Some(cfg)) => {
+            crate::run_helpers::evaluate_tier_models(
+                name,
+                cfg,
+                tier_filter.and_then(TierFilter::whitelist_slice),
+                &[],
+            )
+            .1
+        }
+        _ => Vec::new(),
+    };
+    let attempt_failures: Vec<crate::failover_trace::AttemptFailure> = failures
+        .iter()
+        .map(|failure| crate::failover_trace::AttemptFailure {
+            model_spec: failure.model_spec.clone(),
+            reason: failure.reason.clone(),
+            quota_exhausted: failure.quota_exhausted,
+        })
+        .collect();
+    crate::failover_trace::build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &attempt_failures,
+        selected_model_spec,
+    )
 }
 
 fn ordered_global_candidates(
@@ -201,6 +275,62 @@ pub(crate) fn persist_fallback_result_fields(
             session_id,
             error = %err,
             "Failed to persist runtime fallback fields in result.toml"
+        );
+    }
+}
+
+/// Persist the per-tool failover chain into `result.toml` (#1714).
+///
+/// Complements [`persist_fallback_result_fields`] (which records the collapsed
+/// `fallback_reason` for backward compatibility) by writing the full
+/// `[[fallback_chain]]` of categorised per-tool skip reasons. Also records
+/// `original_tool`/`fallback_tool` so a NON-quota failover (e.g. an
+/// all-disabled tier falling back to claude-code) is still attributed, not just
+/// the legacy quota path. No-op when the chain is empty (no failover occurred).
+pub(crate) fn persist_fallback_chain(
+    project_root: &Path,
+    session_id: &str,
+    original_tool: ToolName,
+    fallback_tool: ToolName,
+    fallback_chain: Vec<FallbackAttempt>,
+) {
+    if fallback_chain.is_empty() {
+        return;
+    }
+    let Ok(Some(mut result)) = csa_session::load_result(project_root, session_id) else {
+        return;
+    };
+    result.original_tool = Some(original_tool.as_str().to_string());
+    result.fallback_tool = Some(fallback_tool.as_str().to_string());
+    result.fallback_chain = Some(fallback_chain);
+    if let Err(err) = csa_session::save_result(project_root, session_id, &result) {
+        tracing::warn!(
+            session_id,
+            error = %err,
+            "Failed to persist failover chain in result.toml"
+        );
+    }
+}
+
+/// Append a non-fatal warning to `result.toml`'s `warnings` (#1714 Ask 3).
+///
+/// Used by the writer-family diversity guard: a same-family failover is
+/// surfaced as a warning, NOT a verdict change, so a clean single-family review
+/// stays merge-able (preserving #1657). Skips writing if the identical warning
+/// is already present.
+pub(crate) fn persist_result_warning(project_root: &Path, session_id: &str, warning: &str) {
+    let Ok(Some(mut result)) = csa_session::load_result(project_root, session_id) else {
+        return;
+    };
+    if result.warnings.iter().any(|existing| existing == warning) {
+        return;
+    }
+    result.warnings.push(warning.to_string());
+    if let Err(err) = csa_session::save_result(project_root, session_id, &result) {
+        tracing::warn!(
+            session_id,
+            error = %err,
+            "Failed to persist review diversity warning in result.toml"
         );
     }
 }

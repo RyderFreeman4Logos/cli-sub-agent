@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 use anyhow::Result;
+use csa_config::ProjectConfig;
 use csa_core::types::{OutputFormat, ToolName};
 use tracing::warn;
 
@@ -10,7 +11,8 @@ use crate::debate_cmd_output::{
     extract_debate_summary, persist_debate_output_artifacts, render_debate_output,
 };
 use crate::tier_model_fallback::{
-    TierAttemptFailure, format_all_models_failed_reason, persist_fallback_result_fields,
+    TierAttemptFailure, TierFilter, format_all_models_failed_reason, persist_fallback_chain,
+    persist_fallback_result_fields,
 };
 
 pub(crate) struct FinalizedDebateOutcome {
@@ -20,13 +22,18 @@ pub(crate) struct FinalizedDebateOutcome {
 
 pub(crate) struct DebateFinalizeContext<'a> {
     pub(crate) all_tier_models_failed: bool,
+    pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) tier_filter: Option<&'a TierFilter>,
     pub(crate) failures: &'a [TierAttemptFailure],
     pub(crate) debate_mode: DebateMode,
     pub(crate) output_header: Option<DebateOutputHeader>,
     pub(crate) original_tool: Option<ToolName>,
     pub(crate) fallback_tool: Option<ToolName>,
     pub(crate) fallback_reason: Option<&'a str>,
+    /// Winning debater model spec, if the debate succeeded. Bounds the persisted
+    /// failover chain to before-winner skips (#1714).
+    pub(crate) selected_model_spec: Option<&'a str>,
 }
 
 fn build_unavailable_debate_summary(
@@ -175,6 +182,19 @@ pub(crate) fn finalize_debate_outcome(
                 original_tool,
                 fallback_tool,
                 context.fallback_reason,
+            );
+            persist_fallback_chain(
+                project_root,
+                session_id,
+                original_tool,
+                fallback_tool,
+                crate::tier_model_fallback::build_fallback_chain_for_result(
+                    context.project_config,
+                    context.resolved_tier_name,
+                    context.tier_filter,
+                    context.failures,
+                    context.selected_model_spec,
+                ),
             );
         }
         resolved_exit_code

@@ -2,6 +2,7 @@ use super::*;
 use crate::review_cmd::tests::{
     ScopedEnvVarRestore, project_config_with_enabled_tools, setup_git_repo,
 };
+use crate::test_env_lock::ScopedTestEnvVar;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{GlobalConfig, ProjectProfile, TierStrategy, config::TierConfig};
 use csa_core::types::{ReviewDecision, ToolName};
@@ -23,6 +24,43 @@ fn config_with_review_tier(enabled_tools: &[&str], models: &[&str]) -> csa_confi
         },
     );
     config
+}
+
+#[test]
+fn build_failover_chain_records_build_time_exclusions_without_runtime_failures() {
+    let _available_guard =
+        ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let config = config_with_review_tier(
+        &["claude-code"],
+        &[
+            "codex/openai/gpt-5.4/high",
+            "claude-code/anthropic/claude-sonnet/high",
+        ],
+    );
+
+    // Empty runtime failures represents the later claude-code reviewer
+    // succeeding; the skipped codex build-time exclusion (BEFORE the winner)
+    // still needs a trace.
+    let chain = crate::tier_model_fallback::build_fallback_chain_for_result(
+        Some(&config),
+        Some("quality"),
+        None,
+        &[],
+        Some("claude-code/anthropic/claude-sonnet/high"),
+    );
+
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0].tool, "codex");
+    assert_eq!(
+        chain[0].model_spec.as_deref(),
+        Some("codex/openai/gpt-5.4/high")
+    );
+    assert_eq!(chain[0].skip_reason, "disabled");
+    assert!(!chain[0].quota_exhausted);
+    assert!(
+        chain.iter().all(|attempt| attempt.tool != "claude-code"),
+        "the successful reviewer is not a fallback-chain skip"
+    );
 }
 
 #[cfg(unix)]

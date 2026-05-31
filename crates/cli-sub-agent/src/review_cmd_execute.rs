@@ -30,7 +30,8 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 use crate::tier_model_fallback::{
     TierAttemptFailure, TierFilter, chain_failure_reasons,
     classify_next_model_failure_with_elapsed, fallback_reason_for_result,
-    format_all_models_failed_reason, ordered_tier_candidates, persist_fallback_result_fields,
+    format_all_models_failed_reason, ordered_tier_candidates, persist_fallback_chain,
+    persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -313,10 +314,10 @@ pub(crate) async fn execute_review_with_tier_filter(
                     let model_label = attempt_model_spec
                         .clone()
                         .unwrap_or_else(|| attempt_tool.as_str().to_string());
-                    failures.push(TierAttemptFailure {
-                        model_spec: model_label.clone(),
-                        reason: detected.reason.clone(),
-                    });
+                    failures.push(TierAttemptFailure::from_rate_limit(
+                        model_label.clone(),
+                        &detected,
+                    ));
                     warn!(
                         failed_tool = %attempt_tool,
                         failed_model = %model_label,
@@ -354,6 +355,21 @@ pub(crate) async fn execute_review_with_tier_filter(
                             tool,
                             *attempt_tool,
                             fallback_reason_for_result(&failures),
+                        );
+                        persist_fallback_chain(
+                            project_root,
+                            &session_id,
+                            tool,
+                            *attempt_tool,
+                            crate::tier_model_fallback::build_fallback_chain_for_result(
+                                project_config,
+                                tier_name.as_deref(),
+                                tier_filter.as_ref(),
+                                &failures,
+                                // All tier models failed: no winner, so persist
+                                // the full chain.
+                                None,
+                            ),
                         );
                     }
                     let failure_reason =
@@ -488,14 +504,16 @@ pub(crate) async fn execute_review_with_tier_filter(
 
         if tier_fallback_enabled
             && candidates.len() > 1
-            && let Some(reason) = failure_reason
+            && let Some(failure) = failure_reason
         {
             let model_label = attempt_model_spec
                 .clone()
                 .unwrap_or_else(|| attempt_tool.as_str().to_string());
+            let reason = failure.reason.clone();
             failures.push(TierAttemptFailure {
                 model_spec: model_label.clone(),
                 reason: reason.clone(),
+                quota_exhausted: failure.quota_exhausted,
             });
             warn!(
                 failed_tool = %attempt_tool,
@@ -514,6 +532,20 @@ pub(crate) async fn execute_review_with_tier_filter(
                     tool,
                     *attempt_tool,
                     fallback_reason_for_result(&failures),
+                );
+                persist_fallback_chain(
+                    project_root,
+                    &execution.meta_session_id,
+                    tool,
+                    *attempt_tool,
+                    crate::tier_model_fallback::build_fallback_chain_for_result(
+                        project_config,
+                        tier_name.as_deref(),
+                        tier_filter.as_ref(),
+                        &failures,
+                        // Every tier model failed: no winner, persist full chain.
+                        None,
+                    ),
                 );
                 let persistable_session_id = Some(execution.meta_session_id.clone());
                 return Ok(ReviewExecutionOutcome {
@@ -544,6 +576,22 @@ pub(crate) async fn execute_review_with_tier_filter(
             tool,
             *attempt_tool,
             fallback_reason_for_result(&failures),
+        );
+        persist_fallback_chain(
+            project_root,
+            &execution.meta_session_id,
+            tool,
+            *attempt_tool,
+            crate::tier_model_fallback::build_fallback_chain_for_result(
+                project_config,
+                tier_name.as_deref(),
+                tier_filter.as_ref(),
+                &failures,
+                // The winning model: bounds the persisted chain to before-winner
+                // skips so a first-choice success omits never-reached tier
+                // models (#1714).
+                attempt_model_spec.as_deref(),
+            ),
         );
         let routed_to = (attempt_tool != &tool
             || attempt_model_spec.as_deref() != tier_model_spec.as_deref())

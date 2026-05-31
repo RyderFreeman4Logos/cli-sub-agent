@@ -109,10 +109,10 @@ pub(super) async fn execute_csa_step_with_tier_failover(
                         rate_limit.reason
                     );
                     eprintln!("{label} - {spec_label} FAILOVER ({})", rate_limit.reason);
-                    failures.push(TierAttemptFailure {
-                        model_spec: spec_label.to_string(),
-                        reason: rate_limit.reason,
-                    });
+                    failures.push(TierAttemptFailure::from_rate_limit(
+                        spec_label.to_string(),
+                        &rate_limit,
+                    ));
                     continue;
                 }
                 if let Some(reason) = format_all_models_failed_reason(params.tier_name, &failures) {
@@ -124,9 +124,14 @@ pub(super) async fn execute_csa_step_with_tier_failover(
                 if idx + 1 < candidates.len() {
                     let spec_label = model_spec.as_deref().unwrap_or(tool.as_str());
                     warn!("{label} - {spec_label} error: {err}; trying next tier model");
+                    // Spawn/transport error before any RateLimitDetected: the
+                    // scheduler has no authoritative quota signal here, so leave
+                    // `quota_exhausted` unset and let the failover trace classify
+                    // the reason string (build-time path, unchanged).
                     failures.push(TierAttemptFailure {
                         model_spec: spec_label.to_string(),
                         reason: format!("error: {err}"),
+                        quota_exhausted: None,
                     });
                     continue;
                 }

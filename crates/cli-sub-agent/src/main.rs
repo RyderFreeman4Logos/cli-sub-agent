@@ -24,6 +24,7 @@ mod error_hints;
 mod error_report;
 mod eval_cmd;
 mod executor_csa_guard;
+mod failover_trace;
 mod gc;
 mod gh_env;
 mod goal_loop;
