@@ -90,6 +90,7 @@ pub(crate) async fn handle_claude_sub_agent(
         false, // readonly_project_root
         &[],   // extra_writable
         &[],   // extra_readable
+        false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
     )
     .await?;
 

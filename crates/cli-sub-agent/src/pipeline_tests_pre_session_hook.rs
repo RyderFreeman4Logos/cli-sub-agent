@@ -104,6 +104,7 @@ printf 'ok\n'
         false, // readonly_project_root
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     .unwrap();

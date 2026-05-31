@@ -98,6 +98,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     .expect("initial review should fall back to opencode");
@@ -122,6 +123,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         no_failover: false,
         fast_but_more_cost: false,
         no_fs_sandbox: true,
+        no_error_marker_scan: false,
         extra_writable: &[],
         extra_readable: &[],
         timeout: None,

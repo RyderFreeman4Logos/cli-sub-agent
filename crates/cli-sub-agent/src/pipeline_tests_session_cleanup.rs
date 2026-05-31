@@ -248,6 +248,7 @@ async fn state_dir_cap_failure_persists_result_for_fresh_spawn() {
         false,
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     {
@@ -310,6 +311,7 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
         false,
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     {
@@ -423,6 +425,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
         false,
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     {

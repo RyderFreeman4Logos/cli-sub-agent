@@ -137,6 +137,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     .expect("tier fallback should succeed");
@@ -273,6 +274,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     .expect("explicit codex tier fallback should succeed");
@@ -422,6 +424,7 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     .expect("all-failed fallback should still return an outcome");
@@ -493,6 +496,7 @@ async fn execute_review_primary_success_keeps_routing_metadata_empty() {
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     .expect("primary model should succeed");

@@ -62,6 +62,7 @@ pub(crate) fn should_terminate_for_initial_response(
     initial_response_timeout: Duration,
     session_dir: Option<&Path>,
     next_liveness_poll_at: &mut Option<Instant>,
+    error_marker_scan_enabled: bool,
 ) -> Option<IdleTerminationReason> {
     let stdout_idle_for = last_stdout_activity.elapsed();
 
@@ -71,7 +72,8 @@ pub(crate) fn should_terminate_for_initial_response(
             .then_some(IdleTerminationReason::Idle);
     }
 
-    if let Some(dir) = session_dir {
+    // #1745 stopgap opt-out; proper fix = scope marker scan to backend-transport stream only (#182)
+    if error_marker_scan_enabled && let Some(dir) = session_dir {
         let now = Instant::now();
         let should_poll = next_liveness_poll_at
             .as_ref()
@@ -102,6 +104,7 @@ pub(crate) fn should_terminate_for_idle(
     session_dir: Option<&Path>,
     liveness_dead_since: &mut Option<Instant>,
     next_liveness_poll_at: &mut Option<Instant>,
+    error_marker_scan_enabled: bool,
 ) -> Option<IdleTerminationReason> {
     let idle_for = last_activity.elapsed();
     if idle_for < idle_timeout && idle_for < FATAL_ERROR_PROGRESS_GRACE {
@@ -133,7 +136,8 @@ pub(crate) fn should_terminate_for_idle(
         return None;
     }
 
-    if signals.fatal_error && idle_for >= FATAL_ERROR_PROGRESS_GRACE {
+    // #1745 stopgap opt-out; proper fix = scope marker scan to backend-transport stream only (#182)
+    if error_marker_scan_enabled && signals.fatal_error && idle_for >= FATAL_ERROR_PROGRESS_GRACE {
         return Some(IdleTerminationReason::FatalError);
     }
 
@@ -169,6 +173,7 @@ mod tests {
             None,
             &mut dead_since,
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
@@ -189,6 +194,7 @@ mod tests {
             Duration::from_secs(600),
             Some(temp.path()),
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, Some(IdleTerminationReason::FatalError));
@@ -207,6 +213,7 @@ mod tests {
             Duration::from_secs(600),
             Some(temp.path()),
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, None);
@@ -227,6 +234,7 @@ mod tests {
             Duration::from_secs(600),
             Some(temp.path()),
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, None);
@@ -244,6 +252,7 @@ mod tests {
             Duration::from_secs(2),
             None,
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
@@ -262,6 +271,7 @@ mod tests {
             Duration::from_secs(2),
             Some(temp.path()),
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, Some(IdleTerminationReason::Idle));
@@ -294,6 +304,7 @@ mod tests {
             Some(temp.path()),
             &mut dead_since,
             &mut next_poll,
+            true,
         );
 
         assert_eq!(should_terminate, None);
@@ -332,6 +343,7 @@ mod tests {
             Some(tmp.path()),
             &mut dead_since,
             &mut next_poll,
+            true,
         );
 
         assert_eq!(terminate, None, "should not terminate when tool is alive");
@@ -380,6 +392,7 @@ mod tests {
             Some(tmp.path()),
             &mut dead_since,
             &mut next_poll,
+            true,
         );
 
         assert!(
@@ -414,6 +427,7 @@ mod tests {
             Some(tmp.path()),
             &mut dead_since,
             &mut next_poll,
+            true,
         );
 
         assert_eq!(terminate, Some(IdleTerminationReason::FatalError));
@@ -441,9 +455,71 @@ mod tests {
             Some(tmp.path()),
             &mut dead_since,
             &mut next_poll,
+            true,
         );
 
         assert_eq!(terminate, None);
         assert!(dead_since.is_none());
+    }
+
+    #[test]
+    fn fatal_error_marker_scan_disabled_does_not_kill_idle(/* #1745 opt-out */) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Same marker + same no-progress condition as
+        // `fatal_error_marker_fast_fails_before_promoted_idle_timeout`, but with
+        // the scan disabled: the marker-based fatal classification MUST NOT fire.
+        std::fs::write(
+            tmp.path().join("stderr.log"),
+            "provider failed: HTTP 429 Too Many Requests\n",
+        )
+        .expect("write stderr");
+
+        let mut dead_since = None;
+        let mut next_poll = None;
+        // Idle for the fatal grace but still well under the promoted idle timeout,
+        // so the only thing that could terminate here is the marker fast-fail.
+        let mut last_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+
+        let terminate = should_terminate_for_idle(
+            &mut last_activity,
+            Duration::from_secs(7200),
+            Duration::from_secs(600),
+            Some(tmp.path()),
+            &mut dead_since,
+            &mut next_poll,
+            false,
+        );
+
+        assert_eq!(
+            terminate, None,
+            "scan disabled must bypass marker-based fatal kill"
+        );
+        assert!(dead_since.is_none());
+    }
+
+    #[test]
+    fn initial_response_scan_disabled_ignores_fatal_marker(/* #1745 opt-out */) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // Mirrors `initial_response_fast_fails_after_fatal_error_grace` but with the
+        // scan disabled: a fatal marker on stderr must NOT trigger a FatalError; the
+        // configured initial-response timeout (here large) governs instead.
+        std::fs::write(temp.path().join("stderr.log"), "invalid_api_key\n").expect("stderr log");
+        let last_stdout_activity =
+            Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+        let mut next_poll = None;
+
+        let should_terminate = should_terminate_for_initial_response(
+            last_stdout_activity,
+            Duration::from_secs(600),
+            Some(temp.path()),
+            &mut next_poll,
+            false,
+        );
+
+        assert_eq!(
+            should_terminate, None,
+            "scan disabled must not fast-fail on initial-response fatal marker"
+        );
     }
 }

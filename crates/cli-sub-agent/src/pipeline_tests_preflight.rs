@@ -74,6 +74,7 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
         false,
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     {
@@ -186,6 +187,7 @@ async fn execute_with_session_and_meta_runs_preflight_for_fresh_spawn_override()
         false,
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     {
@@ -265,6 +267,7 @@ async fn execute_with_session_and_meta_skips_preflight_for_resume_session() {
         false,
         &[],
         &[],
+        false, // cli_no_error_marker_scan (#1745)
     )
     .await
     {

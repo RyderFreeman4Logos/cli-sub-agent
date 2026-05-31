@@ -271,6 +271,7 @@ echo "ok persistent"
                     output_spool: None,
                     output_spool_max_bytes: 64 * 1024,
                     output_spool_keep_rotated: false,
+                    error_marker_scan_enabled: true,
                     setting_sources: None,
                     sandbox: None,
                     thinking_budget: None,

@@ -229,6 +229,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             effective_idle,
                             session_dir,
                             &mut next_liveness_poll_at,
+                            spawn_options.error_marker_scan_enabled,
                         )
                     } else {
                         should_terminate_for_idle(
@@ -238,6 +239,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             session_dir,
                             &mut liveness_dead_since,
                             &mut next_liveness_poll_at,
+                            spawn_options.error_marker_scan_enabled,
                         )
                     };
                     if let Some(reason) = idle_termination {
@@ -342,6 +344,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             effective_idle,
                             session_dir,
                             &mut next_liveness_poll_at,
+                            spawn_options.error_marker_scan_enabled,
                         )
                     } else {
                         should_terminate_for_idle(
@@ -351,6 +354,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             session_dir,
                             &mut liveness_dead_since,
                             &mut next_liveness_poll_at,
+                            spawn_options.error_marker_scan_enabled,
                         )
                     };
                     if let Some(reason) = idle_termination {

@@ -346,6 +346,7 @@ impl Executor {
             output_spool: options.output_spool.as_deref(),
             output_spool_max_bytes: options.output_spool_max_bytes,
             output_spool_keep_rotated: options.output_spool_keep_rotated,
+            error_marker_scan_enabled: options.error_marker_scan_enabled,
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),
             thinking_budget: self.thinking_budget().cloned(),

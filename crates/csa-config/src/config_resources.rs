@@ -19,6 +19,20 @@ pub struct ResourcesConfig {
     /// watchdog path after output has stopped making progress.
     #[serde(default = "default_fatal_error_markers")]
     pub fatal_error_markers: Vec<String>,
+    /// Whether the fatal-error-marker silent-hang scan (#1652) is enabled.
+    ///
+    /// When `true` (the default), a session is fast-failed if a configured
+    /// provider/4xx/5xx marker appears in its relayed output and no further
+    /// output progress is observed for the no-progress grace window. Set to
+    /// `false` to opt out for sessions that legitimately read/edit/test CSA's
+    /// own error/quota/failover detection code, whose source and test fixtures
+    /// contain marker literals (e.g. "429", "quota exceeded") that are the
+    /// SUBJECT of the work rather than an actual backend error (#1745).
+    ///
+    /// Disabling this knob bypasses ONLY the marker-based fatal classification;
+    /// the idle-timeout and wall-clock timeout still apply.
+    #[serde(default = "default_error_marker_scan")]
+    pub error_marker_scan: bool,
     /// Maximum time to block when waiting for a free global tool slot.
     #[serde(default = "default_slot_wait_timeout_seconds")]
     pub slot_wait_timeout_seconds: u64,
@@ -136,6 +150,15 @@ fn default_fatal_error_markers() -> Vec<String> {
     .collect()
 }
 
+/// Serde default for [`ResourcesConfig::error_marker_scan`].
+///
+/// An ABSENT field MUST deserialize to `true` so the #1652 scan stays enabled
+/// by default; `#[serde(default)]` would yield `false` (scan disabled), which
+/// would silently weaken existing behavior (rust rule 016 / serde-default).
+fn default_error_marker_scan() -> bool {
+    true
+}
+
 fn default_stdin_write_timeout_seconds() -> u64 {
     30
 }
@@ -151,6 +174,7 @@ impl Default for ResourcesConfig {
             idle_timeout_seconds: default_idle_timeout_seconds(),
             liveness_dead_seconds: default_liveness_dead_seconds(),
             fatal_error_markers: default_fatal_error_markers(),
+            error_marker_scan: default_error_marker_scan(),
             slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
             stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
             termination_grace_period_seconds: default_termination_grace_period_seconds(),
@@ -176,6 +200,7 @@ impl ResourcesConfig {
             && self.idle_timeout_seconds == default_idle_timeout_seconds()
             && self.liveness_dead_seconds == default_liveness_dead_seconds()
             && self.fatal_error_markers == default_fatal_error_markers()
+            && self.error_marker_scan == default_error_marker_scan()
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.termination_grace_period_seconds == default_termination_grace_period_seconds()
@@ -187,5 +212,56 @@ impl ResourcesConfig {
             && self.pids_max.is_none()
             && self.soft_limit_percent.is_none()
             && self.memory_monitor_interval_seconds.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1745: an ABSENT `error_marker_scan` field MUST deserialize to `true`
+    /// so the #1652 silent-hang scan stays enabled by default. This guards
+    /// against a regression to `#[serde(default)]` (which would yield `false`).
+    #[test]
+    fn error_marker_scan_absent_deserializes_to_true() {
+        let cfg: ResourcesConfig = toml::from_str("").expect("empty [resources] table");
+        assert!(
+            cfg.error_marker_scan,
+            "absent error_marker_scan must default to true (scan enabled)"
+        );
+    }
+
+    #[test]
+    fn error_marker_scan_explicit_false_is_honored() {
+        let cfg: ResourcesConfig =
+            toml::from_str("error_marker_scan = false").expect("explicit false");
+        assert!(!cfg.error_marker_scan);
+    }
+
+    #[test]
+    fn error_marker_scan_explicit_true_is_honored() {
+        let cfg: ResourcesConfig =
+            toml::from_str("error_marker_scan = true").expect("explicit true");
+        assert!(cfg.error_marker_scan);
+    }
+
+    /// The struct `Default` must agree with the serde default so a freshly
+    /// constructed config and a deserialized-empty config behave identically.
+    #[test]
+    fn default_impl_enables_error_marker_scan() {
+        assert!(ResourcesConfig::default().error_marker_scan);
+        assert!(default_error_marker_scan());
+    }
+
+    /// `is_default()` must treat scan-enabled as the default state (so a config
+    /// that only disables the scan is NOT omitted by `skip_serializing_if`).
+    #[test]
+    fn is_default_tracks_error_marker_scan() {
+        assert!(ResourcesConfig::default().is_default());
+        let disabled = ResourcesConfig {
+            error_marker_scan: false,
+            ..ResourcesConfig::default()
+        };
+        assert!(!disabled.is_default());
     }
 }

@@ -428,6 +428,7 @@ fn default_review_args() -> ReviewArgs {
         initial_response_timeout: None,
         stream_stdout: false,
         no_stream_stdout: false,
+        no_error_marker_scan: false,
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
@@ -684,6 +685,13 @@ fn review_cli_parses_no_stream_stdout_flag() {
 }
 
 #[test]
+fn review_cli_parses_no_error_marker_scan_flag() {
+    // #1745: opt-out flag must parse on `csa review`.
+    let args = parse_review_args(&["csa", "review", "--diff", "--no-error-marker-scan"]);
+    assert!(args.no_error_marker_scan);
+}
+
+#[test]
 fn review_cli_defaults_no_timeout() {
     let args = parse_review_args(&["csa", "review", "--diff"]);
     assert_eq!(args.timeout, None);
@@ -691,6 +699,8 @@ fn review_cli_defaults_no_timeout() {
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
     assert!(!args.allow_fallback);
+    // #1745: scan opt-out defaults to false (scan enabled).
+    assert!(!args.no_error_marker_scan);
 }
 
 #[test]

@@ -268,8 +268,9 @@ pub(super) async fn execute_csa_step(
             SessionCreationMode::FreshChild,
             options.no_fs_sandbox,
             options.readonly_project_root,
-            &[], // extra_writable
-            &[], // extra_readable
+            &[],   // extra_writable
+            &[],   // extra_readable
+            false, // cli_no_error_marker_scan: plan has no CLI flag; defer to config (#1745)
         )
     };
     let result = match execute_once(session_arg.clone()).await {

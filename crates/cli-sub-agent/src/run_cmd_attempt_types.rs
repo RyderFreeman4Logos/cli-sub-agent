@@ -61,6 +61,10 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub(crate) task_needs_edit: Option<bool>,
     pub(crate) no_fs_sandbox: bool,
+    /// CLI `--no-error-marker-scan`: when `true`, disables the #1652
+    /// fatal-error-marker silent-hang scan for this run, overriding config
+    /// (#1745). Idle/wall-clock timeouts still apply.
+    pub(crate) no_error_marker_scan: bool,
     pub(crate) extra_writable: Vec<PathBuf>,
     pub(crate) extra_readable: Vec<PathBuf>,
     pub(crate) branch_guard: BranchGuardRuntime,

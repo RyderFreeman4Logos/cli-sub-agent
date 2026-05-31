@@ -78,6 +78,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    // CLI `--no-error-marker-scan` override. `true` forces the #1652 scan OFF for
+    // this session, overriding config; `false` defers to `[resources].error_marker_scan`
+    // (default-true). The idle/wall-clock timeouts always remain active (#1745).
+    cli_no_error_marker_scan: bool,
 ) -> Result<SessionExecutionResult> {
     let memory_project_key = resolve_memory_project_key(project_root);
     let session_exec_bootstrap::SessionBootstrap {
@@ -383,6 +387,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     execute_options =
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
+    // Resolve the #1652 fatal-error-marker scan opt-out (#1745). Precedence:
+    // CLI `--no-error-marker-scan` (forces OFF) > config `[resources].error_marker_scan`
+    // (default-true) > built-in default (ON). Only the marker-based fatal classification
+    // is affected; idle/wall-clock timeouts still apply.
+    let error_marker_scan_enabled =
+        !cli_no_error_marker_scan && config.is_none_or(|cfg| cfg.resources.error_marker_scan);
+    execute_options = execute_options.with_error_marker_scan_enabled(error_marker_scan_enabled);
     apply_transport_failover_overrides(&mut execute_options, merged_env_ref);
     if let Some(pre_session_hook) = pre_session_hook {
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);

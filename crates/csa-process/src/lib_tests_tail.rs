@@ -192,6 +192,7 @@ fn test_should_terminate_resets_last_activity_on_progress_signal() {
         Some(tmp.path()),
         &mut dead_since,
         &mut next_poll,
+        true,
     );
 
     assert_eq!(terminate, None, "progress should prevent termination");

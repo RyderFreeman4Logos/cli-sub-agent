@@ -636,7 +636,8 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
-        &[],   // extra_readable
+        &[],   // extra_readable,
+        true,  // no_error_marker_scan: default scan ON (#1745)
     )
     .await;
 

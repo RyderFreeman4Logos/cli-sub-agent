@@ -254,6 +254,7 @@ impl Transport for OpenaiCompatTransport {
                 output_spool: None,
                 output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
                 output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+                error_marker_scan_enabled: true,
                 setting_sources: None,
                 sandbox: None,
                 thinking_budget: None,

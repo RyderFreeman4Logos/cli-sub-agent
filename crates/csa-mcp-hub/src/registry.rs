@@ -562,6 +562,8 @@ impl BackendTransport {
                         keep_stdin_open: true,
                         spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
                         keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+                        // MCP Hub server spawn has no idle watchdog; field is inert here.
+                        error_marker_scan_enabled: true,
                     },
                     Some(&plan),
                     &config.name,

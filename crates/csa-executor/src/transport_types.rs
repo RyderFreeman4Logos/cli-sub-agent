@@ -55,6 +55,11 @@ pub struct TransportOptions<'a> {
     pub output_spool: Option<&'a Path>,
     pub output_spool_max_bytes: u64,
     pub output_spool_keep_rotated: bool,
+    /// Whether the #1652 fatal-error-marker silent-hang scan is enabled for
+    /// this session. `false` opts out of marker-based fatal classification
+    /// (idle/wall-clock timeouts still apply); resolved at the executor
+    /// boundary from the CLI flag / config field (#1745).
+    pub error_marker_scan_enabled: bool,
     pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
     /// Current thinking budget for idle-disconnect auto-downshift (Issue #766).

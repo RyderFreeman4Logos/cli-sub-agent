@@ -661,6 +661,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             false, // readonly_project_root
             &[],   // extra_writable
             &[],   // extra_readable
+            false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
         )
         .await?
     };

@@ -173,6 +173,14 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub no_stream_stdout: bool,
 
+    /// Disable the fatal-error-marker silent-hang scan for this session. Use
+    /// ONLY when developing CSA's own error/quota/failover detection code,
+    /// whose source and test fixtures legitimately contain provider error
+    /// markers (#1745). The idle-timeout and wall-clock timeout still apply.
+    /// Default: scan enabled.
+    #[arg(long)]
+    pub no_error_marker_scan: bool,
+
     /// Continue without csa-review pattern (warn instead of hard error)
     #[arg(long)]
     pub allow_fallback: bool,

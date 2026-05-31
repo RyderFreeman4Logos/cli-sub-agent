@@ -92,6 +92,7 @@ pub(crate) async fn handle_run(
     tier: Option<String>,
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
+    no_error_marker_scan: bool,
     extra_writable: Vec<PathBuf>,
     extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
@@ -543,6 +544,7 @@ pub(crate) async fn handle_run(
         pre_session_hook,
         task_needs_edit,
         no_fs_sandbox,
+        no_error_marker_scan,
         extra_writable,
         extra_readable,
         branch_guard,

@@ -309,6 +309,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             readonly_project_root,
             &args.extra_writable,
             &args.extra_readable,
+            args.no_error_marker_scan,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -488,6 +489,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             no_failover: args.no_failover,
             fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,
+            no_error_marker_scan: args.no_error_marker_scan,
             extra_writable: &args.extra_writable,
             extra_readable: &args.extra_readable,
             timeout: args.timeout,

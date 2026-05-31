@@ -123,6 +123,14 @@ pub struct SpawnOptions {
     pub spool_max_bytes: u64,
     /// Preserve the rotated spool file after execution completes.
     pub keep_rotated_spool: bool,
+    /// Whether the #1652 fatal-error-marker silent-hang scan is enabled.
+    ///
+    /// When `true` (the default), the idle watchdog fast-fails the child if a
+    /// configured provider/4xx/5xx marker appears in its output and no further
+    /// progress is observed within the no-progress grace window. When `false`,
+    /// the marker-based fatal classification is bypassed for this session; the
+    /// idle-timeout and wall-clock timeout still apply (#1745 opt-out).
+    pub error_marker_scan_enabled: bool,
 }
 
 impl Default for SpawnOptions {
@@ -132,6 +140,7 @@ impl Default for SpawnOptions {
             keep_stdin_open: false,
             spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
+            error_marker_scan_enabled: true,
         }
     }
 }
