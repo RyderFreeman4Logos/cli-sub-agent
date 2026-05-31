@@ -26,6 +26,8 @@ is_exempt() {
         */tests/*.rs) return 0 ;;
         */benches/*.rs) return 0 ;;
         */config.rs|*/global.rs) return 0 ;;
+        # synced with justfile split-monolith-files exemption (review-command driver; split pending)
+        */review_cmd_execute.rs) return 0 ;;
     esac
     return 1
 }
