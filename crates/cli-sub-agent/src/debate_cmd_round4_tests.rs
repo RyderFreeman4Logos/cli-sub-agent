@@ -249,7 +249,9 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         None,
         DebateFinalizeContext {
             all_tier_models_failed: true,
+            project_config: None,
             resolved_tier_name: Some("quality"),
+            tier_filter: None,
             failures: &failures,
             debate_mode: DebateMode::Heterogeneous,
             output_header: None,

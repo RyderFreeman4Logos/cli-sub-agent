@@ -137,7 +137,16 @@ fn build_chain_appends_entries_outside_tier_order() {
 // Ask 3 (#1714): warn (do NOT fail) when failover lands on the writer's family.
 #[test]
 fn diversity_warning_fires_on_same_family_failover() {
-    let warning = writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, true);
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        &[(
+            "codex/openai/gpt-5/high".to_string(),
+            "HTTP 429 Too Many Requests".to_string(),
+        )],
+    );
+    let warning =
+        writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, &chain);
     assert!(warning.is_some());
     let text = warning.unwrap();
     assert!(text.contains("claude-code"));
@@ -145,24 +154,65 @@ fn diversity_warning_fires_on_same_family_failover() {
 }
 
 #[test]
-fn diversity_warning_silent_when_families_differ() {
+fn diversity_warning_fires_on_build_time_same_family_fallback() {
+    let ordered_specs = vec![
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+        "claude-code/anthropic/claude-sonnet/high".to_string(),
+    ];
+    let exclusions = vec![TierModelExclusion {
+        model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+        tool: Some(ToolName::GeminiCli),
+        kind: FailoverSkipKind::Disabled,
+    }];
+    let chain = build_review_fallback_chain(&ordered_specs, &exclusions, &[]);
+
+    let warning =
+        writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, &chain);
+
+    assert!(warning.is_some());
     assert!(
-        writer_family_diversity_warning(Some("claude-code"), ToolName::GeminiCli, true).is_none()
+        warning
+            .unwrap()
+            .contains("heterogeneous review diversity lost")
+    );
+}
+
+#[test]
+fn diversity_warning_silent_when_writer_and_reviewer_families_differ() {
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        &[(
+            "codex/openai/gpt-5/high".to_string(),
+            "HTTP 429 Too Many Requests".to_string(),
+        )],
+    );
+    assert!(
+        writer_family_diversity_warning(Some("claude-code"), ToolName::GeminiCli, &chain).is_none()
     );
 }
 
 #[test]
 fn diversity_warning_silent_without_failover() {
     assert!(
-        writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, false).is_none()
+        writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, &[]).is_none()
     );
 }
 
 #[test]
 fn diversity_warning_silent_when_writer_unknown() {
-    assert!(writer_family_diversity_warning(None, ToolName::ClaudeCode, true).is_none());
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        &[(
+            "codex/openai/gpt-5/high".to_string(),
+            "HTTP 429 Too Many Requests".to_string(),
+        )],
+    );
+    assert!(writer_family_diversity_warning(None, ToolName::ClaudeCode, &chain).is_none());
     // Unrecognised writer tool name → cannot assert diversity loss.
     assert!(
-        writer_family_diversity_warning(Some("mystery-tool"), ToolName::ClaudeCode, true).is_none()
+        writer_family_diversity_warning(Some("mystery-tool"), ToolName::ClaudeCode, &chain)
+            .is_none()
     );
 }

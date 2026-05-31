@@ -331,15 +331,23 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        // Ask 3 (#1714): if failover landed the reviewer in the writer's model
-        // family, heterogeneity is lost. Warn (do NOT fail) so a clean
-        // single-family review stays merge-able (#1657). `parent_tool` is the
-        // writer/parent signal; warn-only because it is not a guaranteed writer
-        // identity at review time.
+        // Ask 3 (#1714): consume the persisted fallback chain built by the
+        // central tier helper so build-time exclusions and runtime failures
+        // drive the same diversity warning path.
+        let fallback_chain = result
+            .persistable_session_id
+            .as_deref()
+            .and_then(|session_id| {
+                csa_session::load_result(&project_root, session_id)
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|saved| saved.fallback_chain)
+            .unwrap_or_default();
         if let Some(diversity_warning) = crate::failover_trace::writer_family_diversity_warning(
             parent_tool.as_deref(),
             result.executed_tool,
-            result.executed_tool != tool,
+            &fallback_chain,
         ) {
             warn!(warning = %diversity_warning, "Review heterogeneity diversity guard (#1714)");
             eprintln!("warning: {diversity_warning}");

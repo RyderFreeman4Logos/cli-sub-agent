@@ -40,7 +40,12 @@ fn build_failover_chain_records_build_time_exclusions_without_runtime_failures()
 
     // Empty runtime failures represents the later claude-code reviewer
     // succeeding; the skipped codex build-time exclusion still needs a trace.
-    let chain = build_failover_chain_for_result(Some(&config), Some("quality"), None, &[]);
+    let chain = crate::tier_model_fallback::build_fallback_chain_for_result(
+        Some(&config),
+        Some("quality"),
+        None,
+        &[],
+    );
 
     assert_eq!(chain.len(), 1);
     assert_eq!(chain[0].tool, "codex");

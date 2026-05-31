@@ -184,20 +184,25 @@ pub(crate) fn build_review_fallback_chain(
 /// Returns a non-fatal warning string to attach to the result. This is
 /// warn-only by design: it does NOT change the verdict, preserving #1657's
 /// guarantee that a clean single-family review stays merge-able. Returns `None`
-/// when no failover occurred, when the writer family is unknown (so we cannot
-/// claim diversity was lost), or when the families differ.
+/// when the fallback chain does not show a skipped different-family reviewer,
+/// when the writer family is unknown (so we cannot claim diversity was lost),
+/// or when the writer/reviewer families differ.
 pub(crate) fn writer_family_diversity_warning(
     writer_tool: Option<&str>,
     final_reviewer: ToolName,
-    fell_back: bool,
+    fallback_chain: &[FallbackAttempt],
 ) -> Option<String> {
-    if !fell_back {
-        return None;
-    }
     let writer = writer_tool?;
     let writer_family = provider_for_tool_name(writer)?;
     let reviewer_family = final_reviewer.model_family();
     if writer_family != reviewer_family {
+        return None;
+    }
+    let skipped_different_family = fallback_chain.iter().any(|attempt| {
+        provider_for_tool_name(&attempt.tool)
+            .is_some_and(|skipped_family| skipped_family != reviewer_family)
+    });
+    if !skipped_different_family {
         return None;
     }
     Some(format!(

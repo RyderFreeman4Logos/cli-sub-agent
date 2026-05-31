@@ -18,7 +18,7 @@ use csa_core::{
         API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY, AUTH_MODE_ENV_KEY,
         AUTH_MODE_OAUTH,
     },
-    types::{FallbackAttempt, OutputFormat, ReviewDecision, ToolName},
+    types::{OutputFormat, ReviewDecision, ToolName},
 };
 use csa_executor::{Executor, PeakMemoryContext};
 use csa_session::{
@@ -99,28 +99,6 @@ fn warn_if_fast_mode_has_no_codex_review_candidate(
             "warning: --fast-but-more-cost only affects codex; no codex review attempt is in the resolved candidate set."
         );
     }
-}
-
-/// Build the per-tool failover chain to persist into `result.toml` (#1714).
-///
-/// Combines models excluded at candidate-build time (disabled / undetected /
-/// whitelist-filtered, surfaced by [`crate::run_helpers::evaluate_tier_models`])
-/// with the candidates that were actually attempted and errored (`failures`),
-/// presenting them in tier-definition order. Returns an empty chain only when
-/// no candidate was excluded or failed — a clean first-candidate review has no
-/// failover to trace, so its `result.toml` is left untouched.
-fn build_failover_chain_for_result(
-    project_config: Option<&ProjectConfig>,
-    tier_name: Option<&str>,
-    tier_filter: Option<&TierFilter>,
-    failures: &[TierAttemptFailure],
-) -> Vec<FallbackAttempt> {
-    crate::tier_model_fallback::build_fallback_chain_for_result(
-        project_config,
-        tier_name,
-        tier_filter,
-        failures,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -383,7 +361,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                             &session_id,
                             tool,
                             *attempt_tool,
-                            build_failover_chain_for_result(
+                            crate::tier_model_fallback::build_fallback_chain_for_result(
                                 project_config,
                                 tier_name.as_deref(),
                                 tier_filter.as_ref(),
@@ -555,7 +533,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     &execution.meta_session_id,
                     tool,
                     *attempt_tool,
-                    build_failover_chain_for_result(
+                    crate::tier_model_fallback::build_fallback_chain_for_result(
                         project_config,
                         tier_name.as_deref(),
                         tier_filter.as_ref(),
@@ -597,7 +575,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             &execution.meta_session_id,
             tool,
             *attempt_tool,
-            build_failover_chain_for_result(
+            crate::tier_model_fallback::build_fallback_chain_for_result(
                 project_config,
                 tier_name.as_deref(),
                 tier_filter.as_ref(),
