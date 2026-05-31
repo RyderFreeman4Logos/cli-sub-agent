@@ -3,6 +3,7 @@ use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 
 use super::{is_tool_binary_available_for_config, parse_tool_name};
+use crate::failover_trace::{FailoverSkipKind, TierModelExclusion};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TierToolResolution {
@@ -10,44 +11,95 @@ pub(crate) struct TierToolResolution {
     pub model_spec: String,
 }
 
+/// Walk a tier's model list in definition order, partitioning each spec into
+/// either an available [`TierToolResolution`] or a [`TierModelExclusion`] that
+/// records WHY it was filtered out (#1714). [`collect_available_tier_models`]
+/// returns only the `included` half; the `excluded` half feeds the failover
+/// trace so the orchestrator can distinguish a disabled/undetected tool from a
+/// quota-exhausted one.
+///
+/// `skip_specs` (already-attempted models in the current failover) are dropped
+/// from both halves: they are tracked as attempt failures elsewhere, so
+/// recording them here too would double-count them in the chain.
+pub(crate) fn evaluate_tier_models(
+    tier_name: &str,
+    config: &ProjectConfig,
+    whitelist: Option<&[String]>,
+    skip_specs: &[String],
+) -> (Vec<TierToolResolution>, Vec<TierModelExclusion>) {
+    let mut included = Vec::new();
+    let mut excluded = Vec::new();
+    let Some(tier) = config.tiers.get(tier_name) else {
+        return (included, excluded);
+    };
+
+    for spec in &tier.models {
+        if skip_specs.iter().any(|s| s == spec) {
+            continue;
+        }
+        let parts: Vec<&str> = spec.splitn(4, '/').collect();
+        if parts.len() != 4 {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: None,
+                kind: FailoverSkipKind::MalformedSpec,
+            });
+            continue;
+        }
+        let tool_str = parts[0];
+        let Ok(tool) = parse_tool_name(tool_str) else {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: None,
+                kind: FailoverSkipKind::MalformedSpec,
+            });
+            continue;
+        };
+        if !config.is_tool_enabled(tool_str) {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: Some(tool),
+                kind: FailoverSkipKind::Disabled,
+            });
+            continue;
+        }
+        if !is_tool_binary_available_for_config(tool_str, Some(config)) {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: Some(tool),
+                kind: FailoverSkipKind::AvailabilityDetectionMiss,
+            });
+            continue;
+        }
+        if let Some(wl) = whitelist
+            && !wl.iter().any(|w| w == tool_str)
+        {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: Some(tool),
+                kind: FailoverSkipKind::WhitelistFiltered,
+            });
+            continue;
+        }
+        included.push(TierToolResolution {
+            tool,
+            model_spec: spec.clone(),
+        });
+    }
+
+    (included, excluded)
+}
+
+/// Available tier models in definition order. Thin wrapper over
+/// [`evaluate_tier_models`] that discards exclusion bookkeeping; behaviour is
+/// identical to the pre-#1714 filter.
 pub(crate) fn collect_available_tier_models(
     tier_name: &str,
     config: &ProjectConfig,
     whitelist: Option<&[String]>,
     skip_specs: &[String],
 ) -> Vec<TierToolResolution> {
-    let Some(tier) = config.tiers.get(tier_name) else {
-        return Vec::new();
-    };
-
-    tier.models
-        .iter()
-        .filter_map(|spec| {
-            if skip_specs.iter().any(|s| s == spec) {
-                return None;
-            }
-            let parts: Vec<&str> = spec.splitn(4, '/').collect();
-            if parts.len() != 4 {
-                return None;
-            }
-            let tool_str = parts[0];
-            let tool = parse_tool_name(tool_str).ok()?;
-            if !config.is_tool_enabled(tool_str)
-                || !is_tool_binary_available_for_config(tool_str, Some(config))
-            {
-                return None;
-            }
-            if let Some(wl) = whitelist
-                && !wl.iter().any(|w| w == tool_str)
-            {
-                return None;
-            }
-            Some(TierToolResolution {
-                tool,
-                model_spec: spec.clone(),
-            })
-        })
-        .collect()
+    evaluate_tier_models(tier_name, config, whitelist, skip_specs).0
 }
 
 pub(crate) fn resolve_requested_tool_from_tier(

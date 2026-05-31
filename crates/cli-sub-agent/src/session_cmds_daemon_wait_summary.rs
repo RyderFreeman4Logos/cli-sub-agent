@@ -80,6 +80,14 @@ fn render_wait_result_summary(
         lines.push(format!("Review verdict: {verdict}"));
     }
 
+    if let Some(failover) = format_failover_chain_label(result) {
+        lines.push(format!("Failover: {failover}"));
+    }
+
+    for warning in &result.warnings {
+        lines.push(format!("Warning: {warning}"));
+    }
+
     if let Some(summary) =
         crate::session_summary_text::human_session_summary(session_dir, &result.summary)
             .and_then(|text| compact_wait_summary_text(&text))
@@ -88,6 +96,26 @@ fn render_wait_result_summary(
     }
 
     lines.join("\n")
+}
+
+/// Render the per-tool failover chain as a single line for the wait summary,
+/// e.g. `gemini-cli: rate-limit-429; antigravity-cli: disabled; codex: disabled
+/// → claude-code` (#1714). Returns `None` when no failover was recorded.
+fn format_failover_chain_label(result: &csa_session::SessionResult) -> Option<String> {
+    let chain = result.fallback_chain.as_ref()?;
+    if chain.is_empty() {
+        return None;
+    }
+    let steps = chain
+        .iter()
+        .map(|attempt| format!("{}: {}", attempt.tool, attempt.skip_reason))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let landed = result
+        .fallback_tool
+        .as_deref()
+        .unwrap_or(result.tool.as_str());
+    Some(format!("{steps} → {landed}"))
 }
 
 fn render_wait_result_json(
@@ -111,6 +139,8 @@ fn render_wait_result_json(
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,
         "review_verdict": read_review_verdict_label(session_dir, result),
+        "failover": format_failover_chain_label(result),
+        "warnings": result.warnings,
         "summary": crate::session_summary_text::human_session_summary(session_dir, &result.summary)
             .and_then(|text| compact_wait_summary_text(&text)),
     });

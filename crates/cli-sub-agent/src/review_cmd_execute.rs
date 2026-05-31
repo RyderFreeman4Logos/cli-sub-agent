@@ -18,7 +18,7 @@ use csa_core::{
         API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY, AUTH_MODE_ENV_KEY,
         AUTH_MODE_OAUTH,
     },
-    types::{OutputFormat, ReviewDecision, ToolName},
+    types::{FallbackAttempt, OutputFormat, ReviewDecision, ToolName},
 };
 use csa_executor::{Executor, PeakMemoryContext};
 use csa_session::{
@@ -30,7 +30,8 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 use crate::tier_model_fallback::{
     TierAttemptFailure, TierFilter, chain_failure_reasons,
     classify_next_model_failure_with_elapsed, fallback_reason_for_result,
-    format_all_models_failed_reason, ordered_tier_candidates, persist_fallback_result_fields,
+    format_all_models_failed_reason, ordered_tier_candidates, persist_fallback_chain,
+    persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -98,6 +99,50 @@ fn warn_if_fast_mode_has_no_codex_review_candidate(
             "warning: --fast-but-more-cost only affects codex; no codex review attempt is in the resolved candidate set."
         );
     }
+}
+
+/// Build the per-tool failover chain to persist into `result.toml` (#1714).
+///
+/// Combines models excluded at candidate-build time (disabled / undetected /
+/// whitelist-filtered, surfaced by [`crate::run_helpers::evaluate_tier_models`])
+/// with the candidates that were actually attempted and errored (`failures`),
+/// presenting them in tier-definition order. Returns an empty chain when no
+/// candidate failed — a clean first-candidate review has no failover to trace,
+/// so its `result.toml` is left untouched.
+fn build_failover_chain_for_result(
+    project_config: Option<&ProjectConfig>,
+    tier_name: Option<&str>,
+    tier_filter: Option<&TierFilter>,
+    failures: &[TierAttemptFailure],
+) -> Vec<FallbackAttempt> {
+    if failures.is_empty() {
+        return Vec::new();
+    }
+    let ordered_specs: Vec<String> = tier_name
+        .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
+        .map(|tier| tier.models.clone())
+        .unwrap_or_default();
+    let exclusions = match (tier_name, project_config) {
+        (Some(name), Some(cfg)) => {
+            crate::run_helpers::evaluate_tier_models(
+                name,
+                cfg,
+                tier_filter.and_then(TierFilter::whitelist_slice),
+                &[],
+            )
+            .1
+        }
+        _ => Vec::new(),
+    };
+    let attempt_failures: Vec<(String, String)> = failures
+        .iter()
+        .map(|failure| (failure.model_spec.clone(), failure.reason.clone()))
+        .collect();
+    crate::failover_trace::build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &attempt_failures,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -355,6 +400,18 @@ pub(crate) async fn execute_review_with_tier_filter(
                             *attempt_tool,
                             fallback_reason_for_result(&failures),
                         );
+                        persist_fallback_chain(
+                            project_root,
+                            &session_id,
+                            tool,
+                            *attempt_tool,
+                            build_failover_chain_for_result(
+                                project_config,
+                                tier_name.as_deref(),
+                                tier_filter.as_ref(),
+                                &failures,
+                            ),
+                        );
                     }
                     let failure_reason =
                         format_all_models_failed_reason(tier_name.as_deref(), &failures);
@@ -515,6 +572,18 @@ pub(crate) async fn execute_review_with_tier_filter(
                     *attempt_tool,
                     fallback_reason_for_result(&failures),
                 );
+                persist_fallback_chain(
+                    project_root,
+                    &execution.meta_session_id,
+                    tool,
+                    *attempt_tool,
+                    build_failover_chain_for_result(
+                        project_config,
+                        tier_name.as_deref(),
+                        tier_filter.as_ref(),
+                        &failures,
+                    ),
+                );
                 let persistable_session_id = Some(execution.meta_session_id.clone());
                 return Ok(ReviewExecutionOutcome {
                     execution,
@@ -544,6 +613,18 @@ pub(crate) async fn execute_review_with_tier_filter(
             tool,
             *attempt_tool,
             fallback_reason_for_result(&failures),
+        );
+        persist_fallback_chain(
+            project_root,
+            &execution.meta_session_id,
+            tool,
+            *attempt_tool,
+            build_failover_chain_for_result(
+                project_config,
+                tier_name.as_deref(),
+                tier_filter.as_ref(),
+                &failures,
+            ),
         );
         let routed_to = (attempt_tool != &tool
             || attempt_model_spec.as_deref() != tier_model_spec.as_deref())

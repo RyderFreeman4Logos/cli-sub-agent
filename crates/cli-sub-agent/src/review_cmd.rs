@@ -331,6 +331,27 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
+        // Ask 3 (#1714): if failover landed the reviewer in the writer's model
+        // family, heterogeneity is lost. Warn (do NOT fail) so a clean
+        // single-family review stays merge-able (#1657). `parent_tool` is the
+        // writer/parent signal; warn-only because it is not a guaranteed writer
+        // identity at review time.
+        if let Some(diversity_warning) = crate::failover_trace::writer_family_diversity_warning(
+            parent_tool.as_deref(),
+            result.executed_tool,
+            result.executed_tool != tool,
+        ) {
+            warn!(warning = %diversity_warning, "Review heterogeneity diversity guard (#1714)");
+            eprintln!("warning: {diversity_warning}");
+            if let Some(session_id) = result.persistable_session_id.as_deref() {
+                crate::tier_model_fallback::persist_result_warning(
+                    &project_root,
+                    session_id,
+                    &diversity_warning,
+                );
+            }
+        }
+
         let resolved =
             resolve_single_review_result(&result, result.executed_tool, &scope, &project_root);
         let sanitized = resolved.sanitized;

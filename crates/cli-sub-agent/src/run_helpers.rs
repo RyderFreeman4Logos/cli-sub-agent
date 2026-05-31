@@ -49,8 +49,8 @@ pub(crate) use prompt::{
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
 pub(crate) use tier_resolution::{
-    TierToolResolution, collect_available_tier_models, resolve_requested_tool_from_tier,
-    resolve_tool_from_tier,
+    TierToolResolution, collect_available_tier_models, evaluate_tier_models,
+    resolve_requested_tool_from_tier, resolve_tool_from_tier,
 };
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]

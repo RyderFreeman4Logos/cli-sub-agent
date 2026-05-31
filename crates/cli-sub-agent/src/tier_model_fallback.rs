@@ -1,5 +1,5 @@
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolName;
+use csa_core::types::{FallbackAttempt, ToolName};
 use csa_scheduler::RateLimitDetected;
 use std::path::Path;
 use std::time::Duration;
@@ -23,7 +23,7 @@ impl TierFilter {
         Self::Whitelist(tools.into_iter().map(Into::into).collect())
     }
 
-    fn whitelist_slice(&self) -> Option<&[String]> {
+    pub(crate) fn whitelist_slice(&self) -> Option<&[String]> {
         match self {
             Self::All => None,
             Self::Whitelist(tools) => Some(tools.as_slice()),
@@ -201,6 +201,62 @@ pub(crate) fn persist_fallback_result_fields(
             session_id,
             error = %err,
             "Failed to persist runtime fallback fields in result.toml"
+        );
+    }
+}
+
+/// Persist the per-tool failover chain into `result.toml` (#1714).
+///
+/// Complements [`persist_fallback_result_fields`] (which records the collapsed
+/// `fallback_reason` for backward compatibility) by writing the full
+/// `[[fallback_chain]]` of categorised per-tool skip reasons. Also records
+/// `original_tool`/`fallback_tool` so a NON-quota failover (e.g. an
+/// all-disabled tier falling back to claude-code) is still attributed, not just
+/// the legacy quota path. No-op when the chain is empty (no failover occurred).
+pub(crate) fn persist_fallback_chain(
+    project_root: &Path,
+    session_id: &str,
+    original_tool: ToolName,
+    fallback_tool: ToolName,
+    fallback_chain: Vec<FallbackAttempt>,
+) {
+    if fallback_chain.is_empty() {
+        return;
+    }
+    let Ok(Some(mut result)) = csa_session::load_result(project_root, session_id) else {
+        return;
+    };
+    result.original_tool = Some(original_tool.as_str().to_string());
+    result.fallback_tool = Some(fallback_tool.as_str().to_string());
+    result.fallback_chain = Some(fallback_chain);
+    if let Err(err) = csa_session::save_result(project_root, session_id, &result) {
+        tracing::warn!(
+            session_id,
+            error = %err,
+            "Failed to persist failover chain in result.toml"
+        );
+    }
+}
+
+/// Append a non-fatal warning to `result.toml`'s `warnings` (#1714 Ask 3).
+///
+/// Used by the writer-family diversity guard: a same-family failover is
+/// surfaced as a warning, NOT a verdict change, so a clean single-family review
+/// stays merge-able (preserving #1657). Skips writing if the identical warning
+/// is already present.
+pub(crate) fn persist_result_warning(project_root: &Path, session_id: &str, warning: &str) {
+    let Ok(Some(mut result)) = csa_session::load_result(project_root, session_id) else {
+        return;
+    };
+    if result.warnings.iter().any(|existing| existing == warning) {
+        return;
+    }
+    result.warnings.push(warning.to_string());
+    if let Err(err) = csa_session::save_result(project_root, session_id, &result) {
+        tracing::warn!(
+            session_id,
+            error = %err,
+            "Failed to persist review diversity warning in result.toml"
         );
     }
 }
