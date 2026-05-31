@@ -1,17 +1,20 @@
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
-use csa_core::types::ToolName;
+use csa_core::types::{FallbackAttempt, ToolName};
 use tokio::task::JoinSet;
 use tracing::{error, warn};
 
 use crate::cli::ReviewArgs;
+use crate::failover_trace::FailoverSkipKind;
 use crate::pipeline::resolve_effective_initial_response_timeout_for_tool;
 use crate::review_consensus::{
     CLEAN, UNAVAILABLE, agreement_level, build_multi_reviewer_instruction,
     consensus_strategy_label, consensus_verdict, parse_consensus_strategy, resolve_consensus,
 };
-use crate::review_routing::ReviewRoutingMetadata;
+use crate::review_routing::{
+    ReviewRoutingMetadata, persist_review_routing_artifact_with_fallback_chain,
+};
 
 use super::bug_class_pipeline::{
     maybe_extract_recurring_bug_class_skills, resolve_review_iterations,
@@ -205,9 +208,18 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         diff_fingerprint.clone(),
     );
 
-    let responses: Vec<AgentResponse> = outcomes
+    let consensus_outcomes = consensus_outcomes_for_final_verdict(&outcomes);
+    let excluded_from_consensus = permanent_quota_unavailable_reviewer_indices(&outcomes);
+    let excluded_fallback_chain = permanent_quota_unavailable_fallback_chain(&outcomes);
+    persist_excluded_reviewer_routing(
+        ctx.project_root,
+        &ctx.review_routing,
+        &outcomes,
+        &excluded_fallback_chain,
+    );
+    let responses: Vec<AgentResponse> = consensus_outcomes
         .iter()
-        .map(consensus_response_from_outcome)
+        .map(|outcome| consensus_response_from_outcome(outcome))
         .collect();
 
     let consensus_result = resolve_consensus(consensus_strategy, &responses);
@@ -250,12 +262,21 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         agreement * 100.0,
     );
     for outcome in &outcomes {
-        println!(
-            "- reviewer {} ({}) => {}",
-            outcome.reviewer_index + 1,
-            outcome.tool,
-            outcome.verdict
-        );
+        if excluded_from_consensus.contains(&outcome.reviewer_index) {
+            println!(
+                "- reviewer {} ({}) => {} (excluded_from_consensus: permanent quota unavailable)",
+                outcome.reviewer_index + 1,
+                outcome.tool,
+                outcome.verdict
+            );
+        } else {
+            println!(
+                "- reviewer {} ({}) => {}",
+                outcome.reviewer_index + 1,
+                outcome.tool,
+                outcome.verdict
+            );
+        }
     }
 
     let review_session_ids = outcomes
@@ -263,7 +284,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         .map(|outcome| outcome.session_id.clone())
         .collect::<Vec<_>>();
     maybe_extract_recurring_bug_class_skills(ctx.project_root, &review_session_ids);
-    Ok(if final_verdict == CLEAN { 0 } else { 1 })
+    Ok(multi_reviewer_exit_code(final_verdict))
 }
 
 pub(super) fn warn_if_fast_mode_has_no_codex_reviewer(
@@ -294,6 +315,89 @@ fn consensus_response_from_outcome(outcome: &ReviewerOutcome) -> AgentResponse {
         weight: 1.0,
         timed_out: !outcome.produced_usable_verdict(),
     }
+}
+
+fn consensus_outcomes_for_final_verdict(outcomes: &[ReviewerOutcome]) -> Vec<&ReviewerOutcome> {
+    let has_usable_verdict = outcomes
+        .iter()
+        .any(ReviewerOutcome::produced_usable_verdict);
+    outcomes
+        .iter()
+        .filter(|outcome| !(has_usable_verdict && outcome_has_permanent_quota_unavailable(outcome)))
+        .collect()
+}
+
+fn permanent_quota_unavailable_reviewer_indices(outcomes: &[ReviewerOutcome]) -> Vec<usize> {
+    let has_usable_verdict = outcomes
+        .iter()
+        .any(ReviewerOutcome::produced_usable_verdict);
+    if !has_usable_verdict {
+        return Vec::new();
+    }
+    outcomes
+        .iter()
+        .filter(|outcome| outcome_has_permanent_quota_unavailable(outcome))
+        .map(|outcome| outcome.reviewer_index)
+        .collect()
+}
+
+fn outcome_has_permanent_quota_unavailable(outcome: &ReviewerOutcome) -> bool {
+    permanent_quota_unavailable_fallback_attempt(outcome).is_some()
+}
+
+fn permanent_quota_unavailable_fallback_chain(
+    outcomes: &[ReviewerOutcome],
+) -> Vec<FallbackAttempt> {
+    let has_usable_verdict = outcomes
+        .iter()
+        .any(ReviewerOutcome::produced_usable_verdict);
+    if !has_usable_verdict {
+        return Vec::new();
+    }
+    outcomes
+        .iter()
+        .filter_map(permanent_quota_unavailable_fallback_attempt)
+        .collect()
+}
+
+fn permanent_quota_unavailable_fallback_attempt(
+    outcome: &ReviewerOutcome,
+) -> Option<FallbackAttempt> {
+    let diagnostic = outcome.diagnostic.as_deref()?;
+    let kind = FailoverSkipKind::classify(diagnostic);
+    (outcome.verdict == UNAVAILABLE && kind.is_quota()).then(|| FallbackAttempt {
+        tool: outcome.tool.as_str().to_string(),
+        model_spec: None,
+        skip_reason: kind.category().to_string(),
+        quota_exhausted: true,
+        timestamp: chrono::Utc::now(),
+    })
+}
+
+fn persist_excluded_reviewer_routing(
+    project_root: &Path,
+    review_routing: &ReviewRoutingMetadata,
+    outcomes: &[ReviewerOutcome],
+    fallback_chain: &[FallbackAttempt],
+) {
+    if fallback_chain.is_empty() {
+        return;
+    }
+    for outcome in outcomes
+        .iter()
+        .filter(|outcome| outcome.produced_usable_verdict())
+    {
+        persist_review_routing_artifact_with_fallback_chain(
+            project_root,
+            &outcome.session_id,
+            review_routing,
+            fallback_chain,
+        );
+    }
+}
+
+fn multi_reviewer_exit_code(final_verdict: &str) -> i32 {
+    if final_verdict == CLEAN { 0 } else { 1 }
 }
 
 pub(super) async fn collect_reviewer_outcomes(
@@ -395,140 +499,5 @@ fn synthesize_unavailable_outcomes(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::review_consensus::HAS_ISSUES;
-    use csa_core::consensus::ConsensusStrategy;
-    use proptest::prelude::*;
-
-    #[derive(Clone, Copy, Debug)]
-    enum ReviewerState {
-        Pass,
-        Fail,
-        Unavailable,
-    }
-
-    impl ReviewerState {
-        fn verdict(self) -> &'static str {
-            match self {
-                Self::Pass => CLEAN,
-                Self::Fail => HAS_ISSUES,
-                Self::Unavailable => UNAVAILABLE,
-            }
-        }
-    }
-
-    fn outcome(reviewer_index: usize, verdict: &'static str) -> ReviewerOutcome {
-        ReviewerOutcome {
-            reviewer_index,
-            tool: ToolName::Codex,
-            session_id: format!("01TESTREVIEWER{reviewer_index:012}"),
-            output: verdict.to_string(),
-            exit_code: if verdict == CLEAN { 0 } else { 1 },
-            verdict,
-            diagnostic: None,
-        }
-    }
-
-    #[test]
-    fn unavailable_outcomes_do_not_vote_against_clean_consensus() {
-        let outcomes = [outcome(0, UNAVAILABLE), outcome(1, CLEAN)];
-        let responses: Vec<AgentResponse> = outcomes
-            .iter()
-            .map(consensus_response_from_outcome)
-            .collect();
-        let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
-
-        assert_eq!(consensus.decision.as_deref(), Some(CLEAN));
-        assert_eq!(consensus_verdict(&consensus), CLEAN);
-    }
-
-    #[test]
-    fn unavailable_outcomes_do_not_hide_has_issues_consensus() {
-        let outcomes = [outcome(0, UNAVAILABLE), outcome(1, HAS_ISSUES)];
-        let responses: Vec<AgentResponse> = outcomes
-            .iter()
-            .map(consensus_response_from_outcome)
-            .collect();
-        let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
-
-        assert_eq!(consensus.decision.as_deref(), Some(HAS_ISSUES));
-        assert_eq!(consensus_verdict(&consensus), HAS_ISSUES);
-    }
-
-    #[tokio::test]
-    async fn collect_reviewer_outcomes_waits_after_unavailable_reviewer() {
-        let mut join_set = JoinSet::new();
-        join_set.spawn(async {
-            Ok(build_unavailable_reviewer_outcome(
-                0,
-                ToolName::GeminiCli,
-                "gemini-cli tool failure: reason: QUOTA_EXHAUSTED",
-            ))
-        });
-        join_set.spawn(async {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            Ok(outcome(1, CLEAN))
-        });
-
-        let outcomes =
-            collect_reviewer_outcomes(&mut join_set, &[ToolName::GeminiCli, ToolName::Codex], None)
-                .await
-                .expect("collect outcomes");
-
-        assert_eq!(outcomes.len(), 2);
-        assert_eq!(outcomes[0].verdict, UNAVAILABLE);
-        assert_eq!(outcomes[1].verdict, CLEAN);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
-
-        #[test]
-        fn reviewer_outcome_consensus_mapping_filters_unavailable_before_vote(
-            states in prop::collection::vec(reviewer_state_strategy(), 2..=4),
-        ) {
-            let outcomes: Vec<ReviewerOutcome> = states
-                .iter()
-                .enumerate()
-                .map(|(idx, state)| outcome(idx, state.verdict()))
-                .collect();
-            let responses: Vec<AgentResponse> = outcomes
-                .iter()
-                .map(consensus_response_from_outcome)
-                .collect();
-            let active_responses: Vec<AgentResponse> = responses
-                .iter()
-                .filter(|response| !response.timed_out)
-                .cloned()
-                .collect();
-
-            prop_assert_eq!(
-                responses.iter().filter(|response| response.timed_out).count(),
-                states.iter().filter(|state| matches!(state, ReviewerState::Unavailable)).count()
-            );
-
-            let consensus_with_unavailable =
-                resolve_consensus(ConsensusStrategy::Majority, &responses);
-            let consensus_without_unavailable =
-                resolve_consensus(ConsensusStrategy::Majority, &active_responses);
-
-            prop_assert_eq!(
-                consensus_with_unavailable.decision.as_deref(),
-                consensus_without_unavailable.decision.as_deref()
-            );
-            prop_assert_eq!(
-                consensus_verdict(&consensus_with_unavailable),
-                consensus_verdict(&consensus_without_unavailable)
-            );
-        }
-    }
-
-    fn reviewer_state_strategy() -> impl Strategy<Value = ReviewerState> {
-        prop_oneof![
-            Just(ReviewerState::Pass),
-            Just(ReviewerState::Fail),
-            Just(ReviewerState::Unavailable),
-        ]
-    }
-}
+#[path = "review_cmd_multi_tests.rs"]
+mod tests;
