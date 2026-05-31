@@ -10,8 +10,11 @@ fn classify_distinguishes_quota_rate_limit_transport_and_error() {
         FailoverSkipKind::classify("gemini-cli reached its monthly spending cap"),
         FailoverSkipKind::OauthQuota
     );
+    // A billing/spending-cap context marks PERMANENT exhaustion. (A bare
+    // "quota" without billing context is transient — see the dedicated
+    // generic-quota regression test below.)
     assert_eq!(
-        FailoverSkipKind::classify("permanent quota exhaustion detected"),
+        FailoverSkipKind::classify("account billing limit exceeded; quota_exhausted"),
         FailoverSkipKind::OauthQuota
     );
     assert_eq!(
@@ -30,6 +33,60 @@ fn classify_distinguishes_quota_rate_limit_transport_and_error() {
         FailoverSkipKind::classify("model returned a malformed verdict"),
         FailoverSkipKind::AttemptedAndErrored
     );
+}
+
+// #1714 / #1736 classify() narrowing regression: a transient provider error
+// that merely CONTAINS the word "quota" alongside a 429 / RESOURCE_EXHAUSTED
+// marker must classify as the transient `RateLimit429`, NOT permanent
+// `OauthQuota`. The prior `classify()` matched a generic "quota" substring
+// first and mislabeled these as permanent (→ quota_exhausted=true), violating
+// the `FallbackAttempt.quota_exhausted` contract.
+#[test]
+fn classify_transient_429_with_quota_word_is_rate_limit_not_oauth_quota() {
+    let kind = FailoverSkipKind::classify("HTTP 429: quota exceeded");
+    assert_eq!(kind, FailoverSkipKind::RateLimit429);
+    assert!(
+        !kind.is_quota(),
+        "a 429 carrying the word 'quota' is a transient rate limit, not permanent exhaustion"
+    );
+}
+
+#[test]
+fn classify_resource_exhausted_quota_exhausted_without_billing_is_rate_limit() {
+    // RESOURCE_EXHAUSTED + QUOTA_EXHAUSTED but NO billing context → transient.
+    let kind = FailoverSkipKind::classify("status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED");
+    assert_eq!(kind, FailoverSkipKind::RateLimit429);
+    assert!(!kind.is_quota());
+}
+
+#[test]
+fn classify_generic_quota_exceeded_without_billing_is_rate_limit() {
+    // Bare "quota exceeded" without any hard-cap/billing marker is the
+    // per-minute/per-model throttle class → transient.
+    let kind = FailoverSkipKind::classify("quota exceeded for model gemini-3.1-pro");
+    assert_eq!(kind, FailoverSkipKind::RateLimit429);
+    assert!(!kind.is_quota());
+}
+
+#[test]
+fn classify_monthly_spending_cap_is_permanent_oauth_quota() {
+    let kind = FailoverSkipKind::classify("monthly spending cap reached");
+    assert_eq!(kind, FailoverSkipKind::OauthQuota);
+    assert!(
+        kind.is_quota(),
+        "a monthly spending cap is permanent quota exhaustion"
+    );
+}
+
+#[test]
+fn classify_quota_exhausted_with_billing_context_is_permanent_oauth_quota() {
+    // QUOTA_EXHAUSTED WITH a billing context IS permanent (matches the canonical
+    // gemini detector's billing-context rule).
+    let kind = FailoverSkipKind::classify(
+        "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED; billing hard limit reached",
+    );
+    assert_eq!(kind, FailoverSkipKind::OauthQuota);
+    assert!(kind.is_quota());
 }
 
 #[test]

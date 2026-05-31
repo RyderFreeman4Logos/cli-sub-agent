@@ -76,10 +76,28 @@ impl FailoverSkipKind {
     /// stderr) into a stable category. Used for tools that were ACTUALLY
     /// attempted and produced an error — distinct from build-time exclusions
     /// whose kind is known structurally.
+    ///
+    /// Quota classification mirrors the documented `FallbackAttempt.quota_exhausted`
+    /// contract (permanent monthly / spending-cap class vs. transient rate limit)
+    /// and the canonical scheduler `rate_limit` table. PERMANENT `OauthQuota` is
+    /// matched NARROWLY via the shared
+    /// [`csa_core::gemini::detect_permanent_quota_exhaustion_pattern`] helper,
+    /// which keys off genuine hard-cap markers ("monthly spending cap",
+    /// "billing", "spending limit", `QUOTA_EXHAUSTED` WITH a billing context),
+    /// plus a bare `oauth` marker. Transient markers — a plain "429" / "rate
+    /// limit" / "too many requests" / "RESOURCE_EXHAUSTED" / generic "quota"
+    /// (e.g. "quota exceeded", `QUOTA_EXHAUSTED` WITHOUT billing context) — fall
+    /// through to `RateLimit429`. The transient check is ordered FIRST so a
+    /// string carrying BOTH a transient marker and the word "quota" (e.g. "HTTP
+    /// 429: quota exceeded") classifies as transient `RateLimit429`, not
+    /// permanent `OauthQuota`.
     pub(crate) fn classify(reason: &str) -> Self {
         let lower = reason.to_ascii_lowercase();
-        if lower.contains("monthly spending cap")
-            || lower.contains("quota")
+        // Permanent hard-cap quota (monthly / spending-cap / billing) is matched
+        // narrowly first via the canonical detector, then a bare `oauth` marker.
+        // A generic "quota" substring is deliberately NOT treated as permanent
+        // here — that is the transient class handled below.
+        if csa_core::gemini::detect_permanent_quota_exhaustion_pattern(&lower).is_some()
             || lower.contains("oauth")
         {
             Self::OauthQuota
@@ -87,7 +105,9 @@ impl FailoverSkipKind {
             || lower.contains("rate limit")
             || lower.contains("rate-limit")
             || lower.contains("resource_exhausted")
+            || lower.contains("resource exhausted")
             || lower.contains("too many requests")
+            || lower.contains("quota")
         {
             Self::RateLimit429
         } else if lower.contains("transport")
