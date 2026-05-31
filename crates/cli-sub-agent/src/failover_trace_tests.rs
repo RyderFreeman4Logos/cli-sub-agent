@@ -148,6 +148,7 @@ fn plain_429_serializes_not_quota_exhausted_but_permanent_does() {
                 "gemini-cli reached its monthly spending cap".to_string(),
             ),
         ],
+        None,
     );
     assert_eq!(chain.len(), 2);
     // Plain transient 429 → rate-limit-429 reason, NOT quota_exhausted.
@@ -195,7 +196,14 @@ fn build_chain_records_per_tool_reasons_for_multi_skip() {
         "gemini-cli hit HTTP 429".to_string(),
     )];
 
-    let chain = build_review_fallback_chain(&ordered_specs, &exclusions, &attempt_failures);
+    // claude-code (pos3) is the surviving selection; the three earlier tools
+    // (all BEFORE the winner) are recorded, and the winner is omitted.
+    let chain = build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &attempt_failures,
+        Some("claude-code/anthropic/sonnet-4.6/xhigh"),
+    );
 
     // One entry per skipped/attempted tool, in tier-definition order; the
     // selected claude-code reviewer is NOT in the chain.
@@ -233,11 +241,81 @@ fn build_chain_appends_entries_outside_tier_order() {
             "codex/openai/gpt-5.5/high".to_string(),
             "transport: server shut down unexpectedly".to_string(),
         )],
+        None,
     );
     assert_eq!(chain.len(), 1);
     assert_eq!(chain[0].tool, "codex");
     assert_eq!(chain[0].skip_reason, "transport-error");
     assert!(!chain[0].quota_exhausted);
+}
+
+// #1714 after-winner contract regression: when the FIRST tier model wins, a
+// LATER disabled/missing tier model was NEVER reached and must NOT appear in the
+// persisted chain (the prior code emitted every exclusion found in the full tier
+// order, regardless of where the winner sat). Reproduces a tier like
+// `[claude-code (enabled, pos0), codex (disabled, pos1)]`: claude-code wins
+// first, so codex must be omitted.
+#[test]
+fn build_chain_omits_after_winner_exclusions_when_first_model_wins() {
+    let ordered_specs = vec![
+        "claude-code/anthropic/sonnet-4.6/xhigh".to_string(),
+        "codex/openai/gpt-5.5/high".to_string(),
+    ];
+    let exclusions = vec![TierModelExclusion {
+        // codex is disabled, but it sits AFTER the winning claude-code so it was
+        // never reached.
+        model_spec: "codex/openai/gpt-5.5/high".to_string(),
+        tool: Some(ToolName::Codex),
+        kind: FailoverSkipKind::Disabled,
+    }];
+
+    let chain = build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &[],
+        Some("claude-code/anthropic/sonnet-4.6/xhigh"),
+    );
+
+    assert!(
+        chain.is_empty(),
+        "first-model win with no earlier skips must leave an empty chain; got {chain:?}"
+    );
+    assert!(
+        chain.iter().all(|attempt| attempt.tool != "codex"),
+        "a disabled model AFTER the winner was never reached and must not be recorded"
+    );
+}
+
+// Companion to the above: an after-winner same-family exclusion must NOT trigger
+// the heterogeneous-diversity warning, because no actual failover past the
+// winner occurred (the false-warning half of the #1714 bug).
+#[test]
+fn diversity_warning_silent_for_after_winner_same_family_exclusion() {
+    let ordered_specs = vec![
+        "claude-code/anthropic/sonnet-4.6/xhigh".to_string(),
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+    ];
+    // gemini-cli (a DIFFERENT family) is disabled but sits AFTER the winning
+    // claude-code, so it was never reached.
+    let exclusions = vec![TierModelExclusion {
+        model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+        tool: Some(ToolName::GeminiCli),
+        kind: FailoverSkipKind::Disabled,
+    }];
+    let chain = build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &[],
+        Some("claude-code/anthropic/sonnet-4.6/xhigh"),
+    );
+
+    // The after-winner gemini exclusion is gone, so there is no skipped
+    // different-family reviewer to drive the warning.
+    assert!(
+        writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, &chain)
+            .is_none(),
+        "no real failover past the first-choice winner → no diversity warning"
+    );
 }
 
 // Ask 3 (#1714): warn (do NOT fail) when failover lands on the writer's family.
@@ -250,6 +328,7 @@ fn diversity_warning_fires_on_same_family_failover() {
             "codex/openai/gpt-5/high".to_string(),
             "HTTP 429 Too Many Requests".to_string(),
         )],
+        None,
     );
     let warning =
         writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, &chain);
@@ -270,7 +349,14 @@ fn diversity_warning_fires_on_build_time_same_family_fallback() {
         tool: Some(ToolName::GeminiCli),
         kind: FailoverSkipKind::Disabled,
     }];
-    let chain = build_review_fallback_chain(&ordered_specs, &exclusions, &[]);
+    // claude-code (pos1) won; the BEFORE-winner gemini-cli exclusion is recorded,
+    // so the same-family diversity warning still fires.
+    let chain = build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &[],
+        Some("claude-code/anthropic/claude-sonnet/high"),
+    );
 
     let warning =
         writer_family_diversity_warning(Some("claude-code"), ToolName::ClaudeCode, &chain);
@@ -292,6 +378,7 @@ fn diversity_warning_silent_when_writer_and_reviewer_families_differ() {
             "codex/openai/gpt-5/high".to_string(),
             "HTTP 429 Too Many Requests".to_string(),
         )],
+        None,
     );
     assert!(
         writer_family_diversity_warning(Some("claude-code"), ToolName::GeminiCli, &chain).is_none()
@@ -314,6 +401,7 @@ fn diversity_warning_silent_when_writer_unknown() {
             "codex/openai/gpt-5/high".to_string(),
             "HTTP 429 Too Many Requests".to_string(),
         )],
+        None,
     );
     assert!(writer_family_diversity_warning(None, ToolName::ClaudeCode, &chain).is_none());
     // Unrecognised writer tool name → cannot assert diversity loss.

@@ -366,6 +366,9 @@ pub(crate) async fn execute_review_with_tier_filter(
                                 tier_name.as_deref(),
                                 tier_filter.as_ref(),
                                 &failures,
+                                // All tier models failed: no winner, so persist
+                                // the full chain.
+                                None,
                             ),
                         );
                     }
@@ -538,6 +541,8 @@ pub(crate) async fn execute_review_with_tier_filter(
                         tier_name.as_deref(),
                         tier_filter.as_ref(),
                         &failures,
+                        // Every tier model failed: no winner, persist full chain.
+                        None,
                     ),
                 );
                 let persistable_session_id = Some(execution.meta_session_id.clone());
@@ -580,6 +585,10 @@ pub(crate) async fn execute_review_with_tier_filter(
                 tier_name.as_deref(),
                 tier_filter.as_ref(),
                 &failures,
+                // The winning model: bounds the persisted chain to before-winner
+                // skips so a first-choice success omits never-reached tier
+                // models (#1714).
+                attempt_model_spec.as_deref(),
             ),
         );
         let routed_to = (attempt_tool != &tool

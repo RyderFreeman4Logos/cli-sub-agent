@@ -183,6 +183,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             original_tool: None,
             fallback_tool: None,
             fallback_reason: None,
+            selected_model_spec: None,
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");
@@ -363,6 +364,7 @@ Verdict: APPROVE
             original_tool: None,
             fallback_tool: None,
             fallback_reason: None,
+            selected_model_spec: None,
         },
     )
     .expect("explicit verdict should finalize");
@@ -453,6 +455,7 @@ Verdict: APPROVE
             original_tool: Some(csa_core::types::ToolName::GeminiCli),
             fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_reason: None,
+            selected_model_spec: None,
         },
     )
     .expect("fallback chain should finalize");
@@ -546,6 +549,9 @@ Verdict: APPROVE
             original_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_reason: None,
+            // claude-code (pos1) is the winning debater; the BEFORE-winner codex
+            // exclusion (pos0) is still persisted (#1714).
+            selected_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
         },
     )
     .expect("build-time fallback chain should finalize");
@@ -628,6 +634,7 @@ Verdict: REVISE
             original_tool: None,
             fallback_tool: None,
             fallback_reason: None,
+            selected_model_spec: None,
         },
     )
     .expect("revise verdict should finalize");

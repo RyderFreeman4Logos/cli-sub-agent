@@ -31,6 +31,9 @@ pub(crate) struct DebateFinalizeContext<'a> {
     pub(crate) original_tool: Option<ToolName>,
     pub(crate) fallback_tool: Option<ToolName>,
     pub(crate) fallback_reason: Option<&'a str>,
+    /// Winning debater model spec, if the debate succeeded. Bounds the persisted
+    /// failover chain to before-winner skips (#1714).
+    pub(crate) selected_model_spec: Option<&'a str>,
 }
 
 fn build_unavailable_debate_summary(
@@ -190,6 +193,7 @@ pub(crate) fn finalize_debate_outcome(
                     context.resolved_tier_name,
                     context.tier_filter,
                     context.failures,
+                    context.selected_model_spec,
                 ),
             );
         }

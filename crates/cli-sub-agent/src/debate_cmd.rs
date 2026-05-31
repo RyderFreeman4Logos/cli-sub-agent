@@ -320,6 +320,7 @@ pub(crate) async fn handle_debate(
     let mut execution = None;
     let mut failures = Vec::new();
     let mut final_tool = None;
+    let mut final_model_spec: Option<String> = None;
 
     'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
         candidates.iter().enumerate()
@@ -465,6 +466,7 @@ pub(crate) async fn handle_debate(
             resume_session = Some(executed.meta_session_id.clone());
             if executed.execution.exit_code == 0 {
                 final_tool = Some(*attempt_tool);
+                final_model_spec = attempt_model_spec.clone();
                 execution = Some(executed);
                 break 'tier_attempts;
             }
@@ -572,6 +574,7 @@ pub(crate) async fn handle_debate(
             original_tool: Some(tool),
             fallback_tool: final_tool,
             fallback_reason,
+            selected_model_spec: final_model_spec.as_deref(),
         },
     )?;
     let rendered_output = finalized.rendered_output;

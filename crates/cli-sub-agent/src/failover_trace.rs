@@ -173,15 +173,48 @@ fn failure_attempt(model_spec: &str, raw_reason: &str) -> FallbackAttempt {
 /// omitted — the chain records only skips and failures. Entries not covered by
 /// `ordered_specs` (e.g. the global-fallback path, which has no tier list) are
 /// appended so nothing is silently dropped.
+///
+/// `selected_model_spec` is the WINNING model (the reviewer/debater that
+/// succeeded), if any. When it is `Some` and present in `ordered_specs`, only
+/// build-time exclusions and tier-ordered failures STRICTLY BEFORE its index are
+/// emitted: the winner itself and any tier specs AFTER it were never reached, so
+/// recording them would falsely imply a failover past the winner (#1714 — this
+/// also stops [`writer_family_diversity_warning`] from firing for a first-choice
+/// success). Runtime `attempt_failures` are always preserved (they are genuine
+/// attempts), as are entries outside `ordered_specs` (the global-fallback path).
+/// `None` (e.g. the all-models-failed path, where there is no winner) preserves
+/// the full chain.
 pub(crate) fn build_review_fallback_chain(
     ordered_specs: &[String],
     exclusions: &[TierModelExclusion],
     attempt_failures: &[(String, String)],
+    selected_model_spec: Option<&str>,
 ) -> Vec<FallbackAttempt> {
     let mut chain = Vec::new();
     let mut emitted: HashSet<String> = HashSet::new();
 
-    for spec in ordered_specs {
+    // Index of the winning model in tier order, if it is a tier spec. Tier specs
+    // at or after this index were never reached and must be omitted.
+    let selected_index =
+        selected_model_spec.and_then(|sel| ordered_specs.iter().position(|spec| spec == sel));
+    // A tier spec is "after the winner" (never reached) when its position is
+    // >= the winner's index. Such specs are excluded from every pass below.
+    let reached_in_tier_order = |spec: &str| -> bool {
+        match (selected_index, ordered_specs.iter().position(|s| s == spec)) {
+            (Some(winner_idx), Some(spec_idx)) => spec_idx < winner_idx,
+            // No winner in tier order, or spec not in tier order: not gated here
+            // (out-of-tier entries are handled by the trailing append loops).
+            _ => true,
+        }
+    };
+
+    for (spec_idx, spec) in ordered_specs.iter().enumerate() {
+        if let Some(winner_idx) = selected_index
+            && spec_idx >= winner_idx
+        {
+            // The winner and everything after it in tier order was not reached.
+            continue;
+        }
         if let Some(exclusion) = exclusions.iter().find(|e| &e.model_spec == spec) {
             chain.push(exclusion_attempt(exclusion));
             emitted.insert(spec.clone());
@@ -193,11 +226,20 @@ pub(crate) fn build_review_fallback_chain(
     }
 
     for exclusion in exclusions {
+        // Skip after-winner tier exclusions (never reached); out-of-tier
+        // exclusions still flow through.
+        if !reached_in_tier_order(&exclusion.model_spec) {
+            continue;
+        }
         if emitted.insert(exclusion.model_spec.clone()) {
             chain.push(exclusion_attempt(exclusion));
         }
     }
     for (spec, reason) in attempt_failures {
+        // Runtime attempt failures are genuine attempts and are always recorded,
+        // even on the global-fallback path that has no tier order. (A spec that
+        // both succeeded AND is listed as a failure cannot occur: a winning model
+        // is never pushed as a TierAttemptFailure.)
         if emitted.insert(spec.clone()) {
             chain.push(failure_attempt(spec, reason));
         }

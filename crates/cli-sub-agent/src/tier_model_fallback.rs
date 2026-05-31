@@ -93,11 +93,18 @@ pub(crate) fn ordered_tier_candidates(
 ///
 /// Includes both candidate-build exclusions and runtime attempt failures so a
 /// successful later candidate still leaves a trace for earlier build-time skips.
+///
+/// `selected_model_spec` is the WINNING model (when the run succeeded). It bounds
+/// the emitted build-time exclusions to tier specs BEFORE the winner so a
+/// first-choice success does not falsely persist later, never-reached tier
+/// models as skips (#1714). Pass `None` on the all-models-failed path (no
+/// winner) to keep the full chain.
 pub(crate) fn build_fallback_chain_for_result(
     project_config: Option<&ProjectConfig>,
     tier_name: Option<&str>,
     tier_filter: Option<&TierFilter>,
     failures: &[TierAttemptFailure],
+    selected_model_spec: Option<&str>,
 ) -> Vec<FallbackAttempt> {
     let ordered_specs: Vec<String> = tier_name
         .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
@@ -123,6 +130,7 @@ pub(crate) fn build_fallback_chain_for_result(
         &ordered_specs,
         &exclusions,
         &attempt_failures,
+        selected_model_spec,
     )
 }
 

@@ -39,12 +39,14 @@ fn build_failover_chain_records_build_time_exclusions_without_runtime_failures()
     );
 
     // Empty runtime failures represents the later claude-code reviewer
-    // succeeding; the skipped codex build-time exclusion still needs a trace.
+    // succeeding; the skipped codex build-time exclusion (BEFORE the winner)
+    // still needs a trace.
     let chain = crate::tier_model_fallback::build_fallback_chain_for_result(
         Some(&config),
         Some("quality"),
         None,
         &[],
+        Some("claude-code/anthropic/claude-sonnet/high"),
     );
 
     assert_eq!(chain.len(), 1);
