@@ -57,11 +57,19 @@ impl FailoverSkipKind {
         }
     }
 
-    /// Whether this skip represents quota exhaustion (drives
-    /// `FallbackAttempt.quota_exhausted`). Only genuine quota / rate-limit
-    /// conditions count — a disabled or undetected tool is NOT quota.
+    /// Whether this skip represents PERMANENT quota exhaustion (drives
+    /// `FallbackAttempt.quota_exhausted`). Only `OauthQuota` — the monthly /
+    /// spending-cap class — counts, matching the documented field contract on
+    /// [`csa_core::types::FallbackAttempt::quota_exhausted`] ("permanent quota
+    /// exhaustion vs. transient rate limit") and the canonical scheduler
+    /// classification (`csa-scheduler` rate_limit table: a plain HTTP 429 maps
+    /// to `quota_exhausted = false`). A transient `RateLimit429`, a disabled, or
+    /// an undetected tool is NOT permanent quota exhaustion. `RateLimit429`
+    /// still carries its own distinct `rate-limit-429` `skip_reason`, so the
+    /// per-tool failover categorisation from #1714 is preserved — only this
+    /// boolean is narrowed to the permanent class.
     pub(crate) const fn is_quota(self) -> bool {
-        matches!(self, Self::OauthQuota | Self::RateLimit429)
+        matches!(self, Self::OauthQuota)
     }
 
     /// Classify a free-text failover reason (from `detect_rate_limit` or attempt

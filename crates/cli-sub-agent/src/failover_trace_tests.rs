@@ -54,14 +54,59 @@ fn category_strings_are_stable_and_distinct() {
     );
 }
 
+// #1714 field-contract regression: `FallbackAttempt.quota_exhausted` is
+// documented as PERMANENT quota exhaustion (monthly / spending-cap class) "vs.
+// transient rate limit", and the canonical scheduler table maps a plain HTTP
+// 429 to `quota_exhausted = false`. So ONLY `OauthQuota` may flag quota
+// exhaustion; a transient `RateLimit429` must NOT, even though it still carries
+// its own `rate-limit-429` skip_reason category.
 #[test]
-fn only_quota_kinds_count_as_quota_exhausted() {
+fn only_permanent_quota_counts_as_quota_exhausted() {
+    // Permanent (monthly / spending-cap) quota DOES flag quota exhaustion.
     assert!(FailoverSkipKind::OauthQuota.is_quota());
-    assert!(FailoverSkipKind::RateLimit429.is_quota());
+    // Transient HTTP 429 rate limit does NOT — it is not permanent exhaustion.
+    assert!(!FailoverSkipKind::RateLimit429.is_quota());
     assert!(!FailoverSkipKind::Disabled.is_quota());
     assert!(!FailoverSkipKind::AvailabilityDetectionMiss.is_quota());
     assert!(!FailoverSkipKind::TransportError.is_quota());
     assert!(!FailoverSkipKind::AttemptedAndErrored.is_quota());
+}
+
+// Serialization-level guard for the same contract: a plain 429 attempt failure
+// serializes `quota_exhausted = false` (mapped to the transient `rate-limit-429`
+// skip reason), while a permanent monthly-cap exhaustion serializes
+// `quota_exhausted = true`.
+#[test]
+fn plain_429_serializes_not_quota_exhausted_but_permanent_does() {
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        &[
+            (
+                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "HTTP 429 Too Many Requests; Retry-After: 30".to_string(),
+            ),
+            (
+                "antigravity-cli/google/default/xhigh".to_string(),
+                "gemini-cli reached its monthly spending cap".to_string(),
+            ),
+        ],
+    );
+    assert_eq!(chain.len(), 2);
+    // Plain transient 429 → rate-limit-429 reason, NOT quota_exhausted.
+    assert_eq!(chain[0].tool, "gemini-cli");
+    assert_eq!(chain[0].skip_reason, "rate-limit-429");
+    assert!(
+        !chain[0].quota_exhausted,
+        "a plain HTTP 429 is a transient rate limit, not permanent quota exhaustion"
+    );
+    // Permanent monthly-cap exhaustion → oauth-quota reason AND quota_exhausted.
+    assert_eq!(chain[1].tool, "antigravity-cli");
+    assert_eq!(chain[1].skip_reason, "oauth-quota");
+    assert!(
+        chain[1].quota_exhausted,
+        "a monthly spending cap is permanent quota exhaustion"
+    );
 }
 
 // DONE-WHEN (Ask 1): the chain records, for EACH tool it skips or attempts, a
@@ -100,7 +145,11 @@ fn build_chain_records_per_tool_reasons_for_multi_skip() {
     assert_eq!(chain.len(), 3);
     assert_eq!(chain[0].tool, "gemini-cli");
     assert_eq!(chain[0].skip_reason, "rate-limit-429");
-    assert!(chain[0].quota_exhausted);
+    // A plain HTTP 429 is a transient rate limit, NOT permanent quota
+    // exhaustion (the documented `quota_exhausted` contract reserves the flag
+    // for the monthly / spending-cap class). The distinct `rate-limit-429`
+    // skip_reason still records WHY gemini-cli was skipped.
+    assert!(!chain[0].quota_exhausted);
     assert_eq!(chain[1].tool, "antigravity-cli");
     assert_eq!(chain[1].skip_reason, "disabled");
     assert!(!chain[1].quota_exhausted);
