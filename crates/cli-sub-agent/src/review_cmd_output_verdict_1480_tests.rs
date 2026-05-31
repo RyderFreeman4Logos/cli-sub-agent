@@ -11,6 +11,7 @@ fn issue_1480_skip_meta_with_zero_findings_emits_pass() {
         true, // findings_empty
         None, // overall_risk
         Some(ReviewDecision::Skip),
+        || Ok(false), // blocking summary signal absent
         || Ok(false), // prose_clean_check irrelevant: zero evidence fires first
         || Ok(false), // prose_fail_check irrelevant: Skip meta is not Fail/Uncertain
     )
@@ -89,6 +90,7 @@ fn issue_1480_skip_meta_with_nonzero_low_counts_stays_skip() {
         true, // findings_empty
         None, // overall_risk
         Some(ReviewDecision::Skip),
+        || Ok(false),
         || Ok(false),
         || Ok(false),
     )

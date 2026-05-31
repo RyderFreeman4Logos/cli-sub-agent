@@ -51,6 +51,54 @@ fn issue_1675_fail_meta_empty_findings_with_prose_fail_verdict_emits_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1740: codex can emit prose findings in details.md as `N. High: ...` under
+/// `## Findings`, while the structured findings artifact is empty and meta says
+/// Pass/CLEAN. A blocking summary signal plus inline HIGH finding must fail.
+#[test]
+fn issue_1740_codex_inline_findings_and_blocking_summary_emit_fail() {
+    let session_id = "01TEST1740CODEXPROSEHIGH00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1740-codex-prose-high", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nReview found one blocking contract issue in the debate failover trace path. ...\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\n## Findings\n\n1. High: `csa debate` can over-report `fallback_chain` for terminal non-success verdicts\n   File: crates/cli-sub-agent/src/debate_cmd.rs:467\n   ...\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Fail,
+        "#1740: inline codex HIGH finding plus blocking summary must fail closed"
+    );
+    assert_ne!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert!(
+        artifact
+            .severity_counts
+            .get(&Severity::High)
+            .copied()
+            .unwrap_or_default()
+            >= 1,
+        "#1740: inline `High:` finding must be reflected in severity_counts"
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 /// #1675 Case 2: regression guard for #1349 — meta=Fail + empty findings +
 /// NEUTRAL prose (no FAIL verdict token) MUST stay Pass.
 #[test]

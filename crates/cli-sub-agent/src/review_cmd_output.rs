@@ -21,6 +21,8 @@ mod diagnostics;
 mod exit_code;
 #[path = "review_cmd_output_fail_closed.rs"]
 mod fail_closed;
+#[path = "review_cmd_output_prose_signals.rs"]
+mod prose_signals;
 #[path = "review_cmd_output_sections.rs"]
 mod sections;
 #[path = "review_cmd_output_summary.rs"]
@@ -43,6 +45,7 @@ pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
 pub(super) use fail_closed::fail_closed_review_meta;
 use fail_closed::fail_closed_review_verdict_artifact;
+use prose_signals::{reconcile_counts_with_prose, review_prose_signals};
 pub(super) use sections::{
     derive_review_result_summary, has_structured_review_content, sanitize_review_output,
 };
@@ -189,6 +192,7 @@ fn verdict_from_meta(
 fn cross_check_json_for_blocking(
     session_dir: &Path,
     meta: &ReviewSessionMeta,
+    blocking_summary: bool,
 ) -> Result<Option<ReviewVerdictArtifact>, anyhow::Error> {
     let Some(json_artifact) = load_review_artifact_from_output(session_dir)? else {
         return Ok(None);
@@ -202,6 +206,7 @@ fn cross_check_json_for_blocking(
         json_artifact.findings.is_empty(),
         json_artifact.overall_risk.as_deref(),
         ReviewDecision::from_str(&meta.decision).ok(),
+        || Ok(blocking_summary),
         || review_contains_prose_clean_conclusion(session_dir),
         || review_contains_prose_fail_conclusion(session_dir),
     )?;
@@ -213,10 +218,13 @@ fn derive_review_verdict_artifact(
     meta: &ReviewSessionMeta,
     findings: &[Finding],
 ) -> Result<ReviewVerdictArtifact, anyhow::Error> {
+    let prose_signals = review_prose_signals(session_dir)?;
     let mut synthetic_empty_findings_counts = None;
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
-        let severity_counts =
-            severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
+        let severity_counts = reconcile_counts_with_prose(
+            severity_counts_for_findings_toml(&findings_file, zero_severity_counts),
+            &prose_signals.severity_counts,
+        );
 
         // Detect synthetic-empty findings.toml: the sidecar marker is written by
         // persist_review_findings_toml when TOML extraction failed (#1045 round 3).
@@ -230,7 +238,9 @@ fn derive_review_verdict_artifact(
             && findings_file.findings.is_empty()
             && severity_counts_are_zero(&severity_counts)
         {
-            if let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)? {
+            if let Some(artifact) =
+                cross_check_json_for_blocking(session_dir, meta, prose_signals.blocking_summary)?
+            {
                 return Ok(artifact);
             }
             synthetic_empty_findings_counts = Some(severity_counts.clone());
@@ -243,7 +253,11 @@ fn derive_review_verdict_artifact(
             // Non-synthetic (trusted) or non-empty findings.toml: cross-check
             // review-findings.json for the empty case (round 2 logic), then return.
             if findings_file.findings.is_empty() && severity_counts_are_zero(&severity_counts) {
-                if let Some(artifact) = cross_check_json_for_blocking(session_dir, meta)? {
+                if let Some(artifact) = cross_check_json_for_blocking(
+                    session_dir,
+                    meta,
+                    prose_signals.blocking_summary,
+                )? {
                     return Ok(artifact);
                 }
                 // No blocking JSON findings, but JSON may have low-only counts.
@@ -256,6 +270,7 @@ fn derive_review_verdict_artifact(
                         false, // JSON has findings (low-only)
                         None,
                         ReviewDecision::from_str(&meta.decision).ok(),
+                        || Ok(prose_signals.blocking_summary),
                         || review_contains_prose_clean_conclusion(session_dir),
                         || review_contains_prose_fail_conclusion(session_dir),
                     )?;
@@ -268,6 +283,7 @@ fn derive_review_verdict_artifact(
                 findings_file.findings.is_empty(),
                 None,
                 ReviewDecision::from_str(&meta.decision).ok(),
+                || Ok(prose_signals.blocking_summary),
                 || review_contains_prose_clean_conclusion(session_dir),
                 || review_contains_prose_fail_conclusion(session_dir),
             )?;
@@ -276,12 +292,16 @@ fn derive_review_verdict_artifact(
     }
 
     if let Some(artifact) = load_review_artifact_from_output(session_dir)? {
-        let severity_counts = severity_counts_for_artifact(&artifact, zero_severity_counts);
+        let severity_counts = reconcile_counts_with_prose(
+            severity_counts_for_artifact(&artifact, zero_severity_counts),
+            &prose_signals.severity_counts,
+        );
         let decision = derive_decision_from_severity_counts(
             &severity_counts,
             artifact.findings.is_empty(),
             artifact.overall_risk.as_deref(),
             ReviewDecision::from_str(&meta.decision).ok(),
+            || Ok(prose_signals.blocking_summary),
             || review_contains_prose_clean_conclusion(session_dir),
             || review_contains_prose_fail_conclusion(session_dir),
         )?;
@@ -308,6 +328,7 @@ fn derive_review_verdict_artifact(
             true,
             None,
             ReviewDecision::from_str(&meta.decision).ok(),
+            || Ok(prose_signals.blocking_summary),
             || review_contains_prose_clean_conclusion(session_dir),
             || review_contains_prose_fail_conclusion(session_dir),
         )?;
@@ -388,11 +409,15 @@ fn derive_decision_from_severity_counts(
     findings_empty: bool,
     overall_risk: Option<&str>,
     meta_decision: Option<ReviewDecision>,
+    prose_blocking_check: impl FnOnce() -> Result<bool, anyhow::Error>,
     prose_clean_check: impl FnOnce() -> Result<bool, anyhow::Error>,
     prose_fail_check: impl FnOnce() -> Result<bool, anyhow::Error>,
 ) -> Result<ReviewDecision, anyhow::Error> {
     // Blocking findings (critical/high/medium) always fail.
     if has_blocking_severity(severity_counts) {
+        return Ok(ReviewDecision::Fail);
+    }
+    if prose_blocking_check()? {
         return Ok(ReviewDecision::Fail);
     }
 

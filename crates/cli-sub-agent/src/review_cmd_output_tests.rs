@@ -125,6 +125,7 @@ fn derive_decision_fail_meta_with_zero_severity_and_pass_prose_emits_pass() {
         true,
         Some("low"),
         Some(ReviewDecision::Fail),
+        || Ok(false),
         || Ok(true),
         || Ok(false), // prose has no affirmative FAIL token (#1675)
     )
