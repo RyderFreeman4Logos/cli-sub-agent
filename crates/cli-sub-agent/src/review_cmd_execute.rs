@@ -106,18 +106,15 @@ fn warn_if_fast_mode_has_no_codex_review_candidate(
 /// Combines models excluded at candidate-build time (disabled / undetected /
 /// whitelist-filtered, surfaced by [`crate::run_helpers::evaluate_tier_models`])
 /// with the candidates that were actually attempted and errored (`failures`),
-/// presenting them in tier-definition order. Returns an empty chain when no
-/// candidate failed — a clean first-candidate review has no failover to trace,
-/// so its `result.toml` is left untouched.
+/// presenting them in tier-definition order. Returns an empty chain only when
+/// no candidate was excluded or failed — a clean first-candidate review has no
+/// failover to trace, so its `result.toml` is left untouched.
 fn build_failover_chain_for_result(
     project_config: Option<&ProjectConfig>,
     tier_name: Option<&str>,
     tier_filter: Option<&TierFilter>,
     failures: &[TierAttemptFailure],
 ) -> Vec<FallbackAttempt> {
-    if failures.is_empty() {
-        return Vec::new();
-    }
     let ordered_specs: Vec<String> = tier_name
         .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
         .map(|tier| tier.models.clone())
