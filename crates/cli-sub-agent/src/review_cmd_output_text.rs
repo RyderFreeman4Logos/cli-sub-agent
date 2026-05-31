@@ -161,24 +161,58 @@ pub(super) fn severity_counts_from_text(text: &str) -> std::collections::BTreeMa
     let marker_re =
         Regex::new(r"(?i)\[(critical|high|medium|low|info|p[0-4])\]").expect("valid regex");
     let mut counts = zero_severity_counts();
+    let mut in_findings_section = false;
 
-    for captures in marker_re.captures_iter(text) {
-        let severity = match captures.get(1).map(|m| m.as_str().to_ascii_lowercase()) {
-            Some(level) if level == "critical" => Severity::Critical,
-            Some(level) if level == "high" => Severity::High,
-            Some(level) if level == "medium" => Severity::Medium,
-            Some(level) if level == "low" => Severity::Low,
-            Some(level) if level == "info" => Severity::Low,
-            Some(level) if level == "p0" => Severity::Critical,
-            Some(level) if level == "p1" => Severity::High,
-            Some(level) if level == "p2" => Severity::Medium,
-            Some(level) if level == "p3" || level == "p4" => Severity::Low,
-            _ => continue,
-        };
-        *counts.entry(severity).or_insert(0) += 1;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if is_findings_header(line) {
+            in_findings_section = true;
+            continue;
+        }
+        if in_findings_section && trimmed.starts_with('#') {
+            in_findings_section = false;
+            continue;
+        }
+
+        if in_findings_section && let Some(severity) = inline_findings_line_severity(line) {
+            *counts.entry(severity).or_insert(0) += 1;
+            continue;
+        }
+
+        for captures in marker_re.captures_iter(line) {
+            let Some(severity) = captures
+                .get(1)
+                .and_then(|level| severity_from_label(level.as_str()))
+            else {
+                continue;
+            };
+            *counts.entry(severity).or_insert(0) += 1;
+        }
     }
 
     counts
+}
+
+fn inline_findings_line_severity(line: &str) -> Option<Severity> {
+    let trimmed = line.trim_start();
+    let (index, rest) = trimmed.split_once('.')?;
+    if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+
+    let (severity, _) = rest.trim_start().split_once(':')?;
+    severity_from_label(severity.trim())
+}
+
+fn severity_from_label(level: &str) -> Option<Severity> {
+    let normalized = level.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "critical" | "p0" => Some(Severity::Critical),
+        "high" | "p1" => Some(Severity::High),
+        "medium" | "p2" => Some(Severity::Medium),
+        "low" | "info" | "p3" | "p4" => Some(Severity::Low),
+        _ => None,
+    }
 }
 
 pub(super) fn parse_overall_risk_from_text(text: &str) -> Option<String> {
@@ -188,6 +222,55 @@ pub(super) fn parse_overall_risk_from_text(text: &str) -> Option<String> {
         .captures(text)
         .and_then(|captures| captures.get(1))
         .map(|level| level.as_str().to_ascii_lowercase())
+}
+
+pub(super) fn contains_blocking_issue_signal(text: &str) -> bool {
+    text.lines().any(line_has_blocking_issue_signal)
+}
+
+fn line_has_blocking_issue_signal(line: &str) -> bool {
+    if contains_clean_phrase(line) {
+        return false;
+    }
+
+    const ISSUE_NOUNS: &[&str] = &[
+        "issue", "issues", "finding", "findings", "problem", "problems", "bug", "bugs", "defect",
+        "defects",
+    ];
+    const NEGATIONS: &[&str] = &["no", "non", "nonblocking", "not", "none", "without"];
+    const MAX_TOKENS_AFTER_BLOCKING: usize = 8;
+    const MAX_NEGATION_LOOKBACK: usize = 3;
+
+    let tokens = line
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+
+    for (index, token) in tokens.iter().enumerate() {
+        if token == "nonblocking" {
+            continue;
+        }
+        if token != "blocking" {
+            continue;
+        }
+        if tokens[..index]
+            .iter()
+            .rev()
+            .take(MAX_NEGATION_LOOKBACK)
+            .any(|candidate| NEGATIONS.contains(&candidate.as_str()))
+        {
+            continue;
+        }
+        if ((index + 1)..tokens.len()).any(|candidate| {
+            candidate - index <= MAX_TOKENS_AFTER_BLOCKING
+                && ISSUE_NOUNS.contains(&tokens[candidate].as_str())
+        }) {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub(super) fn derive_decision_from_text(

@@ -1,7 +1,7 @@
 use super::{
     ToolReviewFailureKind, derive_decision_from_severity_counts, derive_decision_from_text,
     detect_prose_fail_conclusion, detect_tool_review_failure, ensure_review_summary_artifact,
-    extract_review_text, persist_review_verdict,
+    extract_review_text, persist_review_verdict, text::contains_blocking_issue_signal,
 };
 use crate::review_cmd::output::artifacts::PersistedReviewArtifact;
 use crate::test_env_lock::TEST_ENV_LOCK;
@@ -125,6 +125,7 @@ fn derive_decision_fail_meta_with_zero_severity_and_pass_prose_emits_pass() {
         true,
         Some("low"),
         Some(ReviewDecision::Fail),
+        || Ok(false),
         || Ok(true),
         || Ok(false), // prose has no affirmative FAIL token (#1675)
     )
