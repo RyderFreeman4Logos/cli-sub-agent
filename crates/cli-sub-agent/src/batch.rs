@@ -646,6 +646,7 @@ async fn execute_task(
         false, // readonly_project_root
         &[],   // extra_writable
         &[],   // extra_readable
+        false, // cli_no_error_marker_scan: batch has no CLI flag; defer to config (#1745)
     )
     .await;
 

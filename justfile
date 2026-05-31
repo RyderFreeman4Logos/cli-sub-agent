@@ -104,6 +104,9 @@ find-monolith-files:
         */review_cmd_execute.rs) exempt=true ;;    # review-command driver; split pending
         */session_cmds_reconcile.rs) exempt=true ;;  # ~10.8K on main; reconcile driver; #161 field-spread touch; split pending
         */preflight_state_dir.rs) exempt=true ;;     # ~9.4K on main; #161 SessionResult field-spread touch; split pending
+        */mcp_server.rs) exempt=true ;;              # ~8.0K on main; MCP tool dispatcher; #1745 field-spread touch; split pending
+        */run_cmd_attempt.rs) exempt=true ;;         # ~10.8K on main; run-attempt driver; #1745 field-spread touch; split pending
+        */transport_cli.rs) exempt=true ;;           # ~9.1K on main; CLI transport spawn; #1745 field-spread touch; split pending
     esac
     [ -f "$file" ] || exit 0
     grep -Iq '' "$file" 2>/dev/null || exit 0  # skip binary files

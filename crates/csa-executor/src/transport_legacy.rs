@@ -107,6 +107,8 @@ impl LegacyTransport {
             keep_stdin_open: false,
             spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+            // execute_in (ephemeral/testing path) keeps the #1652 scan enabled.
+            error_marker_scan_enabled: true,
         };
         let initial_response_timeout_seconds =
             consume_resolved_execute_in_initial_response_timeout_seconds(
@@ -199,6 +201,7 @@ impl LegacyTransport {
             keep_stdin_open: false,
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
+            error_marker_scan_enabled: options.error_marker_scan_enabled,
         };
         let initial_response_timeout_seconds =
             Self::consume_resolved_transport_initial_response_timeout_seconds(

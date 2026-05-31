@@ -77,6 +77,7 @@ printf '%s\\n' \
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     {
@@ -158,6 +159,7 @@ exit 7\n",
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     {
@@ -257,6 +259,7 @@ fi\n",
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     {
@@ -344,6 +347,7 @@ printf '%s\\n' \
         false,
         &[],
         &[],
+        true, // no_error_marker_scan: default scan ON (#1745)
     )
     .await
     {

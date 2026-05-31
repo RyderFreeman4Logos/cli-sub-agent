@@ -436,6 +436,7 @@ fn test_liveness_true_resets_death_timer() {
         Some(tmp.path()),
         &mut dead_since,
         &mut next_poll,
+        true,
     );
 
     assert_eq!(terminate, None);

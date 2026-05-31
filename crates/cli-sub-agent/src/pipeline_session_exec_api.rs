@@ -41,6 +41,7 @@ pub(crate) async fn execute_with_session(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    cli_no_error_marker_scan: bool,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -68,6 +69,7 @@ pub(crate) async fn execute_with_session(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        cli_no_error_marker_scan,
     )
     .await?;
     Ok(execution.execution)
@@ -101,6 +103,7 @@ pub(crate) async fn execute_with_session_and_meta(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    cli_no_error_marker_scan: bool,
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
         executor,
@@ -130,6 +133,7 @@ pub(crate) async fn execute_with_session_and_meta(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        cli_no_error_marker_scan,
     )
     .await
 }

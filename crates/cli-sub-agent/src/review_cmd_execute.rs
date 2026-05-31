@@ -128,6 +128,7 @@ pub(crate) async fn execute_review(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<ReviewExecutionOutcome> {
     execute_review_with_tier_filter(
         tool,
@@ -157,6 +158,7 @@ pub(crate) async fn execute_review(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        no_error_marker_scan,
     )
     .await
 }
@@ -190,6 +192,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
     if session.is_none()
@@ -294,6 +297,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             readonly_project_root,
             extra_writable,
             extra_readable,
+            no_error_marker_scan,
         )
         .await
         {
@@ -447,6 +451,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     readonly_project_root,
                     extra_writable,
                     extra_readable,
+                    no_error_marker_scan,
                 )
                 .await
                 {
@@ -651,6 +656,7 @@ async fn execute_review_once(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     crate::pipeline::execute_with_session_and_meta_with_parent_source(
         executor,
@@ -680,6 +686,7 @@ async fn execute_review_once(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        no_error_marker_scan,
     )
     .await
 }
@@ -704,6 +711,7 @@ async fn execute_review_once_with_artifact_guard(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let invocation_started_at = Utc::now();
     match execute_review_once(
@@ -725,6 +733,7 @@ async fn execute_review_once_with_artifact_guard(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        no_error_marker_scan,
     )
     .await
     {

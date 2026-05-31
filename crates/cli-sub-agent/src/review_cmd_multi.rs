@@ -107,6 +107,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let reviewer_no_failover = ctx.args.no_failover;
         let reviewer_fast_but_more_cost = ctx.args.fast_but_more_cost;
         let reviewer_no_fs_sandbox = ctx.args.no_fs_sandbox;
+        let reviewer_no_error_marker_scan = ctx.args.no_error_marker_scan;
         let reviewer_extra_writable = ctx.args.extra_writable.clone();
         let reviewer_extra_readable = ctx.args.extra_readable.clone();
         // Keep every reviewer on the resolved tier when possible by binding
@@ -165,6 +166,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 readonly_project_root,
                 &reviewer_extra_writable,
                 &reviewer_extra_readable,
+                reviewer_no_error_marker_scan,
             )
             .await
             {

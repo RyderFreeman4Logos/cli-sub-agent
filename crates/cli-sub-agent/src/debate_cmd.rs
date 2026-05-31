@@ -383,6 +383,7 @@ pub(crate) async fn handle_debate(
                 readonly_project_root,
                 &args.extra_writable,
                 &args.extra_readable,
+                false, // #1745: no debate flag; config decides (shared monitor).
             );
 
             let execute_result = if let Some(timeout_secs) = timeout_seconds {

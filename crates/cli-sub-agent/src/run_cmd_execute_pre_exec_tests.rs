@@ -127,6 +127,7 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
         Some("default".to_string()),
         false,
         false,
+        false, // no_error_marker_scan (#1745)
         Vec::new(),
         Vec::new(),
     )
@@ -214,6 +215,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         None,
         false,
         false,
+        false, // no_error_marker_scan (#1745)
         Vec::new(),
         Vec::new(),
     )

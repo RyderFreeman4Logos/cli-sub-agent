@@ -81,6 +81,7 @@ pub(crate) async fn execute_review_for_tests(
     readonly_project_root: bool,
     extra_writable: &[std::path::PathBuf],
     extra_readable: &[std::path::PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<execute::ReviewExecutionOutcome> {
     execute::execute_review(
         tool,
@@ -107,6 +108,7 @@ pub(crate) async fn execute_review_for_tests(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        no_error_marker_scan,
     )
     .await
 }

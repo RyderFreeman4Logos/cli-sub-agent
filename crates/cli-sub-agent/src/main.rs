@@ -287,6 +287,7 @@ async fn run() -> Result<()> {
             memory_query,
             stream_stdout,
             no_stream_stdout,
+            no_error_marker_scan,
             spec: _spec,
             tier,
             force_ignore_tier_setting,
@@ -376,6 +377,7 @@ async fn run() -> Result<()> {
                 tier,
                 force_ignore_tier_setting,
                 no_fs_sandbox,
+                no_error_marker_scan,
                 extra_writable,
                 extra_readable,
             })

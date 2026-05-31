@@ -273,6 +273,7 @@ impl Transport for ClaudeCodeCliTransport {
             keep_stdin_open: false,
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
+            error_marker_scan_enabled: options.error_marker_scan_enabled,
         };
 
         self.execute_once(ExecuteOnceRequest {

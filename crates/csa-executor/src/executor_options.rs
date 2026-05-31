@@ -15,6 +15,14 @@ pub struct ExecuteOptions {
     pub output_spool: Option<PathBuf>,
     pub output_spool_max_bytes: u64,
     pub output_spool_keep_rotated: bool,
+    /// Whether the #1652 fatal-error-marker silent-hang scan is enabled.
+    ///
+    /// Defaults to `true` (scan enabled). Set to `false` to opt out for
+    /// sessions developing CSA's own error/quota/failover detection code,
+    /// whose source and test fixtures contain provider error markers (#1745).
+    /// Disabling bypasses ONLY the marker-based fatal classification; the
+    /// idle-timeout and wall-clock timeout still apply.
+    pub error_marker_scan_enabled: bool,
     /// Selective MCP/setting sources for ACP session meta.
     /// `Some(sources)` → inject `settingSources` into session meta.
     /// `None` → no override (load everything).
@@ -62,6 +70,7 @@ impl ExecuteOptions {
             output_spool: None,
             output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
             output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+            error_marker_scan_enabled: true,
             setting_sources: None,
             initial_response_timeout_seconds: None,
             sandbox: None,
@@ -134,6 +143,15 @@ impl ExecuteOptions {
     pub fn with_output_spool_rotation(mut self, max_bytes: u64, keep_rotated: bool) -> Self {
         self.output_spool_max_bytes = max_bytes;
         self.output_spool_keep_rotated = keep_rotated;
+        self
+    }
+
+    /// Enable or disable the #1652 fatal-error-marker silent-hang scan (#1745).
+    ///
+    /// When `false`, the marker-based fatal classification is bypassed for the
+    /// session; the idle-timeout and wall-clock timeout still apply.
+    pub fn with_error_marker_scan_enabled(mut self, enabled: bool) -> Self {
+        self.error_marker_scan_enabled = enabled;
         self
     }
 }

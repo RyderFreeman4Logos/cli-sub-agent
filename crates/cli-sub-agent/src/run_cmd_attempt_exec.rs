@@ -124,6 +124,7 @@ pub(super) async fn run_persistent_with_timeout(
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<AttemptExecution> {
     match tokio::time::timeout(
         timeout_duration,
@@ -155,6 +156,7 @@ pub(super) async fn run_persistent_with_timeout(
             no_fs_sandbox,
             extra_writable,
             extra_readable,
+            no_error_marker_scan,
         ),
     )
     .await
@@ -192,6 +194,7 @@ pub(super) async fn run_persistent_without_timeout(
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<AttemptExecution> {
     execute_persistent(
         executor,
@@ -221,6 +224,7 @@ pub(super) async fn run_persistent_without_timeout(
         no_fs_sandbox,
         extra_writable,
         extra_readable,
+        no_error_marker_scan,
     )
     .await
 }
@@ -254,6 +258,7 @@ async fn execute_persistent(
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
+    no_error_marker_scan: bool,
 ) -> Result<AttemptExecution> {
     let effective_description = if let Some(fork_res) = fork_resolution {
         description.clone().or_else(|| {
@@ -300,6 +305,7 @@ async fn execute_persistent(
         false, // readonly_project_root: `csa run` allows writes
         extra_writable,
         extra_readable,
+        no_error_marker_scan,
     )
     .await
     {
