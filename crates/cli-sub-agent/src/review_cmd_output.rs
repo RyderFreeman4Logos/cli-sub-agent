@@ -49,11 +49,11 @@ pub(super) use sections::{
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
 };
-pub(super) use text::extract_review_text;
 use text::{
     derive_decision_from_text, parse_overall_risk_from_text, severity_counts_from_text,
     zero_severity_counts,
 };
+pub(super) use text::{extract_review_text, stream_started_without_terminal_event};
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
