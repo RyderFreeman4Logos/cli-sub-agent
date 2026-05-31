@@ -185,11 +185,13 @@ pub(crate) async fn execute_transport_with_signal(
                 .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
                 .and_then(|ctx| ctx.0);
             let error_summary = format!("transport: {e}");
+            // The anyhow error chain is the provider/transport error channel for
+            // a failed turn (the agent's reviewed stdout is discarded on Err), so
+            // it is the correct — and only — source for a permanent quota verdict
+            // (#1736).
             let exhaustion = crate::run_cmd_post::detect_permanent_tool_exhaustion_text(
                 executor.tool_name(),
-                &error_summary,
                 &format!("{e:#}"),
-                "",
                 1,
                 None,
             );

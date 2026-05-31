@@ -88,10 +88,16 @@ pub(crate) fn detect_gemini_permanent_quota_exhaustion_result(
     if execution.exit_code == 0 {
         return None;
     }
-    detect_permanent_quota_exhaustion_pattern(&format!(
-        "{}\n{}\n{}",
-        execution.summary, execution.stderr_output, execution.output
-    ))
+    // Scan ONLY stderr — the provider's error channel. The agent's stdout
+    // (`output`) and the stdout-derived `summary` are reviewed/echoed content
+    // (e.g. a diff hunk, source line, or commit message under review may
+    // literally contain "monthly spending cap"), so matching markers there
+    // produced a false permanent-quota verdict and self-killed healthy sessions
+    // (#1736). gemini-cli emits genuine quota errors on stderr (mirrored by the
+    // fake-gemini test harness writing the failure reason with `>&2`), matching
+    // the stderr-only contract already used for codex (`is_codex_permanent_quota_result`,
+    // #1460). Transient rate-limit retry detection is unchanged.
+    detect_permanent_quota_exhaustion_pattern(&execution.stderr_output)
 }
 
 #[cfg(feature = "acp")]
