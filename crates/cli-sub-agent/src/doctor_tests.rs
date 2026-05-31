@@ -140,16 +140,22 @@ fn test_check_tool_status_nonexistent() {
     assert!(status.version.is_none());
 }
 
+// Regression for #1714: in the default build the `codex-acp` cargo feature is
+// OFF, so codex actually runs via the `codex` CLI (`mode_for_executor` routes
+// `None`/`Some(Cli)` through the CLI transport). The doctor MUST therefore
+// report the CLI transport / `codex` binary it will really use — reporting the
+// `codex-acp` build default was a false-negative that silently dropped codex
+// from tier failover.
 #[cfg(unix)]
 #[test]
-fn default_build_doctor_accepts_codex_acp_runtime() {
+fn default_build_doctor_accepts_codex_cli_runtime() {
     with_stubbed_codex_on_path(|| {
         let status = check_tool_status("codex", None);
         assert!(
             status.is_ready(),
-            "doctor should accept the default codex ACP transport"
+            "doctor should accept the default codex CLI transport"
         );
-        assert_eq!(status.binary_name, "codex-acp");
+        assert_eq!(status.binary_name, "codex");
         assert!(status.hint.is_none());
     });
 }
@@ -162,7 +168,7 @@ fn default_build_doctor_text_output_reports_codex_transport_details() {
         let rendered = render_tool_status_lines(&status).join("\n");
 
         assert!(
-            rendered.contains("Active transport: acp"),
+            rendered.contains("Active transport: cli"),
             "doctor text should report active codex transport: {rendered}"
         );
         assert!(
@@ -170,8 +176,12 @@ fn default_build_doctor_text_output_reports_codex_transport_details() {
             "doctor text should report ACP compile status: {rendered}"
         );
         assert!(
-            rendered.contains("Probed binary: codex-acp"),
-            "doctor text should report the probed codex ACP binary: {rendered}"
+            rendered.contains("Probed binary: codex"),
+            "doctor text should report the probed codex CLI binary: {rendered}"
+        );
+        assert!(
+            !rendered.contains("codex-acp"),
+            "default build doctor must not name the codex-acp binary: {rendered}"
         );
     });
 }
@@ -183,19 +193,30 @@ fn default_build_doctor_json_output_reports_codex_transport_details() {
         let status = check_tool_status("codex", None);
         let json = tool_status_json(&status);
 
-        assert_eq!(json["transport_active"], Value::String("acp".to_string()));
+        assert_eq!(json["transport_active"], Value::String("cli".to_string()));
         assert_eq!(
             json["acp_compiled_in"],
             Value::Bool(csa_executor::CodexRuntimeMetadata::acp_compiled_in())
         );
-        assert_eq!(
-            json["probed_binary"],
-            Value::String("codex-acp".to_string())
-        );
-        assert!(
-            json.get("acp_override_hint").is_none(),
-            "doctor JSON should omit ACP override hints when codex already uses ACP: {json}"
-        );
+        assert_eq!(json["probed_binary"], Value::String("codex".to_string()));
+        // With codex on the CLI transport the override hint depends on whether
+        // the `codex-acp` cargo feature is compiled in: with it OFF (default
+        // build) there is no ACP to opt into, so the hint is omitted; with it
+        // ON (`--all-features`) the doctor surfaces the ACP opt-in hint.
+        if csa_executor::CodexRuntimeMetadata::acp_compiled_in() {
+            assert_eq!(
+                json.get("acp_override_hint"),
+                Some(&Value::String(
+                    "set [tools.codex].transport = \"acp\"".to_string()
+                )),
+                "doctor JSON should surface the ACP opt-in hint when ACP is compiled in but CLI is active: {json}"
+            );
+        } else {
+            assert!(
+                json.get("acp_override_hint").is_none(),
+                "doctor JSON should omit ACP override hints when ACP is not compiled in: {json}"
+            );
+        }
     });
 }
 
@@ -576,9 +597,17 @@ fn feature_build_doctor_text_output_reports_acp_compile_status() {
             rendered.contains("ACP compiled in: yes"),
             "feature build should report that ACP support is compiled in: {rendered}"
         );
+        // Even with the `codex-acp` feature compiled in, codex defaults to the
+        // CLI transport (#760 / #1128) — ACP is opt-in. The doctor must report
+        // the CLI transport it will really use, then surface the ACP opt-in
+        // hint so the user knows they can switch.
         assert!(
-            rendered.contains("Active transport: acp"),
-            "feature build should report the default ACP transport: {rendered}"
+            rendered.contains("Active transport: cli"),
+            "feature build should still default codex to the CLI transport: {rendered}"
+        );
+        assert!(
+            rendered.contains("ACP override: set [tools.codex].transport = \"acp\""),
+            "feature build should surface the ACP opt-in hint when ACP is compiled in but CLI is active: {rendered}"
         );
     });
 }
