@@ -417,16 +417,23 @@ fn derive_decision_from_severity_counts(
     if has_blocking_severity(severity_counts) {
         return Ok(ReviewDecision::Fail);
     }
+
+    if meta_decision == Some(ReviewDecision::Skip) && !severity_counts_are_zero(severity_counts) {
+        return Ok(ReviewDecision::Skip);
+    }
+
+    // Non-blocking findings (low only) → pass. Explicit low-only severity
+    // counts beat summary wording; the summary heuristic only elevates
+    // otherwise ambiguous zero-count output.
+    if !severity_counts_are_zero(severity_counts) {
+        // Only low-severity findings present — non-blocking.
+        return Ok(ReviewDecision::Pass);
+    }
     if prose_blocking_check()? {
         return Ok(ReviewDecision::Fail);
     }
 
-    // Non-blocking findings (low only) → pass.
     // Zero severity counts but non-empty findings list → fail-closed (parsing anomaly).
-    if !findings_empty && !severity_counts_are_zero(severity_counts) {
-        // Only low-severity findings present — non-blocking.
-        return Ok(ReviewDecision::Pass);
-    }
     if !findings_empty && severity_counts_are_zero(severity_counts) {
         // Findings exist but severity counts are zero (unrecognized severities).
         // Fail-closed.

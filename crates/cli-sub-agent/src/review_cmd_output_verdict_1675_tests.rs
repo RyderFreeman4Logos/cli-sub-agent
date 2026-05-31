@@ -99,6 +99,61 @@ fn issue_1740_codex_inline_findings_and_blocking_summary_emit_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
+/// #1740 round 2: "non-blocking issue" is a low-only signal, not a blocking
+/// summary. The low-only finding must keep the verdict non-blocking.
+#[test]
+fn issue_1740_non_blocking_issue_summary_with_low_only_finding_emits_pass() {
+    let session_id = "01TEST1740NONBLOCKINGLOW00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1740-non-blocking-low", session_id);
+
+    fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write findings.toml");
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nFound one non-blocking issue.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\n## Findings\n\n1. Low: Minor wording nit in the review summary\n   File: crates/cli-sub-agent/src/review_cmd_output.rs:1\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    assert!(
+        !contains_blocking_issue_signal("Found one non-blocking issue."),
+        "#1740 round 2: non-blocking issue must not count as a blocking summary"
+    );
+    assert!(!contains_blocking_issue_signal(
+        "Found one non blocking issue."
+    ));
+    assert!(!contains_blocking_issue_signal(
+        "Found one nonblocking issue."
+    ));
+    assert!(contains_blocking_issue_signal("Found one blocking issue."));
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(
+        artifact.decision,
+        ReviewDecision::Pass,
+        "#1740 round 2: low-only non-blocking issue must not fail"
+    );
+    assert_ne!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(
+        artifact.severity_counts.get(&Severity::Low),
+        Some(&1),
+        "#1740 round 2: inline `Low:` finding must be reflected in severity_counts"
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 /// #1675 Case 2: regression guard for #1349 — meta=Fail + empty findings +
 /// NEUTRAL prose (no FAIL verdict token) MUST stay Pass.
 #[test]

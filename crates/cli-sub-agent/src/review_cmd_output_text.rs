@@ -237,7 +237,7 @@ fn line_has_blocking_issue_signal(line: &str) -> bool {
         "issue", "issues", "finding", "findings", "problem", "problems", "bug", "bugs", "defect",
         "defects",
     ];
-    const NEGATIONS: &[&str] = &["no", "not", "none", "without"];
+    const NEGATIONS: &[&str] = &["no", "non", "nonblocking", "not", "none", "without"];
     const MAX_TOKENS_AFTER_BLOCKING: usize = 8;
     const MAX_NEGATION_LOOKBACK: usize = 3;
 
@@ -248,6 +248,9 @@ fn line_has_blocking_issue_signal(line: &str) -> bool {
         .collect::<Vec<_>>();
 
     for (index, token) in tokens.iter().enumerate() {
+        if token == "nonblocking" {
+            continue;
+        }
         if token != "blocking" {
             continue;
         }
