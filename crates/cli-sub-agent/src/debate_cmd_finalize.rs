@@ -10,7 +10,8 @@ use crate::debate_cmd_output::{
     extract_debate_summary, persist_debate_output_artifacts, render_debate_output,
 };
 use crate::tier_model_fallback::{
-    TierAttemptFailure, format_all_models_failed_reason, persist_fallback_result_fields,
+    TierAttemptFailure, format_all_models_failed_reason, persist_fallback_chain,
+    persist_fallback_result_fields,
 };
 
 pub(crate) struct FinalizedDebateOutcome {
@@ -175,6 +176,18 @@ pub(crate) fn finalize_debate_outcome(
                 original_tool,
                 fallback_tool,
                 context.fallback_reason,
+            );
+            persist_fallback_chain(
+                project_root,
+                session_id,
+                original_tool,
+                fallback_tool,
+                crate::tier_model_fallback::build_fallback_chain_for_result(
+                    None,
+                    context.resolved_tier_name,
+                    None,
+                    context.failures,
+                ),
             );
         }
         resolved_exit_code

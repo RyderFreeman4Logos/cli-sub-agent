@@ -89,6 +89,43 @@ pub(crate) fn ordered_tier_candidates(
     ordered
 }
 
+/// Build the persisted per-tool failover chain for a tier result.
+///
+/// Includes both candidate-build exclusions and runtime attempt failures so a
+/// successful later candidate still leaves a trace for earlier build-time skips.
+pub(crate) fn build_fallback_chain_for_result(
+    project_config: Option<&ProjectConfig>,
+    tier_name: Option<&str>,
+    tier_filter: Option<&TierFilter>,
+    failures: &[TierAttemptFailure],
+) -> Vec<FallbackAttempt> {
+    let ordered_specs: Vec<String> = tier_name
+        .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
+        .map(|tier| tier.models.clone())
+        .unwrap_or_default();
+    let exclusions = match (tier_name, project_config) {
+        (Some(name), Some(cfg)) => {
+            crate::run_helpers::evaluate_tier_models(
+                name,
+                cfg,
+                tier_filter.and_then(TierFilter::whitelist_slice),
+                &[],
+            )
+            .1
+        }
+        _ => Vec::new(),
+    };
+    let attempt_failures: Vec<(String, String)> = failures
+        .iter()
+        .map(|failure| (failure.model_spec.clone(), failure.reason.clone()))
+        .collect();
+    crate::failover_trace::build_review_fallback_chain(
+        &ordered_specs,
+        &exclusions,
+        &attempt_failures,
+    )
+}
+
 fn ordered_global_candidates(
     initial_tool: ToolName,
     initial_model_spec: Option<&str>,

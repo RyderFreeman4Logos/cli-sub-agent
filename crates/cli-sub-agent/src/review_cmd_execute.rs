@@ -115,30 +115,11 @@ fn build_failover_chain_for_result(
     tier_filter: Option<&TierFilter>,
     failures: &[TierAttemptFailure],
 ) -> Vec<FallbackAttempt> {
-    let ordered_specs: Vec<String> = tier_name
-        .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
-        .map(|tier| tier.models.clone())
-        .unwrap_or_default();
-    let exclusions = match (tier_name, project_config) {
-        (Some(name), Some(cfg)) => {
-            crate::run_helpers::evaluate_tier_models(
-                name,
-                cfg,
-                tier_filter.and_then(TierFilter::whitelist_slice),
-                &[],
-            )
-            .1
-        }
-        _ => Vec::new(),
-    };
-    let attempt_failures: Vec<(String, String)> = failures
-        .iter()
-        .map(|failure| (failure.model_spec.clone(), failure.reason.clone()))
-        .collect();
-    crate::failover_trace::build_review_fallback_chain(
-        &ordered_specs,
-        &exclusions,
-        &attempt_failures,
+    crate::tier_model_fallback::build_fallback_chain_for_result(
+        project_config,
+        tier_name,
+        tier_filter,
+        failures,
     )
 }
 
