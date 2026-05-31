@@ -66,6 +66,72 @@ pub(in crate::review_cmd) fn extract_review_text(raw_output: &str) -> Option<Str
     transcript_messages.pop()
 }
 
+/// Minimal stream-event view used to detect turn completion without depending on the shape
+/// of unrelated event payloads. Reading only `type` (serde ignores all other fields) keeps
+/// detection robust against schema drift in `result`/`item`/`usage` bodies.
+#[derive(Debug, Deserialize)]
+struct StreamEventType {
+    #[serde(rename = "type")]
+    event_type: String,
+}
+
+/// Terminal stream events marking a reviewer turn that finished normally. claude-code
+/// (`--output-format stream-json`) emits a final `{"type":"result",...}`; codex emits
+/// `{"type":"turn.completed",...}`. Their presence proves the turn ran to completion,
+/// independent of the verdict it reached.
+const STREAM_TERMINAL_EVENT_TYPES: &[&str] = &["result", "turn.completed"];
+
+/// Event types that positively identify a JSON streaming transcript (claude-code / codex).
+/// Used to keep [`stream_started_without_terminal_event`] from misclassifying non-streaming
+/// output (gemini-cli / opencode plain text, rate-limit event blobs) as an incomplete stream.
+const STREAM_EVENT_TYPES: &[&str] = &[
+    // claude-code stream-json
+    "system",
+    "assistant",
+    "user",
+    "stream_event",
+    "result",
+    // codex event stream
+    "thread.started",
+    "turn.started",
+    "turn.completed",
+    "turn.failed",
+    "item.started",
+    "item.completed",
+];
+
+/// Whether a reviewer's streamed transcript began but never reached a terminal completion
+/// event — the signature of a process killed/timed-out mid-turn (OOM, SIGKILL, no-progress
+/// watchdog). Such a transcript's verdict tokens are unreliable: they are frequently scraped
+/// from the *reviewed code* (which itself contains `CLEAN`/`HAS_ISSUES`/`UNAVAILABLE` literals)
+/// rather than emitted as a deliberate verdict, so fail-closing them to `HAS_ISSUES` mislabels
+/// an infrastructure failure as a blocking review (#1657). Callers combine this with a non-zero
+/// exit code before reclassifying the reviewer as unavailable.
+///
+/// Conservative by construction: returns `false` unless the output is *recognized* as a
+/// claude-code/codex JSON stream (so plain-text gemini-cli/opencode output is never flagged),
+/// and `false` as soon as any terminal event is seen (so a completed reviewer that merely
+/// exits non-zero is never flagged).
+pub(in crate::review_cmd) fn stream_started_without_terminal_event(raw_output: &str) -> bool {
+    let mut saw_stream_event = false;
+    for line in raw_output.lines() {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<StreamEventType>(line) else {
+            continue;
+        };
+        if STREAM_TERMINAL_EVENT_TYPES.contains(&event.event_type.as_str()) {
+            return false;
+        }
+        if STREAM_EVENT_TYPES.contains(&event.event_type.as_str()) {
+            saw_stream_event = true;
+        }
+    }
+    saw_stream_event
+}
+
 fn looks_like_review_message(text: &str) -> bool {
     super::has_structured_review_content(text)
         || contains_verdict_token(text, "PASS")

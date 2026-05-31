@@ -25,6 +25,8 @@ use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{is_worktree_submodule, persist_review_result_exit_code};
+#[path = "review_cmd_artifact_parse.rs"]
+mod artifact_parse;
 #[path = "review_cmd_bug_class.rs"]
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::review_consensus::{CLEAN, HAS_ISSUES};
 
 #[derive(Debug, Clone)]
 pub(in crate::review_cmd) struct ReviewerOutcome {
@@ -9,6 +10,12 @@ pub(in crate::review_cmd) struct ReviewerOutcome {
     pub exit_code: i32,
     pub verdict: &'static str,
     pub diagnostic: Option<String>,
+}
+
+impl ReviewerOutcome {
+    pub(in crate::review_cmd) fn produced_usable_verdict(&self) -> bool {
+        matches!(self.verdict, CLEAN | HAS_ISSUES)
+    }
 }
 
 pub(in crate::review_cmd) fn print_reviewer_outcomes(outcomes: &[ReviewerOutcome]) {

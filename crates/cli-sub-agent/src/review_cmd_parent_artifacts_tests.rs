@@ -1,7 +1,8 @@
 use super::{
     MultiReviewerConsensusArtifacts, clear_multi_reviewer_artifact_dirs,
     parent_artifact_for_decision, parent_consensus_review_meta, parent_review_decision,
-    write_multi_reviewer_consensus_artifacts, write_multi_reviewer_parent_artifacts,
+    parse_reviewer_artifact, write_multi_reviewer_consensus_artifacts,
+    write_multi_reviewer_parent_artifacts, write_parent_review_verdict,
     write_standalone_consensus_review_artifacts,
 };
 use crate::review_consensus::UNAVAILABLE;
@@ -22,6 +23,16 @@ enum ReviewerState {
     Unavailable,
 }
 
+impl ReviewerState {
+    fn verdict(self) -> &'static str {
+        match self {
+            Self::Pass => crate::review_consensus::CLEAN,
+            Self::Fail => crate::review_consensus::HAS_ISSUES,
+            Self::Unavailable => UNAVAILABLE,
+        }
+    }
+}
+
 fn blocking_finding(fid: impl Into<String>) -> Finding {
     let fid = fid.into();
     Finding {
@@ -31,6 +42,19 @@ fn blocking_finding(fid: impl Into<String>) -> Finding {
         line: Some(7),
         rule_id: format!("rule.review.{fid}"),
         summary: "blocking finding must propagate".to_string(),
+        engine: "reviewer".to_string(),
+    }
+}
+
+fn finding_with_severity(severity: Severity, fid: impl Into<String>) -> Finding {
+    let fid = fid.into();
+    Finding {
+        severity,
+        fid: fid.clone(),
+        file: "src/lib.rs".to_string(),
+        line: Some(7),
+        rule_id: format!("rule.review.{fid}"),
+        summary: "review finding".to_string(),
         engine: "reviewer".to_string(),
     }
 }
@@ -56,6 +80,266 @@ fn write_parent_reviewer_artifact(
         serde_json::to_vec_pretty(&artifact).expect("artifact should serialize"),
     )
     .expect("review artifact should be written");
+}
+
+fn reviewer_outcome(
+    reviewer_index: usize,
+    tool: ToolName,
+    verdict: &'static str,
+    diagnostic: Option<&str>,
+) -> super::super::output::ReviewerOutcome {
+    super::super::output::ReviewerOutcome {
+        reviewer_index,
+        tool,
+        session_id: format!("01TESTREVIEWER{reviewer_index:012}"),
+        output: verdict.to_string(),
+        exit_code: if verdict == crate::review_consensus::CLEAN {
+            0
+        } else {
+            1
+        },
+        verdict,
+        diagnostic: diagnostic.map(str::to_string),
+    }
+}
+
+fn parent_verdict_for_outcomes(
+    outcomes: &[super::super::output::ReviewerOutcome],
+    final_verdict: &str,
+    all_reviewers_unavailable: bool,
+) -> ReviewVerdictArtifact {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        outcomes.len(),
+        outcomes,
+        final_verdict,
+        all_reviewers_unavailable,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse")
+}
+
+#[test]
+fn issue_1657_unavailable_reviewer_plus_clean_reviewer_passes() {
+    let outcomes = vec![
+        reviewer_outcome(0, ToolName::GeminiCli, UNAVAILABLE, Some("quota exhausted")),
+        reviewer_outcome(
+            1,
+            ToolName::ClaudeCode,
+            crate::review_consensus::CLEAN,
+            None,
+        ),
+    ];
+
+    let verdict =
+        parent_verdict_for_outcomes(&outcomes, crate::review_consensus::HAS_ISSUES, false);
+
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
+}
+
+#[test]
+fn issue_1657_unavailable_reviewer_plus_blocking_reviewer_fails() {
+    let outcomes = vec![
+        reviewer_outcome(0, ToolName::GeminiCli, UNAVAILABLE, Some("quota exhausted")),
+        reviewer_outcome(
+            1,
+            ToolName::ClaudeCode,
+            crate::review_consensus::HAS_ISSUES,
+            None,
+        ),
+    ];
+
+    let verdict = parent_verdict_for_outcomes(&outcomes, crate::review_consensus::CLEAN, false);
+
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
+}
+
+#[test]
+fn issue_1657_all_unavailable_reviewers_are_unavailable_and_fail_closed() {
+    let outcomes = vec![
+        reviewer_outcome(0, ToolName::GeminiCli, UNAVAILABLE, Some("quota exhausted")),
+        reviewer_outcome(1, ToolName::Codex, UNAVAILABLE, Some("tool unavailable")),
+    ];
+
+    let verdict = parent_verdict_for_outcomes(&outcomes, UNAVAILABLE, true);
+
+    assert_eq!(verdict.decision, ReviewDecision::Unavailable);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_ne!(verdict.decision, ReviewDecision::Uncertain);
+    assert_ne!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(
+        crate::verdict_exit_code::exit_code_from_review_decision(verdict.decision),
+        1
+    );
+    assert_eq!(verdict.verdict_legacy, UNAVAILABLE);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+}
+
+#[test]
+fn issue_1657_single_crashed_reviewer_without_verdict_fails_closed() {
+    let outcomes = vec![reviewer_outcome(
+        0,
+        ToolName::Codex,
+        crate::review_consensus::UNCERTAIN,
+        Some("reviewer crashed before producing a verdict"),
+    )];
+
+    let verdict = parent_verdict_for_outcomes(&outcomes, crate::review_consensus::UNCERTAIN, false);
+
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::HAS_ISSUES);
+}
+
+#[test]
+fn issue_1657_two_clean_reviewers_pass() {
+    let outcomes = vec![
+        reviewer_outcome(0, ToolName::Codex, crate::review_consensus::CLEAN, None),
+        reviewer_outcome(
+            1,
+            ToolName::ClaudeCode,
+            crate::review_consensus::CLEAN,
+            None,
+        ),
+    ];
+
+    let verdict = parent_verdict_for_outcomes(&outcomes, crate::review_consensus::CLEAN, false);
+
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
+}
+
+#[test]
+fn issue_1696_parent_verdict_counts_all_reviewer_findings_when_decision_passes() {
+    let temp = tempdir().expect("tempdir should be created");
+    let findings = vec![
+        finding_with_severity(Severity::Medium, "FID-MEDIUM"),
+        finding_with_severity(Severity::Low, "FID-LOW-1"),
+        finding_with_severity(Severity::Low, "FID-LOW-2"),
+        finding_with_severity(Severity::Low, "FID-LOW-3"),
+    ];
+    let consolidated = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&findings),
+        findings,
+        review_mode: Some("diff".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: "01PARENTSESSION000000000000".to_string(),
+        timestamp: chrono::Utc::now(),
+    };
+    let decision = ReviewDecision::Pass;
+    let parent_artifact = parent_artifact_for_decision(&consolidated, decision);
+
+    write_parent_review_verdict(
+        temp.path(),
+        "01PARENTSESSION000000000000",
+        &consolidated.findings,
+        decision,
+        crate::review_consensus::CLEAN,
+    )
+    .expect("parent review verdict should be written");
+
+    let verdict_path = temp.path().join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_slice(&fs::read(verdict_path).expect("read review verdict"))
+            .expect("review verdict should parse");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, crate::review_consensus::CLEAN);
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
+    assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&3));
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Critical), Some(&0));
+    assert_eq!(
+        parent_artifact.findings.len(),
+        3,
+        "the parent artifact may stay filtered while verdict counts remain descriptive"
+    );
+}
+
+#[test]
+fn issue_1696_reviewer_artifact_ignores_info_without_dropping_countable_findings() {
+    let temp = tempdir().expect("tempdir should be created");
+    let reviewer_dir = temp.path().join("reviewer-3");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let artifact_path = reviewer_dir.join("review-findings.json");
+    let content = r#"{
+        "findings": [
+            {
+                "severity": "medium",
+                "fid": "FID-MEDIUM",
+                "file": "src/lib.rs",
+                "line": 7,
+                "rule_id": "rule.review.medium",
+                "summary": "medium finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "low",
+                "fid": "FID-LOW-1",
+                "file": "src/lib.rs",
+                "line": 8,
+                "rule_id": "rule.review.low1",
+                "summary": "low finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "low",
+                "fid": "FID-LOW-2",
+                "file": "src/lib.rs",
+                "line": 9,
+                "rule_id": "rule.review.low2",
+                "summary": "low finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "low",
+                "fid": "FID-LOW-3",
+                "file": "src/lib.rs",
+                "line": 10,
+                "rule_id": "rule.review.low3",
+                "summary": "low finding",
+                "engine": "reviewer"
+            },
+            {
+                "severity": "info",
+                "fid": "FID-INFO",
+                "file": "src/lib.rs",
+                "line": 11,
+                "rule_id": "rule.review.info",
+                "summary": "informational note",
+                "engine": "reviewer"
+            }
+        ],
+        "severity_summary": {
+            "critical": 0,
+            "high": 0,
+            "medium": 1,
+            "low": 3
+        }
+    }"#;
+
+    let artifact =
+        parse_reviewer_artifact(&artifact_path, content).expect("reviewer artifact should parse");
+    assert_eq!(artifact.findings.len(), 4);
+    assert_eq!(artifact.severity_summary.medium, 1);
+    assert_eq!(artifact.severity_summary.low, 3);
+    assert_eq!(artifact.severity_summary.high, 0);
+    assert_eq!(artifact.severity_summary.critical, 0);
 }
 
 #[test]
@@ -472,8 +756,8 @@ fn write_multi_reviewer_parent_artifacts_promotes_empty_findings_to_pass() {
         tool: ToolName::Codex,
         session_id: "01CHILDSESSION0000000000000".to_string(),
         output: "Reviewer wrote a clean findings artifact.".to_string(),
-        exit_code: 1,
-        verdict: crate::review_consensus::HAS_ISSUES,
+        exit_code: 0,
+        verdict: crate::review_consensus::CLEAN,
         diagnostic: None,
     }];
     let parent_meta = csa_session::state::ReviewSessionMeta {
@@ -538,11 +822,8 @@ fn write_multi_reviewer_parent_artifacts_promotes_empty_findings_to_pass() {
 
 #[test]
 fn parent_review_decision_fails_closed_on_unbacked_has_issues_consensus() {
-    // #1659: a HAS_ISSUES consensus with an empty consolidated artifact is trustworthy as
-    // PASS only when EVERY dissenting (HAS_ISSUES-voting) reviewer persisted its structured
-    // findings. The 4th arg is `dissent_findings_persisted`: when false, at least one
-    // dissenter's findings never reached disk (quota/auth failure), so the empty artifact
-    // must FAIL-CLOSED, never promote to a synthetic PASS.
+    // #1659: a produced HAS_ISSUES verdict is a real blocking vote even when
+    // the reviewer failed to persist structured findings.
     let empty = ReviewArtifact {
         severity_summary: SeveritySummary::from_findings(&[]),
         findings: Vec::new(),
@@ -551,20 +832,50 @@ fn parent_review_decision_fails_closed_on_unbacked_has_issues_consensus() {
         session_id: "01PARENTSESSION000000000000".to_string(),
         timestamp: chrono::Utc::now(),
     };
+    let fail_outcomes = [reviewer_outcome(
+        0,
+        ToolName::Codex,
+        crate::review_consensus::HAS_ISSUES,
+        None,
+    )];
+    let clean_outcomes = [reviewer_outcome(
+        0,
+        ToolName::ClaudeCode,
+        crate::review_consensus::CLEAN,
+        None,
+    )];
     assert_eq!(
-        parent_review_decision(&empty, crate::review_consensus::HAS_ISSUES, false, false),
+        parent_review_decision(
+            &empty,
+            crate::review_consensus::HAS_ISSUES,
+            &fail_outcomes,
+            false,
+            false
+        ),
         ReviewDecision::Fail,
-        "#1659: unbacked HAS_ISSUES consensus must fail-closed"
+        "#1659: produced HAS_ISSUES verdict must fail"
     );
     assert_eq!(
-        parent_review_decision(&empty, crate::review_consensus::HAS_ISSUES, false, true),
-        ReviewDecision::Pass,
-        "every dissenting reviewer persisting an explicit empty artifact remains a trusted PASS"
-    );
-    assert_eq!(
-        parent_review_decision(&empty, crate::review_consensus::CLEAN, false, false),
+        parent_review_decision(
+            &empty,
+            crate::review_consensus::CLEAN,
+            &clean_outcomes,
+            false,
+            false
+        ),
         ReviewDecision::Pass,
         "a clean consensus with no artifacts must not fail-closed"
+    );
+    assert_eq!(
+        parent_review_decision(
+            &empty,
+            crate::review_consensus::HAS_ISSUES,
+            &[],
+            false,
+            true
+        ),
+        ReviewDecision::Fail,
+        "empty produced set must fail-closed"
     );
 }
 
@@ -824,8 +1135,34 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
         diagnostic: Some("reviewer timed out after 1800s".to_string()),
     }];
 
-    write_multi_reviewer_parent_artifacts(temp.path(), 1, &outcomes, UNAVAILABLE, true, None)
-        .expect("parent artifacts should be produced");
+    let parent_meta = csa_session::state::ReviewSessionMeta {
+        session_id: "01PARENTSESSION000000000000".to_string(),
+        head_sha: "abcdef1234567890".to_string(),
+        decision: ReviewDecision::Uncertain.as_str().to_string(),
+        verdict: UNAVAILABLE.to_string(),
+        status_reason: None,
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
+        tool: "consensus".to_string(),
+        scope: "range:main...HEAD".to_string(),
+        exit_code: 1,
+        fix_attempted: false,
+        fix_rounds: 0,
+        review_iterations: 1,
+        timestamp: chrono::Utc::now(),
+        diff_fingerprint: Some("sha256:test".to_string()),
+    };
+
+    write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        1,
+        &outcomes,
+        UNAVAILABLE,
+        true,
+        Some(&parent_meta),
+    )
+    .expect("parent artifacts should be produced");
 
     let verdict: ReviewVerdictArtifact = serde_json::from_str(
         &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
@@ -833,7 +1170,22 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
     )
     .expect("review verdict should parse");
     assert_eq!(verdict.decision, ReviewDecision::Unavailable);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_ne!(verdict.decision, ReviewDecision::Uncertain);
+    assert_ne!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(
+        crate::verdict_exit_code::exit_code_from_review_decision(verdict.decision),
+        1
+    );
     assert_eq!(verdict.verdict_legacy, UNAVAILABLE);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+
+    let written_meta: csa_session::state::ReviewSessionMeta =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("review_meta.json")).unwrap())
+            .expect("review meta should parse");
+    assert_eq!(written_meta.decision, ReviewDecision::Unavailable.as_str());
+    assert_eq!(written_meta.verdict, UNAVAILABLE);
+    assert_eq!(written_meta.exit_code, 1);
 }
 
 #[test]
@@ -969,12 +1321,15 @@ proptest! {
             reviewer_artifacts,
             "01PARENTSESSION000000000000",
         );
-        // final_verdict is always CLEAN here, so the #1659 dissent guard never fires; pass
-        // `true` (consensus treated as backed) -- this proptest exercises the
-        // blocking-findings-survive-clean-consensus path, not the fail-closed guard.
+        let outcomes: Vec<super::super::output::ReviewerOutcome> = states
+            .iter()
+            .enumerate()
+            .map(|(idx, state)| reviewer_outcome(idx, ToolName::Codex, state.verdict(), None))
+            .collect();
         let decision = parent_review_decision(
             &consolidated,
             crate::review_consensus::CLEAN,
+            &outcomes,
             states.iter().all(|state| matches!(state, ReviewerState::Unavailable)),
             true,
         );
@@ -992,7 +1347,9 @@ proptest! {
                 "blocking finding {expected_id} must survive clean consensus text"
             );
         }
-        if expected_blocking_ids.is_empty() {
+        if states.iter().all(|state| matches!(state, ReviewerState::Unavailable)) {
+            prop_assert_eq!(decision, ReviewDecision::Unavailable);
+        } else if expected_blocking_ids.is_empty() {
             prop_assert!(
                 decision != ReviewDecision::Fail,
                 "clean consensus without blocking artifacts should not be promoted to failure"
@@ -1031,9 +1388,9 @@ fn write_standalone_consensus_review_artifacts_updates_carrier_session() {
             reviewer_index: 0,
             tool: ToolName::Codex,
             session_id: carrier_id.clone(),
-            output: "Reviewer 1 found issues.".to_string(),
-            exit_code: 1,
-            verdict: crate::review_consensus::HAS_ISSUES,
+            output: "Reviewer 1 was clean.".to_string(),
+            exit_code: 0,
+            verdict: crate::review_consensus::CLEAN,
             diagnostic: None,
         },
         super::super::output::ReviewerOutcome {

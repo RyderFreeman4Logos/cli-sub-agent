@@ -12,6 +12,16 @@ use agent_client_protocol::{
 use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator};
 use tokio::{process::Child, task::LocalSet};
 
+#[path = "connection_status.rs"]
+mod connection_status;
+use connection_status::{format_stderr, process_exited_error};
+
+#[path = "connection_stream.rs"]
+mod connection_stream;
+#[cfg(test)]
+pub(crate) use connection_stream::LINE_BUF_CAP;
+use connection_stream::{collect_agent_output, stream_new_agent_messages};
+
 // Re-export spawn-related types from the dedicated module.
 #[path = "connection_spawn.rs"]
 mod connection_spawn;
@@ -24,10 +34,7 @@ pub(crate) mod connection_fork;
 pub use connection_fork::{CliForkResult, fork_session_via_cli};
 
 use crate::{
-    client::{
-        SessionEvent, SharedActivity, SharedEvents, StreamingMetadata,
-        event_counts_as_initial_response,
-    },
+    client::{SessionEvent, SharedActivity, SharedEvents, StreamingMetadata},
     error::{AcpError, AcpResult},
 };
 
@@ -130,7 +137,7 @@ impl AcpConnection {
     }
 
     pub async fn initialize(&self) -> AcpResult<()> {
-        self.ensure_process_running()?;
+        self.ensure_process_running().await?;
 
         let request = InitializeRequest::new(ProtocolVersion::LATEST);
         let result = self
@@ -149,7 +156,7 @@ impl AcpConnection {
                 let stderr = self.stderr();
                 Err(AcpError::InitializationFailed(format!(
                     "{err}{}",
-                    Self::format_stderr(&stderr)
+                    format_stderr(&stderr)
                 )))
             }
             None => {
@@ -159,7 +166,7 @@ impl AcpConnection {
                     "ACP initialize timed out after {}s{}; \
                      consider increasing [acp] init_timeout_seconds in .csa/config.toml",
                     self.init_timeout.as_secs(),
-                    Self::format_stderr(&stderr),
+                    format_stderr(&stderr),
                 )))
             }
         }
@@ -175,7 +182,7 @@ impl AcpConnection {
         working_dir: Option<&Path>,
         meta: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> AcpResult<String> {
-        self.ensure_process_running()?;
+        self.ensure_process_running().await?;
 
         let session_working_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
         let mut request = NewSessionRequest::new(session_working_dir);
@@ -197,7 +204,7 @@ impl AcpConnection {
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "{err}{}",
-                    Self::format_stderr(&stderr)
+                    format_stderr(&stderr)
                 )))
             }
             None => {
@@ -207,7 +214,7 @@ impl AcpConnection {
                     "ACP session/new timed out after {}s{}; \
                      consider increasing [acp] init_timeout_seconds in .csa/config.toml",
                     self.init_timeout.as_secs(),
-                    Self::format_stderr(&stderr),
+                    format_stderr(&stderr),
                 )))
             }
         }
@@ -218,7 +225,7 @@ impl AcpConnection {
         session_id: &str,
         working_dir: Option<&Path>,
     ) -> AcpResult<String> {
-        self.ensure_process_running()?;
+        self.ensure_process_running().await?;
 
         let session_working_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
         let request =
@@ -240,7 +247,7 @@ impl AcpConnection {
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "{err}{}",
-                    Self::format_stderr(&stderr)
+                    format_stderr(&stderr)
                 )))
             }
             None => {
@@ -253,7 +260,7 @@ impl AcpConnection {
                     "ACP session/load timed out after {}s{}; \
                      consider increasing [acp] init_timeout_seconds in .csa/config.toml",
                     self.init_timeout.as_secs(),
-                    Self::format_stderr(&stderr),
+                    format_stderr(&stderr),
                 )))
             }
         }
@@ -279,7 +286,7 @@ impl AcpConnection {
             )));
         }
 
-        self.ensure_process_running()?;
+        self.ensure_process_running().await?;
 
         let fork_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
         let fork_result =
@@ -321,7 +328,7 @@ impl AcpConnection {
         initial_response_timeout: Option<Duration>,
         io: PromptIoOptions<'_>,
     ) -> AcpResult<PromptResult> {
-        self.ensure_process_running()?;
+        self.ensure_process_running().await?;
 
         self.events.borrow_mut().clear();
         let now = Instant::now();
@@ -444,7 +451,7 @@ impl AcpConnection {
                 metadata,
             }),
             PromptOutcome::Completed(Err(err)) => {
-                let stderr_detail = Self::format_stderr(&self.stderr());
+                let stderr_detail = format_stderr(&self.stderr());
                 Err(AcpError::PromptFailed(format!("{err}{stderr_detail}")))
             }
             PromptOutcome::IdleTimeout => {
@@ -515,41 +522,30 @@ impl AcpConnection {
     pub fn stderr(&self) -> String {
         self.stderr_buf.borrow().clone()
     }
-    fn ensure_process_running(&self) -> AcpResult<()> {
-        let mut child = self.child.borrow_mut();
-        if let Some(status) = child
+    async fn ensure_process_running(&self) -> AcpResult<()> {
+        let status = self
+            .child
+            .borrow_mut()
             .try_wait()
-            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
-        {
-            let code = status.code().unwrap_or(-1);
-            #[cfg(unix)]
-            let signal = {
-                use std::os::unix::process::ExitStatusExt;
-                status.signal()
-            };
-            #[cfg(not(unix))]
-            let signal = None;
+            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?;
+
+        if let Some(status) = status {
+            self.drain_stderr_tail().await;
             let stderr = self.stderr();
-            return Err(AcpError::ProcessExited {
-                code,
-                signal,
-                stderr,
-            });
+            return Err(process_exited_error(status, stderr));
         }
         Ok(())
     }
 
-    /// Format captured stderr for inclusion in error messages.
-    ///
-    /// Returns an empty string when no stderr was captured, or
-    /// `"; stderr: <content>"` otherwise.
+    async fn drain_stderr_tail(&self) {
+        self.local_set
+            .run_until(tokio::time::sleep(Duration::from_millis(10)))
+            .await;
+    }
+
+    #[cfg(test)]
     pub(crate) fn format_stderr(stderr: &str) -> String {
-        let trimmed = stderr.trim();
-        if trimmed.is_empty() {
-            String::new()
-        } else {
-            format!("; stderr: {trimmed}")
-        }
+        format_stderr(stderr)
     }
 }
 
@@ -628,158 +624,6 @@ fn maybe_emit_heartbeat(
         effective_timeout.as_secs()
     );
     *last_heartbeat = now;
-}
-
-/// Maximum bytes buffered before a newline-free chunk is force-flushed.
-pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
-
-/// Flush complete lines and keep incomplete tails unless the buffer exceeds [`LINE_BUF_CAP`].
-fn flush_complete_lines(buf: &mut String, prefix: &str) {
-    while let Some(pos) = buf.find('\n') {
-        let line: String = buf.drain(..=pos).collect();
-        eprint!("{prefix}{line}");
-    }
-    if buf.len() > LINE_BUF_CAP {
-        let remainder = std::mem::take(buf);
-        eprintln!("{prefix}{remainder}");
-    }
-}
-
-/// Flush any remaining buffered content, appending a terminating newline.
-fn flush_remaining_buf(buf: &mut String, prefix: &str) {
-    if !buf.is_empty() {
-        let remainder = std::mem::take(buf);
-        eprintln!("{prefix}{remainder}");
-    }
-}
-
-fn stream_new_agent_messages(
-    events: &SharedEvents,
-    processed_event_count: &mut usize,
-    stream_stdout_to_stderr: bool,
-    output_spool: &mut Option<SpoolRotator>,
-    metadata: &mut StreamingMetadata,
-    stdout_line_buf: &mut String,
-    thought_line_buf: &mut String,
-) -> bool {
-    // Track progress against total seen events because the retained deque can evict old entries.
-    let events_ref = events.borrow();
-    metadata.sync_from_store(&events_ref);
-    if *processed_event_count >= events_ref.total_events_count() {
-        return false;
-    }
-    let retained_start = events_ref.retained_start_index();
-    let stream_start = (*processed_event_count).max(retained_start);
-    if stream_start > *processed_event_count {
-        let skipped = stream_start - *processed_event_count;
-        tracing::warn!(
-            skipped,
-            retained_start,
-            processed = *processed_event_count,
-            "ACP event ring buffer overrun: {skipped} events were evicted before being streamed to spool/stderr"
-        );
-        // Avoid splicing pre-overrun partial lines with the first retained chunk.
-        stdout_line_buf.clear();
-        thought_line_buf.clear();
-    }
-    let skip = stream_start.saturating_sub(retained_start);
-    let mut saw_initial_response_event = false;
-
-    for event in events_ref.retained_events().iter().skip(skip) {
-        saw_initial_response_event |= event_counts_as_initial_response(event);
-        match event {
-            SessionEvent::AgentMessage(chunk) => {
-                if stream_stdout_to_stderr {
-                    flush_remaining_buf(thought_line_buf, "[thought] ");
-                    stdout_line_buf.push_str(chunk);
-                    flush_complete_lines(stdout_line_buf, "[stdout] ");
-                }
-                spool_chunk(output_spool, chunk.as_bytes(), metadata);
-                metadata.append_message_text(chunk);
-            }
-            SessionEvent::AgentThought(chunk) => {
-                if stream_stdout_to_stderr {
-                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
-                    thought_line_buf.push_str(chunk);
-                    flush_complete_lines(thought_line_buf, "[thought] ");
-                }
-                spool_chunk(output_spool, chunk.as_bytes(), metadata);
-                metadata.append_thought_text(chunk);
-            }
-            SessionEvent::PlanUpdate(plan) => {
-                metadata.has_plan_updates = true;
-                let msg = format!("[plan] {plan}\n");
-                if stream_stdout_to_stderr {
-                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
-                    flush_remaining_buf(thought_line_buf, "[thought] ");
-                    eprint!("{msg}");
-                }
-                spool_chunk(output_spool, msg.as_bytes(), metadata);
-            }
-            SessionEvent::ToolCallStarted { title, kind, .. } => {
-                metadata.has_tool_calls = true;
-                let msg = format!("[tool:started] {title} ({kind})\n");
-                if stream_stdout_to_stderr {
-                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
-                    flush_remaining_buf(thought_line_buf, "[thought] ");
-                    eprint!("{msg}");
-                }
-                spool_chunk(output_spool, msg.as_bytes(), metadata);
-            }
-            SessionEvent::ToolCallCompleted { status, .. } => {
-                let msg = format!("[tool:completed] {status}\n");
-                if stream_stdout_to_stderr {
-                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
-                    flush_remaining_buf(thought_line_buf, "[thought] ");
-                    eprint!("{msg}");
-                }
-                spool_chunk(output_spool, msg.as_bytes(), metadata);
-            }
-            SessionEvent::Other(payload) => {
-                let msg = format!("[other] {payload}\n");
-                if stream_stdout_to_stderr {
-                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
-                    flush_remaining_buf(thought_line_buf, "[thought] ");
-                    eprint!("{msg}");
-                }
-                spool_chunk(output_spool, msg.as_bytes(), metadata);
-            }
-        }
-    }
-
-    if stream_stdout_to_stderr {
-        flush_remaining_buf(stdout_line_buf, "[stdout] ");
-        flush_remaining_buf(thought_line_buf, "[thought] ");
-    }
-
-    *processed_event_count = events_ref.total_events_count();
-    saw_initial_response_event
-}
-
-fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut StreamingMetadata) {
-    if let Some(writer) = spool {
-        let _ = writer.write(bytes);
-        metadata.spool_bytes_written = writer.bytes_written();
-    }
-}
-
-/// Collect agent-visible output, falling back to thought text when no message text exists.
-fn collect_agent_output(metadata: &mut StreamingMetadata) -> String {
-    let message = metadata.message_text.trim();
-    if !message.is_empty() {
-        return metadata.message_text.clone();
-    }
-    let thought = metadata.thought_text.trim();
-    if !thought.is_empty() {
-        metadata.has_thought_fallback = true;
-        tracing::warn!(
-            thought_bytes = metadata.thought_text.len(),
-            "agent produced no message output; falling back to thought text"
-        );
-        // Keep the marker on its own line so CSA section markers remain parseable.
-        return format!("[thought-fallback]\n{}", metadata.thought_text);
-    }
-    String::new()
 }
 
 fn stop_reason_to_string(reason: StopReason) -> String {

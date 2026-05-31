@@ -57,6 +57,14 @@ mod tests {
     }
 
     #[test]
+    fn review_unavailable_maps_to_one() {
+        assert_eq!(
+            exit_code_from_review_decision(ReviewDecision::Unavailable),
+            1
+        );
+    }
+
+    #[test]
     fn debate_approve_maps_to_zero() {
         assert_eq!(exit_code_from_debate_verdict("APPROVE", None), 0);
     }

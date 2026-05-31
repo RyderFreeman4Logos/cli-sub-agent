@@ -304,3 +304,230 @@ fn forced_unavailable_preserves_explicit_pass_verdict() {
     assert_eq!(reviewer.verdict, CLEAN);
     assert_eq!(reviewer.exit_code, 0);
 }
+
+/// A claude-code reviewer killed mid-turn: the stream begins (system/assistant/agent_message
+/// events) but never emits the terminal `{"type":"result"}`. Its last agent message narrates the
+/// reviewed code, which itself contains a `HAS_ISSUES` literal — the exact verdict-token
+/// contamination that made the round-4 runtime review fail-close to HAS_ISSUES instead of
+/// UNAVAILABLE (#1657).
+fn killed_claude_code_review_transcript() -> String {
+    [
+        r#"{"type":"system","subtype":"init","session_id":"01TESTKILLEDCLAUDE"}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":"reviewing"}}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"parse_review_decision returns HAS_ISSUES when a blocking token appears in the reviewed diff."}}"#,
+        r#"{"type":"stream_event","event":{"type":"content_block_delta"}}"#,
+    ]
+    .join("\n")
+}
+
+#[test]
+fn build_reviewer_outcome_reclassifies_killed_claude_code_stream_as_unavailable() {
+    // Pre-fix: extract_review_text scrapes the partial agent message's HAS_ISSUES token and the
+    // reviewer fail-closes to HAS_ISSUES. Post-fix: the stream has no terminal `result` event and
+    // exited non-zero, so it is classified UNAVAILABLE (infra could not run to completion).
+    let mut result = outcome(&killed_claude_code_review_transcript(), 1);
+    result.executed_tool = ToolName::ClaudeCode;
+
+    let reviewer =
+        build_reviewer_outcome(0, ToolName::ClaudeCode, &result).expect("reviewer outcome");
+
+    assert_eq!(reviewer.verdict, UNAVAILABLE);
+    assert_eq!(reviewer.exit_code, 1);
+}
+
+#[test]
+fn build_reviewer_outcome_preserves_completed_has_issues_verdict() {
+    // A reviewer that ran to completion (terminal `result` event present) keeps its deliberate
+    // HAS_ISSUES verdict even with a non-zero exit — the killed-stream override must not fire.
+    let mut transcript = killed_claude_code_review_transcript();
+    transcript.push('\n');
+    transcript
+        .push_str(r#"{"type":"result","subtype":"success","result":"HAS_ISSUES: blocking bug at src/foo.rs:10"}"#);
+    let mut result = outcome(&transcript, 1);
+    result.executed_tool = ToolName::ClaudeCode;
+
+    let reviewer =
+        build_reviewer_outcome(0, ToolName::ClaudeCode, &result).expect("reviewer outcome");
+
+    assert_eq!(reviewer.verdict, HAS_ISSUES);
+    assert_eq!(reviewer.exit_code, 1);
+}
+
+#[test]
+fn build_reviewer_outcome_preserves_completed_clean_verdict() {
+    let transcript = [
+        r#"{"type":"system","subtype":"init"}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"CLEAN: no blocking issues found in the diff."}}"#,
+        r#"{"type":"result","subtype":"success","result":"CLEAN: no blocking issues found in the diff."}"#,
+    ]
+    .join("\n");
+    let mut result = outcome(&transcript, 0);
+    result.executed_tool = ToolName::ClaudeCode;
+
+    let reviewer =
+        build_reviewer_outcome(0, ToolName::ClaudeCode, &result).expect("reviewer outcome");
+
+    assert_eq!(reviewer.verdict, CLEAN);
+    assert_eq!(reviewer.exit_code, 0);
+}
+
+#[test]
+fn build_reviewer_outcome_reclassifies_killed_codex_stream_as_unavailable() {
+    // codex equivalent: a stream with `turn.failed` (killed by signal) but no `turn.completed`.
+    let transcript = [
+        r#"{"type":"thread.started","thread_id":"t-kill"}"#,
+        r#"{"type":"turn.started"}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"The verdict mapping emits HAS_ISSUES for blocking findings in the reviewed code."}}"#,
+        r#"{"type":"turn.failed","error":{"message":"stream disconnected before completion: killed by signal 9"}}"#,
+    ]
+    .join("\n");
+    let result = outcome(&transcript, 1);
+
+    let reviewer = build_reviewer_outcome(0, ToolName::Codex, &result).expect("reviewer outcome");
+
+    assert_eq!(reviewer.verdict, UNAVAILABLE);
+    assert_eq!(reviewer.exit_code, 1);
+}
+
+#[test]
+fn build_reviewer_outcome_keeps_plain_text_blocking_verdict_without_stream() {
+    // Legacy plain-text reviewer output (gemini-cli / opencode) is not a JSON stream, so the
+    // killed-stream override never fires: a genuine blocking verdict is preserved, not masked.
+    let reviewer = build_reviewer_outcome(
+        0,
+        ToolName::GeminiCli,
+        &outcome(
+            "Overall risk: high\nHAS_ISSUES: a real blocking correctness bug in the patch.",
+            1,
+        ),
+    )
+    .expect("reviewer outcome");
+
+    assert_eq!(reviewer.verdict, HAS_ISSUES);
+}
+
+#[test]
+fn stream_started_without_terminal_event_flags_killed_claude_code_stream() {
+    assert!(stream_started_without_terminal_event(
+        &killed_claude_code_review_transcript()
+    ));
+}
+
+#[test]
+fn stream_started_without_terminal_event_clears_on_claude_code_result_event() {
+    let mut transcript = killed_claude_code_review_transcript();
+    transcript.push('\n');
+    transcript.push_str(r#"{"type":"result","subtype":"success","result":"CLEAN"}"#);
+    assert!(!stream_started_without_terminal_event(&transcript));
+}
+
+#[test]
+fn stream_started_without_terminal_event_clears_on_codex_turn_completed() {
+    let transcript = [
+        r#"{"type":"turn.started"}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"done"}}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":1}}"#,
+    ]
+    .join("\n");
+    assert!(!stream_started_without_terminal_event(&transcript));
+}
+
+#[test]
+fn stream_started_without_terminal_event_ignores_non_stream_output() {
+    // Plain-text reviewer output and rate-limit event blobs are not recognized streams.
+    assert!(!stream_started_without_terminal_event(
+        "Overall risk: high\nHAS_ISSUES"
+    ));
+    assert!(!stream_started_without_terminal_event(
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}"#
+    ));
+    assert!(!stream_started_without_terminal_event(""));
+}
+
+#[test]
+fn all_killed_reviewers_persist_unavailable_decision_on_disk() {
+    // End-to-end reproduction of the round-4 runtime bug: three reviewers all killed mid-turn,
+    // run through the REAL derivation (`build_reviewer_outcome`) and the parent write path, then
+    // read back from disk. Pre-fix each killed reviewer mis-derived to HAS_ISSUES, so
+    // `all_reviewers_unavailable` was false and the parent persisted `decision: "fail"`.
+    // Post-fix each derives UNAVAILABLE → the parent persists the distinct `decision: "unavailable"`.
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = crate::test_env_lock::ScopedEnvVarRestore::set(
+        csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+        &session_dir,
+    );
+    let _session_id_guard = crate::test_env_lock::ScopedEnvVarRestore::set(
+        "CSA_SESSION_ID",
+        "01PARENTSESSION000000000000",
+    );
+    let _daemon_session_dir_guard =
+        crate::test_env_lock::ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard =
+        crate::test_env_lock::ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    let killed = killed_claude_code_review_transcript();
+    let outcomes: Vec<_> = (0..3)
+        .map(|index| {
+            let mut result = outcome(&killed, 1);
+            result.executed_tool = ToolName::ClaudeCode;
+            build_reviewer_outcome(index, ToolName::ClaudeCode, &result).expect("reviewer outcome")
+        })
+        .collect();
+
+    assert!(
+        outcomes
+            .iter()
+            .all(|reviewer| reviewer.verdict == UNAVAILABLE),
+        "every reviewer killed mid-turn must derive UNAVAILABLE (pre-fix they fail-closed to \
+         HAS_ISSUES); got {:?}",
+        outcomes
+            .iter()
+            .map(|reviewer| reviewer.verdict)
+            .collect::<Vec<_>>()
+    );
+
+    // Mirror the runtime aggregation in review_cmd_multi.rs: `all_reviewers_unavailable` and the
+    // `final_verdict` are COMPUTED from the derived outcomes, not hardcoded — pre-fix this yields
+    // (false, HAS_ISSUES) and the disk decision below would be `fail`.
+    let all_reviewers_unavailable = !outcomes.is_empty()
+        && outcomes
+            .iter()
+            .all(|reviewer| reviewer.verdict == UNAVAILABLE);
+    let final_verdict = if all_reviewers_unavailable {
+        UNAVAILABLE
+    } else {
+        HAS_ISSUES
+    };
+
+    super::super::parent_artifacts::write_multi_reviewer_parent_artifacts(
+        temp.path(),
+        outcomes.len(),
+        &outcomes,
+        final_verdict,
+        all_reviewers_unavailable,
+        None,
+    )
+    .expect("parent artifacts should be produced");
+
+    let verdict: csa_session::review_artifact::ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+
+    // Distinguishable at rest + fail-closed: the persisted decision is the distinct `unavailable`
+    // value, never `fail`/`uncertain`, and remains non-mergeable.
+    assert_eq!(verdict.decision, ReviewDecision::Unavailable);
+    assert_ne!(verdict.decision, ReviewDecision::Fail);
+    assert_ne!(verdict.decision, ReviewDecision::Uncertain);
+    assert!(
+        !verdict.decision.is_clean(),
+        "unavailable must remain non-mergeable (fail-closed)"
+    );
+    assert_eq!(
+        crate::verdict_exit_code::exit_code_from_review_decision(verdict.decision),
+        1
+    );
+}

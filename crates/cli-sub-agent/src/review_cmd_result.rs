@@ -14,7 +14,7 @@ use crate::review_consensus::{
 use super::execute::ReviewExecutionOutcome;
 use super::output::{
     GEMINI_AUTH_PROMPT_STATUS_REASON, ReviewerOutcome, detect_tool_diagnostic, extract_review_text,
-    is_review_output_empty, sanitize_review_output,
+    is_review_output_empty, sanitize_review_output, stream_started_without_terminal_event,
 };
 
 const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAuth prompt detected; authentication required (no review verdict produced).\n";
@@ -44,6 +44,15 @@ fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
         ReviewDecision::Uncertain => UNCERTAIN,
         ReviewDecision::Unavailable => UNAVAILABLE,
     }
+}
+
+/// Whether a reviewer subprocess was killed/timed-out mid-turn: its streamed transcript began
+/// but never reached a terminal completion event, and it exited non-zero. Such a reviewer never
+/// produced a deliberate verdict — any verdict token in its partial output is unreliable (often
+/// scraped from the reviewed code) — so it must be classified `Unavailable` (infra could not run
+/// to completion) rather than fail-closed to `HAS_ISSUES` (#1657).
+fn reviewer_killed_before_completion(raw_output: &str, exit_code: i32) -> bool {
+    exit_code != 0 && stream_started_without_terminal_event(raw_output)
 }
 
 fn explicit_review_decision_for_execution(
@@ -123,7 +132,13 @@ pub(super) fn resolve_single_review_result(
         load_summary_fallback(project_root, &result.execution.meta_session_id).as_deref(),
     );
 
-    let decision = if let Some(decision) = explicit_decision {
+    let decision = if reviewer_killed_before_completion(
+        &result.execution.execution.output,
+        result.execution.execution.exit_code,
+    ) {
+        // Reviewer killed/timed-out mid-turn: treat as infra-unavailable, not a scraped verdict.
+        ReviewDecision::Unavailable
+    } else if let Some(decision) = explicit_decision {
         decision
     } else if let Some(forced) = result.forced_decision {
         forced
@@ -184,7 +199,16 @@ pub(super) fn build_reviewer_outcome(
         result.execution.exit_code,
         None,
     );
-    let decision = if let Some(decision) = explicit_decision {
+    let decision = if reviewer_killed_before_completion(
+        &result.execution.output,
+        result.execution.exit_code,
+    ) {
+        // Reviewer killed/timed-out mid-turn (no terminal stream event + non-zero exit): the
+        // reviewer never produced a deliberate verdict, so any verdict token in its partial
+        // output is unreliable. Classify as infra-unavailable so the all-reviewers-unavailable
+        // case persists `unavailable` and a producing co-reviewer can still gate the merge (#1657).
+        ReviewDecision::Unavailable
+    } else if let Some(decision) = explicit_decision {
         decision
     } else if let Some(forced) = session_result.forced_decision {
         forced

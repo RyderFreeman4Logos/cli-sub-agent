@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
@@ -5,8 +6,8 @@ use std::str::FromStr;
 use crate::cli::ReviewArgs;
 use anyhow::{Context, Result};
 use csa_core::types::ReviewDecision;
-use csa_session::ReviewVerdictArtifact;
 use csa_session::state::{MetaSessionState, ReviewSessionMeta};
+use csa_session::{ReviewVerdictArtifact, Severity};
 use tracing::debug;
 
 const REQUIRED_FULL_DIFF_SCOPE: &str = "range:main...HEAD";
@@ -16,6 +17,7 @@ pub(crate) struct ReviewVerdictMatch {
     pub session_id: String,
     pub scope: String,
     pub head_sha: String,
+    pub severity_counts: BTreeMap<Severity, u32>,
 }
 
 pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Result<i32> {
@@ -56,13 +58,8 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
 
     match verdict_match {
         Ok(Some(found)) => {
-            println!(
-                "Review verdict check passed: session {} has PASS/CLEAN for {} at {} ({})",
-                found.session_id,
-                branch,
-                short_sha(&found.head_sha),
-                found.scope
-            );
+            let message = format_review_verdict_pass_message(&found, &branch);
+            println!("{message}");
             Ok(0)
         }
         Ok(None) => {
@@ -141,7 +138,8 @@ pub(crate) fn check_review_verdict_for_session(
         return Ok(None);
     }
 
-    if !review_meta_or_artifact_is_pass(&session_dir, &meta)? {
+    let pass_status = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+    if !pass_status.is_pass {
         debug!(
             session_id = %resolved.session_id,
             decision = %meta.decision,
@@ -155,6 +153,7 @@ pub(crate) fn check_review_verdict_for_session(
         session_id: meta.session_id,
         scope: meta.scope,
         head_sha: meta.head_sha,
+        severity_counts: pass_status.severity_counts,
     }))
 }
 
@@ -239,8 +238,8 @@ pub(crate) fn check_review_verdict_for_target(
             );
             continue;
         }
-        let is_pass = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
-        if !is_pass {
+        let pass_status = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+        if !pass_status.is_pass {
             debug!(
                 session_id = %session.meta_session_id,
                 decision = %meta.decision,
@@ -254,7 +253,7 @@ pub(crate) fn check_review_verdict_for_target(
             scope = %meta.scope,
             head_sha = %meta.head_sha,
             timestamp = %meta.timestamp,
-            is_pass,
+            is_pass = pass_status.is_pass,
             "Found matching review verdict candidate"
         );
         candidates.push(ReviewVerdictCandidate {
@@ -262,7 +261,8 @@ pub(crate) fn check_review_verdict_for_target(
             scope: meta.scope,
             head_sha: meta.head_sha,
             timestamp: meta.timestamp,
-            is_pass,
+            is_pass: pass_status.is_pass,
+            severity_counts: pass_status.severity_counts,
         });
     }
 
@@ -291,6 +291,7 @@ pub(crate) fn check_review_verdict_for_target(
         session_id: latest.session_id,
         scope: latest.scope,
         head_sha: latest.head_sha,
+        severity_counts: latest.severity_counts,
     }))
 }
 
@@ -374,7 +375,8 @@ fn check_review_verdict_marker(
         );
         return Ok(None);
     }
-    if !review_meta_or_artifact_is_pass(&session_dir, &meta)? {
+    let pass_status = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+    if !pass_status.is_pass {
         debug!(
             session_id = %marker.session_id,
             decision = %meta.decision,
@@ -394,6 +396,7 @@ fn check_review_verdict_marker(
         session_id: meta.session_id,
         scope: meta.scope,
         head_sha: meta.head_sha,
+        severity_counts: pass_status.severity_counts,
     }))
 }
 
@@ -412,6 +415,7 @@ struct ReviewVerdictCandidate {
     head_sha: String,
     timestamp: chrono::DateTime<chrono::Utc>,
     is_pass: bool,
+    severity_counts: BTreeMap<Severity, u32>,
 }
 
 fn session_branch(session: &MetaSessionState) -> Option<&str> {
@@ -457,7 +461,15 @@ fn diff_fingerprint_matches(
         .unwrap_or(true)
 }
 
-fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta) -> Result<bool> {
+struct ReviewVerdictPassStatus {
+    is_pass: bool,
+    severity_counts: BTreeMap<Severity, u32>,
+}
+
+fn review_meta_or_artifact_is_pass(
+    session_dir: &Path,
+    meta: &ReviewSessionMeta,
+) -> Result<ReviewVerdictPassStatus> {
     if meta.requires_fail_closed_verdict() {
         debug!(
             session_id = %meta.session_id,
@@ -467,7 +479,10 @@ fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta)
             primary_failure = meta.primary_failure.as_deref().unwrap_or(""),
             "Rejecting review verdict because review metadata records reviewer failure"
         );
-        return Ok(false);
+        return Ok(ReviewVerdictPassStatus {
+            is_pass: false,
+            severity_counts: zero_severity_counts(),
+        });
     }
 
     let meta_pass = review_meta_is_pass(meta);
@@ -477,8 +492,7 @@ fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta)
             .with_context(|| format!("failed to read {}", verdict_path.display()))?;
         let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
-        let artifact_pass = artifact.decision == ReviewDecision::Pass
-            || verdict_token_is_pass(&artifact.verdict_legacy);
+        let artifact_pass = artifact.decision == ReviewDecision::Pass;
         debug!(
             session_id = %meta.session_id,
             meta_decision = %meta.decision,
@@ -490,7 +504,10 @@ fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta)
             verdict_path = %verdict_path.display(),
             "Read review verdict artifact"
         );
-        return Ok(artifact_pass);
+        return Ok(ReviewVerdictPassStatus {
+            is_pass: artifact_pass,
+            severity_counts: artifact.severity_counts,
+        });
     }
 
     debug!(
@@ -500,7 +517,10 @@ fn review_meta_or_artifact_is_pass(session_dir: &Path, meta: &ReviewSessionMeta)
         meta_pass,
         "Using review_meta.json verdict"
     );
-    Ok(meta_pass)
+    Ok(ReviewVerdictPassStatus {
+        is_pass: meta_pass,
+        severity_counts: zero_severity_counts(),
+    })
 }
 
 fn review_meta_is_pass(meta: &ReviewSessionMeta) -> bool {
@@ -508,9 +528,7 @@ fn review_meta_is_pass(meta: &ReviewSessionMeta) -> bool {
         return false;
     }
 
-    ReviewDecision::from_str(&meta.decision).is_ok_and(|decision| {
-        decision == ReviewDecision::Pass || verdict_token_is_pass(&meta.verdict)
-    }) || verdict_token_is_pass(&meta.verdict)
+    ReviewDecision::from_str(&meta.decision).is_ok_and(|decision| decision == ReviewDecision::Pass)
 }
 
 fn verdict_token_is_pass(verdict: &str) -> bool {
@@ -522,6 +540,49 @@ fn verdict_token_is_pass(verdict: &str) -> bool {
 
 fn short_sha(sha: &str) -> &str {
     sha.get(..sha.len().min(11)).unwrap_or(sha)
+}
+
+fn format_review_verdict_pass_message(found: &ReviewVerdictMatch, branch: &str) -> String {
+    format!(
+        "Review verdict check passed{}: session {} has PASS/CLEAN for {} at {} ({})",
+        format_nonblocking_counts_suffix(&found.severity_counts),
+        found.session_id,
+        branch,
+        short_sha(&found.head_sha),
+        found.scope
+    )
+}
+
+fn format_nonblocking_counts_suffix(counts: &BTreeMap<Severity, u32>) -> String {
+    let parts = [
+        (Severity::Critical, "critical"),
+        (Severity::High, "high"),
+        (Severity::Medium, "medium"),
+        (Severity::Low, "low"),
+    ]
+    .into_iter()
+    .filter_map(|(severity, label)| {
+        let count = *counts.get(&severity).unwrap_or(&0);
+        (count > 0).then(|| format!("{count} {label}"))
+    })
+    .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" (non-blocking findings: {})", parts.join(", "))
+    }
+}
+
+fn zero_severity_counts() -> BTreeMap<Severity, u32> {
+    [
+        (Severity::Critical, 0),
+        (Severity::High, 0),
+        (Severity::Medium, 0),
+        (Severity::Low, 0),
+    ]
+    .into_iter()
+    .collect()
 }
 
 #[cfg(test)]

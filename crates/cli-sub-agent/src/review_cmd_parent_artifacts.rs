@@ -15,6 +15,7 @@ use csa_session::{
 };
 use serde::Deserialize;
 
+use crate::review_cmd::artifact_parse::parse_review_artifact_fields_lossy;
 use crate::review_consensus::{
     CLEAN, HAS_ISSUES, SKIP, UNAVAILABLE, build_consolidated_artifact, write_consolidated_artifact,
 };
@@ -69,6 +70,22 @@ struct ReviewerFindingsContractArtifact {
 fn parse_reviewer_artifact(path: &Path, content: &str) -> Result<ReviewArtifact> {
     if let Ok(artifact) = serde_json::from_str::<ReviewArtifact>(content) {
         return Ok(artifact);
+    }
+
+    if let Ok(fields) = parse_review_artifact_fields_lossy(content) {
+        return Ok(ReviewArtifact {
+            severity_summary: fields.severity_summary,
+            findings: fields.findings,
+            review_mode: None,
+            schema_version: "1.0".to_string(),
+            session_id: path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown-reviewer")
+                .to_string(),
+            timestamp: chrono::Utc::now(),
+        });
     }
 
     let contract: ReviewerFindingsContractArtifact = serde_json::from_str(content)
@@ -169,6 +186,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     let parent_decision = parent_review_decision(
         &consolidated,
         final_verdict,
+        outcomes,
         all_reviewers_unavailable,
         dissent_findings_persisted,
     );
@@ -179,7 +197,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     write_parent_review_verdict(
         &session_dir,
         &session_id,
-        &parent_artifact,
+        &consolidated.findings,
         parent_decision,
         &parent_verdict,
     )?;
@@ -241,6 +259,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     let decision = parent_review_decision(
         &consolidated,
         ctx.final_verdict,
+        ctx.outcomes,
         ctx.all_reviewers_unavailable,
         dissent_findings_persisted,
     );
@@ -271,7 +290,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         target.session_id.clone(),
         decision,
         verdict,
-        &artifact.findings,
+        &consolidated.findings,
         Vec::new(),
     );
     write_review_verdict(&session_dir, &verdict_artifact)
@@ -392,7 +411,7 @@ fn review_artifact_finding_to_findings_toml(finding: &Finding) -> ReviewFinding 
 fn write_parent_review_verdict(
     session_dir: &Path,
     session_id: &str,
-    artifact: &ReviewArtifact,
+    severity_count_findings: &[Finding],
     decision: ReviewDecision,
     verdict_legacy: &str,
 ) -> Result<()> {
@@ -400,7 +419,7 @@ fn write_parent_review_verdict(
         session_id.to_string(),
         decision,
         verdict_legacy.to_string(),
-        &artifact.findings,
+        severity_count_findings,
         Vec::new(),
     );
     write_review_verdict(session_dir, &verdict)
@@ -434,11 +453,19 @@ fn parent_artifact_for_decision(
 fn parent_review_decision(
     artifact: &ReviewArtifact,
     final_verdict: &str,
+    outcomes: &[ReviewerOutcome],
     all_reviewers_unavailable: bool,
     dissent_findings_persisted: bool,
 ) -> ReviewDecision {
-    if all_reviewers_unavailable {
-        return ReviewDecision::Unavailable;
+    let produced_decision = review_decision_from_produced_outcomes(outcomes);
+    let Some(produced_decision) = produced_decision else {
+        if all_reviewers_unavailable {
+            return ReviewDecision::Unavailable;
+        }
+        return ReviewDecision::Fail;
+    };
+    if produced_decision == ReviewDecision::Fail {
+        return ReviewDecision::Fail;
     }
     let consensus_decision =
         ReviewDecision::from_str(final_verdict).unwrap_or(ReviewDecision::Uncertain);
@@ -479,6 +506,20 @@ fn parent_review_decision(
         return ReviewDecision::Pass;
     }
     consensus_decision
+}
+
+fn review_decision_from_produced_outcomes(outcomes: &[ReviewerOutcome]) -> Option<ReviewDecision> {
+    let mut saw_produced = false;
+    for outcome in outcomes
+        .iter()
+        .filter(|outcome| outcome.produced_usable_verdict())
+    {
+        saw_produced = true;
+        if outcome.verdict == HAS_ISSUES {
+            return Some(ReviewDecision::Fail);
+        }
+    }
+    saw_produced.then_some(ReviewDecision::Pass)
 }
 
 fn is_blocking_severity(severity: &Severity) -> bool {
