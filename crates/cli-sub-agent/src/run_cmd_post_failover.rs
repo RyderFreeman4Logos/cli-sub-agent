@@ -54,11 +54,12 @@ pub(crate) fn detect_permanent_tool_exhaustion_result(
     exec_result: &csa_process::ExecutionResult,
     current_model_spec: Option<&str>,
 ) -> Option<csa_scheduler::RateLimitDetected> {
+    // Only stderr_output is the provider's error channel; `summary`/`output`
+    // are agent stdout (reviewed/echoed content) and must not drive a permanent
+    // quota verdict (#1736).
     detect_permanent_tool_exhaustion_text(
         tool_name_str,
-        &exec_result.summary,
         &exec_result.stderr_output,
-        &exec_result.output,
         exec_result.exit_code,
         current_model_spec,
     )
@@ -66,26 +67,30 @@ pub(crate) fn detect_permanent_tool_exhaustion_result(
 
 pub(crate) fn detect_permanent_tool_exhaustion_text(
     tool_name_str: &str,
-    summary: &str,
-    stderr: &str,
-    stdout: &str,
+    provider_error_channel: &str,
     exit_code: i32,
     current_model_spec: Option<&str>,
 ) -> Option<csa_scheduler::RateLimitDetected> {
     if exit_code == 0 {
         return None;
     }
-    let stdout_with_summary = if summary.trim().is_empty() {
-        stdout.to_string()
-    } else if stdout.trim().is_empty() {
-        summary.to_string()
-    } else {
-        format!("{summary}\n{stdout}")
-    };
+    // PERMANENT tool exhaustion self-kills the session (the caller marks a fatal
+    // gate, blocks failover, and writes `tool_exhausted: ...`). It MUST be
+    // derived only from the provider's own error channel — captured process
+    // stderr, or the anyhow error chain of a transport failure — NEVER from the
+    // agent's stdout (`output`) or the stdout-derived `summary`. A `csa review`
+    // whose reviewed diff/source/commit literally contains a quota phrase (e.g.
+    // "monthly spending cap") must not be misread as a real provider quota
+    // exhaustion (#1736). Both call sites pass the provider-error channel here:
+    // the success path passes `ExecutionResult::stderr_output`, the transport
+    // error path passes the formatted anyhow error chain. `detect_rate_limit`
+    // confirms `quota_exhausted` only from its `stderr` argument, so feeding the
+    // provider channel as stderr (and an empty stdout) yields the permanent
+    // verdict iff the provider itself reported quota exhaustion.
     csa_scheduler::detect_rate_limit(
         tool_name_str,
-        stderr,
-        &stdout_with_summary,
+        provider_error_channel,
+        "",
         exit_code,
         current_model_spec,
     )
@@ -590,3 +595,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "run_cmd_post_failover_tests.rs"]
+mod permanent_exhaustion_tests;

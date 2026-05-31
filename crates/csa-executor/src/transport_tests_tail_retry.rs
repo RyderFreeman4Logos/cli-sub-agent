@@ -77,6 +77,53 @@ fn test_should_retry_generic_quota_exhausted_marker() {
 }
 
 #[test]
+fn test_gemini_permanent_quota_not_triggered_by_reviewed_content_in_stdout() {
+    // #1736 regression: a `csa review` whose reviewed diff/source/commit message
+    // literally contains a quota phrase (e.g. this failover classifier's own
+    // source) must NOT be misclassified as provider quota exhaustion. The marker
+    // here lives only in agent stdout (`output`) and the stdout-derived
+    // `summary`, never in the provider error channel (`stderr_output`).
+    let execution = ExecutionResult {
+        summary: "+    pattern: \"monthly spending cap\",".to_string(),
+        output: "Reviewing diff:\n+const PATTERN: &str = \"monthly spending cap\";\n\
+                  +// matches QUOTA_EXHAUSTED / RESOURCE_EXHAUSTED markers\n\
+                  Verdict: PASS"
+            .to_string(),
+        stderr_output: String::new(),
+        exit_code: 1,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    assert_eq!(
+        detect_gemini_permanent_quota_exhaustion_result(&execution),
+        None,
+        "reviewed quota phrase in stdout/summary must not be read as provider quota exhaustion"
+    );
+}
+
+#[test]
+fn test_gemini_permanent_quota_still_detected_from_provider_stderr() {
+    // Positive: a genuine provider quota error on the stderr channel (as the
+    // gemini-cli backend emits, mirrored by the fake-gemini harness writing the
+    // failure reason with `>&2`) MUST still be detected as permanent.
+    let execution = ExecutionResult {
+        summary: "Verdict: PASS".to_string(),
+        output: "Reviewing diff... Verdict: PASS".to_string(),
+        stderr_output:
+            "reason: 'RESOURCE_EXHAUSTED'; the monthly spending cap was reached for this project"
+                .to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    assert_eq!(
+        detect_gemini_permanent_quota_exhaustion_result(&execution),
+        Some("monthly spending cap"),
+        "provider-reported monthly spending cap on stderr must still be permanent quota"
+    );
+}
+
+#[test]
 fn test_should_retry_transient_429_too_many_requests() {
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
