@@ -542,12 +542,14 @@ pub(crate) async fn handle_debate(
                     }
                     warn!("Debate ended after transient failure: {reason}");
                     final_tool = Some(*attempt_tool);
+                    final_model_spec = attempt_model_spec.clone();
                     execution = Some(executed);
                     break 'tier_attempts;
                 }
                 DebateErrorKind::Deterministic(reason) => {
                     debug!("Debate finished with deterministic non-zero outcome: {reason}");
                     final_tool = Some(*attempt_tool);
+                    final_model_spec = attempt_model_spec.clone();
                     execution = Some(executed);
                     break 'tier_attempts;
                 }

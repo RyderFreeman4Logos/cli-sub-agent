@@ -573,6 +573,116 @@ Verdict: APPROVE
 }
 
 #[test]
+fn debate_finalize_non_success_omits_after_final_disabled_tier_spec() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let _env_lock = test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let state_home = temp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = DebateExactEnvVarGuard::set("HOME", temp.path());
+    let _state_guard = DebateExactEnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let _available_guard =
+        DebateExactEnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+
+    let project_root = temp.path();
+    let session = create_session(project_root, Some("debate"), None, Some("claude-code")).unwrap();
+    save_result(
+        project_root,
+        &session.meta_session_id,
+        &csa_session::SessionResult {
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "tool exited non-zero".to_string(),
+            tool: "claude-code".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: chrono::Utc::now(),
+            completed_at: chrono::Utc::now(),
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            manager_fields: Default::default(),
+        },
+    )
+    .unwrap();
+    let config: csa_config::ProjectConfig = toml::from_str(
+        r#"
+[tools.gemini-cli]
+enabled = false
+
+[tools.claude-code]
+enabled = true
+
+[tools.codex]
+enabled = false
+
+[tiers.quality]
+description = "quality"
+models = [
+  "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+  "claude-code/anthropic/claude-sonnet/high",
+  "codex/openai/gpt-5/high",
+]
+"#,
+    )
+    .expect("test project config");
+    let output = r#"<!-- CSA:SECTION:summary -->
+Verdict: REVISE
+Summary: Needs changes from terminal non-success verdict.
+<!-- CSA:SECTION:summary:END -->
+"#;
+
+    let finalized = debate_cmd::finalize_debate_outcome(
+        project_root,
+        csa_core::types::OutputFormat::Text,
+        Some(pipeline::SessionExecutionResult {
+            execution: csa_process::ExecutionResult {
+                output: output.to_string(),
+                stderr_output: String::new(),
+                summary: "debate verdict produced".to_string(),
+                exit_code: 1,
+                peak_memory_mb: None,
+                ..Default::default()
+            },
+            meta_session_id: session.meta_session_id.clone(),
+            provider_session_id: None,
+            changed_paths: None,
+        }),
+        debate_cmd::DebateFinalizeContext {
+            all_tier_models_failed: false,
+            project_config: Some(&config),
+            resolved_tier_name: Some("quality"),
+            tier_filter: None,
+            failures: &[],
+            debate_mode: debate_cmd::DebateMode::Heterogeneous,
+            output_header: None,
+            original_tool: Some(csa_core::types::ToolName::ClaudeCode),
+            fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
+            fallback_reason: None,
+            selected_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
+        },
+    )
+    .expect("revise verdict should finalize");
+
+    assert_eq!(finalized.exit_code, 1);
+    let saved = csa_session::load_result(project_root, &session.meta_session_id)
+        .unwrap()
+        .expect("saved result");
+    let persisted_chain = saved.fallback_chain.expect("fallback_chain should persist");
+    assert_eq!(persisted_chain.len(), 1);
+    assert_eq!(persisted_chain[0].tool, "gemini-cli");
+    assert_eq!(persisted_chain[0].skip_reason, "disabled");
+    assert!(
+        persisted_chain.iter().all(|attempt| attempt.tool != "codex"),
+        "never-reached after-final codex exclusion must be omitted"
+    );
+}
+
+#[test]
 fn debate_nonzero_with_revise_artifact_exits_failure() {
     let temp = tempfile::TempDir::new().unwrap();
     let _env_lock = test_env_lock::TEST_ENV_LOCK.blocking_lock();
