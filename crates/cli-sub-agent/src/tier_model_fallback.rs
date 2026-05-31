@@ -35,6 +35,31 @@ impl TierFilter {
 pub(crate) struct TierAttemptFailure {
     pub(crate) model_spec: String,
     pub(crate) reason: String,
+    /// Authoritative permanent-quota flag, when this failure came from a runtime
+    /// [`RateLimitDetected`]. The scheduler's `rate_limit` table already decided
+    /// permanent (monthly / spending-cap) vs. transient exhaustion BEFORE
+    /// normalizing the human-readable `reason` (e.g. it maps "monthly spending
+    /// cap" to `reason = "QUOTA_EXHAUSTED"` while keeping `quota_exhausted =
+    /// true`). Re-deriving from that lossy normalized `reason` via
+    /// [`crate::failover_trace::FailoverSkipKind::classify`] would mislabel it as
+    /// transient (#1714), so the structured boolean is carried straight through
+    /// to [`csa_core::types::FallbackAttempt::quota_exhausted`]. `None` for
+    /// build-time exclusions (disabled / undetected / whitelist-filtered specs
+    /// that never produced a `RateLimitDetected`); those keep classifying from
+    /// `reason`.
+    pub(crate) quota_exhausted: Option<bool>,
+}
+
+impl TierAttemptFailure {
+    /// Construct from a runtime [`RateLimitDetected`], capturing the scheduler's
+    /// authoritative `quota_exhausted` flag alongside the normalized reason.
+    pub(crate) fn from_rate_limit(model_spec: String, detected: &RateLimitDetected) -> Self {
+        Self {
+            model_spec,
+            reason: detected.reason.clone(),
+            quota_exhausted: Some(detected.quota_exhausted),
+        }
+    }
 }
 
 pub(crate) fn ordered_tier_candidates(
@@ -122,9 +147,13 @@ pub(crate) fn build_fallback_chain_for_result(
         }
         _ => Vec::new(),
     };
-    let attempt_failures: Vec<(String, String)> = failures
+    let attempt_failures: Vec<crate::failover_trace::AttemptFailure> = failures
         .iter()
-        .map(|failure| (failure.model_spec.clone(), failure.reason.clone()))
+        .map(|failure| crate::failover_trace::AttemptFailure {
+            model_spec: failure.model_spec.clone(),
+            reason: failure.reason.clone(),
+            quota_exhausted: failure.quota_exhausted,
+        })
         .collect();
     crate::failover_trace::build_review_fallback_chain(
         &ordered_specs,

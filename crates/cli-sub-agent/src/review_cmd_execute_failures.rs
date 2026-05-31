@@ -1,15 +1,34 @@
 use super::*;
 use csa_session::{PhaseEvent, SessionPhase};
 
+/// A classified review-failover failure: the normalized reason plus, when the
+/// failure came from a scheduler [`csa_scheduler::RateLimitDetected`], the
+/// authoritative permanent-quota flag the scheduler already computed.
+///
+/// Carrying `quota_exhausted` here (instead of just the normalized `reason`)
+/// lets the failover chain preserve permanent-vs-transient classification on the
+/// runtime path, where the scheduler maps e.g. "monthly spending cap" to
+/// `reason = "QUOTA_EXHAUSTED"` while keeping `quota_exhausted = true` (#1714).
+pub(super) struct ReviewFailoverFailure {
+    pub(super) reason: String,
+    /// Scheduler-authoritative permanent-quota flag, when this failure came from
+    /// a `RateLimitDetected`. `None` for synthetic reasons (e.g. an auth prompt)
+    /// that never produced a structured detection.
+    pub(super) quota_exhausted: Option<bool>,
+}
+
 pub(super) fn classify_review_failover_reason(
     tool: ToolName,
     model_spec: Option<&str>,
     execution: &crate::pipeline::SessionExecutionResult,
     status_reason: Option<&str>,
     attempt_elapsed: Option<std::time::Duration>,
-) -> Option<String> {
+) -> Option<ReviewFailoverFailure> {
     if status_reason == Some("gemini_auth_prompt") {
-        return Some("gemini_auth_prompt".to_string());
+        return Some(ReviewFailoverFailure {
+            reason: "gemini_auth_prompt".to_string(),
+            quota_exhausted: None,
+        });
     }
 
     classify_next_model_failure_with_elapsed(
@@ -20,7 +39,10 @@ pub(super) fn classify_review_failover_reason(
         model_spec,
         attempt_elapsed,
     )
-    .map(|detected| detected.reason)
+    .map(|detected| ReviewFailoverFailure {
+        reason: detected.reason,
+        quota_exhausted: Some(detected.quota_exhausted),
+    })
 }
 
 pub(super) fn build_gemini_api_key_retry_env(

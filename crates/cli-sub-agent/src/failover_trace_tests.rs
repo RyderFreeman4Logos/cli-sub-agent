@@ -1,8 +1,30 @@
 use super::{
-    FailoverSkipKind, TierModelExclusion, build_review_fallback_chain,
+    AttemptFailure, FailoverSkipKind, TierModelExclusion, build_review_fallback_chain,
     writer_family_diversity_warning,
 };
 use csa_core::types::ToolName;
+
+/// Build a runtime attempt failure whose permanent-quota classification is
+/// derived from the raw reason string (the build-time path: `quota_exhausted =
+/// None`). Mirrors a failure that never carried a structured scheduler flag.
+fn raw_failure(model_spec: &str, reason: &str) -> AttemptFailure {
+    AttemptFailure {
+        model_spec: model_spec.to_string(),
+        reason: reason.to_string(),
+        quota_exhausted: None,
+    }
+}
+
+/// Build a runtime attempt failure carrying the scheduler's AUTHORITATIVE
+/// permanent-quota flag, reproducing the production path where the scheduler
+/// already decided permanent vs. transient before normalizing `reason`.
+fn scheduler_failure(model_spec: &str, reason: &str, quota_exhausted: bool) -> AttemptFailure {
+    AttemptFailure {
+        model_spec: model_spec.to_string(),
+        reason: reason.to_string(),
+        quota_exhausted: Some(quota_exhausted),
+    }
+}
 
 #[test]
 fn classify_distinguishes_quota_rate_limit_transport_and_error() {
@@ -139,13 +161,13 @@ fn plain_429_serializes_not_quota_exhausted_but_permanent_does() {
         &[],
         &[],
         &[
-            (
-                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
-                "HTTP 429 Too Many Requests; Retry-After: 30".to_string(),
+            raw_failure(
+                "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+                "HTTP 429 Too Many Requests; Retry-After: 30",
             ),
-            (
-                "antigravity-cli/google/default/xhigh".to_string(),
-                "gemini-cli reached its monthly spending cap".to_string(),
+            raw_failure(
+                "antigravity-cli/google/default/xhigh",
+                "gemini-cli reached its monthly spending cap",
             ),
         ],
         None,
@@ -164,6 +186,90 @@ fn plain_429_serializes_not_quota_exhausted_but_permanent_does() {
     assert!(
         chain[1].quota_exhausted,
         "a monthly spending cap is permanent quota exhaustion"
+    );
+}
+
+// #1714 PRODUCTION-path regression (the gap round 8 named): the scheduler maps a
+// real permanent marker such as "monthly spending cap" to the NORMALIZED reason
+// "QUOTA_EXHAUSTED" while keeping the structured `quota_exhausted = true`. The
+// runtime path must carry that structured flag straight through to
+// `FallbackAttempt.quota_exhausted` instead of re-parsing the normalized reason
+// via `classify()` (which — correctly for the build-time path, per round 5 —
+// maps a bare "QUOTA_EXHAUSTED" to the TRANSIENT `RateLimit429`). Re-parsing here
+// would silently downgrade permanent exhaustion to transient and violate the
+// `FallbackAttempt.quota_exhausted` contract.
+#[test]
+fn scheduler_normalized_quota_exhausted_preserves_permanent_flag() {
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        // Reproduces the scheduler output: human-readable marker already
+        // collapsed to "QUOTA_EXHAUSTED", but `quota_exhausted = true` retained.
+        &[scheduler_failure(
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "QUOTA_EXHAUSTED",
+            true,
+        )],
+        None,
+    );
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0].tool, "gemini-cli");
+    // The structured flag is honored: permanent, NOT downgraded to transient.
+    assert!(
+        chain[0].quota_exhausted,
+        "scheduler-authoritative permanent quota must survive reason normalization"
+    );
+    assert_eq!(
+        chain[0].skip_reason, "oauth-quota",
+        "a scheduler-confirmed permanent quota uses the permanent skip_reason"
+    );
+}
+
+// Companion to the above on the transient side: a plain HTTP 429 that the
+// scheduler classified as `quota_exhausted = false` must serialize the transient
+// `quota_exhausted = false`, keeping the granular `rate-limit-429` category.
+#[test]
+fn scheduler_transient_429_stays_not_quota_exhausted() {
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        &[scheduler_failure(
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "HTTP 429",
+            false,
+        )],
+        None,
+    );
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0].tool, "gemini-cli");
+    assert!(
+        !chain[0].quota_exhausted,
+        "a scheduler-confirmed transient 429 is not permanent quota exhaustion"
+    );
+    assert_eq!(chain[0].skip_reason, "rate-limit-429");
+}
+
+// Defense-in-depth: even if the scheduler's transient marker is a string that
+// `classify()` would (on the build-time path) treat as PERMANENT — e.g. an
+// "oauth" substring — the structured `quota_exhausted = false` is authoritative
+// on the runtime path and the flag stays transient. This guards against the
+// inverse of the #1714 bug (spuriously upgrading a scheduler-transient failure).
+#[test]
+fn scheduler_false_flag_overrides_classify_permanent_string() {
+    let chain = build_review_fallback_chain(
+        &[],
+        &[],
+        &[scheduler_failure(
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "oauth token refresh throttled",
+            false,
+        )],
+        None,
+    );
+    assert_eq!(chain.len(), 1);
+    assert!(
+        !chain[0].quota_exhausted,
+        "scheduler is authoritative: a transient failure stays transient regardless of reason text"
     );
 }
 
@@ -191,9 +297,9 @@ fn build_chain_records_per_tool_reasons_for_multi_skip() {
             kind: FailoverSkipKind::Disabled,
         },
     ];
-    let attempt_failures = vec![(
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
-        "gemini-cli hit HTTP 429".to_string(),
+    let attempt_failures = vec![raw_failure(
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        "gemini-cli hit HTTP 429",
     )];
 
     // claude-code (pos3) is the surviving selection; the three earlier tools
@@ -237,9 +343,9 @@ fn build_chain_appends_entries_outside_tier_order() {
     let chain = build_review_fallback_chain(
         &[],
         &[],
-        &[(
-            "codex/openai/gpt-5.5/high".to_string(),
-            "transport: server shut down unexpectedly".to_string(),
+        &[raw_failure(
+            "codex/openai/gpt-5.5/high",
+            "transport: server shut down unexpectedly",
         )],
         None,
     );
@@ -324,9 +430,9 @@ fn diversity_warning_fires_on_same_family_failover() {
     let chain = build_review_fallback_chain(
         &[],
         &[],
-        &[(
-            "codex/openai/gpt-5/high".to_string(),
-            "HTTP 429 Too Many Requests".to_string(),
+        &[raw_failure(
+            "codex/openai/gpt-5/high",
+            "HTTP 429 Too Many Requests",
         )],
         None,
     );
@@ -374,9 +480,9 @@ fn diversity_warning_silent_when_writer_and_reviewer_families_differ() {
     let chain = build_review_fallback_chain(
         &[],
         &[],
-        &[(
-            "codex/openai/gpt-5/high".to_string(),
-            "HTTP 429 Too Many Requests".to_string(),
+        &[raw_failure(
+            "codex/openai/gpt-5/high",
+            "HTTP 429 Too Many Requests",
         )],
         None,
     );
@@ -397,9 +503,9 @@ fn diversity_warning_silent_when_writer_unknown() {
     let chain = build_review_fallback_chain(
         &[],
         &[],
-        &[(
-            "codex/openai/gpt-5/high".to_string(),
-            "HTTP 429 Too Many Requests".to_string(),
+        &[raw_failure(
+            "codex/openai/gpt-5/high",
+            "HTTP 429 Too Many Requests",
         )],
         None,
     );

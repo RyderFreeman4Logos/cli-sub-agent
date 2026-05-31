@@ -158,14 +158,17 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         tier_model_fallback::TierAttemptFailure {
             model_spec: "bad_pre_session_a".to_string(),
             reason: "AUTH_EXPIRED".to_string(),
+            quota_exhausted: None,
         },
         tier_model_fallback::TierAttemptFailure {
             model_spec: "bad_pre_session_b".to_string(),
             reason: "QUOTA_EXHAUSTED".to_string(),
+            quota_exhausted: None,
         },
         tier_model_fallback::TierAttemptFailure {
             model_spec: "bad_pre_session_c".to_string(),
             reason: "PERMISSION_DENIED".to_string(),
+            quota_exhausted: None,
         },
     ];
     let finalized = debate_cmd::finalize_debate_outcome(
@@ -417,10 +420,12 @@ fn debate_finalize_persists_categorized_fallback_chain_for_multi_skip() {
         tier_model_fallback::TierAttemptFailure {
             model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
             reason: "monthly spending cap reached".to_string(),
+            quota_exhausted: None,
         },
         tier_model_fallback::TierAttemptFailure {
             model_spec: "codex/openai/gpt-5/high".to_string(),
             reason: "acp server shut down unexpectedly".to_string(),
+            quota_exhausted: None,
         },
     ];
     let output = r#"<!-- CSA:SECTION:summary -->

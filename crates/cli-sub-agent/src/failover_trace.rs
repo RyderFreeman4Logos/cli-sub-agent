@@ -152,13 +152,66 @@ fn exclusion_attempt(exclusion: &TierModelExclusion) -> FallbackAttempt {
     }
 }
 
-fn failure_attempt(model_spec: &str, raw_reason: &str) -> FallbackAttempt {
-    let kind = FailoverSkipKind::classify(raw_reason);
+/// A tier model that was actually ATTEMPTED at runtime and errored, with the
+/// normalized failover reason and — for failures originating from a scheduler
+/// [`csa_scheduler::RateLimitDetected`] — the authoritative permanent-quota
+/// flag the scheduler already computed.
+#[derive(Debug, Clone)]
+pub(crate) struct AttemptFailure {
+    /// Full model spec (e.g. `gemini-cli/google/gemini-3.1-pro-preview/xhigh`).
+    pub(crate) model_spec: String,
+    /// Normalized failover reason (e.g. the scheduler's `"QUOTA_EXHAUSTED"`).
+    pub(crate) reason: String,
+    /// Scheduler-authoritative permanent-quota flag, when known. `Some` for
+    /// runtime rate-limit detections (the scheduler decided permanent vs.
+    /// transient before normalizing `reason`); `None` when only a raw reason
+    /// string is available and the kind must be derived via [`FailoverSkipKind::classify`].
+    pub(crate) quota_exhausted: Option<bool>,
+}
+
+/// Build a [`FallbackAttempt`] for a runtime attempt failure.
+///
+/// When the scheduler already computed an authoritative `quota_exhausted` flag
+/// (`failure.quota_exhausted = Some(_)`), that flag is carried STRAIGHT THROUGH
+/// to [`FallbackAttempt::quota_exhausted`] rather than being re-derived from the
+/// normalized `reason`. This is the #1714 fix: the scheduler maps a permanent
+/// marker such as "monthly spending cap" to `reason = "QUOTA_EXHAUSTED"` while
+/// keeping `quota_exhausted = true`; re-parsing that normalized reason via
+/// [`FailoverSkipKind::classify`] would (correctly, per the build-time contract)
+/// map a bare `"QUOTA_EXHAUSTED"` to the transient `RateLimit429`, silently
+/// downgrading permanent exhaustion. The `skip_reason` category still reflects
+/// the failure kind: a permanent quota uses `oauth-quota`; a transient runtime
+/// failure keeps the granular `classify`-derived category (rate-limit-429 /
+/// transport-error / attempted-and-errored) but is FORCED non-quota, since the
+/// scheduler is authoritative on the quota determination.
+///
+/// When `failure.quota_exhausted` is `None` (no `RateLimitDetected` — only a raw
+/// reason string), the kind and the quota flag are both derived from
+/// [`FailoverSkipKind::classify`], unchanged from the build-time path.
+fn failure_attempt(failure: &AttemptFailure) -> FallbackAttempt {
+    let (skip_reason, quota_exhausted) = match failure.quota_exhausted {
+        Some(true) => (FailoverSkipKind::OauthQuota.category().to_string(), true),
+        Some(false) => {
+            // Scheduler is authoritative: NOT permanent quota. Keep the granular
+            // classify-derived category for auditability, but never let it flag
+            // quota exhaustion regardless of what the lossy reason string implies.
+            (
+                FailoverSkipKind::classify(&failure.reason)
+                    .category()
+                    .to_string(),
+                false,
+            )
+        }
+        None => {
+            let kind = FailoverSkipKind::classify(&failure.reason);
+            (kind.category().to_string(), kind.is_quota())
+        }
+    };
     FallbackAttempt {
-        tool: tool_segment(model_spec).to_string(),
-        model_spec: Some(model_spec.to_string()),
-        skip_reason: kind.category().to_string(),
-        quota_exhausted: kind.is_quota(),
+        tool: tool_segment(&failure.model_spec).to_string(),
+        model_spec: Some(failure.model_spec.clone()),
+        skip_reason,
+        quota_exhausted,
         timestamp: Utc::now(),
     }
 }
@@ -167,8 +220,9 @@ fn failure_attempt(model_spec: &str, raw_reason: &str) -> FallbackAttempt {
 ///
 /// `ordered_specs` is the tier's model list in definition order; it drives a
 /// coherent, deterministic trace. `exclusions` are models filtered out at
-/// candidate-build time; `attempt_failures` are `(model_spec, raw_reason)` pairs
-/// for candidates that were actually tried and errored. Models present in
+/// candidate-build time; `attempt_failures` are [`AttemptFailure`] records for
+/// candidates that were actually tried and errored (each carrying the scheduler's
+/// authoritative `quota_exhausted` flag when known). Models present in
 /// neither collection (the selected reviewer, or specs never reached) are
 /// omitted — the chain records only skips and failures. Entries not covered by
 /// `ordered_specs` (e.g. the global-fallback path, which has no tier list) are
@@ -187,7 +241,7 @@ fn failure_attempt(model_spec: &str, raw_reason: &str) -> FallbackAttempt {
 pub(crate) fn build_review_fallback_chain(
     ordered_specs: &[String],
     exclusions: &[TierModelExclusion],
-    attempt_failures: &[(String, String)],
+    attempt_failures: &[AttemptFailure],
     selected_model_spec: Option<&str>,
 ) -> Vec<FallbackAttempt> {
     let mut chain = Vec::new();
@@ -218,9 +272,8 @@ pub(crate) fn build_review_fallback_chain(
         if let Some(exclusion) = exclusions.iter().find(|e| &e.model_spec == spec) {
             chain.push(exclusion_attempt(exclusion));
             emitted.insert(spec.clone());
-        } else if let Some((found_spec, reason)) = attempt_failures.iter().find(|(s, _)| s == spec)
-        {
-            chain.push(failure_attempt(found_spec, reason));
+        } else if let Some(failure) = attempt_failures.iter().find(|f| &f.model_spec == spec) {
+            chain.push(failure_attempt(failure));
             emitted.insert(spec.clone());
         }
     }
@@ -235,13 +288,13 @@ pub(crate) fn build_review_fallback_chain(
             chain.push(exclusion_attempt(exclusion));
         }
     }
-    for (spec, reason) in attempt_failures {
+    for failure in attempt_failures {
         // Runtime attempt failures are genuine attempts and are always recorded,
         // even on the global-fallback path that has no tier order. (A spec that
         // both succeeded AND is listed as a failure cannot occur: a winning model
         // is never pushed as a TierAttemptFailure.)
-        if emitted.insert(spec.clone()) {
-            chain.push(failure_attempt(spec, reason));
+        if emitted.insert(failure.model_spec.clone()) {
+            chain.push(failure_attempt(failure));
         }
     }
 

@@ -314,10 +314,10 @@ pub(crate) async fn execute_review_with_tier_filter(
                     let model_label = attempt_model_spec
                         .clone()
                         .unwrap_or_else(|| attempt_tool.as_str().to_string());
-                    failures.push(TierAttemptFailure {
-                        model_spec: model_label.clone(),
-                        reason: detected.reason.clone(),
-                    });
+                    failures.push(TierAttemptFailure::from_rate_limit(
+                        model_label.clone(),
+                        &detected,
+                    ));
                     warn!(
                         failed_tool = %attempt_tool,
                         failed_model = %model_label,
@@ -504,14 +504,16 @@ pub(crate) async fn execute_review_with_tier_filter(
 
         if tier_fallback_enabled
             && candidates.len() > 1
-            && let Some(reason) = failure_reason
+            && let Some(failure) = failure_reason
         {
             let model_label = attempt_model_spec
                 .clone()
                 .unwrap_or_else(|| attempt_tool.as_str().to_string());
+            let reason = failure.reason.clone();
             failures.push(TierAttemptFailure {
                 model_spec: model_label.clone(),
                 reason: reason.clone(),
+                quota_exhausted: failure.quota_exhausted,
             });
             warn!(
                 failed_tool = %attempt_tool,

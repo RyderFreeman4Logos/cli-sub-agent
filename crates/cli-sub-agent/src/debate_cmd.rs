@@ -418,10 +418,10 @@ pub(crate) async fn handle_debate(
                         let model_label = attempt_model_spec
                             .clone()
                             .unwrap_or_else(|| attempt_tool.as_str().to_string());
-                        failures.push(TierAttemptFailure {
-                            model_spec: model_label.clone(),
-                            reason: detected.reason.clone(),
-                        });
+                        failures.push(TierAttemptFailure::from_rate_limit(
+                            model_label.clone(),
+                            &detected,
+                        ));
                         warn!(
                             failed_tool = %attempt_tool,
                             failed_model = %model_label,
@@ -482,10 +482,10 @@ pub(crate) async fn handle_debate(
                 let model_label = attempt_model_spec
                     .clone()
                     .unwrap_or_else(|| attempt_tool.as_str().to_string());
-                failures.push(TierAttemptFailure {
-                    model_spec: model_label.clone(),
-                    reason: detected.reason.clone(),
-                });
+                failures.push(TierAttemptFailure::from_rate_limit(
+                    model_label.clone(),
+                    &detected,
+                ));
                 warn!(
                     failed_tool = %attempt_tool,
                     failed_model = %model_label,
