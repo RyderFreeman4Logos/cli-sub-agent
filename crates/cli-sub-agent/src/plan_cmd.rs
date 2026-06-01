@@ -219,6 +219,11 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
     if current_depth > max_depth {
         bail!("Max recursion depth ({max_depth}) exceeded. Current: {current_depth}");
     }
+    enforce_plan_run_tier_bypass_gate(
+        config.as_ref(),
+        model_spec_override.as_deref(),
+        current_depth,
+    )?;
 
     // 4. Load workflow: either from --resume journal or from file/pattern
     let (workflow_path, plan, journal_path, explicit_resume) = if let Some(ref resume_path) = resume
@@ -433,6 +438,32 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
     persist_plan_journal(&journal_path, &journal)?;
 
     Ok(())
+}
+
+fn enforce_plan_run_tier_bypass_gate(
+    config: Option<&ProjectConfig>,
+    model_spec_override: Option<&str>,
+    current_depth: u32,
+) -> Result<()> {
+    let Some(model_spec) = model_spec_override else {
+        return Ok(());
+    };
+    let global_config = csa_config::GlobalConfig::load()?;
+    let inherited_trusted_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_env(current_depth)
+            .is_some_and(|pin| pin.force_ignore_tier_setting && pin.model_spec == model_spec);
+    crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
+        project_config: config,
+        global_config: &global_config,
+        flags: crate::run_helpers::TierBypassGateFlags {
+            model_spec: true,
+            force: false,
+            force_ignore_tier_setting: false,
+            model: false,
+            thinking: false,
+        },
+        inherited_trusted_pin,
+    })
 }
 
 // --- Variable handling ---

@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::test_env_lock::ScopedTestEnvVar;
+use clap::Parser;
 use csa_config::{ProjectMeta, ResourcesConfig, TierConfig, TierStrategy, ToolConfig};
 use std::collections::HashMap;
 
@@ -151,16 +152,18 @@ fn resolve_claude_sub_agent_tool_and_model_short_circuits_auto_select_for_model_
         "{auto_select_error}"
     );
 
-    let (tool_name, model_spec, model) = super::resolve_claude_sub_agent_tool_and_model(
-        None,
-        Some("codex/openai/gpt-5.4/medium"),
-        None,
-        None,
-        &global,
-        Some("claude-code"),
-        std::path::Path::new("/tmp/test-project"),
-    )
-    .expect("model-spec exact selection should not require auto-selected tool");
+    let (tool_name, model_spec, model) =
+        super::resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+            arg_tool: None,
+            model_spec: Some("codex/openai/gpt-5.4/medium"),
+            model: None,
+            project_config: None,
+            global_config: &global,
+            parent_tool: Some("claude-code"),
+            project_root: std::path::Path::new("/tmp/test-project"),
+            inherited_trusted_pin: false,
+        })
+        .expect("model-spec exact selection should not require auto-selected tool");
 
     assert_eq!(tool_name, ToolName::Codex);
     assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/medium"));
@@ -171,15 +174,16 @@ fn resolve_claude_sub_agent_tool_and_model_short_circuits_auto_select_for_model_
 fn resolve_claude_sub_agent_tool_and_model_rejects_tool_model_spec_mismatch() {
     let global = GlobalConfig::default();
 
-    let error = super::resolve_claude_sub_agent_tool_and_model(
-        Some(ToolArg::Specific(ToolName::GeminiCli)),
-        Some("codex/openai/gpt-5.4/medium"),
-        None,
-        None,
-        &global,
-        Some("claude-code"),
-        std::path::Path::new("/tmp/test-project"),
-    )
+    let error = super::resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+        arg_tool: Some(ToolArg::Specific(ToolName::GeminiCli)),
+        model_spec: Some("codex/openai/gpt-5.4/medium"),
+        model: None,
+        project_config: None,
+        global_config: &global,
+        parent_tool: Some("claude-code"),
+        project_root: std::path::Path::new("/tmp/test-project"),
+        inherited_trusted_pin: false,
+    })
     .expect_err("mismatched explicit --tool + --model-spec must error");
 
     let message = error.to_string();
@@ -195,16 +199,18 @@ fn alias_to_auto_with_model_spec_resolves_via_spec() {
         .tool_aliases
         .insert("router".to_string(), "auto".to_string());
 
-    let (tool_name, model_spec, model) = super::resolve_claude_sub_agent_tool_and_model(
-        Some(ToolArg::Alias("router".to_string())),
-        Some("codex/openai/gpt-5.4/medium"),
-        None,
-        None,
-        &global,
-        Some("claude-code"),
-        std::path::Path::new("/tmp/test-project"),
-    )
-    .expect("alias to auto should let model-spec choose the tool");
+    let (tool_name, model_spec, model) =
+        super::resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+            arg_tool: Some(ToolArg::Alias("router".to_string())),
+            model_spec: Some("codex/openai/gpt-5.4/medium"),
+            model: None,
+            project_config: None,
+            global_config: &global,
+            parent_tool: Some("claude-code"),
+            project_root: std::path::Path::new("/tmp/test-project"),
+            inherited_trusted_pin: false,
+        })
+        .expect("alias to auto should let model-spec choose the tool");
 
     assert_eq!(tool_name, ToolName::Codex);
     assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/medium"));
@@ -220,29 +226,147 @@ fn alias_to_any_available_matches_direct_any_available() {
         .insert("router".to_string(), "any-available".to_string());
     let cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
 
-    let aliased = super::resolve_claude_sub_agent_tool_and_model(
-        Some(ToolArg::Alias("router".to_string())),
-        Some("codex/openai/gpt-5.4/high"),
-        None,
-        Some(&cfg),
-        &global,
-        Some("gemini-cli"),
-        std::path::Path::new("/tmp/test-project"),
-    )
+    let aliased = super::resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+        arg_tool: Some(ToolArg::Alias("router".to_string())),
+        model_spec: Some("codex/openai/gpt-5.4/high"),
+        model: None,
+        project_config: Some(&cfg),
+        global_config: &global,
+        parent_tool: Some("gemini-cli"),
+        project_root: std::path::Path::new("/tmp/test-project"),
+        inherited_trusted_pin: false,
+    })
     .expect("alias to any-available should behave like direct any-available");
 
-    let direct = super::resolve_claude_sub_agent_tool_and_model(
-        Some(ToolArg::AnyAvailable),
-        Some("codex/openai/gpt-5.4/high"),
-        None,
-        Some(&cfg),
-        &global,
-        Some("gemini-cli"),
-        std::path::Path::new("/tmp/test-project"),
-    )
+    let direct = super::resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+        arg_tool: Some(ToolArg::AnyAvailable),
+        model_spec: Some("codex/openai/gpt-5.4/high"),
+        model: None,
+        project_config: Some(&cfg),
+        global_config: &global,
+        parent_tool: Some("gemini-cli"),
+        project_root: std::path::Path::new("/tmp/test-project"),
+        inherited_trusted_pin: false,
+    })
     .expect("direct any-available should resolve");
 
     assert_eq!(aliased, direct);
+}
+
+#[test]
+fn claude_sub_agent_tier_gate_rejects_model_spec_model_override_by_default() {
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let global = GlobalConfig::default();
+
+    let error = super::enforce_claude_sub_agent_tier_bypass_gate(
+        Some("codex/openai/gpt-5.4/high"),
+        Some("unlisted-model"),
+        Some(&cfg),
+        &global,
+        false,
+    )
+    .expect_err("claude-sub-agent must gate model-spec plus model override under tiers");
+
+    let message = error.to_string();
+    assert!(message.contains("Tier bypass is disabled"), "{message}");
+    assert!(message.contains("--model-spec"), "{message}");
+    assert!(message.contains("--model"), "{message}");
+}
+
+#[test]
+fn claude_sub_agent_tier_gate_rejects_bare_model_by_default() {
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let global = GlobalConfig::default();
+
+    let error = super::enforce_claude_sub_agent_tier_bypass_gate(
+        None,
+        Some("unlisted-model"),
+        Some(&cfg),
+        &global,
+        false,
+    )
+    .expect_err("claude-sub-agent must gate bare model override under tiers");
+
+    let message = error.to_string();
+    assert!(message.contains("Tier bypass is disabled"), "{message}");
+    assert!(message.contains("Refused flags: --model"), "{message}");
+}
+
+#[test]
+fn claude_sub_agent_cli_rejects_thinking_flag() {
+    let error = match crate::cli::Cli::try_parse_from([
+        "csa",
+        "claude-sub-agent",
+        "--thinking",
+        "high",
+        "prompt",
+    ]) {
+        Ok(_) => panic!("claude-sub-agent does not expose --thinking"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn claude_sub_agent_tier_gate_allows_bypass_flags_with_global_opt_in() {
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let global = GlobalConfig {
+        tier_policy: csa_config::TierPolicyConfig {
+            allow_force_bypass: true,
+        },
+        ..Default::default()
+    };
+
+    super::enforce_claude_sub_agent_tier_bypass_gate(
+        Some("codex/openai/gpt-5.4/high"),
+        Some("unlisted-model"),
+        Some(&cfg),
+        &global,
+        false,
+    )
+    .expect("global opt-in should allow claude-sub-agent exact/model bypass");
+    super::enforce_claude_sub_agent_tier_bypass_gate(
+        None,
+        Some("unlisted-model"),
+        Some(&cfg),
+        &global,
+        false,
+    )
+    .expect("global opt-in should allow claude-sub-agent bare model bypass");
+}
+
+#[test]
+fn claude_sub_agent_tier_gate_allows_inherited_trusted_pin() {
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let global = GlobalConfig::default();
+    let inherited_spec = "codex/openai/gpt-5.5/xhigh";
+
+    super::enforce_claude_sub_agent_tier_bypass_gate(
+        Some(inherited_spec),
+        None,
+        Some(&cfg),
+        &global,
+        true,
+    )
+    .expect("trusted inherited subtree pin should bypass the tier gate");
+
+    let (tool_name, model_spec, model) =
+        super::resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+            arg_tool: None,
+            model_spec: Some(inherited_spec),
+            model: None,
+            project_config: Some(&cfg),
+            global_config: &global,
+            parent_tool: Some("claude-code"),
+            project_root: std::path::Path::new("/tmp/test-project"),
+            inherited_trusted_pin: true,
+        })
+        .expect("trusted inherited subtree pin should bypass tier whitelist resolution");
+
+    assert_eq!(tool_name, ToolName::Codex);
+    assert_eq!(model_spec.as_deref(), Some(inherited_spec));
+    assert!(model.is_none());
 }
 
 #[test]
