@@ -41,7 +41,7 @@ pub(super) fn enforce_direct_tool_tier_guard(ctx: DirectToolTierGuardCtx<'_>) ->
          --hint-difficulty <label> to route through [tier_mapping]. \
          Emergency exact-model/force bypasses require \
          [tier_policy].allow_force_bypass = true in the global CSA config.\n\
-         Example: csa run --tier <name> ...\n\
+         Example: csa run --sa-mode <true|false> --tier <name> ...\n\
          Available tiers: {}",
         tier_list.join(", ")
     );

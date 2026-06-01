@@ -17,7 +17,7 @@ pub(crate) fn enforce_tier_bypass_gate(ctx: TierBypassGateCtx<'_>) -> Result<()>
         return Ok(());
     };
 
-    if ctx.global_config.tier_policy.allow_force_bypass || ctx.inherited_trusted_pin {
+    if tier_bypass_allowed(Some(cfg), ctx.global_config, ctx.inherited_trusted_pin) {
         return Ok(());
     }
 
@@ -40,6 +40,15 @@ pub(crate) fn enforce_tier_bypass_gate(ctx: TierBypassGateCtx<'_>) -> Result<()>
         tier_names.join(", "),
         refused_flags.join(", ")
     );
+}
+
+pub(crate) fn tier_bypass_allowed(
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    inherited_trusted_pin: bool,
+) -> bool {
+    project_config.is_some_and(|cfg| !cfg.tiers.is_empty())
+        && (global_config.tier_policy.allow_force_bypass || inherited_trusted_pin)
 }
 
 fn refused_tier_bypass_flags(ctx: &TierBypassGateCtx<'_>) -> Vec<&'static str> {

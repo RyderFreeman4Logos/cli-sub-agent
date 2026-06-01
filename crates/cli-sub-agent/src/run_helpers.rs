@@ -50,6 +50,7 @@ pub(crate) use prompt::{
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
+pub(crate) use tier_bypass_gate::tier_bypass_allowed;
 pub(crate) use tier_bypass_gate::{TierBypassGateCtx, enforce_tier_bypass_gate};
 pub(crate) use tier_resolution::{
     TierToolResolution, collect_available_tier_models, collect_preferred_tier_models,
@@ -190,10 +191,12 @@ pub(crate) fn resolve_tool_and_model(
         needs_edit,
         tier,
         force_ignore_tier_setting,
+        model_spec_tier_bypass_allowed,
         tool_is_auto_resolved,
     } = request;
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting;
+    let bypass_model_spec_tier_check = bypass_tier || model_spec_tier_bypass_allowed;
     let exact_selection_active = model_spec.is_some();
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
@@ -244,7 +247,7 @@ pub(crate) fn resolve_tool_and_model(
                 "When using --force-ignore-tier-setting to bypass tier enforcement, \
                  you must provide complete model specification.\n\
                  Missing required flags: {}\n\
-                 Example: csa run --force-ignore-tier-setting --tool claude-code \
+                 Example: csa run --sa-mode <true|false> --force-ignore-tier-setting --tool claude-code \
                  --model claude-3-5-sonnet-20241022 --thinking medium \"prompt\"",
                 missing.join(", ")
             );
@@ -337,7 +340,7 @@ pub(crate) fn resolve_tool_and_model(
         // Enforce tool enablement from user config
         if let Some(cfg) = config {
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
-            if !force && !bypass_tier {
+            if !force && !bypass_model_spec_tier_check {
                 if cfg.tiers.is_empty() {
                     enforce_model_spec_matches_tool_default(cfg, &parsed, spec)?;
                 } else {

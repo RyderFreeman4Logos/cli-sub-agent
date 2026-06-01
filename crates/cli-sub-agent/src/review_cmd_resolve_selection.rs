@@ -63,6 +63,11 @@ pub(crate) fn resolve_review_selection(
                 needs_edit: false,
                 tier: cli_tier,
                 force_ignore_tier_setting,
+                model_spec_tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
+                    project_config,
+                    global_config,
+                    false,
+                ),
                 tool_is_auto_resolved: false,
             })?;
         return Ok(ResolvedReviewSelection {

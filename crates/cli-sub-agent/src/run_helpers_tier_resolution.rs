@@ -115,20 +115,21 @@ pub(crate) fn collect_preferred_tier_models(
         }
     }
 
-    let mut preferred = Vec::new();
-    let mut remaining = Vec::new();
-    for resolution in available {
-        if preference_order
-            .iter()
-            .any(|preferred_tool| preferred_tool == resolution.tool.as_str())
-        {
-            preferred.push(resolution);
-        } else {
-            remaining.push(resolution);
+    let mut ordered = Vec::new();
+    let mut remaining = available;
+    for preferred_tool in preference_order {
+        let mut next_remaining = Vec::new();
+        for resolution in remaining {
+            if resolution.tool.as_str() == preferred_tool {
+                ordered.push(resolution);
+            } else {
+                next_remaining.push(resolution);
+            }
         }
+        remaining = next_remaining;
     }
-    preferred.extend(remaining);
-    preferred
+    ordered.extend(remaining);
+    ordered
 }
 
 pub(crate) fn resolve_preferred_tool_from_tier(

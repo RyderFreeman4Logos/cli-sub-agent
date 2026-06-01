@@ -148,7 +148,7 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
         "msg: {msg}"
     );
     assert!(
-        msg.contains("Example: csa run --force-ignore-tier-setting"),
+        msg.contains("Example: csa run --sa-mode <true|false> --force-ignore-tier-setting"),
         "msg: {msg}"
     );
 
@@ -256,6 +256,75 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_model_spec_provided() 
         result.is_ok(),
         "force-ignore should bypass model_spec validation: {:?}",
         result
+    );
+}
+
+#[test]
+fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
+    let cfg = config_with_tier(
+        "tier-1",
+        vec!["gemini-cli/google/gemini-3/high"],
+        &["gemini-cli", "codex"],
+    );
+    let global = GlobalConfig {
+        tier_policy: csa_config::TierPolicyConfig {
+            allow_force_bypass: true,
+        },
+        ..Default::default()
+    };
+
+    super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
+        project_config: Some(&cfg),
+        global_config: &global,
+        model_spec: true,
+        force: false,
+        force_ignore_tier_setting: false,
+        model_tier_override: false,
+        thinking_tier_override: false,
+        inherited_trusted_pin: false,
+    })
+    .expect("global opt-in should allow bare --model-spec tier bypass");
+
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some("codex/openai/gpt-5.4/high"),
+        config: Some(&cfg),
+        model_spec_tier_bypass_allowed: super::tier_bypass_allowed(Some(&cfg), &global, false),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    })
+    .expect("opted-in bare --model-spec should resolve exact model");
+
+    assert_eq!(result.0, ToolName::Codex);
+    assert_eq!(result.1.as_deref(), Some("codex/openai/gpt-5.4/high"));
+    assert!(result.2.is_none());
+}
+
+#[test]
+fn collect_preferred_tier_models_honors_preference_array_order() {
+    let _guard = assume_tier_tools_available();
+    let cfg = config_with_tier(
+        "quality",
+        vec![
+            "gemini-cli/google/gemini-3/high",
+            "codex/openai/gpt-5.4/high",
+            "claude-code/anthropic/sonnet-4.5/high",
+        ],
+        &["gemini-cli", "codex", "claude-code"],
+    );
+    let preference_order = vec!["codex".to_string(), "gemini-cli".to_string()];
+
+    let candidates = super::collect_preferred_tier_models("quality", &cfg, &preference_order, &[]);
+    let specs: Vec<&str> = candidates
+        .iter()
+        .map(|resolution| resolution.model_spec.as_str())
+        .collect();
+
+    assert_eq!(
+        specs,
+        vec![
+            "codex/openai/gpt-5.4/high",
+            "gemini-cli/google/gemini-3/high",
+            "claude-code/anthropic/sonnet-4.5/high",
+        ]
     );
 }
 

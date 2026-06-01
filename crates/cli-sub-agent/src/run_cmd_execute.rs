@@ -265,6 +265,15 @@ pub(crate) async fn handle_run(
         force_ignore_tier_setting,
         model_pin_resolution.inherited_trusted_pin,
     )?;
+    if model_selection_flags.model_spec
+        && crate::run_helpers::tier_bypass_allowed(
+            config.as_ref(),
+            &global_config,
+            model_pin_resolution.inherited_trusted_pin,
+        )
+    {
+        force_ignore_tier_setting = true;
+    }
     let primary_writer_spec =
         resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
     let model_spec = model_spec.or(primary_writer_spec);

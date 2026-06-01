@@ -21,6 +21,7 @@ pub(crate) struct RoutingRequest<'a> {
     pub needs_edit: bool,
     pub tier: Option<&'a str>,
     pub force_ignore_tier_setting: bool,
+    pub model_spec_tier_bypass_allowed: bool,
     pub tool_is_auto_resolved: bool,
 }
 
@@ -41,6 +42,7 @@ impl<'a> RoutingRequest<'a> {
             needs_edit: false,
             tier: None,
             force_ignore_tier_setting: false,
+            model_spec_tier_bypass_allowed: false,
             tool_is_auto_resolved: false,
         }
     }
