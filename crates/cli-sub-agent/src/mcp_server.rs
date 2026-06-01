@@ -160,7 +160,7 @@ fn get_tools() -> Vec<McpToolDef> {
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "Tool to use (gemini-cli, opencode, codex, claude-code)"
+                        "description": "Tool to use (gemini-cli, opencode, codex, claude-code). With tier, this is a soft preference before remaining tier fallbacks."
                     },
                     "prompt": {
                         "type": "string",
@@ -172,7 +172,7 @@ fn get_tools() -> Vec<McpToolDef> {
                     },
                     "model_spec": {
                         "type": "string",
-                        "description": "Model specification in format tool:model (optional)"
+                        "description": "Exact model specification (optional). When [tiers] are configured, use tier unless the global [tier_policy].allow_force_bypass escape hatch is enabled."
                     },
                     "ephemeral": {
                         "type": "boolean",
@@ -184,7 +184,7 @@ fn get_tools() -> Vec<McpToolDef> {
                     },
                     "force_ignore_tier_setting": {
                         "type": "boolean",
-                        "description": "Bypass tier routing for direct tool/model overrides. Use without tier; tool+tier+force_ignore is invalid (optional)"
+                        "description": "Emergency tier bypass for direct tool/model overrides. Rejected when [tiers] are configured unless global [tier_policy].allow_force_bypass is enabled; tool+tier+force_ignore is invalid (optional)."
                     }
                 },
                 "required": ["prompt"]
@@ -485,6 +485,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
 
     // Load config
     let config = ProjectConfig::load(&project_root)?;
+    let global_config = csa_config::GlobalConfig::load()?;
 
     // Check recursion depth
     let current_depth: u32 = std::env::var("CSA_DEPTH")
@@ -509,6 +510,17 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             ]
         }));
     }
+
+    crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
+        project_config: config.as_ref(),
+        global_config: &global_config,
+        model_spec: model_spec.is_some(),
+        force: false,
+        force_ignore_tier_setting: force_ignore_tier,
+        model_tier_override: false,
+        thinking_tier_override: false,
+        inherited_trusted_pin: false,
+    })?;
 
     // Resolve tool and model
     let (resolved_tool, resolved_model_spec, resolved_model) =
@@ -573,8 +585,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
         }));
     }
 
-    // Load global config for env injection and slot control
-    let global_config = csa_config::GlobalConfig::load()?;
+    // Use global config for env injection and slot control
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
     let initial_response_timeout_seconds =
         crate::pipeline::resolve_initial_response_timeout_for_tool(

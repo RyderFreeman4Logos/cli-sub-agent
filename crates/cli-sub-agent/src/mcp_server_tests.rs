@@ -1,4 +1,50 @@
 use super::*;
+use std::path::{Path, PathBuf};
+use tempfile::tempdir;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by TEST_ENV_LOCK.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation guarded by TEST_ENV_LOCK.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+struct CurrentDirGuard {
+    original: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn set(path: &Path) -> Self {
+        let original = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(path).expect("set current dir");
+        Self { original }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.original).expect("restore current dir");
+    }
+}
 
 // --- parse_tool_name tests ---
 
@@ -71,6 +117,31 @@ fn get_tools_csa_run_requires_prompt() {
 }
 
 #[test]
+fn get_tools_csa_run_documents_tier_bypass_gate() {
+    let tools = get_tools();
+    let run_tool = tools.iter().find(|t| t.name == "csa_run").unwrap();
+    let properties = run_tool
+        .input_schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .expect("csa_run properties");
+
+    let model_spec_description = properties
+        .get("model_spec")
+        .and_then(|v| v.get("description"))
+        .and_then(|v| v.as_str())
+        .expect("model_spec description");
+    assert!(model_spec_description.contains("[tier_policy].allow_force_bypass"));
+
+    let force_description = properties
+        .get("force_ignore_tier_setting")
+        .and_then(|v| v.get("description"))
+        .and_then(|v| v.as_str())
+        .expect("force_ignore_tier_setting description");
+    assert!(force_description.contains("[tier_policy].allow_force_bypass"));
+}
+
+#[test]
 fn get_tools_csa_session_delete_requires_session_id() {
     let tools = get_tools();
     let del_tool = tools
@@ -85,6 +156,38 @@ fn get_tools_csa_session_delete_requires_session_id() {
             .any(|v| v.as_str() == Some("session_id")),
         "csa_session_delete must require 'session_id' parameter"
     );
+}
+
+#[tokio::test]
+async fn mcp_run_rejects_model_spec_when_project_tiers_exist_and_policy_is_default() {
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let project = tempdir().expect("project tempdir");
+    let config_dir = project.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create project config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[tiers.quality]
+description = "quality"
+models = ["codex/openai/gpt-5/high"]
+"#,
+    )
+    .expect("write project config");
+
+    let xdg = tempdir().expect("xdg tempdir");
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
+    let _cwd_guard = CurrentDirGuard::set(project.path());
+
+    let err = handle_run_tool(serde_json::json!({
+        "prompt": "hello",
+        "model_spec": "codex/openai/gpt-5/high"
+    }))
+    .await
+    .expect_err("MCP exact model bypass should be rejected before execution");
+    let message = err.to_string();
+    assert!(message.contains("Tier bypass is disabled"));
+    assert!(message.contains("--model-spec"));
+    assert!(message.contains("[tier_policy].allow_force_bypass"));
 }
 
 #[test]
