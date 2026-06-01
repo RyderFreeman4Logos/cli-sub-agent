@@ -361,6 +361,7 @@ fn build_result_json_payload_includes_review_iterations() {
         review_iterations: 4,
         timestamp: now,
         diff_fingerprint: Some("sha256:abc123".to_string()),
+        fix_convergence: None,
     };
 
     let payload = build_result_json_payload(

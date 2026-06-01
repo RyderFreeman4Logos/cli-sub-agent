@@ -66,11 +66,10 @@ SAFE_BRANCH="$(_sanitize_branch "${CURRENT_BRANCH}")"
 MARKER=".csa/state/review-gate/${SAFE_BRANCH}-${SHORT_SHA}.pass"
 
 if [ -f "${MARKER}" ]; then
-  echo "pre-push: Review gate passed (marker) for ${CURRENT_BRANCH} at ${SHORT_SHA}."
-  exit 0
+  echo "pre-push: Review gate marker found for ${CURRENT_BRANCH} at ${SHORT_SHA}; validating session."
 fi
 
-# ── Slow path: session-store scan ────────────────────────────────────────────
+# ── Session-store validation ─────────────────────────────────────────────────
 if csa review --check-verdict; then
   echo "pre-push: Full-diff review verified for HEAD ${SHORT_SHA}."
   exit 0

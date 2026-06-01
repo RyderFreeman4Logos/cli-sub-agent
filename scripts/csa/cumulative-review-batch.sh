@@ -75,22 +75,32 @@ resolve_session_dir() {
 
 should_record_passed_head() {
   local session_id="$1"
-  local session_dir verdict_path
+  local session_dir verdict_path meta_path
   session_dir="$(resolve_session_dir "${session_id}")"
   verdict_path="${session_dir}/output/review-verdict.json"
+  meta_path="${session_dir}/review_meta.json"
 
   if [ ! -f "${verdict_path}" ]; then
     echo "WARN: review-verdict artifact missing for session ${session_id}; not updating batch state." >&2
     return 1
   fi
+  if [ ! -f "${meta_path}" ]; then
+    echo "WARN: review_meta artifact missing for session ${session_id}; not updating batch state." >&2
+    return 1
+  fi
 
-  # Negative list avoids known review-meta parsing bug producing decision=fail on
-  # clean reviews; reject only confirmed non-pass states.
-  jq -e '
-    (.decision // "fail") != "uncertain"
-    and (.decision // "fail") != "skip"
+  jq -e --slurpfile meta "${meta_path}" '
+    (.decision // "fail") == "pass"
     and (.severity_counts.critical // 0) == 0
     and (.severity_counts.high // 0) == 0
+    and (($meta[0].decision // "fail") == "pass")
+    and (($meta[0].exit_code // 1) == 0)
+    and (($meta[0].status_reason // "") == "")
+    and (($meta[0].failure_reason // "") == "")
+    and (
+      (($meta[0].fix_attempted // false) | not)
+      or (($meta[0].fix_convergence.reached_genuine_clean_convergence // false) == true)
+    )
   ' "${verdict_path}" >/dev/null
 }
 

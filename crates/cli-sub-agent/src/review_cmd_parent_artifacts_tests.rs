@@ -777,6 +777,7 @@ fn write_multi_reviewer_parent_artifacts_promotes_empty_findings_to_pass() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:test".to_string()),
+        fix_convergence: None,
     };
 
     write_multi_reviewer_parent_artifacts(
@@ -1152,6 +1153,7 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:test".to_string()),
+        fix_convergence: None,
     };
 
     write_multi_reviewer_parent_artifacts(
@@ -1636,6 +1638,7 @@ fn write_multi_reviewer_parent_artifacts_writes_daemon_review_meta() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:test".to_string()),
+        fix_convergence: None,
     };
 
     write_multi_reviewer_parent_artifacts(

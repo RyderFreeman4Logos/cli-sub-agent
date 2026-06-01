@@ -215,6 +215,21 @@ pub struct ReviewSessionMeta {
     /// can reuse a previous review without re-running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_fingerprint: Option<String>,
+    /// Positive sentinel for `csa review --fix` convergence.
+    ///
+    /// Absent for non-fix and legacy sessions.  For `fix_attempted=true`,
+    /// absence means the fix session did not prove genuine clean convergence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix_convergence: Option<FixConvergenceMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FixConvergenceMeta {
+    pub quality_gate_passed: bool,
+    pub fix_output_was_substantive: bool,
+    pub post_consistency_decision: String,
+    pub reached_genuine_clean_convergence: bool,
+    pub terminal_reason: String,
 }
 
 impl ReviewSessionMeta {
@@ -236,6 +251,24 @@ impl ReviewSessionMeta {
             .is_some_and(|failure| !failure.trim().is_empty());
 
         has_primary_failure && self.exit_code != 0
+    }
+
+    /// True when this review is not a fix session, or when the fix session
+    /// persisted the positive clean-convergence sentinel.
+    pub fn fix_clean_converged(&self) -> bool {
+        !self.fix_attempted
+            || self
+                .fix_convergence
+                .as_ref()
+                .is_some_and(|fix| fix.reached_genuine_clean_convergence)
+    }
+
+    /// Central acceptance predicate for consumers that need a clean review gate.
+    pub fn accepts_clean_review_verdict(&self, artifact_decision: ReviewDecision) -> bool {
+        artifact_decision == ReviewDecision::Pass
+            && self.exit_code == 0
+            && !self.requires_fail_closed_verdict()
+            && self.fix_clean_converged()
     }
 }
 

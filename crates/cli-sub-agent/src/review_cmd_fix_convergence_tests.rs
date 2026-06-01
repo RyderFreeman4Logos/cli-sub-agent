@@ -31,6 +31,7 @@ fn make_clean_review_meta(session_id: &str) -> ReviewSessionMeta {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     }
 }
 
@@ -154,11 +155,37 @@ fn assert_clean_convergence_artifacts(session_dir: &Path) {
     );
 }
 
+fn assert_fix_convergence(
+    meta: &ReviewSessionMeta,
+    quality_gate_passed: bool,
+    fix_output_was_substantive: bool,
+    post_consistency_decision: ReviewDecision,
+    reached: bool,
+    terminal_reason: &str,
+) {
+    let convergence = meta
+        .fix_convergence
+        .as_ref()
+        .expect("fix convergence sentinel should be persisted");
+    assert_eq!(convergence.quality_gate_passed, quality_gate_passed);
+    assert_eq!(
+        convergence.fix_output_was_substantive,
+        fix_output_was_substantive
+    );
+    assert_eq!(
+        convergence.post_consistency_decision,
+        post_consistency_decision.as_str()
+    );
+    assert_eq!(convergence.reached_genuine_clean_convergence, reached);
+    assert_eq!(convergence.terminal_reason, terminal_reason);
+}
+
 #[test]
 fn fix_loop_terminal_outcome_truth_table() {
     struct Case {
         name: &'static str,
         quality_gate_passed: bool,
+        fix_output_was_substantive: bool,
         final_decision: ReviewDecision,
         exit_code: i32,
         clean_marker: bool,
@@ -168,6 +195,7 @@ fn fix_loop_terminal_outcome_truth_table() {
         Case {
             name: "genuine clean convergence",
             quality_gate_passed: true,
+            fix_output_was_substantive: true,
             final_decision: ReviewDecision::Pass,
             exit_code: 0,
             clean_marker: true,
@@ -175,6 +203,7 @@ fn fix_loop_terminal_outcome_truth_table() {
         Case {
             name: "converged but post-consistency decision non-clean",
             quality_gate_passed: true,
+            fix_output_was_substantive: true,
             final_decision: ReviewDecision::Fail,
             exit_code: 1,
             clean_marker: false,
@@ -182,13 +211,15 @@ fn fix_loop_terminal_outcome_truth_table() {
         Case {
             name: "exhausted with failing gate and artifact-inferred clean",
             quality_gate_passed: false,
-            final_decision: ReviewDecision::Pass,
+            fix_output_was_substantive: true,
+            final_decision: ReviewDecision::Fail,
             exit_code: 1,
             clean_marker: false,
         },
         Case {
             name: "exhausted with review findings still present",
             quality_gate_passed: false,
+            fix_output_was_substantive: true,
             final_decision: ReviewDecision::Fail,
             exit_code: 1,
             clean_marker: false,
@@ -196,6 +227,7 @@ fn fix_loop_terminal_outcome_truth_table() {
         Case {
             name: "error or abort path",
             quality_gate_passed: false,
+            fix_output_was_substantive: false,
             final_decision: ReviewDecision::Unavailable,
             exit_code: 1,
             clean_marker: false,
@@ -204,13 +236,21 @@ fn fix_loop_terminal_outcome_truth_table() {
 
     for case in cases {
         assert_eq!(
-            fix_exit_code_for_convergence(case.quality_gate_passed, case.final_decision),
+            fix_exit_code_for_convergence(
+                case.quality_gate_passed,
+                case.fix_output_was_substantive,
+                case.final_decision
+            ),
             case.exit_code,
             "{} exit code",
             case.name
         );
         assert_eq!(
-            reached_genuine_clean_convergence(case.quality_gate_passed, case.final_decision),
+            reached_genuine_clean_convergence(
+                case.quality_gate_passed,
+                case.fix_output_was_substantive,
+                case.final_decision
+            ),
             case.clean_marker,
             "{} clean marker",
             case.name
@@ -452,6 +492,14 @@ fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate
     let persisted_meta = read_review_meta(&session_dir);
     assert_eq!(persisted_meta.decision, final_decision.as_str());
     assert_eq!(persisted_meta.exit_code, 1);
+    assert_fix_convergence(
+        &persisted_meta,
+        true,
+        true,
+        ReviewDecision::Fail,
+        false,
+        "post_consistency_non_pass",
+    );
 }
 
 #[test]
@@ -503,11 +551,11 @@ fn persist_fix_final_artifacts_exhausted_failing_gate_empty_artifacts_blocks_exi
 
     assert_eq!(
         final_decision,
-        ReviewDecision::Pass,
-        "empty artifacts reproduce the artifact-inferred clean decision"
+        ReviewDecision::Fail,
+        "failing quality gate must override artifact-inferred clean"
     );
     assert_eq!(
-        fix_exit_code_for_convergence(false, final_decision),
+        fix_exit_code_for_convergence(false, true, final_decision),
         1,
         "exhaustion with a failing gate must force a non-zero exit"
     );
@@ -520,6 +568,25 @@ fn persist_fix_final_artifacts_exhausted_failing_gate_empty_artifacts_blocks_exi
     assert_eq!(
         persisted_meta.exit_code, 1,
         "persisted review meta exit must follow the genuine-convergence predicate"
+    );
+    assert_eq!(
+        persisted_meta.failure_reason.as_deref(),
+        Some("fix_non_convergence:quality_gate_failed")
+    );
+    assert_fix_convergence(
+        &persisted_meta,
+        false,
+        true,
+        ReviewDecision::Fail,
+        false,
+        "quality_gate_failed",
+    );
+    let artifact = read_review_verdict(&session_dir);
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert!(
+        artifact.severity_counts.values().any(|count| *count > 0),
+        "fail-closed verdict must persist a non-zero synthetic count"
     );
 }
 
@@ -570,7 +637,10 @@ fn persist_fix_final_artifacts_exhausted_failing_gate_non_clean_artifacts_blocks
         ReviewDecision::Pass,
         "non-clean artifacts must remain non-clean"
     );
-    assert_eq!(fix_exit_code_for_convergence(false, final_decision), 1);
+    assert_eq!(
+        fix_exit_code_for_convergence(false, true, final_decision),
+        1
+    );
     assert!(
         !marker_path.exists(),
         "exhaustion with non-clean artifacts must remove a stale clean marker"
@@ -578,6 +648,77 @@ fn persist_fix_final_artifacts_exhausted_failing_gate_non_clean_artifacts_blocks
     let persisted_meta = read_review_meta(&session_dir);
     assert_eq!(persisted_meta.decision, final_decision.as_str());
     assert_eq!(persisted_meta.exit_code, 1);
+    assert_eq!(
+        persisted_meta.failure_reason.as_deref(),
+        Some("fix_non_convergence:quality_gate_failed")
+    );
+    assert_fix_convergence(
+        &persisted_meta,
+        false,
+        true,
+        ReviewDecision::Fail,
+        false,
+        "quality_gate_failed",
+    );
+}
+
+#[test]
+fn persist_fix_final_artifacts_empty_fix_output_blocks_clean_artifact_inference() {
+    let branch = "fix-1754-empty-fix-output";
+    let project_root = temp_git_project_root("persist-fix-empty-output", branch);
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXEMPTYOUTPUT");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output = "   \n\t";
+    csa_session::persist_structured_output(&session_dir, "CLEAN\n")
+        .expect("persist stale clean structured output");
+    write_findings_toml(&session_dir, &FindingsFile::default()).expect("write empty findings");
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.head_sha = csa_session::detect_git_head(&project_root).expect("detect HEAD");
+    crate::review_gate::write_review_gate_marker(
+        &project_root,
+        branch,
+        &meta.head_sha,
+        &meta.session_id,
+        &meta.scope,
+    );
+    let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
+    assert!(marker_path.exists(), "test must seed a stale clean marker");
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output(
+        &project_root,
+        &meta,
+        true,
+        current_output,
+    );
+
+    assert_eq!(final_decision, ReviewDecision::Fail);
+    assert!(
+        !marker_path.exists(),
+        "empty fix output must remove a stale clean marker"
+    );
+    let persisted_meta = read_review_meta(&session_dir);
+    assert_eq!(persisted_meta.decision, ReviewDecision::Fail.as_str());
+    assert_eq!(persisted_meta.exit_code, 1);
+    assert_eq!(
+        persisted_meta.failure_reason.as_deref(),
+        Some("fix_non_convergence:empty_fix_output")
+    );
+    assert_fix_convergence(
+        &persisted_meta,
+        true,
+        false,
+        ReviewDecision::Fail,
+        false,
+        "empty_fix_output",
+    );
+    let artifact = read_review_verdict(&session_dir);
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert!(
+        artifact.severity_counts.values().any(|count| *count > 0),
+        "empty-output fail-closed verdict must persist a non-zero count"
+    );
 }
 
 #[test]
@@ -623,4 +764,12 @@ fn persist_fix_final_artifacts_clean_convergence_writes_gate_marker_and_zero_exi
     let persisted_meta = read_review_meta(&session_dir);
     assert_eq!(persisted_meta.decision, final_decision.as_str());
     assert_eq!(persisted_meta.exit_code, 0);
+    assert_fix_convergence(
+        &persisted_meta,
+        true,
+        true,
+        ReviewDecision::Pass,
+        true,
+        "clean_convergence",
+    );
 }

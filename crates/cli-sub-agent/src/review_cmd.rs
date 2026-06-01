@@ -421,6 +421,7 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
             review_iterations,
             timestamp: chrono::Utc::now(),
             diff_fingerprint,
+            fix_convergence: None,
         };
         let persisted_verdict_exit_code = persist_review_sidecars_if_session_exists(
             &project_root,

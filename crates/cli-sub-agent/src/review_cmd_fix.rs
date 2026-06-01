@@ -12,7 +12,8 @@ use crate::review_routing::ReviewRoutingMetadata;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::{
-    FindingsFile, ReviewVerdictArtifact, state::ReviewSessionMeta, write_findings_toml,
+    FindingsFile, FixConvergenceMeta, ReviewVerdictArtifact, state::ReviewSessionMeta,
+    write_findings_toml,
 };
 
 use super::CLEAN;
@@ -66,6 +67,8 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     // Entering the fix loop means the current review is not clean; any existing
     // marker for this SHA is stale until genuine clean convergence rewrites it.
     remove_review_gate_marker_for_current_head(ctx.project_root, &session_id);
+    let mut last_fix_output: Option<String> = None;
+    let mut last_gate_passed = false;
 
     for round in 1..=ctx.max_rounds {
         info!(round, max_rounds = ctx.max_rounds, session_id = %session_id, "Fix round starting");
@@ -130,17 +133,16 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             fix_future.await?
         };
 
-        print!(
-            "{}",
-            sanitize_review_output(&fix_result.execution.execution.output)
-        );
-        let fix_empty = is_review_output_empty(&fix_result.execution.execution.output);
+        let fix_output = fix_result.execution.execution.output.clone();
+        print!("{}", sanitize_review_output(&fix_output));
+        let fix_empty = is_review_output_empty(&fix_output);
         if fix_empty {
             warn!(
                 round,
                 "Fix round produced no substantive output — treating as failed"
             );
         }
+        last_fix_output = Some(fix_output.clone());
         session_id = fix_result.execution.meta_session_id.clone();
 
         // Run the quality gate after fix.
@@ -194,6 +196,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             }
             pipeline_result.passed
         };
+        last_gate_passed = gate_passed;
 
         if gate_passed && !fix_empty {
             let review_meta = ReviewSessionMeta {
@@ -213,12 +216,13 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 review_iterations: ctx.review_iterations,
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: None,
+                fix_convergence: None,
             };
             let final_decision = persist_fix_final_artifacts_with_current_output(
                 ctx.project_root,
                 &review_meta,
                 true,
-                Some(&fix_result.execution.execution.output),
+                Some(&fix_output),
             );
             if final_decision == ReviewDecision::Pass {
                 info!(
@@ -232,7 +236,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                     "Final verdict is non-clean"
                 );
             }
-            return Ok(fix_exit_code_for_convergence(true, final_decision));
+            return Ok(fix_exit_code_for_convergence(true, true, final_decision));
         }
     }
 
@@ -254,15 +258,29 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         review_iterations: ctx.review_iterations,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
-    let final_decision = persist_fix_final_artifacts(ctx.project_root, &review_meta, false);
+    let final_decision = persist_fix_final_artifacts_with_current_output(
+        ctx.project_root,
+        &review_meta,
+        last_gate_passed,
+        last_fix_output.as_deref(),
+    );
     error!(
         max_rounds = ctx.max_rounds,
         "All fix rounds exhausted — quality gate still failing"
     );
-    Ok(fix_exit_code_for_convergence(false, final_decision))
+    Ok(fix_exit_code_for_convergence(
+        last_gate_passed,
+        last_fix_output
+            .as_deref()
+            .map(|output| !is_review_output_empty(output))
+            .unwrap_or(false),
+        final_decision,
+    ))
 }
 
+#[cfg(test)]
 fn persist_fix_final_artifacts(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
@@ -282,13 +300,33 @@ fn persist_fix_final_artifacts_with_current_output(
     quality_gate_passed: bool,
     current_fix_output: Option<&str>,
 ) -> ReviewDecision {
-    persist_review_meta(project_root, review_meta);
-    if quality_gate_passed {
-        match csa_session::get_session_dir(project_root, &review_meta.session_id) {
+    let fix_output_was_substantive = current_fix_output
+        .map(|output| !is_review_output_empty(output))
+        .unwrap_or(quality_gate_passed);
+    let mut meta_for_verdict = review_meta.clone();
+    if let Some(reason) =
+        pre_verdict_non_convergence_reason(quality_gate_passed, fix_output_was_substantive)
+    {
+        meta_for_verdict.decision = ReviewDecision::Fail.as_str().to_string();
+        meta_for_verdict.verdict = "HAS_ISSUES".to_string();
+        meta_for_verdict.exit_code = 1;
+        meta_for_verdict.failure_reason = Some(format!("fix_non_convergence:{reason}"));
+        meta_for_verdict.fix_convergence = Some(FixConvergenceMeta {
+            quality_gate_passed,
+            fix_output_was_substantive,
+            post_consistency_decision: ReviewDecision::Fail.as_str().to_string(),
+            reached_genuine_clean_convergence: false,
+            terminal_reason: reason.to_string(),
+        });
+    }
+
+    persist_review_meta(project_root, &meta_for_verdict);
+    if quality_gate_passed && fix_output_was_substantive {
+        match csa_session::get_session_dir(project_root, &meta_for_verdict.session_id) {
             Ok(session_dir) => {
                 if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
                     warn!(
-                        session_id = %review_meta.session_id,
+                        session_id = %meta_for_verdict.session_id,
                         error = %error,
                         "Failed to write output/findings.toml after CLEAN convergence"
                     );
@@ -304,7 +342,7 @@ fn persist_fix_final_artifacts_with_current_output(
                         && error.kind() != std::io::ErrorKind::NotFound
                     {
                         warn!(
-                            session_id = %review_meta.session_id,
+                            session_id = %meta_for_verdict.session_id,
                             artifact_file,
                             error = %error,
                             "Failed to remove stale review artifact after CLEAN convergence"
@@ -313,26 +351,30 @@ fn persist_fix_final_artifacts_with_current_output(
                 }
                 clean_output::clear_clean_convergence_fail_signals(
                     &session_dir,
-                    &review_meta.session_id,
+                    &meta_for_verdict.session_id,
                     current_fix_output,
                 );
             }
             Err(error) => {
                 warn!(
-                    session_id = %review_meta.session_id,
+                    session_id = %meta_for_verdict.session_id,
                     error = %error,
                     "Cannot resolve session dir for final fix artifacts"
                 );
             }
         }
     }
-    remove_stale_review_verdict(project_root, review_meta);
-    persist_review_verdict(project_root, review_meta, &[], Vec::new());
-    let final_verdict = read_persisted_fix_final_verdict(project_root, review_meta);
-    let final_meta =
-        review_meta_for_final_verdict(review_meta, &final_verdict, quality_gate_passed);
+    remove_stale_review_verdict(project_root, &meta_for_verdict);
+    persist_review_verdict(project_root, &meta_for_verdict, &[], Vec::new());
+    let final_verdict = read_persisted_fix_final_verdict(project_root, &meta_for_verdict);
+    let outcome = FixTerminalOutcome::new(
+        quality_gate_passed,
+        fix_output_was_substantive,
+        final_verdict.decision,
+    );
+    let final_meta = review_meta_for_final_verdict(&meta_for_verdict, &final_verdict, &outcome);
     persist_review_meta(project_root, &final_meta);
-    if reached_genuine_clean_convergence(quality_gate_passed, final_verdict.decision) {
+    if outcome.reached_genuine_clean_convergence() {
         crate::review_gate::maybe_write_review_gate_marker(
             project_root,
             &final_meta.head_sha,
@@ -343,7 +385,7 @@ fn persist_fix_final_artifacts_with_current_output(
         remove_review_gate_marker_for_head(project_root, &final_meta);
     }
     super::post_review::persist_review_failure_suggestion(project_root, &final_meta);
-    final_verdict.decision
+    outcome.post_consistency_decision
 }
 
 struct FinalFixVerdict {
@@ -400,18 +442,41 @@ fn fail_closed_final_fix_verdict() -> FinalFixVerdict {
 fn review_meta_for_final_verdict(
     review_meta: &ReviewSessionMeta,
     final_verdict: &FinalFixVerdict,
-    quality_gate_passed: bool,
+    outcome: &FixTerminalOutcome,
 ) -> ReviewSessionMeta {
     let mut final_meta = review_meta.clone();
-    final_meta.decision = final_verdict.decision.as_str().to_string();
-    final_meta.verdict = final_verdict.verdict_legacy.clone();
-    final_meta.exit_code =
-        fix_exit_code_for_convergence(quality_gate_passed, final_verdict.decision);
+    let persisted_decision = if outcome.pre_verdict_non_converged() {
+        ReviewDecision::Fail
+    } else {
+        final_verdict.decision
+    };
+    final_meta.decision = persisted_decision.as_str().to_string();
+    final_meta.verdict = if persisted_decision == ReviewDecision::Fail {
+        "HAS_ISSUES".to_string()
+    } else {
+        final_verdict.verdict_legacy.clone()
+    };
+    final_meta.exit_code = outcome.exit_code();
+    final_meta.fix_convergence = Some(outcome.fix_convergence_meta());
+    if outcome.pre_verdict_non_converged() {
+        final_meta.failure_reason =
+            Some(format!("fix_non_convergence:{}", outcome.terminal_reason));
+    } else if outcome.reached_genuine_clean_convergence() {
+        final_meta.failure_reason = None;
+    }
     final_meta
 }
 
-fn fix_exit_code_for_convergence(quality_gate_passed: bool, final_decision: ReviewDecision) -> i32 {
-    if reached_genuine_clean_convergence(quality_gate_passed, final_decision) {
+fn fix_exit_code_for_convergence(
+    quality_gate_passed: bool,
+    fix_output_was_substantive: bool,
+    final_decision: ReviewDecision,
+) -> i32 {
+    if reached_genuine_clean_convergence(
+        quality_gate_passed,
+        fix_output_was_substantive,
+        final_decision,
+    ) {
         0
     } else {
         1
@@ -420,9 +485,103 @@ fn fix_exit_code_for_convergence(quality_gate_passed: bool, final_decision: Revi
 
 fn reached_genuine_clean_convergence(
     quality_gate_passed: bool,
+    fix_output_was_substantive: bool,
     final_decision: ReviewDecision,
 ) -> bool {
-    quality_gate_passed && final_decision == ReviewDecision::Pass
+    quality_gate_passed && fix_output_was_substantive && final_decision == ReviewDecision::Pass
+}
+
+struct FixTerminalOutcome {
+    quality_gate_passed: bool,
+    fix_output_was_substantive: bool,
+    post_consistency_decision: ReviewDecision,
+    terminal_reason: &'static str,
+}
+
+impl FixTerminalOutcome {
+    fn new(
+        quality_gate_passed: bool,
+        fix_output_was_substantive: bool,
+        post_consistency_decision: ReviewDecision,
+    ) -> Self {
+        Self {
+            quality_gate_passed,
+            fix_output_was_substantive,
+            post_consistency_decision,
+            terminal_reason: terminal_reason_for_convergence(
+                quality_gate_passed,
+                fix_output_was_substantive,
+                post_consistency_decision,
+            ),
+        }
+    }
+
+    fn reached_genuine_clean_convergence(&self) -> bool {
+        reached_genuine_clean_convergence(
+            self.quality_gate_passed,
+            self.fix_output_was_substantive,
+            self.post_consistency_decision,
+        )
+    }
+
+    fn exit_code(&self) -> i32 {
+        fix_exit_code_for_convergence(
+            self.quality_gate_passed,
+            self.fix_output_was_substantive,
+            self.post_consistency_decision,
+        )
+    }
+
+    fn pre_verdict_non_converged(&self) -> bool {
+        pre_verdict_non_convergence_reason(
+            self.quality_gate_passed,
+            self.fix_output_was_substantive,
+        )
+        .is_some()
+    }
+
+    fn fix_convergence_meta(&self) -> FixConvergenceMeta {
+        FixConvergenceMeta {
+            quality_gate_passed: self.quality_gate_passed,
+            fix_output_was_substantive: self.fix_output_was_substantive,
+            post_consistency_decision: self.post_consistency_decision.as_str().to_string(),
+            reached_genuine_clean_convergence: self.reached_genuine_clean_convergence(),
+            terminal_reason: self.terminal_reason.to_string(),
+        }
+    }
+}
+
+fn terminal_reason_for_convergence(
+    quality_gate_passed: bool,
+    fix_output_was_substantive: bool,
+    post_consistency_decision: ReviewDecision,
+) -> &'static str {
+    if reached_genuine_clean_convergence(
+        quality_gate_passed,
+        fix_output_was_substantive,
+        post_consistency_decision,
+    ) {
+        "clean_convergence"
+    } else if !fix_output_was_substantive {
+        "empty_fix_output"
+    } else if !quality_gate_passed {
+        "quality_gate_failed"
+    } else {
+        "post_consistency_non_pass"
+    }
+}
+
+fn pre_verdict_non_convergence_reason(
+    quality_gate_passed: bool,
+    fix_output_was_substantive: bool,
+) -> Option<&'static str> {
+    if !fix_output_was_substantive {
+        Some("empty_fix_output")
+    } else if !quality_gate_passed {
+        Some("quality_gate_failed")
+    } else {
+        None
+    }
 }
 
 fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionMeta) {

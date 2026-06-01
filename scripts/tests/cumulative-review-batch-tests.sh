@@ -91,7 +91,15 @@ case "${cmd}" in
       printf '%s\n' "${CSA_STUB_VERDICT_JSON}" >"${session_dir}/output/review-verdict.json"
     else
       cat >"${session_dir}/output/review-verdict.json" <<JSON
-{"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0}}
+{"decision":"pass","severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}
+JSON
+    fi
+    if [ -n "${CSA_STUB_META_JSON:-}" ]; then
+      printf '%s\n' "${CSA_STUB_META_JSON}" >"${session_dir}/review_meta.json"
+    else
+      head_sha="$(git rev-parse HEAD 2>/dev/null || printf unknown)"
+      cat >"${session_dir}/review_meta.json" <<JSON
+{"session_id":"${session_id}","head_sha":"${head_sha}","decision":"pass","verdict":"CLEAN","tool":"codex","scope":"range:main...HEAD","exit_code":0,"fix_attempted":false,"fix_rounds":0,"timestamp":"2026-04-01T00:00:00Z"}
 JSON
     fi
     printf '%s\n' "${session_id}"
@@ -359,18 +367,16 @@ run_skip_decision_does_not_record_case() {
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
-run_fail_zero_severity_records_case() {
+run_fail_zero_severity_does_not_record_case() {
   local case_dir="${TMP_ROOT}/fail-zero-severity"
   local repo_dir="${case_dir}/repo"
   local stub_dir="${case_dir}/bin"
   local state_dir="${case_dir}/stub-state"
   local output_file="${case_dir}/output.log"
   local state_file
-  local head_sha
 
   make_repo "${repo_dir}"
   add_commit "${repo_dir}" "file.txt" "one" "commit one"
-  head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
   state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
@@ -386,8 +392,43 @@ run_fail_zero_severity_records_case() {
   )
 
   assert_equals "1" "$(cat "${state_dir}/review-count")" "fail zero severity review count"
-  # Known review-meta parsing bug can mislabel clean reviews as decision=fail.
-  assert_equals "${head_sha}" "$(tr -d '\n' < "${state_file}")" "fail zero severity recorded head"
+  if [ -f "${state_file}" ]; then
+    echo "fail zero severity verdict should not record passed head" >&2
+    exit 1
+  fi
+  grep -q "final_decision: CLEAN" "${output_file}"
+}
+
+run_failed_fix_convergence_does_not_record_case() {
+  local case_dir="${TMP_ROOT}/failed-fix-convergence"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    CSA_STUB_VERDICT_JSON='{"decision":"pass","severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' \
+    CSA_STUB_META_JSON='{"session_id":"01KTESTREVIEWBATCH0000000001","head_sha":"deadbeef","decision":"pass","verdict":"CLEAN","failure_reason":"fix_non_convergence:quality_gate_failed","tool":"codex","scope":"range:main...HEAD","exit_code":1,"fix_attempted":true,"fix_rounds":3,"fix_convergence":{"quality_gate_passed":false,"fix_output_was_substantive":true,"post_consistency_decision":"fail","reached_genuine_clean_convergence":false,"terminal_reason":"quality_gate_failed"},"timestamp":"2026-04-01T00:00:00Z"}' \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "failed fix convergence review count"
+  if [ -f "${state_file}" ]; then
+    echo "failed fix convergence should not record passed head" >&2
+    exit 1
+  fi
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
@@ -447,7 +488,8 @@ run_rewritten_history_runs_review_case
 run_high_severity_verdict_does_not_record_case
 run_uncertain_verdict_does_not_record_case
 run_skip_decision_does_not_record_case
-run_fail_zero_severity_records_case
+run_fail_zero_severity_does_not_record_case
+run_failed_fix_convergence_does_not_record_case
 run_base_branch_change_runs_review_case
 
 echo "cumulative-review-batch tests: ok"

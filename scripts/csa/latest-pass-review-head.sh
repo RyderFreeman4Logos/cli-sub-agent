@@ -12,14 +12,31 @@ if [ ! -d "${session_root}" ]; then
   exit 0
 fi
 
+session_ids="$(
+  csa session list --branch "${branch}" --format json 2>/dev/null \
+    | jq -r '
+        sort_by(.last_accessed) | reverse | .[]
+        | select((.task_context.task_type // "") == "review" or ((.description // "") | startswith("review:")))
+        | .session_id
+      ' 2>/dev/null || true
+)"
+
 while IFS= read -r session_id; do
   [ -n "${session_id}" ] || continue
   review_meta_path="${session_root}/${session_id}/review_meta.json"
+  verdict_path="${session_root}/${session_id}/output/review-verdict.json"
   [ -f "${review_meta_path}" ] || continue
+  [ -f "${verdict_path}" ] || continue
+  verdict_decision="$(jq -r '.decision // "fail"' "${verdict_path}" 2>/dev/null || true)"
+  [ "${verdict_decision}" = "pass" ] || continue
 
   head_sha="$(
     jq -er '
       select(.decision == "pass")
+      | select(.exit_code == 0)
+      | select((.status_reason // "") == "")
+      | select((.failure_reason // "") == "")
+      | select(((.fix_attempted // false) | not) or (.fix_convergence.reached_genuine_clean_convergence // false))
       | select(.scope | startswith("base:") or startswith("range:"))
       | .head_sha
     ' "${review_meta_path}" 2>/dev/null || true
@@ -28,13 +45,6 @@ while IFS= read -r session_id; do
     printf '%s\n' "${head_sha}"
     exit 0
   fi
-done < <(
-  csa session list --branch "${branch}" --format json 2>/dev/null \
-    | jq -r '
-        sort_by(.last_accessed) | reverse | .[]
-        | select((.task_context.task_type // "") == "review" or ((.description // "") | startswith("review:")))
-        | .session_id
-      ' 2>/dev/null || true
-)
+done <<<"${session_ids}"
 
 exit 0

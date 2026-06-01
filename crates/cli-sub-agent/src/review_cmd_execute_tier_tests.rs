@@ -193,6 +193,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
     let session_dir =
         csa_session::get_session_dir(project_dir.path(), &result.execution.meta_session_id)
@@ -338,6 +339,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
     let session_dir =
         csa_session::get_session_dir(project_dir.path(), &result.execution.meta_session_id)

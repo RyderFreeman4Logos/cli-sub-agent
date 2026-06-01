@@ -3,6 +3,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use anyhow::Result;
+use csa_core::types::ReviewDecision;
+use csa_session::{ReviewSessionMeta, ReviewVerdictArtifact};
 
 use super::SessionWaitOutputMode;
 
@@ -255,32 +257,45 @@ fn read_review_verdict_label(
     let verdict_path = session_dir.join("output").join("review-verdict.json");
     if verdict_path.is_file()
         && let Ok(raw) = std::fs::read_to_string(&verdict_path)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw)
+        && let Ok(artifact) = serde_json::from_str::<ReviewVerdictArtifact>(&raw)
     {
-        return value
-            .get("decision")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                value
-                    .get("verdict_legacy")
-                    .and_then(serde_json::Value::as_str)
-            })
-            .map(|value| normalize_review_verdict_label(value, result));
+        let meta = read_review_meta_for_label(session_dir);
+        if meta
+            .as_ref()
+            .is_some_and(|meta| meta.accepts_clean_review_verdict(artifact.decision))
+        {
+            return Some("PASS".to_string());
+        }
+        if artifact.decision == ReviewDecision::Pass {
+            return Some("UNAVAILABLE".to_string());
+        }
+        return Some(normalize_review_verdict_label(
+            artifact.decision.as_str(),
+            result,
+        ));
     }
 
     let meta_path = session_dir.join("review_meta.json");
     if meta_path.is_file()
         && let Ok(raw) = std::fs::read_to_string(&meta_path)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw)
+        && let Ok(meta) = serde_json::from_str::<ReviewSessionMeta>(&raw)
     {
-        return value
-            .get("decision")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| value.get("verdict").and_then(serde_json::Value::as_str))
-            .map(|value| normalize_review_verdict_label(value, result));
+        if meta.fix_attempted && !meta.fix_clean_converged() {
+            return Some("UNAVAILABLE".to_string());
+        }
+        return Some(normalize_review_verdict_label(&meta.decision, result));
     }
 
     None
+}
+
+fn read_review_meta_for_label(session_dir: &Path) -> Option<ReviewSessionMeta> {
+    let meta_path = session_dir.join("review_meta.json");
+    if !meta_path.is_file() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&meta_path).ok()?;
+    serde_json::from_str::<ReviewSessionMeta>(&raw).ok()
 }
 
 fn normalize_review_verdict_label(value: &str, result: &csa_session::SessionResult) -> String {
@@ -399,9 +414,25 @@ mod wait_output_tests {
         std::fs::create_dir_all(&output_dir).expect("output dir should be created");
         std::fs::write(
             output_dir.join("review-verdict.json"),
-            r#"{"decision":"pass","verdict_legacy":"CLEAN"}"#,
+            r#"{"schema_version":1,"session_id":"01TESTWAITSUMMARY","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
         )
         .expect("review verdict should be written");
+        std::fs::write(
+            temp.path().join("review_meta.json"),
+            r#"{
+  "session_id": "01TESTWAITSUMMARY",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 0,
+  "fix_attempted": false,
+  "fix_rounds": 0,
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#,
+        )
+        .expect("review meta should be written");
         let now = Utc::now();
         let result = csa_session::SessionResult {
             status: "success".to_string(),
@@ -439,7 +470,7 @@ mod wait_output_tests {
         std::fs::create_dir_all(&output_dir).expect("output dir should be created");
         std::fs::write(
             output_dir.join("review-verdict.json"),
-            r#"{"decision":"pass","verdict_legacy":"CLEAN"}"#,
+            r#"{"schema_version":1,"session_id":"01TESTWAITFAILPASS","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
         )
         .expect("review verdict should be written");
         let now = Utc::now();
@@ -468,5 +499,66 @@ mod wait_output_tests {
         assert!(!summary.contains("Review verdict: PASS"));
         assert!(summary.contains("Review verdict: UNAVAILABLE"));
         assert!(summary.contains("Summary: fatal backend error: process killed"));
+    }
+
+    #[test]
+    fn compact_summary_does_not_print_pass_for_failed_fix_convergence() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let output_dir = temp.path().join("output");
+        std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+        std::fs::write(
+            output_dir.join("review-verdict.json"),
+            r#"{"schema_version":1,"session_id":"01TESTWAITFAILED","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+        )
+        .expect("review verdict should be written");
+        std::fs::write(
+            temp.path().join("review_meta.json"),
+            r#"{
+  "session_id": "01TESTWAITFAILED",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "failure_reason": "fix_non_convergence:quality_gate_failed",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 1,
+  "fix_attempted": true,
+  "fix_rounds": 3,
+  "fix_convergence": {
+    "quality_gate_passed": false,
+    "fix_output_was_substantive": true,
+    "post_consistency_decision": "fail",
+    "reached_genuine_clean_convergence": false,
+    "terminal_reason": "quality_gate_failed"
+  },
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#,
+        )
+        .expect("review meta should be written");
+        let now = Utc::now();
+        let result = csa_session::SessionResult {
+            status: "failed".to_string(),
+            exit_code: 1,
+            summary: "fix did not converge".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now + chrono::TimeDelta::seconds(65),
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            manager_fields: Default::default(),
+        };
+
+        let summary = render_wait_result_summary(temp.path(), "01TESTWAITFAILED", &result);
+
+        assert!(!summary.contains("Review verdict: PASS"));
+        assert!(summary.contains("Review verdict: UNAVAILABLE"));
     }
 }

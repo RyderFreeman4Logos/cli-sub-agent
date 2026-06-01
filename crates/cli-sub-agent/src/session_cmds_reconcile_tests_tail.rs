@@ -486,7 +486,14 @@ fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
             review_iterations: 1,
             timestamp: now,
             diff_fingerprint: None,
+            fix_convergence: None,
         },
+    )
+    .unwrap();
+    fs::create_dir_all(session_dir.join("output")).unwrap();
+    fs::write(
+        session_dir.join("output").join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
     )
     .unwrap();
 
@@ -593,7 +600,14 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
             review_iterations: 1,
             timestamp: now,
             diff_fingerprint: None,
+            fix_convergence: None,
         },
+    )
+    .unwrap();
+    fs::create_dir_all(session_dir.join("output")).unwrap();
+    fs::write(
+        session_dir.join("output").join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
     )
     .unwrap();
 
