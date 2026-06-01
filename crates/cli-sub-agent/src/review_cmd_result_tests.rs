@@ -163,6 +163,20 @@ fn build_reviewer_outcome_does_not_mark_review_prose_quota_mentions_unavailable(
 }
 
 #[test]
+fn genuine_provider_error_maps_to_unavailable() {
+    let mut result = outcome("", 1);
+    result.execution.execution.stderr_output =
+        "provider request failed: HTTP 503 Service Unavailable".to_string();
+
+    let resolved = resolve_single_review_result(&result, ToolName::Codex, "diff", Path::new("."));
+
+    assert_eq!(resolved.decision, ReviewDecision::Unavailable);
+    assert_eq!(resolved.verdict, UNAVAILABLE);
+    assert_eq!(resolved.effective_exit_code, 1);
+    assert!(resolved.sanitized.contains("Review unavailable:"));
+}
+
+#[test]
 fn tool_unavailable_failure_does_not_override_explicit_fail_verdict() {
     let reviewer = build_reviewer_outcome(
         0,

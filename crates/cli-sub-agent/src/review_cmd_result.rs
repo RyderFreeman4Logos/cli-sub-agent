@@ -8,7 +8,8 @@ use std::path::Path;
 use tracing::warn;
 
 use crate::review_consensus::{
-    CLEAN, HAS_ISSUES, SKIP, UNAVAILABLE, UNCERTAIN, parse_review_decision,
+    CLEAN, HAS_ISSUES, SKIP, UNAVAILABLE, UNCERTAIN, parse_explicit_review_decision_token,
+    parse_review_decision,
 };
 
 use super::execute::ReviewExecutionOutcome;
@@ -61,12 +62,12 @@ fn explicit_review_decision_for_execution(
     summary_fallback: Option<&str>,
 ) -> Option<ReviewDecision> {
     let review_text = extract_review_text(raw_output).unwrap_or_else(|| raw_output.to_string());
-    if contains_explicit_verdict_token(&review_text) {
+    if parse_explicit_review_decision_token(&review_text).is_some() {
         return Some(parse_review_decision(&review_text, exit_code));
     }
 
     summary_fallback
-        .filter(|summary| contains_explicit_verdict_token(summary))
+        .filter(|summary| parse_explicit_review_decision_token(summary).is_some())
         .map(|summary| parse_review_decision(summary, 0))
 }
 
@@ -274,7 +275,7 @@ fn tool_unavailable_failure_reason(
     }
     if extract_review_text(&result.execution.execution.output)
         .as_deref()
-        .is_some_and(contains_explicit_verdict_token)
+        .is_some_and(|text| parse_explicit_review_decision_token(text).is_some())
     {
         return None;
     }
@@ -338,26 +339,6 @@ fn parse_review_decision_for_execution(
 fn load_summary_fallback(project_root: &Path, session_id: &str) -> Option<String> {
     let session_dir = csa_session::get_session_dir(project_root, session_id).ok()?;
     fs::read_to_string(session_dir.join("output").join("summary.md")).ok()
-}
-
-fn contains_explicit_verdict_token(text: &str) -> bool {
-    [
-        "HAS_ISSUES",
-        "FAIL",
-        "UNAVAILABLE",
-        "UNCERTAIN",
-        "CLEAN",
-        "PASS",
-        "SKIP",
-    ]
-    .iter()
-    .any(|token| contains_token(text, token))
-}
-
-fn contains_token(haystack: &str, token: &str) -> bool {
-    haystack
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .any(|part| part.eq_ignore_ascii_case(token))
 }
 
 pub(super) fn build_unavailable_reviewer_outcome(
