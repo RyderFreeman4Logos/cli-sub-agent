@@ -32,6 +32,7 @@ fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     }
 }
 
@@ -362,6 +363,91 @@ start = 425
             }],
         }
     );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1754_findings_toml_derives_blocking_codex_single_prose_findings() {
+    let project_root = temp_project_root("issue-1754-prose-findings");
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TEST1754PROSEFINDINGS00");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+Blocking contract violations found in changed workflow/pattern command paths.
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+1. patterns/csa-review/workflow.toml:137 omits --sa-mode true on the review gate.
+2. patterns/debate/workflow.toml:87 omits --sa-mode true on the debate gate.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta(&session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let findings_path = session_dir.join("output").join("findings.toml");
+    let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse findings.toml");
+    assert_eq!(parsed.findings.len(), 2);
+    assert_eq!(parsed.findings[0].severity, Severity::Medium);
+    assert_eq!(
+        parsed.findings[0].file_ranges[0].path,
+        "patterns/csa-review/workflow.toml"
+    );
+    assert_eq!(parsed.findings[0].file_ranges[0].start, 137);
+    assert_eq!(
+        parsed.findings[1].file_ranges[0].path,
+        "patterns/debate/workflow.toml"
+    );
+    assert_eq!(parsed.findings[1].file_ranges[0].start, 87);
+    assert!(
+        !session_dir
+            .join("output")
+            .join(super::FINDINGS_TOML_SYNTHETIC_MARKER)
+            .exists(),
+        "prose-derived findings are real machine findings, not synthetic empty output"
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1754_findings_toml_derives_medium_path_prefixed_prose_finding() {
+    let project_root = temp_project_root("issue-1754-medium-prose-finding");
+    let _state_home = pin_state_home(&project_root);
+    let session_id = unique_session_id("01TEST1754MEDIUMPROSE000");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+Review found one issue.
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+Medium: docs/debate-review.md:151 reviewer output can hide the required follow-up.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta(&session_id);
+    persist_review_findings_toml(&project_root, &meta);
+
+    let findings_path = session_dir.join("output").join("findings.toml");
+    let actual = fs::read_to_string(&findings_path).expect("read findings.toml");
+    let parsed: FindingsFile = toml::from_str(&actual).expect("parse findings.toml");
+    assert_eq!(parsed.findings.len(), 1);
+    assert_eq!(parsed.findings[0].severity, Severity::Medium);
+    assert_eq!(
+        parsed.findings[0].file_ranges[0].path,
+        "docs/debate-review.md"
+    );
+    assert_eq!(parsed.findings[0].file_ranges[0].start, 151);
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

@@ -38,6 +38,7 @@ fn make_review_meta(
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     }
 }
 

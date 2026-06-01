@@ -217,6 +217,7 @@ mod tests {
             review_iterations: 1,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: None,
+            fix_convergence: None,
         };
 
         persist_review_failure_suggestion(&project_root, &meta);

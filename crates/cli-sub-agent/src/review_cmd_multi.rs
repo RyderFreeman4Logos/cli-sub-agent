@@ -475,6 +475,7 @@ pub(super) fn persist_multi_review_sidecars(
             review_iterations,
             timestamp: review_meta_timestamp,
             diff_fingerprint: diff_fingerprint.clone(),
+            fix_convergence: None,
         };
         let effective_meta = super::output::fail_closed_review_meta(project_root, &review_meta);
         persist_review_meta(project_root, &effective_meta);

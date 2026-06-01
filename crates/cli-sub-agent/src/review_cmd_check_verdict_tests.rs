@@ -3,6 +3,7 @@ use crate::cli::{Cli, Commands, validate_review_args};
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use chrono::{TimeZone, Utc};
 use clap::Parser;
+use csa_core::types::ReviewDecision;
 use csa_core::vcs::{VcsIdentity, VcsKind};
 use csa_session::Finding;
 use std::process::Command;
@@ -96,6 +97,7 @@ fn write_review_session_with_description(
         review_iterations: 1,
         timestamp: Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
     csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
     csa_session::write_review_verdict(
@@ -845,6 +847,167 @@ fn check_verdict_explicit_session_does_not_fallback_to_stale_pass() {
             .unwrap()
             .expect("target scan should still find stale pass");
     assert_eq!(scanned.session_id, stale_pass);
+}
+
+#[test]
+fn check_verdict_rejects_fix_pass_artifact_with_failed_meta_explicit_marker_and_scan() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let branch = "feature";
+    let head_sha = "abc1234567890";
+    let session_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    let session_dir = csa_session::get_session_dir(&project, &session_id).unwrap();
+    let mut meta: ReviewSessionMeta = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap(),
+    )
+    .unwrap();
+    meta.exit_code = 1;
+    meta.fix_attempted = true;
+    meta.fix_rounds = 3;
+    meta.failure_reason = Some("fix_non_convergence:quality_gate_failed".to_string());
+    meta.fix_convergence = Some(csa_session::FixConvergenceMeta {
+        quality_gate_passed: false,
+        fix_output_was_substantive: true,
+        post_consistency_decision: ReviewDecision::Fail.as_str().to_string(),
+        reached_genuine_clean_convergence: false,
+        terminal_reason: "quality_gate_failed".to_string(),
+    });
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write failed fix meta");
+    crate::review_gate::write_review_gate_marker(
+        &project,
+        branch,
+        head_sha,
+        &session_id,
+        REQUIRED_FULL_DIFF_SCOPE,
+    );
+
+    let explicit = check_review_verdict_for_session(
+        &project,
+        &session_id,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+    )
+    .unwrap();
+    assert!(
+        explicit.is_none(),
+        "explicit check must reject pass artifact when fix meta failed"
+    );
+
+    let scanned =
+        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
+            .unwrap();
+    assert!(
+        scanned.is_none(),
+        "marker and session-scan paths must reject pass artifact when fix meta failed"
+    );
+}
+
+#[test]
+fn check_verdict_accepts_clean_initial_fix_without_fix_round_explicit_marker_and_scan() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let branch = "feature";
+    let head_sha = "abc1234567890";
+    let session_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    let session_dir = csa_session::get_session_dir(&project, &session_id).unwrap();
+    let meta: ReviewSessionMeta = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(!meta.fix_attempted);
+    assert_eq!(meta.fix_rounds, 0);
+    assert!(meta.fix_convergence.is_none());
+    crate::review_gate::write_review_gate_marker(
+        &project,
+        branch,
+        head_sha,
+        &session_id,
+        REQUIRED_FULL_DIFF_SCOPE,
+    );
+
+    let explicit = check_review_verdict_for_session(
+        &project,
+        &session_id,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+    )
+    .unwrap()
+    .expect("explicit check should accept clean initial --fix metadata");
+    assert_eq!(explicit.session_id, session_id);
+
+    let scanned =
+        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
+            .unwrap()
+            .expect("marker and session-scan paths should accept clean initial --fix metadata");
+    assert_eq!(scanned.session_id, session_id);
+}
+
+#[test]
+fn check_verdict_accepts_quota_unavailable_co_reviewer_clean_primary() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let branch = "feature";
+    let head_sha = "abc1234567890";
+    let session_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    let session_dir = csa_session::get_session_dir(&project, &session_id).unwrap();
+    let mut meta: ReviewSessionMeta = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap(),
+    )
+    .unwrap();
+    meta.primary_failure = Some("co-reviewer quota unavailable".to_string());
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write quota meta");
+
+    let explicit = check_review_verdict_for_session(
+        &project,
+        &session_id,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+    )
+    .unwrap()
+    .expect("explicit check should accept clean primary despite co-reviewer quota");
+    assert_eq!(explicit.session_id, session_id);
+
+    let scanned =
+        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
+            .unwrap()
+            .expect("scan should accept clean primary despite co-reviewer quota");
+    assert_eq!(scanned.session_id, session_id);
 }
 
 #[test]

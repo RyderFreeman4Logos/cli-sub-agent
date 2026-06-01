@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use csa_core::types::ReviewDecision;
+use csa_session::ReviewSessionMeta;
 use serde_json::Value;
 
 use crate::cli::PushArgs;
@@ -63,10 +64,10 @@ fn check_review_gate(branch: &str) -> Result<ReviewCoverage> {
     };
 
     let verdict = read_review_verdict(&candidate.session_dir)?;
-    let findings_count = read_findings_count(&candidate.session_dir)?;
-    let reviewed_head = read_reviewed_head(&candidate.session_dir)?;
+    let review_meta = read_review_meta(&candidate.session_dir)?;
+    let reviewed_head = review_meta.as_ref().map(|meta| meta.head_sha.as_str());
 
-    if let Some(reviewed_head) = reviewed_head.as_deref() {
+    if let Some(reviewed_head) = reviewed_head {
         if reviewed_head != head {
             bail!(
                 "HEAD {head} is ahead of last reviewed commit {reviewed_head}. Run 'csa review' before pushing."
@@ -87,7 +88,7 @@ fn check_review_gate(branch: &str) -> Result<ReviewCoverage> {
         );
     }
 
-    if verdict_is_allowed(&verdict, findings_count) {
+    if verdict_is_allowed(&verdict, review_meta.as_ref()) {
         Ok(ReviewCoverage {
             session_id: candidate.session_id,
         })
@@ -208,16 +209,16 @@ fn read_session_result_completed_at(session_dir: &Path) -> Result<Option<DateTim
     Ok(Some(result.completed_at))
 }
 
-fn read_reviewed_head(session_dir: &Path) -> Result<Option<String>> {
+fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
     let meta_path = session_dir.join("review_meta.json");
     if !meta_path.exists() {
         return Ok(None);
     }
     let text = fs::read_to_string(&meta_path)
         .with_context(|| format!("Failed to read {}", meta_path.display()))?;
-    let meta: csa_session::ReviewSessionMeta = serde_json::from_str(&text)
+    let meta: ReviewSessionMeta = serde_json::from_str(&text)
         .with_context(|| format!("Failed to parse {}", meta_path.display()))?;
-    Ok(Some(meta.head_sha))
+    Ok(Some(meta))
 }
 
 fn read_review_verdict(session_dir: &Path) -> Result<ParsedReviewVerdict> {
@@ -265,24 +266,11 @@ fn parse_decision(value: &Value) -> Result<ReviewDecision> {
     bail!("Missing review decision; expected `decision`, `verdict`, or `verdict_legacy`");
 }
 
-fn read_findings_count(session_dir: &Path) -> Result<usize> {
-    let path = session_dir.join("output").join("findings.toml");
-    if !path.exists() {
-        return Ok(0);
-    }
-    let text =
-        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let findings: csa_session::FindingsFile =
-        toml::from_str(&text).with_context(|| format!("Failed to parse {}", path.display()))?;
-    Ok(findings.findings.len())
-}
-
-pub(crate) fn verdict_is_allowed(verdict: &ParsedReviewVerdict, findings_count: usize) -> bool {
-    matches!(verdict.decision, ReviewDecision::Pass)
-        || (matches!(verdict.decision, ReviewDecision::Fail)
-            && verdict.severity_total == 0
-            && verdict.inline_findings_count == 0
-            && findings_count == 0)
+pub(crate) fn verdict_is_allowed(
+    verdict: &ParsedReviewVerdict,
+    review_meta: Option<&ReviewSessionMeta>,
+) -> bool {
+    review_meta.is_some_and(|meta| meta.accepts_clean_review_verdict(verdict.decision))
 }
 
 fn branch_has_commits_after(completed_at: DateTime<Utc>) -> Result<bool> {
@@ -349,6 +337,28 @@ fn git_output<const N: usize>(args: [&str; N]) -> Result<String> {
 mod tests {
     use super::*;
 
+    fn clean_review_meta() -> ReviewSessionMeta {
+        ReviewSessionMeta {
+            session_id: "01JPUSH00000000000000000000".to_string(),
+            head_sha: "abc123".to_string(),
+            decision: ReviewDecision::Pass.as_str().to_string(),
+            verdict: "CLEAN".to_string(),
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: "codex".to_string(),
+            scope: "range:main...HEAD".to_string(),
+            exit_code: 0,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: Utc::now(),
+            diff_fingerprint: None,
+            fix_convergence: None,
+        }
+    }
+
     #[test]
     fn parse_review_verdict_reads_decision_and_counts() {
         let verdict = parse_review_verdict(
@@ -381,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn false_positive_failure_with_no_counts_or_findings_is_allowed() {
+    fn fail_with_no_counts_or_findings_is_blocked() {
         let verdict = parse_review_verdict(
             r#"{
                 "decision": "fail",
@@ -391,8 +401,8 @@ mod tests {
         )
         .expect("verdict should parse");
 
-        assert!(verdict_is_allowed(&verdict, 0));
-        assert!(!verdict_is_allowed(&verdict, 1));
+        let meta = clean_review_meta();
+        assert!(!verdict_is_allowed(&verdict, Some(&meta)));
     }
 
     #[test]
@@ -406,7 +416,67 @@ mod tests {
         )
         .expect("verdict should parse");
 
-        assert!(!verdict_is_allowed(&verdict, 0));
+        let meta = clean_review_meta();
+        assert!(!verdict_is_allowed(&verdict, Some(&meta)));
+    }
+
+    #[test]
+    fn pass_artifact_with_failed_fix_meta_is_blocked() {
+        let verdict = parse_review_verdict(
+            r#"{
+                "decision": "pass",
+                "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                "findings": []
+            }"#,
+        )
+        .expect("verdict should parse");
+        let mut meta = clean_review_meta();
+        meta.exit_code = 1;
+        meta.fix_attempted = true;
+        meta.fix_rounds = 3;
+        meta.fix_convergence = Some(csa_session::FixConvergenceMeta {
+            quality_gate_passed: false,
+            fix_output_was_substantive: true,
+            post_consistency_decision: ReviewDecision::Fail.as_str().to_string(),
+            reached_genuine_clean_convergence: false,
+            terminal_reason: "quality_gate_failed".to_string(),
+        });
+
+        assert!(!verdict_is_allowed(&verdict, Some(&meta)));
+    }
+
+    #[test]
+    fn clean_initial_fix_without_fix_round_is_allowed() {
+        let verdict = parse_review_verdict(
+            r#"{
+                "decision": "pass",
+                "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                "findings": []
+            }"#,
+        )
+        .expect("verdict should parse");
+        let meta = clean_review_meta();
+
+        assert!(!meta.fix_attempted);
+        assert_eq!(meta.fix_rounds, 0);
+        assert!(meta.fix_convergence.is_none());
+        assert!(verdict_is_allowed(&verdict, Some(&meta)));
+    }
+
+    #[test]
+    fn quota_unavailable_co_reviewer_clean_primary_is_allowed() {
+        let verdict = parse_review_verdict(
+            r#"{
+                "decision": "pass",
+                "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                "findings": []
+            }"#,
+        )
+        .expect("verdict should parse");
+        let mut meta = clean_review_meta();
+        meta.primary_failure = Some("co-reviewer quota unavailable".to_string());
+
+        assert!(verdict_is_allowed(&verdict, Some(&meta)));
     }
 
     #[test]

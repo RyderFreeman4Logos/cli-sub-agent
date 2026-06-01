@@ -1,7 +1,8 @@
 use super::{
     ToolReviewFailureKind, derive_decision_from_severity_counts, derive_decision_from_text,
-    detect_prose_fail_conclusion, detect_tool_review_failure, ensure_review_summary_artifact,
-    extract_review_text, persist_review_verdict, text::contains_blocking_issue_signal,
+    detect_prose_fail_conclusion, detect_tool_review_failure, enforce_final_verdict_consistency,
+    ensure_review_summary_artifact, extract_review_text, persist_review_verdict,
+    text::contains_blocking_issue_signal,
 };
 use crate::review_cmd::output::artifacts::PersistedReviewArtifact;
 use crate::test_env_lock::TEST_ENV_LOCK;
@@ -33,6 +34,7 @@ fn make_review_meta(session_id: &str) -> ReviewSessionMeta {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     }
 }
 
@@ -790,3 +792,6 @@ mod verdict_1675_tests;
 
 #[path = "review_cmd_output_verdict_1716_tests.rs"]
 mod verdict_1716_tests;
+
+#[path = "review_cmd_output_verdict_1754_tests.rs"]
+mod verdict_1754_tests;

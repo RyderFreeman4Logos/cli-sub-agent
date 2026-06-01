@@ -205,14 +205,7 @@ fn inline_findings_line_severity(line: &str) -> Option<Severity> {
 }
 
 fn severity_from_label(level: &str) -> Option<Severity> {
-    let normalized = level.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "critical" | "p0" => Some(Severity::Critical),
-        "high" | "p1" => Some(Severity::High),
-        "medium" | "p2" => Some(Severity::Medium),
-        "low" | "info" | "p3" | "p4" => Some(Severity::Low),
-        _ => None,
-    }
+    crate::review_cmd::prose_findings::severity_from_label(level)
 }
 
 pub(super) fn parse_overall_risk_from_text(text: &str) -> Option<String> {
@@ -225,52 +218,10 @@ pub(super) fn parse_overall_risk_from_text(text: &str) -> Option<String> {
 }
 
 pub(super) fn contains_blocking_issue_signal(text: &str) -> bool {
-    text.lines().any(line_has_blocking_issue_signal)
-}
-
-fn line_has_blocking_issue_signal(line: &str) -> bool {
-    if contains_clean_phrase(line) {
-        return false;
-    }
-
-    const ISSUE_NOUNS: &[&str] = &[
-        "issue", "issues", "finding", "findings", "problem", "problems", "bug", "bugs", "defect",
-        "defects",
-    ];
-    const NEGATIONS: &[&str] = &["no", "non", "nonblocking", "not", "none", "without"];
-    const MAX_TOKENS_AFTER_BLOCKING: usize = 8;
-    const MAX_NEGATION_LOOKBACK: usize = 3;
-
-    let tokens = line
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>();
-
-    for (index, token) in tokens.iter().enumerate() {
-        if token == "nonblocking" {
-            continue;
-        }
-        if token != "blocking" {
-            continue;
-        }
-        if tokens[..index]
-            .iter()
-            .rev()
-            .take(MAX_NEGATION_LOOKBACK)
-            .any(|candidate| NEGATIONS.contains(&candidate.as_str()))
-        {
-            continue;
-        }
-        if ((index + 1)..tokens.len()).any(|candidate| {
-            candidate - index <= MAX_TOKENS_AFTER_BLOCKING
-                && ISSUE_NOUNS.contains(&tokens[candidate].as_str())
-        }) {
-            return true;
-        }
-    }
-
-    false
+    text.lines().any(|line| {
+        !contains_clean_phrase(line)
+            && crate::review_cmd::prose_findings::contains_blocking_review_signal(line)
+    })
 }
 
 pub(super) fn derive_decision_from_text(

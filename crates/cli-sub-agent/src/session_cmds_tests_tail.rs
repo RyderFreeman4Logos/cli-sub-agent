@@ -729,7 +729,37 @@ fn synthesized_wait_next_step_returns_directive_for_clean_cumulative_review() {
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
 }"#).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("review-verdict.json"), r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#).unwrap();
     let directive = synthesized_wait_next_step(&session_dir).unwrap().expect("directive should be synthesized"); assert!(directive.contains("CSA:NEXT_STEP")); assert!(directive.contains("pr-bot"));
+}
+
+#[rustfmt::skip]
+#[cfg(unix)]
+#[test]
+fn synthesized_wait_next_step_rejects_failed_fix_convergence() {
+    let td = tempdir().unwrap(); let _env_lock = TEST_ENV_LOCK.blocking_lock(); let state_home = td.path().join("xdg-state"); std::fs::create_dir_all(&state_home).unwrap(); let _home_guard = EnvVarGuard::set("HOME", td.path()); let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home); let project = td.path(); let session = create_session(project, Some("wait-next-step-failed-fix"), None, Some("codex")).unwrap(); let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    std::fs::write(session_dir.join("review_meta.json"), r#"{
+  "session_id": "01TEST",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "failure_reason": "fix_non_convergence:quality_gate_failed",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 1,
+  "fix_attempted": true,
+  "fix_rounds": 3,
+  "fix_convergence": {
+    "quality_gate_passed": false,
+    "fix_output_was_substantive": true,
+    "post_consistency_decision": "fail",
+    "reached_genuine_clean_convergence": false,
+    "terminal_reason": "quality_gate_failed"
+  },
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("review-verdict.json"), r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#).unwrap();
+    assert!(synthesized_wait_next_step(&session_dir).unwrap().is_none());
 }
 
 #[rustfmt::skip]
@@ -749,6 +779,7 @@ fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
 }"#).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("review-verdict.json"), r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#).unwrap();
     assert!(synthesized_wait_next_step(&session_dir).unwrap().is_none());
     std::fs::write(session_dir.join("review_meta.json"), r#"{
   "session_id": "01TEST",
@@ -762,6 +793,7 @@ fn synthesized_wait_next_step_skips_non_cumulative_or_existing_directive() {
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
 }"#).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("review-verdict.json"), r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#).unwrap();
     std::fs::write(session_dir.join("stdout.log"), "<!-- CSA:NEXT_STEP cmd=\"custom\" required=false -->\n").unwrap(); assert!(synthesized_wait_next_step(&session_dir).unwrap().is_none());
 }
 
@@ -782,6 +814,7 @@ fn synthesized_wait_next_step_ignores_malformed_unpushed_commit_sidecar() {
   "fix_rounds": 0,
   "timestamp": "2026-04-01T00:00:00Z"
 }"#).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("review-verdict.json"), r#"{"schema_version":1,"session_id":"01TEST","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#).unwrap();
     std::fs::create_dir_all(session_dir.join("output")).unwrap(); std::fs::write(session_dir.join("output").join("unpushed_commits.json"), "{\"recovery_command\":").unwrap();
     let directive = synthesized_wait_next_step(&session_dir).unwrap().expect("malformed sidecar should fall back to review handoff"); assert!(directive.contains("CSA:NEXT_STEP")); assert!(directive.contains("pr-bot"));
 }

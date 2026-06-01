@@ -254,6 +254,7 @@ fn mock_pass_review_persists_pass_review_meta() {
         review_iterations: 0,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
 
     csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");

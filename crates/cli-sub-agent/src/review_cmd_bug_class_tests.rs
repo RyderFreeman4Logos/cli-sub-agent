@@ -187,6 +187,7 @@ fn review_iterations_increment_from_prior_review_meta_on_same_branch() {
             review_iterations: 1,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: None,
+            fix_convergence: None,
         },
     )
     .expect("review meta");
@@ -230,6 +231,7 @@ fn review_iterations_do_not_undercount_after_more_than_ten_prior_reviews() {
                 review_iterations: iteration,
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: None,
+                fix_convergence: None,
             },
         )
         .expect("review meta");
@@ -280,6 +282,7 @@ fn review_iterations_use_max_prior_value_instead_of_most_recent_session() {
             review_iterations: 5,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: None,
+            fix_convergence: None,
         },
     )
     .expect("older review meta");
@@ -311,6 +314,7 @@ fn review_iterations_use_max_prior_value_instead_of_most_recent_session() {
             review_iterations: 2,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: None,
+            fix_convergence: None,
         },
     )
     .expect("newer review meta");
@@ -382,6 +386,7 @@ fn bug_class_loader_collapses_multi_reviewer_sessions_into_one_logical_review() 
                 review_iterations: 7,
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: Some("sha256:shared".to_string()),
+                fix_convergence: None,
             },
         )
         .expect("review meta");
@@ -466,6 +471,7 @@ fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion(
                 review_iterations: 7,
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: Some("sha256:shared".to_string()),
+                fix_convergence: None,
             },
         )
         .expect("review meta");
@@ -525,6 +531,7 @@ fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists(
             review_iterations: 7,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: Some("sha256:shared".to_string()),
+            fix_convergence: None,
         },
     )
     .expect("review meta");
@@ -569,6 +576,7 @@ fn bug_class_loader_reads_exact_consolidated_path_written_by_consensus_writer() 
             review_iterations: 1,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: Some("sha256:shared".to_string()),
+            fix_convergence: None,
         },
     )
     .expect("review meta");

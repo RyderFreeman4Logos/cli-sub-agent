@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 
 use crate::cli::ReviewArgs;
 use anyhow::{Context, Result};
-use csa_core::types::ReviewDecision;
 use csa_session::state::{MetaSessionState, ReviewSessionMeta};
 use csa_session::{ReviewVerdictArtifact, Severity};
 use tracing::debug;
@@ -138,7 +136,7 @@ pub(crate) fn check_review_verdict_for_session(
         return Ok(None);
     }
 
-    let pass_status = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+    let pass_status = review_session_acceptance_status(&session_dir, &meta)?;
     if !pass_status.is_pass {
         debug!(
             session_id = %resolved.session_id,
@@ -238,7 +236,7 @@ pub(crate) fn check_review_verdict_for_target(
             );
             continue;
         }
-        let pass_status = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+        let pass_status = review_session_acceptance_status(&session_dir, &meta)?;
         if !pass_status.is_pass {
             debug!(
                 session_id = %session.meta_session_id,
@@ -375,7 +373,7 @@ fn check_review_verdict_marker(
         );
         return Ok(None);
     }
-    let pass_status = review_meta_or_artifact_is_pass(&session_dir, &meta)?;
+    let pass_status = review_session_acceptance_status(&session_dir, &meta)?;
     if !pass_status.is_pass {
         debug!(
             session_id = %marker.session_id,
@@ -461,74 +459,52 @@ fn diff_fingerprint_matches(
         .unwrap_or(true)
 }
 
-struct ReviewVerdictPassStatus {
+struct ReviewVerdictAcceptanceStatus {
     is_pass: bool,
     severity_counts: BTreeMap<Severity, u32>,
 }
 
-fn review_meta_or_artifact_is_pass(
+fn review_session_acceptance_status(
     session_dir: &Path,
     meta: &ReviewSessionMeta,
-) -> Result<ReviewVerdictPassStatus> {
-    if meta.requires_fail_closed_verdict() {
+) -> Result<ReviewVerdictAcceptanceStatus> {
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    if !verdict_path.exists() {
         debug!(
             session_id = %meta.session_id,
             meta_decision = %meta.decision,
             meta_verdict = %meta.verdict,
-            meta_exit_code = meta.exit_code,
-            primary_failure = meta.primary_failure.as_deref().unwrap_or(""),
-            "Rejecting review verdict because review metadata records reviewer failure"
+            verdict_path = %verdict_path.display(),
+            "Rejecting review verdict because review-verdict.json is missing"
         );
-        return Ok(ReviewVerdictPassStatus {
+        return Ok(ReviewVerdictAcceptanceStatus {
             is_pass: false,
             severity_counts: zero_severity_counts(),
         });
     }
 
-    let meta_pass = review_meta_is_pass(meta);
-    let verdict_path = session_dir.join("output").join("review-verdict.json");
-    if verdict_path.exists() {
-        let raw = fs::read_to_string(&verdict_path)
-            .with_context(|| format!("failed to read {}", verdict_path.display()))?;
-        let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
-        let artifact_pass = artifact.decision == ReviewDecision::Pass;
-        debug!(
-            session_id = %meta.session_id,
-            meta_decision = %meta.decision,
-            meta_verdict = %meta.verdict,
-            meta_pass,
-            artifact_decision = %artifact.decision,
-            artifact_verdict = %artifact.verdict_legacy,
-            artifact_pass,
-            verdict_path = %verdict_path.display(),
-            "Read review verdict artifact"
-        );
-        return Ok(ReviewVerdictPassStatus {
-            is_pass: artifact_pass,
-            severity_counts: artifact.severity_counts,
-        });
-    }
-
+    let raw = fs::read_to_string(&verdict_path)
+        .with_context(|| format!("failed to read {}", verdict_path.display()))?;
+    let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
+    let accepted = meta.accepts_clean_review_verdict(artifact.decision);
     debug!(
         session_id = %meta.session_id,
         meta_decision = %meta.decision,
         meta_verdict = %meta.verdict,
-        meta_pass,
-        "Using review_meta.json verdict"
+        meta_exit_code = meta.exit_code,
+        meta_fix_attempted = meta.fix_attempted,
+        meta_fix_converged = meta.fix_clean_converged(),
+        artifact_decision = %artifact.decision,
+        artifact_verdict = %artifact.verdict_legacy,
+        accepted,
+        verdict_path = %verdict_path.display(),
+        "Read review verdict artifact"
     );
-    Ok(ReviewVerdictPassStatus {
-        is_pass: meta_pass,
-        severity_counts: zero_severity_counts(),
+    Ok(ReviewVerdictAcceptanceStatus {
+        is_pass: accepted,
+        severity_counts: artifact.severity_counts,
     })
-}
-
-fn review_meta_is_pass(meta: &ReviewSessionMeta) -> bool {
-    if meta.requires_fail_closed_verdict() {
-        return false;
-    }
-
-    ReviewDecision::from_str(&meta.decision).is_ok_and(|decision| decision == ReviewDecision::Pass)
 }
 
 fn verdict_token_is_pass(verdict: &str) -> bool {

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use csa_session::state::ReviewSessionMeta;
+use csa_session::{ReviewVerdictArtifact, state::ReviewSessionMeta};
 
 use super::super::{POST_REVIEW_PR_BOT_CMD, UnpushedCommitsRecoveryPacket};
 
@@ -52,7 +52,14 @@ pub(crate) fn synthesized_wait_next_step(session_dir: &Path) -> Result<Option<St
 
     let review_meta: ReviewSessionMeta =
         serde_json::from_str(&fs::read_to_string(review_meta_path)?)?;
-    if review_meta.decision != "pass" {
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let Ok(verdict_raw) = fs::read_to_string(&verdict_path) else {
+        return Ok(None);
+    };
+    let Ok(verdict) = serde_json::from_str::<ReviewVerdictArtifact>(&verdict_raw) else {
+        return Ok(None);
+    };
+    if !review_meta.accepts_clean_review_verdict(verdict.decision) {
         return Ok(None);
     }
     if !(review_meta.scope.starts_with("base:") || review_meta.scope.starts_with("range:")) {

@@ -146,6 +146,7 @@ fn exact_test_make_review_meta(
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     }
 }
 
@@ -571,6 +572,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
     let session_dir =
         csa_session::get_session_dir(project_dir.path(), &result.execution.meta_session_id)
@@ -632,6 +634,7 @@ async fn execute_review_unavailable_does_not_persist_session_artifacts() {
         review_iterations: 0,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
     let persisted_exit_code =
         review_cmd::persist_review_sidecars_if_session_exists(project_dir.path(), &meta, None);

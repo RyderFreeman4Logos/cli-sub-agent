@@ -54,8 +54,8 @@ pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use state::{
-    ContextStatus, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta, SandboxInfo,
-    SessionPhase, TaskContext, TokenUsage, ToolState, write_review_meta,
+    ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,
+    SandboxInfo, SessionPhase, TaskContext, TokenUsage, ToolState, write_review_meta,
 };
 
 pub use metadata::SessionMetadata;

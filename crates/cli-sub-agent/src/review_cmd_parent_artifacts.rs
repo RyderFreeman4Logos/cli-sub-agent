@@ -284,6 +284,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         review_iterations: ctx.review_iterations,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: ctx.diff_fingerprint.clone(),
+        fix_convergence: None,
     };
     write_review_meta(&session_dir, &meta).context("failed to write consensus review_meta.json")?;
     let verdict_artifact = ReviewVerdictArtifact::from_parts(
@@ -351,6 +352,7 @@ pub(super) fn parent_consensus_review_meta(
         review_iterations,
         timestamp: chrono::Utc::now(),
         diff_fingerprint,
+        fix_convergence: None,
     })
 }
 

@@ -93,6 +93,7 @@ fn review_session_meta_serde_roundtrip() {
         review_iterations: 3,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:abc123".to_string()),
+        fix_convergence: None,
     };
 
     let json = serde_json::to_string_pretty(&meta).expect("serialize");
@@ -120,6 +121,7 @@ fn review_session_meta_write_and_read() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
 
     write_review_meta(td.path(), &meta).expect("write");
@@ -155,6 +157,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     };
     write_review_meta(td.path(), &meta1).expect("write initial");
 
@@ -175,6 +178,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:def456".to_string()),
+        fix_convergence: None,
     };
     write_review_meta(td.path(), &meta2).expect("write after fix");
 
@@ -224,6 +228,7 @@ fn review_meta_with_decision(decision: &str, verdict: &str, exit_code: i32) -> R
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        fix_convergence: None,
     }
 }
 
@@ -258,4 +263,21 @@ fn review_session_meta_allows_explicit_pass_zero_exit() {
     let meta = review_meta_with_decision("pass", "CLEAN", 0);
 
     assert!(!meta.requires_fail_closed_verdict());
+}
+
+#[test]
+fn review_session_meta_accepts_clean_verdict_for_non_fix_pass() {
+    let meta = review_meta_with_decision("pass", "CLEAN", 0);
+
+    assert!(meta.fix_clean_converged());
+    assert!(meta.accepts_clean_review_verdict(ReviewDecision::Pass));
+}
+
+#[test]
+fn review_session_meta_rejects_fix_without_positive_convergence_sentinel() {
+    let mut meta = review_meta_with_decision("pass", "CLEAN", 0);
+    meta.fix_attempted = true;
+
+    assert!(!meta.fix_clean_converged());
+    assert!(!meta.accepts_clean_review_verdict(ReviewDecision::Pass));
 }

@@ -2,11 +2,7 @@ use std::path::Path;
 use std::{fs, str::FromStr};
 
 use anyhow::Result;
-use csa_core::gemini::RATE_LIMIT_PATTERNS;
-use csa_core::types::{ReviewDecision, ToolName};
-use csa_executor::{
-    contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
-};
+use csa_core::types::ReviewDecision;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{Finding, ReviewVerdictArtifact, Severity, write_review_verdict};
 use tracing::{debug, warn};
@@ -15,6 +11,8 @@ use tracing::{debug, warn};
 mod artifacts;
 #[path = "review_cmd_output_clean.rs"]
 mod clean_detection;
+#[path = "review_cmd_output_consistency.rs"]
+mod consistency;
 #[path = "review_cmd_output_diagnostics.rs"]
 mod diagnostics;
 #[path = "review_cmd_output_exit.rs"]
@@ -29,6 +27,8 @@ mod sections;
 mod summary_artifact;
 #[path = "review_cmd_output_text.rs"]
 mod text;
+#[path = "review_cmd_output_tool_failure.rs"]
+mod tool_failure;
 use artifacts::{
     has_blocking_severity, json_severity_counts_if_present, load_findings_toml_from_output,
     load_review_artifact_from_output, severity_counts_are_zero, severity_counts_for_artifact,
@@ -38,8 +38,8 @@ use artifacts::{
 use clean_detection::detect_prose_fail_conclusion;
 use clean_detection::{
     review_contains_prose_clean_conclusion, review_contains_prose_fail_conclusion,
-    strip_prompt_guards,
 };
+use consistency::enforce_final_verdict_consistency;
 pub(crate) use diagnostics::detect_tool_diagnostic;
 pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
@@ -57,31 +57,11 @@ use text::{
     zero_severity_counts,
 };
 pub(super) use text::{extract_review_text, stream_started_without_terminal_event};
+pub(super) use tool_failure::{ToolReviewFailureKind, detect_tool_review_failure};
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
 pub(super) const GEMINI_AUTH_PROMPT_STATUS_REASON: &str = "gemini_auth_prompt";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ToolReviewFailureKind {
-    GeminiAuthPromptDetected,
-}
-
-impl ToolReviewFailureKind {
-    pub(super) fn status_reason(self) -> &'static str {
-        match self {
-            Self::GeminiAuthPromptDetected => GEMINI_AUTH_PROMPT_STATUS_REASON,
-        }
-    }
-
-    pub(super) fn summary_note(self) -> &'static str {
-        match self {
-            Self::GeminiAuthPromptDetected => {
-                "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced"
-            }
-        }
-    }
-}
 
 /// Persist a [`ReviewSessionMeta`] to `{session_dir}/review_meta.json`.
 ///
@@ -140,6 +120,15 @@ pub(super) fn persist_review_verdict(
             artifact.routed_to = meta.routed_to.clone();
             artifact.primary_failure = meta.primary_failure.clone();
             artifact.failure_reason = meta.failure_reason.clone();
+            if let Err(error) = enforce_final_verdict_consistency(&session_dir, &mut artifact) {
+                warn!(
+                    session_id = %meta.session_id,
+                    error = %error,
+                    "Review verdict consistency check failed; writing fail-closed uncertain verdict"
+                );
+                artifact.decision = ReviewDecision::Uncertain;
+                artifact.verdict_legacy = "UNCERTAIN".to_string();
+            }
             if let Err(e) = write_review_verdict(&session_dir, &artifact) {
                 warn!(
                     session_id = %meta.session_id,
@@ -159,6 +148,7 @@ pub(super) fn persist_review_verdict(
         }
     }
 }
+
 #[cfg(test)]
 pub(crate) fn persist_review_verdict_for_tests(
     project_root: &Path,
@@ -549,48 +539,6 @@ pub(super) fn is_worktree_submodule(project_root: &Path) -> bool {
     };
     let gitdir = gitdir_raw.trim();
     gitdir.contains("/worktrees/") && gitdir.contains("/modules/")
-}
-
-pub(super) fn detect_tool_review_failure(
-    tool: ToolName,
-    stdout: &str,
-    stderr: &str,
-) -> Option<ToolReviewFailureKind> {
-    if tool != ToolName::GeminiCli {
-        return None;
-    }
-    let normalized_stdout =
-        normalize_gemini_prompt_text(&strip_ansi_escape_sequences(&strip_prompt_guards(stdout)));
-    let normalized_stderr =
-        normalize_gemini_prompt_text(&strip_ansi_escape_sequences(&strip_prompt_guards(stderr)));
-    let combined = if normalized_stderr.is_empty() {
-        normalized_stdout.clone()
-    } else if normalized_stdout.is_empty() {
-        normalized_stderr.clone()
-    } else {
-        format!("{normalized_stdout}\n{normalized_stderr}")
-    };
-
-    if !contains_gemini_oauth_prompt(&combined) {
-        return None;
-    }
-
-    let saw_turn_completed = combined.lines().any(|line| {
-        line.contains("\"type\":\"turn.completed\"")
-            || line.contains("\"type\": \"turn.completed\"")
-            || line.trim() == "turn.completed"
-    });
-    if saw_turn_completed {
-        return None;
-    }
-
-    let output_tokens = crate::run_helpers::parse_token_usage(&combined)
-        .and_then(|usage| usage.output_tokens)
-        .unwrap_or(0);
-    if output_tokens != 0 {
-        return None;
-    }
-    Some(ToolReviewFailureKind::GeminiAuthPromptDetected)
 }
 
 pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
