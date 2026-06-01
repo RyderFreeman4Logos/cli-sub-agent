@@ -108,8 +108,18 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
     };
     // #1741: honor a pinned SA subtree's inherited model spec for `csa review`
     // (see subtree_pin::apply_subtree_pin).
-    subtree_pin::apply_subtree_pin(&mut args, current_depth);
+    let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, current_depth);
     let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
+    crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
+        project_config: config.as_ref(),
+        global_config: &global_config,
+        model_spec: args.model_spec.is_some(),
+        force: false,
+        force_ignore_tier_setting: args.force_ignore_tier_setting,
+        model_tier_override: args.model.is_some(),
+        thinking_tier_override: args.thinking.is_some(),
+        inherited_trusted_pin,
+    })?;
     validate_review_direct_tool_tier_restriction(
         args_tool.is_some(),
         config.as_ref(),
@@ -215,7 +225,7 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
     };
     let tool = resolved_selection.tool;
     let resolved_model_spec = resolved_selection.model_spec.clone();
-    let tier_filter = resolved_selection.tier_filter.clone();
+    let tier_preference_order = resolved_selection.tier_preference_order.clone();
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
@@ -294,7 +304,7 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
             resolved_model_spec.clone(),
             resolved_tier_name.clone(),
             tier_active,
-            tier_filter.clone(),
+            tier_preference_order.clone(),
             review_thinking.clone(),
             review_description.clone(),
             &project_root,

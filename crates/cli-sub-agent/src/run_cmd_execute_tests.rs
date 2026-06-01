@@ -423,7 +423,7 @@ fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
             true,
         );
 
-    assert!(!tier_auto_select);
+    assert!(tier_auto_select);
     assert!(failover_on_crash_enabled);
     assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
 }
@@ -431,6 +431,18 @@ fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
 #[test]
 fn run_explicit_tool_defaults_to_no_failover() {
     assert!(resolve_run_no_failover(
+        true,
+        false,
+        &ToolSelectionStrategy::Explicit(ToolName::Codex),
+        false,
+        false,
+    ));
+}
+
+#[test]
+fn run_explicit_tool_with_tier_keeps_failover_enabled() {
+    assert!(!resolve_run_no_failover(
+        true,
         true,
         &ToolSelectionStrategy::Explicit(ToolName::Codex),
         false,
@@ -442,6 +454,7 @@ fn run_explicit_tool_defaults_to_no_failover() {
 fn run_explicit_tool_allow_fallback_keeps_failover_enabled() {
     assert!(!resolve_run_no_failover(
         true,
+        false,
         &ToolSelectionStrategy::Explicit(ToolName::Codex),
         false,
         true,

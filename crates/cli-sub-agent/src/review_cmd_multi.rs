@@ -146,7 +146,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 reviewer_model_spec,
                 reviewer_tier_name,
                 false,
-                None,
+                Vec::new(),
                 reviewer_thinking,
                 reviewer_description,
                 &reviewer_project_root,

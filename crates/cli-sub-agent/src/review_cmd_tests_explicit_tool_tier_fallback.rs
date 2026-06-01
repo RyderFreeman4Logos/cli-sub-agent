@@ -31,7 +31,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
         Some(&config),
         None,
         true,
-        Some(&crate::tier_model_fallback::TierFilter::all()),
+        &["codex".to_string()],
     );
 
     assert_eq!(

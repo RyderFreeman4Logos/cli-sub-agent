@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::debate_cmd::DebateMode;
-use crate::tier_model_fallback::TierFilter;
 use anyhow::{Context, Result};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
@@ -75,7 +74,7 @@ pub(crate) struct ResolvedDebateSelection {
     pub(crate) tool: ToolName,
     pub(crate) mode: DebateMode,
     pub(crate) model_spec: Option<String>,
-    pub(crate) tier_filter: Option<TierFilter>,
+    pub(crate) tier_preference_order: Vec<String>,
 }
 
 pub(crate) fn validate_debate_direct_tool_tier_restriction(
@@ -135,7 +134,7 @@ pub(crate) fn resolve_debate_selection(
             tool,
             mode: DebateMode::Heterogeneous,
             model_spec: resolved_model_spec,
-            tier_filter: None,
+            tier_preference_order: Vec::new(),
         });
     }
 
@@ -162,19 +161,19 @@ pub(crate) fn resolve_debate_selection(
         if let Some(ref tier) = tier_name
             && let Some(cfg) = project_config
         {
-            let resolution = crate::run_helpers::resolve_requested_tool_from_tier(
+            let tier_preference_order = vec![tool.as_str().to_string()];
+            let resolution = crate::run_helpers::resolve_preferred_tool_from_tier(
                 tier,
                 cfg,
                 parent_tool,
-                tool,
-                force_override_user_config,
+                &tier_preference_order,
                 &[],
             )?;
             return Ok(ResolvedDebateSelection {
                 tool: resolution.tool,
                 mode: DebateMode::Heterogeneous,
                 model_spec: Some(resolution.model_spec),
-                tier_filter: Some(TierFilter::whitelist([tool.as_str().to_string()])),
+                tier_preference_order,
             });
         }
 
@@ -185,19 +184,15 @@ pub(crate) fn resolve_debate_selection(
             tool,
             mode: DebateMode::Heterogeneous,
             model_spec: None,
-            tier_filter: None,
+            tier_preference_order: Vec::new(),
         });
     }
 
-    // Compute effective whitelist from tool selection (project > global).
-    // IMPORTANT (#648): When [debate].tool is set, it acts as a whitelist filter
-    // on the tier's model list, silently narrowing a multi-tool tier to only the
-    // specified tool(s). To use the full tier fallback chain, set tool = "auto".
-    let effective_whitelist = project_config
+    let effective_selection = project_config
         .and_then(|cfg| cfg.debate.as_ref())
         .map(|d| &d.tool)
         .unwrap_or(&global_config.debate.tool);
-    let whitelist = effective_whitelist.whitelist();
+    let tier_preference_order = effective_selection.preference_order();
 
     if let Some(ref tier) = tier_name {
         let cfg = project_config.ok_or_else(|| {
@@ -209,31 +204,7 @@ pub(crate) fn resolve_debate_selection(
         })?;
 
         let tier_tools = cfg.list_tools_in_tier(tier);
-        if let Some(wl) = whitelist {
-            let matching_tools: Vec<&str> = tier_tools
-                .iter()
-                .filter(|(tool_name, _)| wl.iter().any(|allowed| allowed == tool_name))
-                .map(|(tool_name, _)| tool_name.as_str())
-                .collect();
-            if matching_tools.is_empty() {
-                let tier_tool_names: Vec<&str> = tier_tools
-                    .iter()
-                    .map(|(tool_name, _)| tool_name.as_str())
-                    .collect();
-                anyhow::bail!(
-                    "Tier '{}' has no tools matching [debate].tool whitelist [{}]. \
-                     The active debate tier remains authoritative.\n\
-                     Tier tools: [{}].\n\
-                     Update [debate].tool or choose a different tier.",
-                    tier,
-                    wl.join(", "),
-                    tier_tool_names.join(", ")
-                );
-            }
-        }
-
-        let filtered_tools =
-            crate::run_helpers::collect_available_tier_models(tier, cfg, whitelist, &[]);
+        let filtered_tools = crate::run_helpers::collect_available_tier_models(tier, cfg, &[]);
         maybe_guard_debate_narrowing(
             tier,
             &tier_tools,
@@ -241,17 +212,18 @@ pub(crate) fn resolve_debate_selection(
             global_config.debate.require_heterogeneous,
         )?;
 
-        if let Some(resolution) =
-            crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
-        {
+        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier(
+            tier,
+            cfg,
+            parent_tool,
+            &tier_preference_order,
+            &[],
+        ) {
             return Ok(ResolvedDebateSelection {
                 tool: resolution.tool,
                 mode: DebateMode::Heterogeneous,
                 model_spec: Some(resolution.model_spec),
-                tier_filter: Some(match whitelist {
-                    Some(wl) => TierFilter::whitelist(wl.iter().cloned()),
-                    None => TierFilter::all(),
-                }),
+                tier_preference_order,
             });
         }
 
@@ -286,7 +258,7 @@ pub(crate) fn resolve_debate_selection(
             tool: t,
             mode: m,
             model_spec: None,
-            tier_filter: None,
+            tier_preference_order: Vec::new(),
         })
         .with_context(|| {
             format!(
@@ -308,7 +280,7 @@ pub(crate) fn resolve_debate_selection(
         tool: t,
         mode: m,
         model_spec: None,
-        tier_filter: None,
+        tier_preference_order: Vec::new(),
     })
 }
 

@@ -43,7 +43,7 @@ pub(super) async fn execute_csa_step_with_tier_failover(
         step_ctx.config,
         global_config.as_ref(),
         params.tier_name.is_some(),
-        None,
+        &[],
     );
 
     let mut failures: Vec<TierAttemptFailure> = Vec::new();

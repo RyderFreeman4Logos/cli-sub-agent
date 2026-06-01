@@ -44,7 +44,6 @@ fn build_failover_chain_records_build_time_exclusions_without_runtime_failures()
     let chain = crate::tier_model_fallback::build_fallback_chain_for_result(
         Some(&config),
         Some("quality"),
-        None,
         &[],
         Some("claude-code/anthropic/claude-sonnet/high"),
     );
@@ -291,7 +290,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
     assert_eq!(codex_invocations.lines().count(), 2);
     assert!(
         !gemini_invocation_log.exists(),
-        "gemini should not be invoked when --tool codex whitelists codex-only candidates"
+        "gemini should not be invoked because the preferred codex fallback succeeds first"
     );
 
     let meta = ReviewSessionMeta {

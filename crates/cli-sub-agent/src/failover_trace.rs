@@ -37,8 +37,6 @@ pub(crate) enum FailoverSkipKind {
     AttemptedAndErrored,
     /// Spec malformed: could not parse `tool/provider/model/thinking`.
     MalformedSpec,
-    /// Excluded by an explicit tool whitelist (requested-tool / heterogeneity filter).
-    WhitelistFiltered,
 }
 
 impl FailoverSkipKind {
@@ -53,7 +51,6 @@ impl FailoverSkipKind {
             Self::TransportError => "transport-error",
             Self::AttemptedAndErrored => "attempted-and-errored",
             Self::MalformedSpec => "malformed-spec",
-            Self::WhitelistFiltered => "whitelist-filtered",
         }
     }
 

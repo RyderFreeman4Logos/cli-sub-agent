@@ -52,8 +52,8 @@ pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
 pub(crate) use tier_bypass_gate::{TierBypassGateCtx, enforce_tier_bypass_gate};
 pub(crate) use tier_resolution::{
-    TierToolResolution, collect_available_tier_models, evaluate_tier_models,
-    resolve_requested_tool_from_tier, resolve_tool_from_tier,
+    TierToolResolution, collect_available_tier_models, collect_preferred_tier_models,
+    evaluate_tier_models, resolve_preferred_tool_from_tier, resolve_tool_from_tier,
 };
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
@@ -285,22 +285,16 @@ pub(crate) fn resolve_tool_and_model(
         None
     };
 
-    // Case 0: --tier provided → resolve tool/model from tier definition.
-    // A user-explicit `--tool` acts as a filter inside the selected tier.
+    // Case 0: --tier provided -> resolve tool/model from tier definition.
+    // A user-explicit `--tool` is a soft preference inside the selected tier:
+    // prefer matching candidates first, then keep the rest of the tier failover chain.
     if let Some(ref canonical_name) = canonical_tier
         && let Some(cfg) = config
     {
         let resolution = if let Some(requested_tool) = tool.filter(|_| !tool_is_auto_resolved) {
-            resolve_requested_tool_from_tier(
-                canonical_name,
-                cfg,
-                None,
-                requested_tool,
-                force_override_user_config,
-                &[],
-            )?
-        } else if let Some(resolution) =
-            resolve_tool_from_tier(canonical_name, cfg, None, None, &[])
+            let preference_order = [requested_tool.as_str().to_string()];
+            resolve_preferred_tool_from_tier(canonical_name, cfg, None, &preference_order, &[])?
+        } else if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, &[], &[])
         {
             resolution
         } else {

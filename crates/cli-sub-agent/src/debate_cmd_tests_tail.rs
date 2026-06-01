@@ -589,9 +589,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
         Some(&config),
         None,
         true,
-        Some(&crate::tier_model_fallback::TierFilter::whitelist([
-            "codex",
-        ])),
+        &["codex".to_string()],
     );
 
     assert_eq!(
@@ -602,6 +600,10 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
                 Some("codex/openai/gpt-5.4/medium".to_string()),
             ),
             (ToolName::Codex, Some("codex/openai/gpt-5/high".to_string())),
+            (
+                ToolName::GeminiCli,
+                Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+            ),
         ]
     );
 }

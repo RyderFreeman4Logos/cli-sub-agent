@@ -121,7 +121,6 @@ fn category_strings_are_stable_and_distinct() {
         FailoverSkipKind::TransportError,
         FailoverSkipKind::AttemptedAndErrored,
         FailoverSkipKind::MalformedSpec,
-        FailoverSkipKind::WhitelistFiltered,
     ];
     let categories: Vec<&str> = kinds.iter().map(|k| k.category()).collect();
     let unique: std::collections::HashSet<&str> = categories.iter().copied().collect();

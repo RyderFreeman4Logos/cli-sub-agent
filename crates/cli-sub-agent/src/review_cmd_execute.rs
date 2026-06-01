@@ -28,10 +28,9 @@ use tracing::{info, warn};
 
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
 use crate::tier_model_fallback::{
-    TierAttemptFailure, TierFilter, chain_failure_reasons,
-    classify_next_model_failure_with_elapsed, fallback_reason_for_result,
-    format_all_models_failed_reason, ordered_tier_candidates, persist_fallback_chain,
-    persist_fallback_result_fields,
+    TierAttemptFailure, chain_failure_reasons, classify_next_model_failure_with_elapsed,
+    fallback_reason_for_result, format_all_models_failed_reason, ordered_tier_candidates,
+    persist_fallback_chain, persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -138,7 +137,7 @@ pub(crate) async fn execute_review(
         tier_model_spec,
         tier_name,
         tier_fallback_enabled,
-        None,
+        Vec::new(),
         thinking,
         description,
         project_root,
@@ -172,7 +171,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     tier_model_spec: Option<String>,
     tier_name: Option<String>,
     tier_fallback_enabled: bool,
-    tier_filter: Option<TierFilter>,
+    tier_preference_order: Vec<String>,
     thinking: Option<String>,
     description: String,
     project_root: &Path,
@@ -220,7 +219,7 @@ pub(crate) async fn execute_review_with_tier_filter(
         project_config,
         Some(global_config),
         tier_fallback_enabled,
-        tier_filter.as_ref(),
+        &tier_preference_order,
     );
     warn_if_fast_mode_has_no_codex_review_candidate(
         effective_fast_mode,
@@ -381,7 +380,6 @@ pub(crate) async fn execute_review_with_tier_filter(
                             crate::tier_model_fallback::build_fallback_chain_for_result(
                                 project_config,
                                 tier_name.as_deref(),
-                                tier_filter.as_ref(),
                                 &failures,
                                 // All tier models failed: no winner, so persist
                                 // the full chain.
@@ -560,7 +558,6 @@ pub(crate) async fn execute_review_with_tier_filter(
                     crate::tier_model_fallback::build_fallback_chain_for_result(
                         project_config,
                         tier_name.as_deref(),
-                        tier_filter.as_ref(),
                         &failures,
                         // Every tier model failed: no winner, persist full chain.
                         None,
@@ -604,7 +601,6 @@ pub(crate) async fn execute_review_with_tier_filter(
             crate::tier_model_fallback::build_fallback_chain_for_result(
                 project_config,
                 tier_name.as_deref(),
-                tier_filter.as_ref(),
                 &failures,
                 // The winning model: bounds the persisted chain to before-winner
                 // skips so a first-choice success omits never-reached tier

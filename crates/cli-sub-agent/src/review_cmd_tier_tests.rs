@@ -234,14 +234,15 @@ fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
         Some("gemini-cli/google/default/xhigh")
     );
     assert_eq!(
-        selection.tier_filter,
-        Some(crate::tier_model_fallback::TierFilter::All),
+        selection.tier_preference_order,
+        vec!["gemini-cli"],
         "explicit review --tool chooses the first attempt but must not whitelist away tier fallback"
     );
 }
 
 #[test]
-fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
+fn test_review_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
@@ -260,16 +261,17 @@ fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
         false,
     );
 
-    let err = result.expect_err("missing tool in review tier must error");
-    assert!(
-        err.to_string()
-            .contains("Tool 'codex' is not available in tier 'quality'"),
-        "unexpected error: {err}"
+    let (tool, model_spec) = result.expect("missing preferred tool should not hard-fail");
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
     );
 }
 
 #[test]
-fn test_review_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
+fn test_review_tier_preference_mismatch_uses_full_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = review_config_with_whitelist(
         "quality",
@@ -289,15 +291,11 @@ fn test_review_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
         false,
     );
 
-    let err = result.expect_err("whitelist mismatch must hard-fail");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("[review].tool whitelist"),
-        "unexpected error: {msg}"
-    );
-    assert!(
-        msg.contains("active review tier remains authoritative"),
-        "{msg}"
+    let (tool, model_spec) = result.expect("absent preferred tool should not hard-fail");
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
     );
 }
 

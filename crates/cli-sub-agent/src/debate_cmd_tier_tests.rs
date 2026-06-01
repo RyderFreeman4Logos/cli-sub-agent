@@ -4,8 +4,6 @@ use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::{GlobalConfig, ProjectConfig, ReviewConfig, ToolConfig, ToolSelection};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tracing_subscriber::fmt::MakeWriter;
 
 fn assume_tier_tools_available() -> ScopedTestEnvVar {
     ScopedTestEnvVar::set(
@@ -90,45 +88,6 @@ fn debate_config_with_whitelist(
         ..Default::default()
     });
     cfg
-}
-
-#[derive(Clone, Default)]
-struct SharedLogBuffer {
-    bytes: Arc<Mutex<Vec<u8>>>,
-}
-
-impl SharedLogBuffer {
-    fn contents(&self) -> String {
-        String::from_utf8(self.bytes.lock().expect("log buffer lock").clone()).expect("utf8 logs")
-    }
-}
-
-struct SharedLogWriter {
-    bytes: Arc<Mutex<Vec<u8>>>,
-}
-
-impl<'a> MakeWriter<'a> for SharedLogBuffer {
-    type Writer = SharedLogWriter;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        SharedLogWriter {
-            bytes: Arc::clone(&self.bytes),
-        }
-    }
-}
-
-impl std::io::Write for SharedLogWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.bytes
-            .lock()
-            .expect("log writer lock")
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 fn debate_config_with_single_tool_whitelist(
@@ -242,7 +201,8 @@ fn test_debate_tool_plus_tier_resolves_requested_tool_from_tier() {
 }
 
 #[test]
-fn test_debate_tool_plus_tier_errors_when_tool_missing_from_tier() {
+fn test_debate_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
@@ -261,16 +221,18 @@ fn test_debate_tool_plus_tier_errors_when_tool_missing_from_tier() {
         false,
     );
 
-    let err = result.expect_err("missing tool in debate tier must error");
-    assert!(
-        err.to_string()
-            .contains("Tool 'codex' is not available in tier 'quality'"),
-        "unexpected error: {err}"
+    let (tool, mode, model_spec) = result.expect("missing preferred tool should not hard-fail");
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(mode, DebateMode::Heterogeneous);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
     );
 }
 
 #[test]
-fn test_debate_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
+fn test_debate_tier_preference_mismatch_uses_full_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = debate_config_with_whitelist(
         "quality",
@@ -290,20 +252,17 @@ fn test_debate_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
         false,
     );
 
-    let err = result.expect_err("whitelist mismatch must hard-fail");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("[debate].tool whitelist"),
-        "unexpected error: {msg}"
-    );
-    assert!(
-        msg.contains("active debate tier remains authoritative"),
-        "{msg}"
+    let (tool, mode, model_spec) = result.expect("absent preferred tool should not hard-fail");
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(mode, DebateMode::Heterogeneous);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
     );
 }
 
 #[test]
-fn debate_resolution_warns_on_silent_narrowing_without_flag() {
+fn debate_resolution_prefers_configured_tool_without_narrowing_fallbacks() {
     let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = debate_config_with_single_tool_whitelist(
@@ -315,14 +274,6 @@ fn debate_resolution_warns_on_silent_narrowing_without_flag() {
         &["gemini-cli", "codex"],
         "codex",
     );
-
-    let buffer = SharedLogBuffer::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_writer(buffer.clone())
-        .without_time()
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
 
     let result = resolve_debate_tool(
         None,
@@ -340,20 +291,10 @@ fn debate_resolution_warns_on_silent_narrowing_without_flag() {
     assert_eq!(result.0, ToolName::Codex);
     assert_eq!(result.1, DebateMode::Heterogeneous);
     assert_eq!(result.2.as_deref(), Some("codex/openai/gpt-5.4/high"));
-
-    let logs = buffer.contents();
-    assert!(
-        logs.contains("debate panel narrowed to single tool `codex`"),
-        "expected narrowing warning, got: {logs}"
-    );
-    assert!(
-        logs.contains("tier `quality` declared 2 models"),
-        "expected tier context in warning, got: {logs}"
-    );
 }
 
 #[test]
-fn debate_resolution_fails_on_narrowing_when_require_heterogeneous_true() {
+fn debate_resolution_require_heterogeneous_passes_with_preference_plus_fallbacks() {
     let _tool_availability = assume_tier_tools_available();
     let mut global = GlobalConfig::default();
     global.debate.require_heterogeneous = true;
@@ -367,7 +308,7 @@ fn debate_resolution_fails_on_narrowing_when_require_heterogeneous_true() {
         "codex",
     );
 
-    let err = resolve_debate_tool(
+    let result = resolve_debate_tool(
         None,
         None,
         Some(&cfg),
@@ -378,21 +319,11 @@ fn debate_resolution_fails_on_narrowing_when_require_heterogeneous_true() {
         Some("quality"),
         false,
     )
-    .expect_err("strict heterogeneity should fail on narrowing");
+    .expect("strict heterogeneity should pass because preferences keep fallback tools");
 
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Debate tier 'quality' narrowed to a single surviving tool 'codex'"),
-        "unexpected error: {msg}"
-    );
-    assert!(
-        msg.contains("gemini-cli/google/default/xhigh"),
-        "declared models missing from error: {msg}"
-    );
-    assert!(
-        msg.contains("codex/openai/gpt-5.4/high"),
-        "declared models missing from error: {msg}"
-    );
+    assert_eq!(result.0, ToolName::Codex);
+    assert_eq!(result.1, DebateMode::Heterogeneous);
+    assert_eq!(result.2.as_deref(), Some("codex/openai/gpt-5.4/high"));
 }
 
 #[test]

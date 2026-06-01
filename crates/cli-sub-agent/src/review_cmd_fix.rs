@@ -77,7 +77,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.effective_tier_model_spec.clone(),
             None,
             false,
-            None,
+            Vec::new(),
             ctx.review_thinking.clone(),
             format!("fix round {round}/{}", ctx.max_rounds),
             ctx.project_root,
