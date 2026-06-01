@@ -197,6 +197,37 @@ run_missing_state_runs_review_case() {
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
+run_clean_initial_fix_without_round_records_case() {
+  local case_dir="${TMP_ROOT}/clean-initial-fix"
+  local repo_dir="${case_dir}/repo"
+  local stub_dir="${case_dir}/bin"
+  local state_dir="${case_dir}/stub-state"
+  local output_file="${case_dir}/output.log"
+  local state_file
+  local head_sha
+
+  make_repo "${repo_dir}"
+  add_commit "${repo_dir}" "file.txt" "one" "commit one"
+  head_sha="$(git -C "${repo_dir}" rev-parse HEAD)"
+  state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
+  make_csa_stub "${stub_dir}"
+
+  (
+    cd "${repo_dir}"
+    PATH="${stub_dir}:${PATH}" \
+    XDG_STATE_HOME="${case_dir}/xdg-state" \
+    CSA_STUB_STATE_DIR="${state_dir}" \
+    CSA_STUB_BATCH_COMMITS="3" \
+    CSA_STUB_META_JSON="{\"session_id\":\"01KTESTREVIEWBATCH0000000001\",\"head_sha\":\"${head_sha}\",\"decision\":\"pass\",\"verdict\":\"CLEAN\",\"tool\":\"codex\",\"scope\":\"range:main...HEAD\",\"exit_code\":0,\"fix_attempted\":false,\"fix_rounds\":0,\"timestamp\":\"2026-04-01T00:00:00Z\"}" \
+    bash "${SCRIPT_PATH}" --default-branch main -- csa review --fix --range main...HEAD \
+      >"${output_file}" 2>&1
+  )
+
+  assert_equals "1" "$(cat "${state_dir}/review-count")" "clean initial fix review count"
+  assert_equals "${head_sha}" "$(tr -d '\n' < "${state_file}")" "clean initial fix recorded head"
+  grep -q "final_decision: CLEAN" "${output_file}"
+}
+
 run_override_case() {
   local case_dir="${TMP_ROOT}/override"
   local repo_dir="${case_dir}/repo"
@@ -483,6 +514,7 @@ run_base_branch_change_runs_review_case() {
 
 run_skip_case
 run_missing_state_runs_review_case
+run_clean_initial_fix_without_round_records_case
 run_override_case
 run_rewritten_history_runs_review_case
 run_high_severity_verdict_does_not_record_case

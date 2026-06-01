@@ -446,6 +446,24 @@ mod tests {
     }
 
     #[test]
+    fn clean_initial_fix_without_fix_round_is_allowed() {
+        let verdict = parse_review_verdict(
+            r#"{
+                "decision": "pass",
+                "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                "findings": []
+            }"#,
+        )
+        .expect("verdict should parse");
+        let meta = clean_review_meta();
+
+        assert!(!meta.fix_attempted);
+        assert_eq!(meta.fix_rounds, 0);
+        assert!(meta.fix_convergence.is_none());
+        assert!(verdict_is_allowed(&verdict, Some(&meta)));
+    }
+
+    #[test]
     fn quota_unavailable_co_reviewer_clean_primary_is_allowed() {
         let verdict = parse_review_verdict(
             r#"{

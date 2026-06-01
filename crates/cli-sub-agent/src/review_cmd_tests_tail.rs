@@ -662,6 +662,87 @@ fn install_pattern(project_root: &Path, name: &str) {
     std::fs::write(skill_dir.join("SKILL.md"), "# test pattern\n").unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn handle_review_fix_clean_initial_persists_no_fix_attempt() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let codex_stub = "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 1.0.0\\n'\n  exit 0\nfi\nprintf '%s\\n' '<!-- CSA:SECTION:summary -->' 'PASS' '<!-- CSA:SECTION:summary:END -->' '<!-- CSA:SECTION:details -->' 'No blocking findings remain.' '<!-- CSA:SECTION:details:END -->'\n";
+    for binary in ["codex", "codex-acp"] {
+        let path = bin_dir.join(binary);
+        std::fs::write(&path, codex_stub).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+    let mut config = project_config_with_enabled_tools(&["codex"]);
+    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    write_review_project_config(project_dir.path(), &config);
+    install_pattern(project_dir.path(), "csa-review");
+
+    let cd = project_dir.path().display().to_string();
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--cd",
+        &cd,
+        "--files",
+        "tracked.txt",
+        "--tool",
+        "codex",
+        "--single",
+        "--fix",
+        "--no-fs-sandbox",
+    ]);
+
+    let exit_code = handle_review(args, 0)
+        .await
+        .expect("clean initial --fix review should succeed");
+    assert_eq!(exit_code, 0);
+
+    let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    assert_eq!(sessions.len(), 1, "expected one review session");
+    let session_id = &sessions[0].meta_session_id;
+    let session_dir = csa_session::get_session_dir(project_dir.path(), session_id).unwrap();
+    let meta: ReviewSessionMeta = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap(),
+    )
+    .unwrap();
+    let artifact: csa_session::ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(meta.exit_code, 0);
+    assert!(
+        !meta.fix_attempted,
+        "clean initial --fix must not require fix convergence metadata"
+    );
+    assert_eq!(meta.fix_rounds, 0);
+    assert!(meta.fix_convergence.is_none());
+    assert!(meta.accepts_clean_review_verdict(artifact.decision));
+
+    let identity = csa_session::create_vcs_backend(project_dir.path())
+        .identity(project_dir.path())
+        .expect("resolve git identity");
+    let branch = identity.ref_name.expect("branch name");
+    let marker_path = crate::review_gate::marker_path(project_dir.path(), &branch, &meta.head_sha);
+    assert!(
+        marker_path.exists(),
+        "clean initial --fix must write the review gate marker"
+    );
+}
+
 #[tokio::test]
 async fn handle_review_rejects_direct_tool_tier_before_session_creation() {
     let project_dir = tempdir().unwrap();

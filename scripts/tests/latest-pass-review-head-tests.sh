@@ -117,6 +117,11 @@ run_case \
   cleanhead
 
 run_case \
+  clean_initial_fix_no_round \
+  '{"session_id":"01KLATESTPASS00000000000001","head_sha":"cleaninitialfix","decision":"pass","verdict":"CLEAN","tool":"codex","scope":"range:main...HEAD","exit_code":0,"fix_attempted":false,"fix_rounds":0,"timestamp":"2026-04-01T00:00:00Z"}' \
+  cleaninitialfix
+
+run_case \
   pass_meta_exit_one \
   '{"session_id":"01KLATESTPASS00000000000001","head_sha":"badexit","decision":"pass","verdict":"CLEAN","tool":"codex","scope":"range:main...HEAD","exit_code":1,"fix_attempted":false,"fix_rounds":0,"timestamp":"2026-04-01T00:00:00Z"}' \
   ''

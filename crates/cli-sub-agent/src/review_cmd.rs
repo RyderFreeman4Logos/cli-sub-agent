@@ -404,6 +404,7 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
         // Write structured review metadata to session directory.
         let effective_exit_code = resolved.effective_exit_code;
         let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
+        let fix_attempted = should_run_fix_loop(args.fix, decision);
         let review_meta = ReviewSessionMeta {
             session_id: result.execution.meta_session_id.clone(),
             head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
@@ -416,7 +417,7 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
             tool: result.executed_tool.to_string(),
             scope: scope.clone(),
             exit_code: effective_exit_code,
-            fix_attempted: args.fix,
+            fix_attempted,
             fix_rounds: 0,
             review_iterations,
             timestamp: chrono::Utc::now(),
