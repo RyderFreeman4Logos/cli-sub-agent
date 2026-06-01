@@ -180,6 +180,69 @@ fn test_merged_schema_version_uses_max_when_explicit() {
 }
 
 #[test]
+fn test_project_config_rejects_tier_policy_force_bypass() {
+    let dir = tempdir().unwrap();
+    let project_path = dir.path().join("project.toml");
+    std::fs::write(
+        &project_path,
+        r#"
+[tier_policy]
+allow_force_bypass = true
+"#,
+    )
+    .unwrap();
+
+    let err = ProjectConfig::load_with_paths(None, &project_path)
+        .expect_err("project config must not enable global-only tier policy");
+    let rendered = format!("{err:#}");
+
+    assert!(
+        rendered.contains("[tier_policy].allow_force_bypass is global-only"),
+        "error should reject project-level tier policy: {rendered}"
+    );
+    assert!(
+        rendered.contains("~/.config/cli-sub-agent/config.toml"),
+        "error should point to the global config path: {rendered}"
+    );
+}
+
+#[test]
+fn test_project_config_cannot_override_global_tier_policy_force_bypass() {
+    let dir = tempdir().unwrap();
+    let user_path = dir.path().join("user.toml");
+    let project_path = dir.path().join("project.toml");
+    std::fs::write(
+        &user_path,
+        r#"
+[tier_policy]
+allow_force_bypass = true
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &project_path,
+        r#"
+[tier_policy]
+allow_force_bypass = true
+"#,
+    )
+    .unwrap();
+
+    let err = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .expect_err("project overlay must not grant the global-only bypass");
+    let rendered = format!("{err:#}");
+
+    assert!(
+        rendered.contains("Invalid project config:"),
+        "error should identify the project layer: {rendered}"
+    );
+    assert!(
+        rendered.contains("[tier_policy].allow_force_bypass is global-only"),
+        "error should reject project-level tier policy: {rendered}"
+    );
+}
+
+#[test]
 fn test_resolve_github_config_dir_prefers_project_over_user() {
     let dir = tempdir().unwrap();
     let user_path = dir.path().join("user.toml");

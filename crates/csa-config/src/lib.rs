@@ -47,7 +47,8 @@ pub use global::{
     DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions, ExperimentalConfig, GateMode, GateStep,
     GithubConfig, GlobalConfig, GlobalHooksConfig, GlobalMcpConfig, KvCacheConfig,
     KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, PreflightConfig, ResolvedKvCacheValue,
-    ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed, ToolSelection,
+    ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed, TierPolicyConfig,
+    ToolSelection,
 };
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
