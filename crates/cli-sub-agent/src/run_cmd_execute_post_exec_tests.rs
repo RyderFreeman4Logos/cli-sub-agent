@@ -420,6 +420,41 @@ async fn post_exec_gate_nonzero_dirty_is_fatal() {
 }
 
 #[tokio::test]
+async fn post_exec_gate_runner_error_overwrites_result_as_failure() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").unwrap();
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let err = apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some(&session_id),
+        Some(&config),
+        None,
+        false,
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async { Err(anyhow::anyhow!("gate process unavailable")) })
+        },
+    )
+    .await
+    .expect_err("runner infrastructure error is fatal");
+
+    assert!(err.to_string().contains("gate process unavailable"));
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(!result.gate_timeout);
+    assert_eq!(
+        result.summary,
+        "could not run the post-exec gate: gate process unavailable"
+    );
+}
+
+#[tokio::test]
 async fn post_exec_gate_timeout_committed_clean_is_advisory() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;

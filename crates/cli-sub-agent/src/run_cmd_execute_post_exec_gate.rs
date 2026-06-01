@@ -353,7 +353,7 @@ where
         return Ok(());
     }
 
-    match maybe_run_post_exec_gate_with_runner(
+    let gate_outcome = match maybe_run_post_exec_gate_with_runner(
         project_root,
         prompt_text,
         session_id,
@@ -361,8 +361,23 @@ where
         changed_paths,
         runner,
     )
-    .await?
+    .await
     {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            if let Some(session_id) = session_id {
+                crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
+                    project_root,
+                    session_id,
+                    &format!("could not run the post-exec gate: {err}"),
+                    false,
+                );
+            }
+            return Err(err);
+        }
+    };
+
+    match gate_outcome {
         PostExecGateOutcome::Passed | PostExecGateOutcome::Skipped => Ok(()),
         PostExecGateOutcome::Failed(failure) if failure.is_timeout() => {
             if classify_post_exec_gate_worktree(project_root, session_id)
