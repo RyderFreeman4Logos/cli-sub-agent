@@ -45,8 +45,12 @@ fn overwrites_success_result_with_failure() {
         "precondition: result.toml must start as success"
     );
 
-    let gate_err = anyhow::anyhow!("just pre-commit: No justfile found (exit=1)");
-    overwrite_result_as_post_exec_gate_failure(project_root, session_id, &gate_err);
+    overwrite_result_as_post_exec_gate_failure(
+        project_root,
+        session_id,
+        "post-exec gate failed: just pre-commit: No justfile found (exit=1)",
+        false,
+    );
 
     let result = csa_session::load_result(project_root, session_id)
         .unwrap()
@@ -61,6 +65,7 @@ fn overwrites_success_result_with_failure() {
         "summary must reference gate failure, got: {}",
         result.summary
     );
+    assert!(!result.gate_timeout);
 }
 
 #[test]
@@ -68,11 +73,62 @@ fn no_panic_when_session_missing() {
     let tmp = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let project_root = tmp.path();
-    let gate_err = anyhow::anyhow!("gate failed");
     // Must not panic even when result.toml does not exist
     overwrite_result_as_post_exec_gate_failure(
         project_root,
         "01TESTMISSINGSESSION0000000A",
-        &gate_err,
+        "post-exec gate failed: gate failed",
+        false,
+    );
+}
+
+#[test]
+fn records_timeout_advisory_without_overwriting_success() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path();
+    let session =
+        create_session(project_root, Some("gate-test"), None, Some("claude-code")).unwrap();
+    let session_id = &session.meta_session_id;
+    write_success_result_for(project_root, session_id);
+
+    record_post_exec_gate_timeout_advisory(project_root, session_id);
+
+    let result = csa_session::load_result(project_root, session_id)
+        .unwrap()
+        .expect("result.toml should still exist");
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(result.gate_timeout);
+    assert!(
+        result
+            .warnings
+            .contains(&"gate timed out, verification incomplete, not a gate pass".to_string())
+    );
+}
+
+#[test]
+fn records_no_post_exec_gate_skip_warning_without_timeout() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path();
+    let session =
+        create_session(project_root, Some("gate-test"), None, Some("claude-code")).unwrap();
+    let session_id = &session.meta_session_id;
+    write_success_result_for(project_root, session_id);
+
+    record_post_exec_gate_skipped_by_flag(project_root, session_id);
+
+    let result = csa_session::load_result(project_root, session_id)
+        .unwrap()
+        .expect("result.toml should still exist");
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.gate_timeout);
+    assert!(
+        result.warnings.contains(
+            &"post-exec gate skipped by --no-post-exec-gate; external verification required"
+                .to_string()
+        )
     );
 }

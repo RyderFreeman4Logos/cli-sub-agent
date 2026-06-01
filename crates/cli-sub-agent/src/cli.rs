@@ -216,6 +216,10 @@ pub enum Commands {
         #[arg(long)]
         no_error_marker_scan: bool,
 
+        /// Skip only the post-exec shell gate; external verification remains required.
+        #[arg(long)]
+        no_post_exec_gate: bool,
+
         /// Path to agent-spec file (.spec or .toml) for contract-based verification
         #[arg(long, value_name = "PATH", value_parser = parse_spec_path_arg)]
         spec: Option<String>,

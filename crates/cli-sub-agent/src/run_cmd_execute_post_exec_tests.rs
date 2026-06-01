@@ -1,11 +1,14 @@
 use super::{
-    PostExecGateCommandOutcome, PostExecGateOutcome, execute_post_exec_gate_command,
+    PostExecGateCommandOutcome, PostExecGateOutcome,
+    apply_post_exec_gate_after_success_with_runner, execute_post_exec_gate_command,
     maybe_run_post_exec_gate_with_runner,
 };
+use crate::cli::{Cli, Commands};
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use crate::test_session_sandbox::ScopedSessionSandbox;
+use clap::Parser;
 use csa_config::{PostExecGateConfig, ProjectConfig, ProjectMeta, ResourcesConfig, RunConfig};
-use csa_session::create_session_fresh;
+use csa_session::{SessionResult, create_session_fresh, load_result, save_result};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -86,6 +89,42 @@ fn create_session_at_current_head(project_root: &Path) -> String {
     .meta_session_id
 }
 
+fn write_success_result_for(project_root: &Path, session_id: &str) {
+    let now = chrono::Utc::now();
+    let result = SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "task completed".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        manager_fields: Default::default(),
+    };
+    save_result(project_root, session_id, &result).expect("write success result");
+}
+
+fn persisted_result(project_root: &Path, session_id: &str) -> SessionResult {
+    load_result(project_root, session_id)
+        .expect("load result")
+        .expect("result should exist")
+}
+
+fn commit_tracked_change(project_root: &Path) {
+    std::fs::write(project_root.join("tracked.txt"), "committed\n").unwrap();
+    run_git(project_root, &["add", "tracked.txt"]);
+    run_git(project_root, &["commit", "-m", "change tracked"]);
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn execute_post_exec_gate_strips_inherited_csa_env() {
@@ -148,7 +187,7 @@ async fn post_exec_gate_passes_when_command_succeeds() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "just pre-commit");
     assert_eq!(calls[0].1, project_dir.path());
-    assert_eq!(calls[0].2, 600);
+    assert_eq!(calls[0].2, 1800);
 }
 
 #[tokio::test]
@@ -162,7 +201,7 @@ async fn post_exec_gate_failure_returns_structured_diagnostic() {
         command: "cargo test".to_string(),
         ..Default::default()
     });
-    let err = maybe_run_post_exec_gate_with_runner(
+    let outcome = maybe_run_post_exec_gate_with_runner(
         project_dir.path(),
         "Implement the fix in tracked.txt",
         Some("01TESTPOSTEXECGATEFAIL0000000"),
@@ -173,9 +212,13 @@ async fn post_exec_gate_failure_returns_structured_diagnostic() {
         },
     )
     .await
-    .expect_err("gate failure should bubble up");
+    .expect("gate command should return a typed outcome");
 
-    let rendered = format!("{err:#}");
+    let PostExecGateOutcome::Failed(failure) = outcome else {
+        panic!("expected typed gate failure, got {outcome:?}");
+    };
+
+    let rendered = failure.diagnostic;
     assert!(rendered.contains("csa: post-exec gate failed (exit=3)."));
     assert!(rendered.contains("gate command: cargo test"));
     assert!(rendered.contains(&format!("cwd: {}", project_dir.path().display())));
@@ -307,6 +350,256 @@ async fn post_exec_gate_runs_when_changed_paths_are_non_empty() {
 
     assert_eq!(outcome, PostExecGateOutcome::Passed);
     assert_eq!(calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn post_exec_gate_nonzero_committed_clean_is_fatal() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    commit_tracked_change(project_dir.path());
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let err = apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Implement and commit the fix",
+        Some(&session_id),
+        Some(&config),
+        None,
+        false,
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
+        },
+    )
+    .await
+    .expect_err("nonzero gate exit is fatal even when committed-clean");
+
+    assert!(err.to_string().contains("post-exec gate failed"));
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(!result.gate_timeout);
+    assert!(
+        result.warnings.is_empty(),
+        "no success warning on fatal exit"
+    );
+    assert!(result.summary.contains("post-exec gate failed"));
+}
+
+#[tokio::test]
+async fn post_exec_gate_nonzero_dirty_is_fatal() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").unwrap();
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some(&session_id),
+        Some(&config),
+        None,
+        false,
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
+        },
+    )
+    .await
+    .expect_err("nonzero gate exit is fatal for dirty work");
+
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(!result.gate_timeout);
+    assert!(result.summary.contains("post-exec gate failed"));
+}
+
+#[tokio::test]
+async fn post_exec_gate_timeout_committed_clean_is_advisory() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    commit_tracked_change(project_dir.path());
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Implement and commit the fix",
+        Some(&session_id),
+        Some(&config),
+        None,
+        false,
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async { Ok(PostExecGateCommandOutcome::TimedOut) })
+        },
+    )
+    .await
+    .expect("timeout is advisory when work is committed-clean");
+
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(result.gate_timeout);
+    assert!(result.summary.contains("task completed"));
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("verification incomplete")),
+        "warning should explain incomplete verification: {:?}",
+        result.warnings
+    );
+}
+
+#[tokio::test]
+async fn post_exec_gate_timeout_dirty_is_fatal() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").unwrap();
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some(&session_id),
+        Some(&config),
+        None,
+        false,
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async { Ok(PostExecGateCommandOutcome::TimedOut) })
+        },
+    )
+    .await
+    .expect_err("timeout is fatal when dirty work remains");
+
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(result.gate_timeout);
+    assert_eq!(
+        result.summary,
+        "timeout left dirty/uncommitted work unverified"
+    );
+}
+
+#[tokio::test]
+async fn post_exec_gate_success_passes_both_cleanliness_states() {
+    let config = project_config_with_gate(PostExecGateConfig::default());
+
+    {
+        let clean_dir = tempdir().unwrap();
+        let _clean_sandbox = ScopedSessionSandbox::new(&clean_dir).await;
+        init_clean_git_repo(clean_dir.path());
+        let clean_session_id = create_session_at_current_head(clean_dir.path());
+        commit_tracked_change(clean_dir.path());
+        write_success_result_for(clean_dir.path(), &clean_session_id);
+
+        apply_post_exec_gate_after_success_with_runner(
+            clean_dir.path(),
+            "Implement and commit the fix",
+            Some(&clean_session_id),
+            Some(&config),
+            None,
+            false,
+            |_command, _cwd, _timeout_seconds| {
+                Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(0))) })
+            },
+        )
+        .await
+        .expect("successful gate passes committed-clean work");
+
+        let clean_result = persisted_result(clean_dir.path(), &clean_session_id);
+        assert_eq!(clean_result.status, "success");
+        assert_eq!(clean_result.exit_code, 0);
+        assert!(!clean_result.gate_timeout);
+        assert!(clean_result.warnings.is_empty());
+    }
+
+    {
+        let dirty_dir = tempdir().unwrap();
+        let _dirty_sandbox = ScopedSessionSandbox::new(&dirty_dir).await;
+        init_clean_git_repo(dirty_dir.path());
+        let dirty_session_id = create_session_at_current_head(dirty_dir.path());
+        std::fs::write(dirty_dir.path().join("tracked.txt"), "dirty\n").unwrap();
+        write_success_result_for(dirty_dir.path(), &dirty_session_id);
+
+        apply_post_exec_gate_after_success_with_runner(
+            dirty_dir.path(),
+            "Modify tracked.txt",
+            Some(&dirty_session_id),
+            Some(&config),
+            None,
+            false,
+            |_command, _cwd, _timeout_seconds| {
+                Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(0))) })
+            },
+        )
+        .await
+        .expect("successful gate passes dirty work");
+
+        let dirty_result = persisted_result(dirty_dir.path(), &dirty_session_id);
+        assert_eq!(dirty_result.status, "success");
+        assert_eq!(dirty_result.exit_code, 0);
+        assert!(!dirty_result.gate_timeout);
+        assert!(dirty_result.warnings.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn run_cli_no_post_exec_gate_skips_runner_and_persists_warning() {
+    let cli = Cli::try_parse_from(["csa", "run", "--no-post-exec-gate", "prompt"])
+        .expect("run CLI should parse --no-post-exec-gate");
+    match cli.command {
+        Commands::Run {
+            no_post_exec_gate, ..
+        } => assert!(no_post_exec_gate),
+        _ => panic!("expected run command"),
+    }
+
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").unwrap();
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some(&session_id),
+        Some(&config),
+        None,
+        true,
+        |_command, _cwd, _timeout_seconds| {
+            Box::pin(async move {
+                panic!("runner must not execute when --no-post-exec-gate is set");
+            })
+        },
+    )
+    .await
+    .expect("skip flag should preserve successful turn result");
+
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.gate_timeout);
+    assert!(
+        result.warnings.iter().any(|warning| warning
+            == "post-exec gate skipped by --no-post-exec-gate; external verification required"),
+        "skip warning should be persisted: {:?}",
+        result.warnings
+    );
 }
 
 #[tokio::test]

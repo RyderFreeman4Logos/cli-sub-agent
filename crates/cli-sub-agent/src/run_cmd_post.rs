@@ -162,19 +162,15 @@ pub(crate) fn update_fork_genealogy(
 pub(crate) fn overwrite_result_as_post_exec_gate_failure(
     project_root: &Path,
     session_id: &str,
-    gate_err: &anyhow::Error,
+    gate_summary: &str,
+    gate_timeout: bool,
 ) {
-    let gate_summary = format!("post-exec gate failed: {gate_err:#}");
-    let is_timeout = gate_err.to_string().contains("timed out")
-        || gate_err.to_string().contains("timeout")
-        || gate_err.to_string().contains("Timeout");
-
     match load_result(project_root, session_id) {
         Ok(Some(mut result)) => {
             result.exit_code = 1;
             result.status = "failure".to_string();
-            result.summary = gate_summary;
-            result.gate_timeout = is_timeout;
+            result.summary = gate_summary.to_string();
+            result.gate_timeout = gate_timeout;
             if let Err(save_err) = save_result(project_root, session_id, &result) {
                 warn!(
                     session = %session_id,
@@ -205,6 +201,60 @@ pub(crate) fn overwrite_result_as_post_exec_gate_failure(
             error = %retire_err,
             "Failed to retire session after post-exec gate failure"
         );
+    }
+}
+
+pub(crate) fn record_post_exec_gate_timeout_advisory(project_root: &Path, session_id: &str) {
+    record_post_exec_gate_success_warning(
+        project_root,
+        session_id,
+        true,
+        "gate timed out, verification incomplete, not a gate pass",
+    );
+}
+
+pub(crate) fn record_post_exec_gate_skipped_by_flag(project_root: &Path, session_id: &str) {
+    record_post_exec_gate_success_warning(
+        project_root,
+        session_id,
+        false,
+        "post-exec gate skipped by --no-post-exec-gate; external verification required",
+    );
+}
+
+fn record_post_exec_gate_success_warning(
+    project_root: &Path,
+    session_id: &str,
+    gate_timeout: bool,
+    warning: &str,
+) {
+    match load_result(project_root, session_id) {
+        Ok(Some(mut result)) => {
+            result.gate_timeout = result.gate_timeout || gate_timeout;
+            if !result.warnings.iter().any(|existing| existing == warning) {
+                result.warnings.push(warning.to_string());
+            }
+            if let Err(save_err) = save_result(project_root, session_id, &result) {
+                warn!(
+                    session = %session_id,
+                    error = %save_err,
+                    "Failed to record post-exec gate warning"
+                );
+            }
+        }
+        Ok(None) => {
+            warn!(
+                session = %session_id,
+                "No result.toml to annotate with post-exec gate warning"
+            );
+        }
+        Err(load_err) => {
+            warn!(
+                session = %session_id,
+                error = %load_err,
+                "Failed to load result.toml for post-exec gate warning"
+            );
+        }
     }
 }
 

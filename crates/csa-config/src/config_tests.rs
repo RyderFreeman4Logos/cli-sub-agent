@@ -794,3 +794,21 @@ fn test_tool_config_fast_mode_absent_defaults_to_none() {
     let cfg: ToolConfig = toml::from_str("").unwrap();
     assert_eq!(cfg.fast_mode, None);
 }
+
+#[test]
+fn post_exec_gate_default_timeout_seconds_is_1800() {
+    assert_eq!(PostExecGateConfig::default().timeout_seconds, 1800);
+}
+
+#[test]
+fn post_exec_gate_timeout_seconds_toml_override_still_works() {
+    let cfg: ProjectConfig = toml::from_str(
+        r#"
+[run.post_exec_gate]
+timeout_seconds = 2400
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(cfg.run.post_exec_gate.timeout_seconds, 2400);
+}

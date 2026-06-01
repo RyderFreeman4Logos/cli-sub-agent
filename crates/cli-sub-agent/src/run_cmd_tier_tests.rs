@@ -154,6 +154,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         false,
         false,
         false, // no_error_marker_scan (#1745)
+        false,
         Vec::new(),
         Vec::new(),
     )
