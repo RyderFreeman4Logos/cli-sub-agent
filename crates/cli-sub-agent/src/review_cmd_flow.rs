@@ -5,8 +5,8 @@ use csa_session::state::ReviewSessionMeta;
 use super::execute;
 use super::findings_toml::persist_review_findings_toml;
 use super::output::{
-    fail_closed_review_meta, persist_review_meta, persist_review_verdict,
-    persisted_review_verdict_exit_code,
+    fail_closed_review_meta, persist_review_meta, persist_review_verdict_artifact,
+    persisted_review_verdict_exit_code, review_meta_for_verdict_artifact,
 };
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
@@ -41,15 +41,25 @@ pub(crate) fn persist_review_sidecars_if_session_exists(
 
     persist_review_meta(project_root, &effective_meta);
     persist_review_findings_toml(project_root, &effective_meta);
-    persist_review_verdict(project_root, &effective_meta, &[], Vec::new());
-    let verdict_exit_code =
-        persisted_review_verdict_exit_code(project_root, persistable_session_id);
+    let verdict_artifact =
+        persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new());
+    let final_meta = verdict_artifact
+        .as_ref()
+        .map(|artifact| review_meta_for_verdict_artifact(&effective_meta, artifact))
+        .unwrap_or(effective_meta);
+    persist_review_meta(project_root, &final_meta);
+    let verdict_exit_code = verdict_artifact
+        .as_ref()
+        .map(|artifact| crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision))
+        .unwrap_or_else(|| {
+            persisted_review_verdict_exit_code(project_root, persistable_session_id)
+        });
     if verdict_exit_code == 0 {
         crate::review_gate::maybe_write_review_gate_marker(
             project_root,
-            &meta.head_sha,
+            &final_meta.head_sha,
             persistable_session_id,
-            &meta.scope,
+            &final_meta.scope,
         );
     }
     Some(verdict_exit_code)

@@ -69,6 +69,8 @@ pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
 use bug_class_pipeline::try_resolve_review_iterations;
 use bug_class_pipeline::{maybe_extract_recurring_bug_class_skills, resolve_review_iterations};
 #[cfg(test)]
+pub(crate) use check_verdict::check_review_verdict_for_target;
+#[cfg(test)]
 use execute::execute_review;
 use execute::{compute_diff_fingerprint, execute_review_with_tier_filter};
 #[cfg(test)]

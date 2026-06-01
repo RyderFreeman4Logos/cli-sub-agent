@@ -23,6 +23,8 @@ pub(crate) use lock::try_acquire_session_wait_lock;
 pub(crate) use next_step::synthesized_wait_next_step;
 use result_loader::{load_completed_daemon_result_with_fallback, refresh_result_for_wait};
 use summary::emit_wait_terminal_output;
+#[cfg(test)]
+pub(crate) use summary::render_wait_result_summary;
 use types::WaitExecutionOptions;
 #[cfg(test)]
 pub(crate) use types::WaitLoopTiming;

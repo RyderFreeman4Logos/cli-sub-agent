@@ -61,7 +61,7 @@ pub(super) fn emit_wait_terminal_output(
     Ok(true)
 }
 
-fn render_wait_result_summary(
+pub(crate) fn render_wait_result_summary(
     session_dir: &Path,
     session_id: &str,
     result: &csa_session::SessionResult,
@@ -260,14 +260,13 @@ fn read_review_verdict_label(
         && let Ok(artifact) = serde_json::from_str::<ReviewVerdictArtifact>(&raw)
     {
         let meta = read_review_meta_for_label(session_dir);
-        if meta
-            .as_ref()
-            .is_some_and(|meta| meta.accepts_clean_review_verdict(artifact.decision))
-        {
-            return Some("PASS".to_string());
-        }
         if artifact.decision == ReviewDecision::Pass {
-            return Some("UNAVAILABLE".to_string());
+            if meta.as_ref().is_some_and(|meta| {
+                meta.requires_fail_closed_verdict() || !meta.fix_clean_converged()
+            }) {
+                return Some("UNAVAILABLE".to_string());
+            }
+            return Some("PASS".to_string());
         }
         return Some(normalize_review_verdict_label(
             artifact.decision.as_str(),

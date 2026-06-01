@@ -90,6 +90,15 @@ pub(super) fn persist_review_verdict(
     findings: &[Finding],
     prior_round_refs: Vec<String>,
 ) {
+    let _ = persist_review_verdict_artifact(project_root, meta, findings, prior_round_refs);
+}
+
+pub(super) fn persist_review_verdict_artifact(
+    project_root: &Path,
+    meta: &ReviewSessionMeta,
+    findings: &[Finding],
+    prior_round_refs: Vec<String>,
+) -> Option<ReviewVerdictArtifact> {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
             let mut artifact = if meta.requires_fail_closed_verdict() {
@@ -135,8 +144,10 @@ pub(super) fn persist_review_verdict(
                     error = %e,
                     "Failed to write output/review-verdict.json"
                 );
+                None
             } else {
                 debug!(session_id = %meta.session_id, "Wrote output/review-verdict.json");
+                Some(artifact)
             }
         }
         Err(e) => {
@@ -145,8 +156,21 @@ pub(super) fn persist_review_verdict(
                 error = %e,
                 "Cannot resolve session dir for review verdict"
             );
+            None
         }
     }
+}
+
+pub(super) fn review_meta_for_verdict_artifact(
+    meta: &ReviewSessionMeta,
+    artifact: &ReviewVerdictArtifact,
+) -> ReviewSessionMeta {
+    let mut final_meta = meta.clone();
+    final_meta.decision = artifact.decision.as_str().to_string();
+    final_meta.verdict = artifact.verdict_legacy.clone();
+    final_meta.exit_code =
+        crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision);
+    final_meta
 }
 
 #[cfg(test)]
