@@ -22,8 +22,8 @@ use super::bug_class_pipeline::{
 use super::execute::{compute_diff_fingerprint, execute_review_with_tier_filter};
 use super::output::ReviewerOutcome;
 use super::output::{
-    GEMINI_AUTH_PROMPT_STATUS_REASON, persist_review_meta, persist_review_verdict,
-    print_reviewer_outcomes,
+    GEMINI_AUTH_PROMPT_STATUS_REASON, persist_review_meta, persist_review_verdict_artifact,
+    print_reviewer_outcomes, review_meta_for_verdict_artifact,
 };
 use super::prior_rounds::explicit_review_tool;
 use super::result_handling::{
@@ -480,7 +480,12 @@ pub(super) fn persist_multi_review_sidecars(
         let effective_meta = super::output::fail_closed_review_meta(project_root, &review_meta);
         persist_review_meta(project_root, &effective_meta);
         super::findings_toml::persist_review_findings_toml(project_root, &effective_meta);
-        persist_review_verdict(project_root, &effective_meta, &[], Vec::new());
+        if let Some(artifact) =
+            persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new())
+        {
+            let final_meta = review_meta_for_verdict_artifact(&effective_meta, &artifact);
+            persist_review_meta(project_root, &final_meta);
+        }
     }
 }
 

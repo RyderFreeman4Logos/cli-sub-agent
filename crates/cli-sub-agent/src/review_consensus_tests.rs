@@ -290,6 +290,27 @@ fn parse_review_verdict_accepts_clean_phrase_without_explicit_token() {
 }
 
 #[test]
+fn summary_and_verdict_paths_agree() {
+    let output = r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+<!-- CSA:SECTION:details -->
+No blocking findings.
+
+Notes:
+- I did not run the test suite because this CSA subprocess is read-only.
+- Codegraph was unavailable because this checkout has no initialized index.
+<!-- CSA:SECTION:details:END -->
+"#;
+
+    let summary_verdict = parse_review_verdict(output, 0);
+    let structured_decision = parse_review_decision(output, 0);
+
+    assert_eq!(summary_verdict, CLEAN);
+    assert_eq!(structured_decision, csa_core::types::ReviewDecision::Pass);
+}
+
+#[test]
 fn build_multi_reviewer_instruction_keeps_session_dir_deferred_when_env_exists() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _parent_guard =

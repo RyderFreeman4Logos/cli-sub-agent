@@ -61,7 +61,7 @@ pub(super) fn emit_wait_terminal_output(
     Ok(true)
 }
 
-fn render_wait_result_summary(
+pub(crate) fn render_wait_result_summary(
     session_dir: &Path,
     session_id: &str,
     result: &csa_session::SessionResult,
@@ -260,14 +260,16 @@ fn read_review_verdict_label(
         && let Ok(artifact) = serde_json::from_str::<ReviewVerdictArtifact>(&raw)
     {
         let meta = read_review_meta_for_label(session_dir);
-        if meta
-            .as_ref()
-            .is_some_and(|meta| meta.accepts_clean_review_verdict(artifact.decision))
-        {
-            return Some("PASS".to_string());
-        }
         if artifact.decision == ReviewDecision::Pass {
-            return Some("UNAVAILABLE".to_string());
+            if !wait_result_allows_pass_verdict(result) {
+                return Some("UNAVAILABLE".to_string());
+            }
+            if meta.as_ref().is_some_and(|meta| {
+                meta.requires_fail_closed_verdict() || !meta.fix_clean_converged()
+            }) {
+                return Some("UNAVAILABLE".to_string());
+            }
+            return Some("PASS".to_string());
         }
         return Some(normalize_review_verdict_label(
             artifact.decision.as_str(),
@@ -298,9 +300,13 @@ fn read_review_meta_for_label(session_dir: &Path) -> Option<ReviewSessionMeta> {
     serde_json::from_str::<ReviewSessionMeta>(&raw).ok()
 }
 
+fn wait_result_allows_pass_verdict(result: &csa_session::SessionResult) -> bool {
+    result.exit_code == 0 && result.status.trim().eq_ignore_ascii_case("success")
+}
+
 fn normalize_review_verdict_label(value: &str, result: &csa_session::SessionResult) -> String {
     match value.trim().to_ascii_uppercase().as_str() {
-        "PASS" | "CLEAN" if result.exit_code != 0 => "UNAVAILABLE".to_string(),
+        "PASS" | "CLEAN" if !wait_result_allows_pass_verdict(result) => "UNAVAILABLE".to_string(),
         "PASS" | "CLEAN" => "PASS".to_string(),
         "FAIL" | "FAILED" | "HAS_ISSUES" => "FAIL".to_string(),
         other => other.to_string(),
@@ -460,6 +466,42 @@ mod wait_output_tests {
         assert!(summary.contains("Session: 01TESTWAITSUMMARY"));
         assert!(summary.contains("Elapsed: 1m 5s"));
         assert!(summary.contains("Tokens: input=100, output=25, total=125, cache_read=40"));
+        assert!(summary.contains("Review verdict: PASS"));
+    }
+
+    #[test]
+    fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let output_dir = temp.path().join("output");
+        std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+        std::fs::write(
+            output_dir.join("review-verdict.json"),
+            r#"{"schema_version":1,"session_id":"01TESTWAITARTPASS","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+        )
+        .expect("review verdict should be written");
+        let now = Utc::now();
+        let result = csa_session::SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "review complete".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now + chrono::TimeDelta::seconds(65),
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            manager_fields: Default::default(),
+        };
+
+        let summary = render_wait_result_summary(temp.path(), "01TESTWAITARTPASS", &result);
+
         assert!(summary.contains("Review verdict: PASS"));
     }
 

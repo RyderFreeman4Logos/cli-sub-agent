@@ -227,7 +227,7 @@ pub(crate) fn resolve_consensus(
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_review_verdict(output: &str, exit_code: i32) -> &'static str {
     let has_issues = contains_verdict_token(output, HAS_ISSUES);
-    let clean = contains_verdict_token(output, CLEAN);
+    let clean = contains_verdict_token(output, CLEAN) || contains_verdict_token(output, "PASS");
 
     if has_issues {
         HAS_ISSUES
@@ -248,7 +248,7 @@ pub(crate) fn parse_review_decision(
 ) -> csa_core::types::ReviewDecision {
     use csa_core::types::ReviewDecision;
 
-    if let Some(decision) = parse_review_decision_token(output) {
+    if let Some(decision) = parse_explicit_review_decision_token(output) {
         return decision;
     }
 
@@ -259,12 +259,14 @@ pub(crate) fn parse_review_decision(
     }
 }
 
-fn parse_review_decision_token(output: &str) -> Option<csa_core::types::ReviewDecision> {
+pub(crate) fn parse_explicit_review_decision_token(
+    output: &str,
+) -> Option<csa_core::types::ReviewDecision> {
     use csa_core::types::ReviewDecision;
 
     let has_fail =
         contains_verdict_token(output, HAS_ISSUES) || contains_verdict_token(output, "FAIL");
-    let has_unavailable = contains_verdict_token(output, UNAVAILABLE);
+    let has_unavailable = contains_explicit_unavailable_verdict(output);
     let has_uncertain = contains_verdict_token(output, UNCERTAIN);
     let has_pass = contains_verdict_token(output, CLEAN) || contains_verdict_token(output, "PASS");
     let has_skip = contains_verdict_token(output, SKIP);
@@ -282,6 +284,46 @@ fn parse_review_decision_token(output: &str) -> Option<csa_core::types::ReviewDe
     } else {
         None
     }
+}
+
+pub(crate) fn contains_explicit_unavailable_verdict(output: &str) -> bool {
+    output.lines().any(|line| {
+        line_is_standalone_verdict_token(line, UNAVAILABLE)
+            || verdict_label_value_starts_with_token(line, UNAVAILABLE)
+    })
+}
+
+fn line_is_standalone_verdict_token(line: &str, token: &str) -> bool {
+    let mut words = line
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|part| !part.is_empty());
+    matches!(words.next(), Some(word) if word.eq_ignore_ascii_case(token)) && words.next().is_none()
+}
+
+fn verdict_label_value_starts_with_token(line: &str, token: &str) -> bool {
+    ["verdict", "decision", "summary"]
+        .into_iter()
+        .any(|label| label_value_starts_with_token(line, label, token))
+}
+
+fn label_value_starts_with_token(line: &str, label: &str, token: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    let Some(label_start) = lower.find(label) else {
+        return false;
+    };
+    let after_label = &line[label_start + label.len()..];
+    let trimmed = after_label.trim_start();
+    let after_separator = trimmed
+        .strip_prefix(':')
+        .or_else(|| trimmed.strip_prefix('='))
+        .map(str::trim_start)
+        .unwrap_or(trimmed);
+    first_word(after_separator).is_some_and(|word| word.eq_ignore_ascii_case(token))
+}
+
+fn first_word(text: &str) -> Option<&str> {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .find(|part| !part.is_empty())
 }
 
 fn contains_verdict_token(haystack: &str, token: &str) -> bool {

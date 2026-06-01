@@ -237,7 +237,7 @@ pub(super) fn derive_decision_from_text(
     {
         return ReviewDecision::Fail;
     }
-    if contains_verdict_token(text, "UNAVAILABLE") {
+    if crate::review_consensus::contains_explicit_unavailable_verdict(text) {
         return ReviewDecision::Unavailable;
     }
     if contains_verdict_token(text, "SKIP") {

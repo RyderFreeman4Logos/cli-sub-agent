@@ -3,6 +3,7 @@ use std::process::Command;
 
 use csa_config::{GlobalConfig, ProjectProfile, TierStrategy, config::TierConfig};
 use csa_core::types::{ReviewDecision, ToolName};
+use csa_core::vcs::{VcsIdentity, VcsKind};
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{
     FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity,
@@ -165,6 +166,67 @@ fn exact_test_make_review_finding(severity: Severity, id: &str) -> ReviewFinding
     }
 }
 
+fn exact_test_create_review_session(
+    project_root: &Path,
+    branch: &str,
+    head_sha: &str,
+    description: &str,
+) -> (String, std::path::PathBuf) {
+    let mut session =
+        csa_session::create_session_fresh(project_root, Some(description), None, Some("codex"))
+            .expect("create session");
+    session.branch = Some(branch.to_string());
+    session.git_head_at_creation = Some(head_sha.to_string());
+    session.vcs_identity = Some(VcsIdentity {
+        vcs_kind: VcsKind::Git,
+        commit_id: Some(head_sha.to_string()),
+        change_id: None,
+        short_id: Some(head_sha.chars().take(11).collect()),
+        ref_name: Some(branch.to_string()),
+        op_id: None,
+    });
+    csa_session::save_session(&session).expect("save session state");
+
+    let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id)
+        .expect("resolve session dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    (session.meta_session_id, session_dir)
+}
+
+fn exact_test_codex_agent_message(text: &str) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "type": "item.completed",
+        "item": {
+            "type": "agent_message",
+            "text": text,
+        }
+    }))
+    .expect("serialize transcript line")
+}
+
+fn exact_test_wait_result(exit_code: i32, summary: &str) -> csa_session::SessionResult {
+    let now = chrono::Utc::now();
+    csa_session::SessionResult {
+        status: csa_session::SessionResult::status_from_exit_code(exit_code),
+        exit_code,
+        summary: summary.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(1),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        manager_fields: Default::default(),
+    }
+}
+
 #[test]
 fn fix_loop_exhausted_preserves_open_findings_in_findings_toml() {
     let project_dir = exact_test_setup_git_repo();
@@ -248,6 +310,197 @@ fn persist_verdict_refreshes_on_fix_reuse_session() {
     assert_eq!(artifact.decision, ReviewDecision::Pass);
     assert_eq!(artifact.verdict_legacy, "CLEAN");
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
+}
+
+#[test]
+fn final_iteration_pass_overrides_transient_fail_and_prose_unavailable() {
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    let project_dir = exact_test_setup_git_repo();
+    let _state_home = crate::test_env_lock::ScopedEnvVarRestore::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let branch = "fix-1764-pass";
+    let head_sha = csa_session::detect_git_head(project_dir.path()).expect("detect HEAD");
+    let (session_id, session_dir) = exact_test_create_review_session(
+        project_dir.path(),
+        branch,
+        &head_sha,
+        "review: issue-1764 final pass",
+    );
+
+    let prior_fail = concat!(
+        "<!-- CSA:SECTION:summary -->\n",
+        "Verdict: FAIL\n",
+        "<!-- CSA:SECTION:summary:END -->\n\n",
+        "<!-- CSA:SECTION:details -->\n",
+        "Prior iteration emitted an unstructured fail verdict.\n",
+        "<!-- CSA:SECTION:details:END -->\n",
+    );
+    let final_pass = concat!(
+        "<!-- CSA:SECTION:summary -->\n",
+        "Verdict: PASS\n",
+        "<!-- CSA:SECTION:summary:END -->\n\n",
+        "<!-- CSA:SECTION:details -->\n",
+        "No blocking findings remain.\n",
+        "Codegraph was unavailable in this worktree, so review used git diff/source inspection.\n\n",
+        "```findings.toml\n",
+        "findings = []\n",
+        "```\n",
+        "<!-- CSA:SECTION:details:END -->\n",
+    );
+    let full_output = [
+        exact_test_codex_agent_message(prior_fail),
+        exact_test_codex_agent_message(final_pass),
+    ]
+    .join("\n");
+    std::fs::write(session_dir.join("output").join("full.md"), full_output)
+        .expect("write transcript");
+    csa_session::persist_structured_output(&session_dir, final_pass)
+        .expect("persist final structured output");
+
+    let mut meta = exact_test_make_review_meta(&session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    meta.head_sha = head_sha.clone();
+    meta.scope = "range:main...HEAD".to_string();
+    meta.fix_attempted = false;
+    meta.fix_rounds = 0;
+    meta.review_iterations = 3;
+    meta.exit_code = 1;
+
+    let persisted_exit_code = review_cmd::persist_review_sidecars_if_session_exists(
+        project_dir.path(),
+        &meta,
+        Some(&session_id),
+    );
+
+    assert_eq!(persisted_exit_code, Some(0));
+    let artifact: ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json")).unwrap(),
+    )
+    .unwrap();
+    let persisted_meta: ReviewSessionMeta =
+        serde_json::from_str(&std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert!(artifact.severity_counts.values().all(|count| *count == 0));
+    assert_eq!(persisted_meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(persisted_meta.verdict, "CLEAN");
+    assert_eq!(persisted_meta.exit_code, 0);
+    assert_eq!(persisted_meta.review_iterations, 3);
+
+    let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
+        &session_dir,
+        &session_id,
+        &exact_test_wait_result(0, "Codegraph was unavailable in this worktree"),
+    );
+    assert!(wait_summary.contains("Review verdict: PASS"));
+    assert!(!wait_summary.contains("Review verdict: UNAVAILABLE"));
+
+    let found = review_cmd::check_review_verdict_for_target(
+        project_dir.path(),
+        branch,
+        &head_sha,
+        "range:main...HEAD",
+        None,
+    )
+    .unwrap()
+    .expect("check-verdict should accept the canonical final pass");
+    assert_eq!(found.session_id, session_id);
+}
+
+#[test]
+fn final_iteration_high_finding_fails_all_verdict_consumers() {
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    let project_dir = exact_test_setup_git_repo();
+    let _state_home = crate::test_env_lock::ScopedEnvVarRestore::set(
+        "XDG_STATE_HOME",
+        project_dir.path().join("state"),
+    );
+    let branch = "fix-1764-fail";
+    let head_sha = csa_session::detect_git_head(project_dir.path()).expect("detect HEAD");
+    let (session_id, session_dir) = exact_test_create_review_session(
+        project_dir.path(),
+        branch,
+        &head_sha,
+        "review: issue-1764 final fail",
+    );
+
+    let final_fail = concat!(
+        "<!-- CSA:SECTION:summary -->\n",
+        "Verdict: FAIL\n",
+        "<!-- CSA:SECTION:summary:END -->\n\n",
+        "<!-- CSA:SECTION:details -->\n",
+        "A blocking high finding remains.\n\n",
+        "```findings.toml\n",
+        "[[findings]]\n",
+        "id = \"blocking-high\"\n",
+        "severity = \"high\"\n",
+        "description = \"blocking high finding\"\n",
+        "\n",
+        "[[findings.file_ranges]]\n",
+        "path = \"src/lib.rs\"\n",
+        "start = 1\n",
+        "```\n",
+        "<!-- CSA:SECTION:details:END -->\n",
+    );
+    std::fs::write(
+        session_dir.join("output").join("full.md"),
+        exact_test_codex_agent_message(final_fail),
+    )
+    .expect("write transcript");
+    csa_session::persist_structured_output(&session_dir, final_fail)
+        .expect("persist final structured output");
+
+    let mut meta = exact_test_make_review_meta(&session_id, ReviewDecision::Pass, "CLEAN");
+    meta.head_sha = head_sha.clone();
+    meta.scope = "range:main...HEAD".to_string();
+    meta.fix_attempted = false;
+    meta.fix_rounds = 0;
+    meta.review_iterations = 3;
+
+    let persisted_exit_code = review_cmd::persist_review_sidecars_if_session_exists(
+        project_dir.path(),
+        &meta,
+        Some(&session_id),
+    );
+
+    assert_eq!(persisted_exit_code, Some(1));
+    let artifact: ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json")).unwrap(),
+    )
+    .unwrap();
+    let persisted_meta: ReviewSessionMeta =
+        serde_json::from_str(&std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(persisted_meta.decision, ReviewDecision::Fail.as_str());
+    assert_eq!(persisted_meta.verdict, "HAS_ISSUES");
+    assert_eq!(persisted_meta.exit_code, 1);
+
+    let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
+        &session_dir,
+        &session_id,
+        &exact_test_wait_result(1, "blocking high finding remains"),
+    );
+    assert!(wait_summary.contains("Review verdict: FAIL"));
+    assert!(!wait_summary.contains("Review verdict: PASS"));
+
+    let found = review_cmd::check_review_verdict_for_target(
+        project_dir.path(),
+        branch,
+        &head_sha,
+        "range:main...HEAD",
+        None,
+    )
+    .unwrap();
+    assert!(found.is_none(), "check-verdict must reject final blocking findings");
 }
 
 #[test]

@@ -28,6 +28,8 @@ const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-bot";
 #[cfg(test)]
+pub(crate) use wait::render_wait_result_summary;
+#[cfg(test)]
 pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait, handle_session_wait_with_hooks,
