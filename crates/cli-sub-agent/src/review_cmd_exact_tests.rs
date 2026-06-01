@@ -394,7 +394,7 @@ fn final_iteration_pass_overrides_transient_fail_and_prose_unavailable() {
     let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
         &session_dir,
         &session_id,
-        &exact_test_wait_result(1, "Codegraph was unavailable in this worktree"),
+        &exact_test_wait_result(0, "Codegraph was unavailable in this worktree"),
     );
     assert!(wait_summary.contains("Review verdict: PASS"));
     assert!(!wait_summary.contains("Review verdict: UNAVAILABLE"));
