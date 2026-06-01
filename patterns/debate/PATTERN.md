@@ -50,14 +50,14 @@ If < 2, try next higher tier.
 When a research session exists with relevant context (e.g., codebase exploration,
 documentation gathering, prior analysis), fork debaters from it to avoid
 redundant exploration. Note: `csa debate` does not yet support `--fork-from`
-directly. Use `csa run --fork-from` to prepare a forked session, then pass
+directly. Use `csa run --sa-mode true --fork-from` to prepare a forked session, then pass
 the research context into the debate prompt:
 
 ```bash
 # Gather context via forked session, then feed into debate
-SID=$(csa run --fork-from <research-session-id> "Summarize findings for debate context")
+SID=$(csa run --sa-mode true --fork-from <research-session-id> "Summarize findings for debate context")
 csa session wait --session "$SID"
-DEBATE_SID=$(csa debate "question (with research context above)")
+DEBATE_SID=$(csa debate --sa-mode true "question (with research context above)")
 csa session wait --session "$DEBATE_SID"
 ```
 
@@ -80,7 +80,7 @@ Proposer presents concrete, actionable strategy with:
 4. Anticipated Weaknesses (honest limitations)
 
 ```bash
-SID=$(csa run --tier "${CURRENT_TIER}" --tool "${PROPOSER_TOOL}" --ephemeral "${PROPOSAL_PROMPT}")
+SID=$(csa run --sa-mode true --tier "${CURRENT_TIER}" --tool "${PROPOSER_TOOL}" --ephemeral "${PROPOSAL_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -96,7 +96,7 @@ Critic rigorously evaluates the proposal:
 4. Strongest Counter-Arguments
 
 ```bash
-SID=$(csa run --tier "${CURRENT_TIER}" --tool "${CRITIC_TOOL}" --ephemeral "${CRITIQUE_PROMPT}")
+SID=$(csa run --sa-mode true --tier "${CURRENT_TIER}" --tool "${CRITIC_TOOL}" --ephemeral "${CRITIQUE_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -111,7 +111,7 @@ Proposer responds to each criticism:
 3. Present revised strategy
 
 ```bash
-SID=$(csa run --tier "${CURRENT_TIER}" --tool "${PROPOSER_TOOL}" --ephemeral "${RESPONSE_PROMPT}")
+SID=$(csa run --sa-mode true --tier "${CURRENT_TIER}" --tool "${PROPOSER_TOOL}" --ephemeral "${RESPONSE_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -132,7 +132,7 @@ context. Restart debate loop with the higher tier.
 Max 2 escalations.
 
 ```bash
-SID=$(csa run --tier "${CURRENT_TIER}" --ephemeral "${ESCALATION_PROMPT}")
+SID=$(csa run --sa-mode true --tier "${CURRENT_TIER}" --ephemeral "${ESCALATION_PROMPT}")
 csa session wait --session "$SID"
 ```
 
