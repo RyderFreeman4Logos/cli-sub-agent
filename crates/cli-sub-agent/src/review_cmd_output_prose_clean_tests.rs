@@ -274,7 +274,7 @@ fn persist_review_verdict_prose_clean_summary_respects_high_overall_risk_fail_cl
             .expect("parse verdict");
     assert_eq!(artifact.decision, ReviewDecision::Fail);
     assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
-    assert!(artifact.severity_counts.values().all(|value| *value == 0));
+    assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&1));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

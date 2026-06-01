@@ -1,5 +1,6 @@
-use super::*;
 use crate::review_consensus::{CLEAN, HAS_ISSUES};
+use csa_core::gemini::RATE_LIMIT_PATTERNS;
+use csa_core::types::ToolName;
 
 #[derive(Debug, Clone)]
 pub(in crate::review_cmd) struct ReviewerOutcome {

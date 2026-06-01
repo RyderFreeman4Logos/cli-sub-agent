@@ -6,6 +6,7 @@ use csa_session::{FindingsFile, write_findings_toml};
 use tracing::{debug, warn};
 
 use crate::review_cmd::output::extract_review_text;
+use crate::review_cmd::prose_findings::findings_file_from_prose;
 
 const FINDINGS_TOML_FENCE_LABEL: &str = "findings.toml";
 
@@ -107,10 +108,16 @@ fn derive_findings_toml_artifact(
 
     match extract_findings_toml_from_text(&review_text) {
         Some(artifact) => Ok((artifact, None)),
-        None => Ok((
-            FindingsFile::default(),
-            Some("findings.toml block missing or invalid"),
-        )),
+        None => {
+            if let Some(artifact) = findings_file_from_prose(&review_text) {
+                Ok((artifact, None))
+            } else {
+                Ok((
+                    FindingsFile::default(),
+                    Some("findings.toml block missing or invalid"),
+                ))
+            }
+        }
     }
 }
 
@@ -144,9 +151,19 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
                 return Ok(Some(review_text));
             }
         }
-        let details = fs::read_to_string(&details_path)
-            .map_err(|error| anyhow::anyhow!("read {}: {error}", details_path.display()))?;
-        return Ok(Some(details));
+        let structured_text = ["summary", "details"]
+            .into_iter()
+            .filter_map(|section_id| {
+                let path = session_dir.join("output").join(format!("{section_id}.md"));
+                path.exists().then_some(path)
+            })
+            .map(|path| {
+                fs::read_to_string(&path)
+                    .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+        return Ok((!structured_text.trim().is_empty()).then_some(structured_text));
     }
 
     let full_output_path = session_dir.join("output").join("full.md");

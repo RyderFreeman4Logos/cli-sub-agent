@@ -53,6 +53,8 @@ mod parent_artifacts;
 mod post_review;
 #[path = "review_cmd_prior_rounds.rs"]
 mod prior_rounds;
+#[path = "review_cmd_prose_findings.rs"]
+mod prose_findings;
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
 #[path = "review_cmd_result.rs"]
