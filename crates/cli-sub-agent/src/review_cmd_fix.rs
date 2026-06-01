@@ -10,8 +10,10 @@ use tracing::{error, info, warn};
 use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
 use crate::review_routing::ReviewRoutingMetadata;
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolName;
-use csa_session::{FindingsFile, state::ReviewSessionMeta, write_findings_toml};
+use csa_core::types::{ReviewDecision, ToolName};
+use csa_session::{
+    FindingsFile, ReviewVerdictArtifact, state::ReviewSessionMeta, write_findings_toml,
+};
 
 use super::CLEAN;
 use super::output::{
@@ -193,7 +195,6 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         };
 
         if gate_passed && !fix_empty {
-            info!(round, "Fix round succeeded — quality gate passed");
             let review_meta = ReviewSessionMeta {
                 session_id: session_id.clone(),
                 head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
@@ -212,13 +213,25 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: None,
             };
-            persist_fix_final_artifacts_with_current_output(
+            let final_decision = persist_fix_final_artifacts_with_current_output(
                 ctx.project_root,
                 &review_meta,
                 true,
                 Some(&fix_result.execution.execution.output),
             );
-            return Ok(0);
+            if final_decision == ReviewDecision::Pass {
+                info!(
+                    round,
+                    "Fix round succeeded — quality gate and verdict consistency passed"
+                );
+            } else {
+                warn!(
+                    round,
+                    decision = final_decision.as_str(),
+                    "Final verdict is non-clean"
+                );
+            }
+            return Ok(fix_exit_code_for_decision(final_decision));
         }
     }
 
@@ -241,25 +254,25 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
     };
-    persist_fix_final_artifacts(ctx.project_root, &review_meta, false);
+    let final_decision = persist_fix_final_artifacts(ctx.project_root, &review_meta, false);
     error!(
         max_rounds = ctx.max_rounds,
         "All fix rounds exhausted — quality gate still failing"
     );
-    Ok(1)
+    Ok(fix_exit_code_for_decision(final_decision))
 }
 
 fn persist_fix_final_artifacts(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
     converged_clean: bool,
-) {
+) -> ReviewDecision {
     persist_fix_final_artifacts_with_current_output(
         project_root,
         review_meta,
         converged_clean,
         None,
-    );
+    )
 }
 
 fn persist_fix_final_artifacts_with_current_output(
@@ -267,7 +280,7 @@ fn persist_fix_final_artifacts_with_current_output(
     review_meta: &ReviewSessionMeta,
     converged_clean: bool,
     current_fix_output: Option<&str>,
-) {
+) -> ReviewDecision {
     persist_review_meta(project_root, review_meta);
     if converged_clean {
         match csa_session::get_session_dir(project_root, &review_meta.session_id) {
@@ -312,16 +325,137 @@ fn persist_fix_final_artifacts_with_current_output(
             }
         }
     }
+    remove_stale_review_verdict(project_root, review_meta);
     persist_review_verdict(project_root, review_meta, &[], Vec::new());
-    if converged_clean {
+    let final_verdict = read_persisted_fix_final_verdict(project_root, review_meta);
+    let final_meta = review_meta_for_final_verdict(review_meta, &final_verdict);
+    persist_review_meta(project_root, &final_meta);
+    if final_verdict.decision == ReviewDecision::Pass {
         crate::review_gate::maybe_write_review_gate_marker(
             project_root,
-            &review_meta.head_sha,
-            &review_meta.session_id,
-            &review_meta.scope,
+            &final_meta.head_sha,
+            &final_meta.session_id,
+            &final_meta.scope,
+        );
+    } else {
+        remove_review_gate_marker_for_head(project_root, &final_meta);
+    }
+    super::post_review::persist_review_failure_suggestion(project_root, &final_meta);
+    final_verdict.decision
+}
+
+struct FinalFixVerdict {
+    decision: ReviewDecision,
+    verdict_legacy: String,
+}
+
+fn read_persisted_fix_final_verdict(
+    project_root: &Path,
+    review_meta: &ReviewSessionMeta,
+) -> FinalFixVerdict {
+    let session_dir = match csa_session::get_session_dir(project_root, &review_meta.session_id) {
+        Ok(session_dir) => session_dir,
+        Err(error) => {
+            warn!(
+                session_id = %review_meta.session_id, error = %error, "Cannot resolve verdict dir"
+            );
+            return fail_closed_final_fix_verdict();
+        }
+    };
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let raw = match fs::read_to_string(&verdict_path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            warn!(
+                session_id = %review_meta.session_id, path = %verdict_path.display(), error = %error,
+                "Cannot read final verdict"
+            );
+            return fail_closed_final_fix_verdict();
+        }
+    };
+    match serde_json::from_str::<ReviewVerdictArtifact>(&raw) {
+        Ok(artifact) => FinalFixVerdict {
+            decision: artifact.decision,
+            verdict_legacy: artifact.verdict_legacy,
+        },
+        Err(error) => {
+            warn!(
+                session_id = %review_meta.session_id, path = %verdict_path.display(), error = %error,
+                "Cannot parse final verdict"
+            );
+            fail_closed_final_fix_verdict()
+        }
+    }
+}
+
+fn fail_closed_final_fix_verdict() -> FinalFixVerdict {
+    FinalFixVerdict {
+        decision: ReviewDecision::Uncertain,
+        verdict_legacy: "UNCERTAIN".to_string(),
+    }
+}
+
+fn review_meta_for_final_verdict(
+    review_meta: &ReviewSessionMeta,
+    final_verdict: &FinalFixVerdict,
+) -> ReviewSessionMeta {
+    let mut final_meta = review_meta.clone();
+    final_meta.decision = final_verdict.decision.as_str().to_string();
+    final_meta.verdict = final_verdict.verdict_legacy.clone();
+    final_meta.exit_code = fix_exit_code_for_decision(final_verdict.decision);
+    final_meta
+}
+
+fn fix_exit_code_for_decision(decision: ReviewDecision) -> i32 {
+    if decision == ReviewDecision::Pass {
+        0
+    } else {
+        1
+    }
+}
+
+fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionMeta) {
+    let Ok(session_dir) = csa_session::get_session_dir(project_root, &review_meta.session_id)
+    else {
+        return;
+    };
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    if let Err(error) = fs::remove_file(&verdict_path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            session_id = %review_meta.session_id, path = %verdict_path.display(), error = %error,
+            "Cannot remove stale verdict"
         );
     }
-    super::post_review::persist_review_failure_suggestion(project_root, review_meta);
+}
+
+fn remove_review_gate_marker_for_head(project_root: &Path, review_meta: &ReviewSessionMeta) {
+    if review_meta.head_sha.is_empty() {
+        return;
+    }
+    let backend = csa_session::create_vcs_backend(project_root);
+    let branch = match backend.identity(project_root) {
+        Ok(identity) => identity.ref_name.unwrap_or_default(),
+        Err(error) => {
+            warn!(
+                session_id = %review_meta.session_id, error = %error, "Cannot resolve VCS identity"
+            );
+            return;
+        }
+    };
+    if branch.is_empty() {
+        return;
+    }
+    let marker_path = crate::review_gate::marker_path(project_root, &branch, &review_meta.head_sha);
+    if let Err(error) = fs::remove_file(&marker_path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            session_id = %review_meta.session_id, path = %marker_path.display(), error = %error,
+            "Cannot remove review-gate marker"
+        );
+    }
 }
 
 fn clear_clean_convergence_fail_signals(
@@ -538,8 +672,8 @@ pub(crate) fn persist_fix_final_artifacts_for_tests(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
     converged_clean: bool,
-) {
-    persist_fix_final_artifacts(project_root, review_meta, converged_clean);
+) -> ReviewDecision {
+    persist_fix_final_artifacts(project_root, review_meta, converged_clean)
 }
 
 #[cfg(test)]
@@ -548,13 +682,13 @@ pub(crate) fn persist_fix_final_artifacts_for_tests_with_output(
     review_meta: &ReviewSessionMeta,
     converged_clean: bool,
     current_fix_output: &str,
-) {
+) -> ReviewDecision {
     persist_fix_final_artifacts_with_current_output(
         project_root,
         review_meta,
         converged_clean,
         Some(current_fix_output),
-    );
+    )
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use csa_session::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn make_clean_review_meta(session_id: &str) -> ReviewSessionMeta {
@@ -53,6 +54,46 @@ fn create_session_dir(project_root: &Path, session_id: &str) -> PathBuf {
         csa_session::get_session_dir(project_root, session_id).expect("resolve session dir");
     fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
     session_dir
+}
+
+fn run_git(project_root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn temp_git_project_root(test_name: &str, branch: &str) -> PathBuf {
+    let project_root = temp_project_root(test_name);
+    run_git(&project_root, &["init"]);
+    run_git(&project_root, &["config", "user.email", "test@example.com"]);
+    run_git(&project_root, &["config", "user.name", "Test User"]);
+    fs::write(project_root.join("tracked.txt"), "baseline\n").expect("write tracked file");
+    run_git(&project_root, &["add", "tracked.txt"]);
+    run_git(&project_root, &["commit", "-m", "initial"]);
+    run_git(&project_root, &["checkout", "-b", branch]);
+    project_root
+}
+
+fn read_review_verdict(session_dir: &Path) -> csa_session::ReviewVerdictArtifact {
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+        .expect("parse verdict")
+}
+
+fn read_review_meta(session_dir: &Path) -> ReviewSessionMeta {
+    serde_json::from_str(
+        &fs::read_to_string(session_dir.join("review_meta.json")).expect("read meta"),
+    )
+    .expect("parse meta")
 }
 
 fn stale_finding() -> ReviewFinding {
@@ -283,4 +324,110 @@ fn persist_fix_final_artifacts_preserves_current_round_blocking_prose_fail_close
             > 0,
         "current-round blocking prose must preserve a non-zero medium count"
     );
+}
+
+#[test]
+fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate_marker() {
+    let branch = "fix-1754-blocking-prose";
+    let project_root = temp_git_project_root("persist-fix-blocking-prose-gate-marker", branch);
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXBLOCKINGGATE");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output = "<!-- CSA:SECTION:summary -->\nBlocking issues still remain in the current fix round.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nMedium: src/lib.rs:99 current-round finding.\n<!-- CSA:SECTION:details:END -->\n";
+    persist_prior_blocking_review_with_current_output(&session_dir, current_output);
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.head_sha = csa_session::detect_git_head(&project_root).expect("detect HEAD");
+    crate::review_gate::write_review_gate_marker(
+        &project_root,
+        branch,
+        &meta.head_sha,
+        &meta.session_id,
+        &meta.scope,
+    );
+    let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
+    assert!(marker_path.exists(), "test must seed a stale clean marker");
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output(
+        &project_root,
+        &meta,
+        true,
+        current_output,
+    );
+
+    assert_ne!(
+        final_decision,
+        ReviewDecision::Pass,
+        "post-consistency decision must drive non-zero fix-loop exit semantics"
+    );
+    assert!(
+        !marker_path.exists(),
+        "non-clean post-consistency verdict must remove the clean gate marker"
+    );
+
+    let artifact = read_review_verdict(&session_dir);
+    assert_eq!(artifact.decision, ReviewDecision::Fail);
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(artifact.decision, final_decision);
+    assert!(
+        artifact
+            .severity_counts
+            .get(&Severity::Medium)
+            .copied()
+            .unwrap_or_default()
+            > 0,
+        "review-verdict.json must keep the current-round blocking count"
+    );
+    assert!(
+        session_dir.join("output").join("suggestion.toml").exists(),
+        "suggestion.toml must follow the post-consistency fail decision"
+    );
+    let persisted_meta = read_review_meta(&session_dir);
+    assert_eq!(persisted_meta.decision, final_decision.as_str());
+    assert_eq!(persisted_meta.exit_code, 1);
+}
+
+#[test]
+fn persist_fix_final_artifacts_clean_convergence_writes_gate_marker_and_zero_exit_decision() {
+    let branch = "fix-1754-clean-convergence";
+    let project_root = temp_git_project_root("persist-fix-clean-gate-marker", branch);
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXCLEANGATE");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output = "<!-- CSA:SECTION:summary -->\nVerdict: CLEAN.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nNo blocking findings remain.\n<!-- CSA:SECTION:details:END -->\n";
+    persist_prior_blocking_review_with_current_output(&session_dir, current_output);
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.head_sha = csa_session::detect_git_head(&project_root).expect("detect HEAD");
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output(
+        &project_root,
+        &meta,
+        true,
+        current_output,
+    );
+
+    assert_eq!(
+        final_decision,
+        ReviewDecision::Pass,
+        "post-consistency pass decision maps to fix-loop exit 0"
+    );
+    let artifact = read_review_verdict(&session_dir);
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, CLEAN);
+    assert_eq!(artifact.decision, final_decision);
+    assert!(artifact.severity_counts.values().all(|count| *count == 0));
+
+    let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
+    assert!(
+        marker_path.exists(),
+        "clean post-consistency verdict must write the pre-push gate marker"
+    );
+    assert!(
+        !session_dir.join("output").join("suggestion.toml").exists(),
+        "clean post-consistency verdict must not leave a failure suggestion"
+    );
+    let persisted_meta = read_review_meta(&session_dir);
+    assert_eq!(persisted_meta.decision, final_decision.as_str());
+    assert_eq!(persisted_meta.exit_code, 0);
 }
