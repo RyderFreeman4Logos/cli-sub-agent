@@ -1,6 +1,7 @@
 //! Fix loop for `csa review --fix`: resumes the review session to apply fixes,
 //! then re-gates via quality pipeline after each round.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -17,6 +18,12 @@ use super::output::{
     is_review_output_empty, persist_review_meta, persist_review_verdict, sanitize_review_output,
 };
 use super::resolve::ANTI_RECURSION_PREAMBLE;
+
+const CLEAN_CONVERGENCE_STALE_OUTPUT_FILES: &[&str] = &[
+    "suggestion.toml",
+    super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER,
+];
+const REVIEW_PROSE_SECTION_IDS: &[&str] = &["summary", "details"];
 
 /// All context needed to run the fix loop after a review finds issues.
 pub(crate) struct FixLoopContext<'a> {
@@ -271,21 +278,7 @@ fn persist_fix_final_artifacts(
                         );
                     }
                 }
-                // Clear the synthetic-empty sidecar marker so
-                // derive_review_verdict_artifact does not fall through to
-                // full.md after clean convergence (#1048 M3).
-                let synthetic_marker = session_dir
-                    .join("output")
-                    .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
-                if let Err(error) = std::fs::remove_file(&synthetic_marker)
-                    && error.kind() != std::io::ErrorKind::NotFound
-                {
-                    warn!(
-                        session_id = %review_meta.session_id,
-                        error = %error,
-                        "Failed to remove synthetic marker after CLEAN convergence"
-                    );
-                }
+                clear_clean_convergence_fail_signals(&session_dir, &review_meta.session_id);
             }
             Err(error) => {
                 warn!(
@@ -306,6 +299,139 @@ fn persist_fix_final_artifacts(
         );
     }
     super::post_review::persist_review_failure_suggestion(project_root, review_meta);
+}
+
+fn clear_clean_convergence_fail_signals(session_dir: &Path, session_id: &str) {
+    let output_dir = session_dir.join("output");
+    for stale_file in CLEAN_CONVERGENCE_STALE_OUTPUT_FILES {
+        let stale_path = output_dir.join(stale_file);
+        if let Err(error) = fs::remove_file(&stale_path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                session_id,
+                stale_file,
+                error = %error,
+                "Failed to remove stale review output artifact after CLEAN convergence"
+            );
+        }
+    }
+    retain_latest_review_prose_sections(session_dir, session_id);
+}
+
+fn retain_latest_review_prose_sections(session_dir: &Path, session_id: &str) {
+    let output_dir = session_dir.join("output");
+    let index_path = output_dir.join("index.toml");
+    if !index_path.exists() {
+        remove_legacy_review_prose_files(&output_dir, session_id);
+        return;
+    }
+
+    let contents = match fs::read_to_string(&index_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to read output/index.toml while clearing stale review prose"
+            );
+            return;
+        }
+    };
+    let mut index: csa_session::OutputIndex = match toml::from_str(&contents) {
+        Ok(index) => index,
+        Err(error) => {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to parse output/index.toml while clearing stale review prose"
+            );
+            return;
+        }
+    };
+
+    let mut keep = vec![true; index.sections.len()];
+    for section_id in REVIEW_PROSE_SECTION_IDS {
+        let latest = index
+            .sections
+            .iter()
+            .rposition(|section| section.id == *section_id);
+        for (idx, section) in index.sections.iter().enumerate() {
+            if section.id == *section_id && Some(idx) != latest {
+                keep[idx] = false;
+            }
+        }
+    }
+
+    if keep.iter().all(|keep_section| *keep_section) {
+        return;
+    }
+
+    for (idx, section) in index.sections.iter().enumerate() {
+        if keep[idx] {
+            continue;
+        }
+        if let Some(file_path) = &section.file_path {
+            let stale_path = output_dir.join(file_path);
+            if let Err(error) = fs::remove_file(&stale_path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(
+                    session_id,
+                    file_path,
+                    error = %error,
+                    "Failed to remove stale review prose section after CLEAN convergence"
+                );
+            }
+        }
+    }
+
+    index.sections = index
+        .sections
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, section)| keep[idx].then_some(section))
+        .collect();
+    index.total_tokens = index
+        .sections
+        .iter()
+        .map(|section| section.token_estimate)
+        .sum();
+
+    match toml::to_string_pretty(&index) {
+        Ok(rendered) => {
+            if let Err(error) = fs::write(&index_path, rendered) {
+                warn!(
+                    session_id,
+                    error = %error,
+                    "Failed to rewrite output/index.toml after clearing stale review prose"
+                );
+            }
+        }
+        Err(error) => {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to render output/index.toml after clearing stale review prose"
+            );
+        }
+    }
+}
+
+fn remove_legacy_review_prose_files(output_dir: &Path, session_id: &str) {
+    for section_id in REVIEW_PROSE_SECTION_IDS {
+        let stale_path = output_dir.join(format!("{section_id}.md"));
+        if let Err(error) = fs::remove_file(&stale_path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                session_id,
+                section_id,
+                error = %error,
+                "Failed to remove legacy review prose file after CLEAN convergence"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

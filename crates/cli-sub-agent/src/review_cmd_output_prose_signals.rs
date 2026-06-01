@@ -20,36 +20,7 @@ pub(super) struct ReviewProseSignals {
 }
 
 pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSignals> {
-    let mut saw_summary = false;
-    let mut saw_details = false;
-    let mut contents = Vec::new();
-
-    for (section, content) in csa_session::read_all_sections(session_dir)? {
-        match section.id.as_str() {
-            "summary" => {
-                saw_summary = true;
-                contents.push(("summary".to_string(), content));
-            }
-            "details" => {
-                saw_details = true;
-                contents.push(("details".to_string(), content));
-            }
-            _ => {}
-        }
-    }
-
-    for (section_id, saw_section) in [("summary", saw_summary), ("details", saw_details)] {
-        if saw_section {
-            continue;
-        }
-        let path = session_dir.join("output").join(format!("{section_id}.md"));
-        if !path.exists() {
-            continue;
-        }
-        let content = fs::read_to_string(&path)
-            .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
-        contents.push((section_id.to_string(), content));
-    }
+    let contents = current_round_review_prose_contents(session_dir)?;
 
     let blocking_summary = contents
         .iter()
@@ -71,6 +42,44 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
     }
 
     Ok(signals)
+}
+
+fn current_round_review_prose_contents(session_dir: &Path) -> Result<Vec<(String, String)>> {
+    let mut latest_summary = None;
+    let mut latest_details = None;
+
+    for (section, content) in csa_session::read_all_sections(session_dir)? {
+        match section.id.as_str() {
+            "summary" => latest_summary = Some(content),
+            "details" => latest_details = Some(content),
+            _ => {}
+        }
+    }
+
+    let mut contents = Vec::new();
+    if let Some(content) = latest_summary {
+        contents.push(("summary".to_string(), content));
+    } else if let Some(content) = read_legacy_section_file(session_dir, "summary")? {
+        contents.push(("summary".to_string(), content));
+    }
+
+    if let Some(content) = latest_details {
+        contents.push(("details".to_string(), content));
+    } else if let Some(content) = read_legacy_section_file(session_dir, "details")? {
+        contents.push(("details".to_string(), content));
+    }
+
+    Ok(contents)
+}
+
+fn read_legacy_section_file(session_dir: &Path, section_id: &str) -> Result<Option<String>> {
+    let path = session_dir.join("output").join(format!("{section_id}.md"));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+    Ok(Some(content))
 }
 
 fn record_review_prose_signal(

@@ -450,6 +450,78 @@ fn persist_fix_final_artifacts_clears_synthetic_marker_on_clean_convergence() {
 }
 
 #[test]
+fn persist_fix_final_artifacts_clears_resume_suggestion_and_superseded_prose_on_clean() {
+    let project_root = temp_project_root("persist-fix-clear-resume-prose");
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXCLEARRESUMEPROSE");
+    let session_dir = create_session_dir(&project_root, &session_id);
+
+    write_findings_toml(
+        &session_dir,
+        &FindingsFile {
+            findings: vec![sample_stale_finding()],
+        },
+    )
+    .expect("write stale findings.toml");
+    fs::write(
+        session_dir.join("output").join("suggestion.toml"),
+        format!("[suggestion]\naction = \"resume_to_fix\"\nsession_id = \"{session_id}\"\n"),
+    )
+    .expect("write stale suggestion.toml");
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nBlocking issues found before fix.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nMedium: src/lib.rs:42 stale pre-fix finding.\n<!-- CSA:SECTION:details:END -->\n<!-- CSA:SECTION:summary -->\nVerdict: CLEAN.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nClean convergence verified. Overall risk: low.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    persist_fix_final_artifacts(&project_root, &make_clean_review_meta(&session_id), true);
+
+    let output_dir = session_dir.join("output");
+    assert!(
+        !output_dir.join("suggestion.toml").exists(),
+        "stale resume-to-fix suggestion must be removed after clean convergence"
+    );
+    assert!(
+        !output_dir.join("summary.md").exists(),
+        "superseded pre-fix summary must be removed"
+    );
+    assert!(
+        !output_dir.join("details.md").exists(),
+        "superseded pre-fix details must be removed"
+    );
+
+    let review_sections = csa_session::read_all_sections(&session_dir)
+        .expect("read output sections")
+        .into_iter()
+        .filter(|(section, _)| matches!(section.id.as_str(), "summary" | "details"))
+        .collect::<Vec<_>>();
+    assert_eq!(review_sections.len(), 2);
+    assert!(
+        review_sections
+            .iter()
+            .all(|(_, content)| !content.contains("stale pre-fix finding")),
+        "only current clean prose should remain in the output index"
+    );
+
+    let findings_path = output_dir.join("findings.toml");
+    let parsed: FindingsFile =
+        toml::from_str(&fs::read_to_string(&findings_path).expect("read findings.toml"))
+            .expect("parse findings.toml");
+    assert_eq!(parsed, FindingsFile::default());
+
+    let verdict_path = output_dir.join("review-verdict.json");
+    let artifact: csa_session::ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, CLEAN);
+    assert!(
+        artifact.severity_counts.values().all(|count| *count == 0),
+        "clean convergence must persist all-zero severity counts"
+    );
+}
+
+#[test]
 fn fix_loop_exhausted_preserves_open_findings_in_findings_toml() {
     let project_root = temp_project_root("persist-fix-final-artifacts-exhausted");
     let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
