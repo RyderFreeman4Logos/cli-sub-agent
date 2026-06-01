@@ -212,7 +212,12 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 timestamp: chrono::Utc::now(),
                 diff_fingerprint: None,
             };
-            persist_fix_final_artifacts(ctx.project_root, &review_meta, true);
+            persist_fix_final_artifacts_with_current_output(
+                ctx.project_root,
+                &review_meta,
+                true,
+                Some(&fix_result.execution.execution.output),
+            );
             return Ok(0);
         }
     }
@@ -249,6 +254,20 @@ fn persist_fix_final_artifacts(
     review_meta: &ReviewSessionMeta,
     converged_clean: bool,
 ) {
+    persist_fix_final_artifacts_with_current_output(
+        project_root,
+        review_meta,
+        converged_clean,
+        None,
+    );
+}
+
+fn persist_fix_final_artifacts_with_current_output(
+    project_root: &Path,
+    review_meta: &ReviewSessionMeta,
+    converged_clean: bool,
+    current_fix_output: Option<&str>,
+) {
     persist_review_meta(project_root, review_meta);
     if converged_clean {
         match csa_session::get_session_dir(project_root, &review_meta.session_id) {
@@ -278,7 +297,11 @@ fn persist_fix_final_artifacts(
                         );
                     }
                 }
-                clear_clean_convergence_fail_signals(&session_dir, &review_meta.session_id);
+                clear_clean_convergence_fail_signals(
+                    &session_dir,
+                    &review_meta.session_id,
+                    current_fix_output,
+                );
             }
             Err(error) => {
                 warn!(
@@ -301,7 +324,11 @@ fn persist_fix_final_artifacts(
     super::post_review::persist_review_failure_suggestion(project_root, review_meta);
 }
 
-fn clear_clean_convergence_fail_signals(session_dir: &Path, session_id: &str) {
+fn clear_clean_convergence_fail_signals(
+    session_dir: &Path,
+    session_id: &str,
+    current_fix_output: Option<&str>,
+) {
     let output_dir = session_dir.join("output");
     for stale_file in CLEAN_CONVERGENCE_STALE_OUTPUT_FILES {
         let stale_path = output_dir.join(stale_file);
@@ -316,10 +343,14 @@ fn clear_clean_convergence_fail_signals(session_dir: &Path, session_id: &str) {
             );
         }
     }
-    retain_latest_review_prose_sections(session_dir, session_id);
+    retain_current_review_prose_sections(session_dir, session_id, current_fix_output);
 }
 
-fn retain_latest_review_prose_sections(session_dir: &Path, session_id: &str) {
+fn retain_current_review_prose_sections(
+    session_dir: &Path,
+    session_id: &str,
+    current_fix_output: Option<&str>,
+) {
     let output_dir = session_dir.join("output");
     let index_path = output_dir.join("index.toml");
     if !index_path.exists() {
@@ -350,18 +381,10 @@ fn retain_latest_review_prose_sections(session_dir: &Path, session_id: &str) {
         }
     };
 
-    let mut keep = vec![true; index.sections.len()];
-    for section_id in REVIEW_PROSE_SECTION_IDS {
-        let latest = index
-            .sections
-            .iter()
-            .rposition(|section| section.id == *section_id);
-        for (idx, section) in index.sections.iter().enumerate() {
-            if section.id == *section_id && Some(idx) != latest {
-                keep[idx] = false;
-            }
-        }
-    }
+    let current_review_sections = current_fix_output
+        .map(current_output_review_prose_section_ids)
+        .unwrap_or_default();
+    let keep = review_prose_keep_mask(&index, &current_review_sections);
 
     if keep.iter().all(|keep_section| *keep_section) {
         return;
@@ -418,6 +441,82 @@ fn retain_latest_review_prose_sections(session_dir: &Path, session_id: &str) {
     }
 }
 
+fn review_prose_keep_mask(index: &csa_session::OutputIndex, current_ids: &[String]) -> Vec<bool> {
+    let mut keep = vec![true; index.sections.len()];
+    let mut expected_current = current_ids.iter().rev();
+    let mut next_expected = expected_current.next();
+
+    for (idx, section) in index.sections.iter().enumerate().rev() {
+        if !is_review_prose_section_id(&section.id) {
+            continue;
+        }
+
+        if next_expected.is_some_and(|expected| section.id == *expected) {
+            next_expected = expected_current.next();
+        } else {
+            keep[idx] = false;
+        }
+    }
+
+    keep
+}
+
+fn current_output_review_prose_section_ids(output: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut open_section_id = None;
+
+    for line in output.lines() {
+        match parse_csa_section_marker(line) {
+            Some(CsaSectionMarker::Start(id)) => {
+                if let Some(previous_id) = open_section_id.take() {
+                    push_review_prose_section_id(&mut ids, previous_id);
+                }
+                open_section_id = Some(id);
+            }
+            Some(CsaSectionMarker::End(id)) if open_section_id.as_deref() == Some(id.as_str()) => {
+                push_review_prose_section_id(&mut ids, id);
+                open_section_id = None;
+            }
+            None => {}
+            Some(CsaSectionMarker::End(_)) => {}
+        }
+    }
+
+    if let Some(id) = open_section_id {
+        push_review_prose_section_id(&mut ids, id);
+    }
+
+    ids
+}
+
+fn push_review_prose_section_id(ids: &mut Vec<String>, section_id: String) {
+    if is_review_prose_section_id(&section_id) {
+        ids.push(section_id);
+    }
+}
+
+enum CsaSectionMarker {
+    Start(String),
+    End(String),
+}
+
+fn parse_csa_section_marker(line: &str) -> Option<CsaSectionMarker> {
+    let marker = line
+        .trim()
+        .strip_prefix("<!-- CSA:SECTION:")?
+        .strip_suffix("-->")?
+        .trim();
+    let marker = marker
+        .strip_suffix(":END")
+        .map(|section_id| CsaSectionMarker::End(section_id.trim().to_string()))
+        .unwrap_or_else(|| CsaSectionMarker::Start(marker.to_string()));
+    Some(marker)
+}
+
+fn is_review_prose_section_id(section_id: &str) -> bool {
+    REVIEW_PROSE_SECTION_IDS.contains(&section_id)
+}
+
 fn remove_legacy_review_prose_files(output_dir: &Path, session_id: &str) {
     for section_id in REVIEW_PROSE_SECTION_IDS {
         let stale_path = output_dir.join(format!("{section_id}.md"));
@@ -444,5 +543,24 @@ pub(crate) fn persist_fix_final_artifacts_for_tests(
 }
 
 #[cfg(test)]
+pub(crate) fn persist_fix_final_artifacts_for_tests_with_output(
+    project_root: &Path,
+    review_meta: &ReviewSessionMeta,
+    converged_clean: bool,
+    current_fix_output: &str,
+) {
+    persist_fix_final_artifacts_with_current_output(
+        project_root,
+        review_meta,
+        converged_clean,
+        Some(current_fix_output),
+    );
+}
+
+#[cfg(test)]
 #[path = "review_cmd_fix_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_cmd_fix_convergence_tests.rs"]
+mod convergence_tests;
