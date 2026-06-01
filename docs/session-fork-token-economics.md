@@ -131,7 +131,7 @@ To validate these estimates empirically:
 ```bash
 # 1. Run N cold-start sessions, capture token usage
 for i in $(seq 1 10); do
-  csa run --tool codex "echo hello" 2>&1 | grep -i token
+  csa run --tier tier-1-quick --tool codex "echo hello" 2>&1 | grep -i token
 done
 
 # 2. Run N experimental PTY fork sessions from the same parent

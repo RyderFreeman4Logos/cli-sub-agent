@@ -148,8 +148,8 @@ csa debate --sa-mode false --session 01JK "reconsider given the benchmark result
 ### Debate Configuration
 
 ```bash
-csa debate --sa-mode false --rounds 5 --thinking high "complex architecture question"
-csa debate --sa-mode false --tool codex "force specific tool"
+csa debate --sa-mode false --tier tier-3-complex --rounds 5 --thinking high "complex architecture question"
+csa debate --sa-mode false --tier tier-3-complex --tool codex "try codex first within the tier"
 csa debate --sa-mode false --timeout 600 "time-limited debate"
 ```
 

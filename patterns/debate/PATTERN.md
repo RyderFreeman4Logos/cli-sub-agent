@@ -35,14 +35,15 @@ csa --format json tiers list
 ## Step 3: Resolve Debate Tool
 
 CSA auto-selects heterogeneous tool: claude-code caller → codex reviewer,
-codex caller → claude-code reviewer. Override with explicit --tool if needed
-(requires --force-ignore-tier-setting when tiers are configured).
+codex caller → claude-code reviewer. Use `--tier` as the canonical selector;
+explicit `--tool` is a soft try-first preference inside that tier.
 
 ## Step 4: Select Starting Tier
 
 Use tier mapped to default in tier_mapping, or user-specified tier.
-Filter models to those matching the debate tool.
-Validate >= 2 models available. If < 2, try next higher tier.
+Use the debate tool as a soft ordering preference, not a hard filter.
+Validate >= 2 enabled tools are available when hard heterogeneity is required.
+If < 2, try next higher tier.
 
 ### Fork From Research Session (Optional)
 
@@ -79,7 +80,7 @@ Proposer presents concrete, actionable strategy with:
 4. Anticipated Weaknesses (honest limitations)
 
 ```bash
-SID=$(csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}")
+SID=$(csa run --tier "${CURRENT_TIER}" --tool "${PROPOSER_TOOL}" --ephemeral "${PROPOSAL_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -95,7 +96,7 @@ Critic rigorously evaluates the proposal:
 4. Strongest Counter-Arguments
 
 ```bash
-SID=$(csa run --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}")
+SID=$(csa run --tier "${CURRENT_TIER}" --tool "${CRITIC_TOOL}" --ephemeral "${CRITIQUE_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -110,7 +111,7 @@ Proposer responds to each criticism:
 3. Present revised strategy
 
 ```bash
-SID=$(csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}")
+SID=$(csa run --tier "${CURRENT_TIER}" --tool "${PROPOSER_TOOL}" --ephemeral "${RESPONSE_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -126,12 +127,12 @@ Orchestrator evaluates after each critique-response pair:
 
 ## Step 9: Tier Escalation
 
-Find next higher tier. Summarize debate so far as context.
-Restart debate loop with higher tier models.
+Find next higher tier and update `CURRENT_TIER`. Summarize debate so far as
+context. Restart debate loop with the higher tier.
 Max 2 escalations.
 
 ```bash
-SID=$(csa run --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}")
+SID=$(csa run --tier "${CURRENT_TIER}" --ephemeral "${ESCALATION_PROMPT}")
 csa session wait --session "$SID"
 ```
 

@@ -24,10 +24,11 @@ All tools run in yolo mode by default (auto-approve all actions).
 Before constructing ANY `csa run`, `csa review`, or `csa debate` command, verify:
 
 1. **`--sa-mode true|false`** — REQUIRED at root depth (CSA_DEPTH=0). Sub-agent calls (depth > 0) inherit automatically.
-2. **`--tier <name>`** — REQUIRED for `csa run` when project has `[tiers]` configured. Direct `--tool` is **blocked** by the CLI. For `csa review`/`csa debate`, `--tier` selects model; `--model`/`--thinking` overrides are still allowed.
-3. **NEVER use `--tool` directly** when tiers are configured — use `--tier` instead. To bypass: `--force-ignore-tier-setting` (alias: `--force-tier`).
+2. **`--tier <name>`** — canonical selector whenever project `[tiers]` is non-empty.
+3. **`--tool <tool>`** — only a soft try-first preference inside the selected tier. `[review].tool` and `[debate].tool` behave the same way; they no longer hard-whitelist the tier.
+4. **Direct model or force bypass** — `--model-spec`, `--force-ignore-tier-setting`/`--force-tier`, and broad direct-routing force flags are emergency-only under configured tiers. They are rejected unless `[tier_policy].allow_force_bypass = true` is set in the global config, or CSA is continuing an already-trusted inherited #1741 subtree pin. Project `.csa/config.toml` cannot grant this.
 
-**Priority chain**: `--tier` > config tier > `--tool` (with force) > config tool > auto-select.
+**Priority chain**: inherited trusted pin > `--tier` > config tier / tier mapping > soft tool preference > auto-select. Direct bypass is outside the normal chain and requires the global escape hatch.
 
 ### Quick Reference
 
@@ -35,11 +36,12 @@ Before constructing ANY `csa run`, `csa review`, or `csa debate` command, verify
 # When tiers ARE configured (most CSA projects):
 # Use tier names from your .csa/config.toml [tiers] section
 csa run --sa-mode true --tier <tier-name> "Implement feature X"
-csa review --sa-mode true --tier <tier-name> --range main...HEAD
-csa debate --sa-mode true --tier <tier-name> "REST vs gRPC?"
+csa review --sa-mode true --tier <tier-name> --tool codex --range main...HEAD
+csa debate --sa-mode true --tier <tier-name> --tool claude-code "REST vs gRPC?"
 
-# Bypass tier to force a specific tool (requires --force-ignore-tier-setting):
-csa run --sa-mode true --force-ignore-tier-setting --tool codex "Quick fix"
+# Emergency exact model only when global [tier_policy].allow_force_bypass=true
+# or when continuing an inherited trusted subtree pin:
+csa run --sa-mode true --force-ignore-tier-setting --model-spec codex/openai/gpt-5.4/xhigh "Emergency pinned run"
 
 # When tiers are NOT configured (legacy / simple projects):
 csa run --sa-mode true --tool codex "Implement feature X"
@@ -47,25 +49,35 @@ csa run --sa-mode true --tool codex "Implement feature X"
 
 ### Canonical LLM dispatch form
 
-Prefer this form for general `csa` dispatch when the caller wants an explicit model
-selection without `--tool`/`--tier` conflict handling:
+Prefer this form for general `csa` dispatch when tiers are configured:
 
 ```bash
 csa run \
   --sa-mode true \
-  --model-spec codex/openai/gpt-5.4/xhigh \
-  --no-failover \
+  --tier <tier-name> \
+  --timeout 7200 \
+  --prompt-file /path/to/prompt.md
+```
+
+Add `--tool <tool>` only when you want try-first ordering inside that tier:
+
+```bash
+csa run \
+  --sa-mode true \
+  --tier <tier-name> \
+  --tool codex \
   --timeout 7200 \
   --prompt-file /path/to/prompt.md
 ```
 
 Why this is the canonical LLM-friendly form:
 
-- `--model-spec` encodes tool/provider/model/thinking in one string, avoiding conflict-prone `--tool` + `--tier` + `--force-ignore-tier-setting` combinations
-- `--no-failover` prevents silent fallback when the caller wants a specific tool
+- `--tier` preserves the configured quality/cost policy and fallback chain
+- `--tool` is optional try-first ordering, not a brittle hard filter
 - `--timeout 7200` is the sprint-safe default
 
-Default to this form unless the user explicitly asks for tier-based routing or a different tool.
+Default to tier-based routing. Use direct `--model-spec` only for the global
+escape hatch or an inherited trusted subtree pin.
 
 ## Prompt Crafting (How to Write Better CSA Prompts)
 

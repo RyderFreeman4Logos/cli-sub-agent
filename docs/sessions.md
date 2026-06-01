@@ -58,7 +58,7 @@ Sessions are created automatically by `csa run` when `--session` is
 not provided:
 
 ```bash
-csa run --sa-mode false --tool codex --description "Auth refactor" "analyze auth module"
+csa run --sa-mode false --tier tier-2-standard --tool codex --description "Auth refactor" "analyze auth module"
 ```
 
 ### 2. Resume

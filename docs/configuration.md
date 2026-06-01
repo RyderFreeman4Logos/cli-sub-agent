@@ -10,7 +10,7 @@ Global config (~/.config/cli-sub-agent/config.toml)
   | lowest priority
 Project config ({PROJECT_ROOT}/.csa/config.toml)
   | higher priority
-CLI arguments (--tool, --model, --thinking, etc.)
+CLI arguments (--tier, --tool, --model, --thinking, etc.)
   | highest priority
 Final merged config
 ```
@@ -45,6 +45,9 @@ tool = "auto"                    # Enforce heterogeneous debate
 timeout_secs = 1800              # 30 minute default
 require_heterogeneous = false    # Warn on narrowing; set true to fail fast
 
+[tier_policy]
+allow_force_bypass = false       # Global-only emergency escape hatch
+
 [tools.codex]
 max_concurrent = 5
 transport = "acp"                # See tool-specific transport notes below
@@ -63,6 +66,30 @@ diff_command = "delta"
 `[debate].require_heterogeneous` defaults to `false`.
 Use it to prevent silent collapse from a multi-tool tier into a single surviving tool.
 Leave it off if soft fallback is acceptable; turn it on when debate diversity is a hard requirement.
+
+### `[tier_policy]` -- Global Tier Bypass Policy
+
+```toml
+[tier_policy]
+allow_force_bypass = false
+```
+
+When a project has a non-empty `[tiers]` table, `--tier <name>` is the
+canonical selector. `--tool`, `[review].tool`, and `[debate].tool` are soft
+ordering preferences: CSA tries the preferred tool first, then falls back
+through the remaining enabled models in the selected tier. They are not
+hard whitelists.
+
+Direct exact-model and force-bypass routes are rejected under configured tiers
+unless `allow_force_bypass = true` is set in the global config at
+`~/.config/cli-sub-agent/config.toml`, or CSA is continuing an already-trusted
+inherited subtree pin. This escape hatch covers `--model-spec`,
+`--force-ignore-tier-setting`/`--force-tier`, and broad direct-routing force
+flags.
+
+This field is global-only. A project `.csa/config.toml` cannot grant
+`[tier_policy].allow_force_bypass`; CSA rejects that as a privilege-escalation
+guard because a repository must not be able to authorize its own tier bypass.
 
 ## Project Config
 
@@ -225,7 +252,9 @@ tool = "auto"    # or "codex", "claude-code", "gemini-cli", "antigravity-cli", "
 ```
 
 Overrides the global review tool for this project. In `auto` mode, CSA
-enforces heterogeneity based on parent tool detection.
+enforces heterogeneity based on parent tool detection. With configured tiers,
+this is a soft ordering preference for the selected tier, not a whitelist; CSA
+still falls back through the rest of the tier unless failover is disabled.
 
 ### `[tiers.{name}]` -- Model Tiers
 
@@ -259,8 +288,11 @@ models = [
 Thinking budget values: `low`, `medium`, `high`, `xhigh`, or a custom
 token count.
 
-**Selection logic:** Iterate models in order, return the first whose
-tool is enabled.
+**Selection logic:** select a tier first, then iterate its models in order and
+return the first enabled tool. If a tool preference is present through
+`--tool`, `[review].tool`, or `[debate].tool`, matching models are tried first
+and the rest of the tier remains available as fallback. Use `--tier <name>` as
+the canonical selector whenever `[tiers]` is non-empty.
 
 ### `[tier_mapping]` -- Task to Tier Mapping
 
@@ -277,7 +309,8 @@ security_audit = "tier-3-complex"
 ```
 
 `csa run`, `csa review`, and `csa debate` can select these mappings with
-`--hint-difficulty <LABEL>` when no explicit `--tier` or `--model-spec` is set.
+`--hint-difficulty <LABEL>` when no explicit `--tier` or permitted direct model
+bypass is set.
 For `csa run` and `csa debate`, the prompt may also start with YAML frontmatter:
 
 ```text
@@ -288,8 +321,10 @@ Explain the failing command.
 ```
 
 The frontmatter block is stripped before forwarding the prompt to the selected
-tool. CLI `--hint-difficulty` wins over prompt frontmatter; explicit `--tier` or
-`--model-spec` wins over both.
+tool. CLI `--hint-difficulty` wins over prompt frontmatter; explicit `--tier`
+wins over both. `--model-spec` bypasses mappings only when the global
+`[tier_policy].allow_force_bypass` escape hatch is enabled or an inherited
+trusted subtree pin is being continued.
 
 ### `[aliases]` -- Model Aliases
 
@@ -302,7 +337,9 @@ smart = "codex/anthropic/claude-opus/xhigh"
 balanced = "codex/anthropic/claude-sonnet/medium"
 ```
 
-Usage: `csa run --sa-mode false --model fast "quick check"`
+Usage in simple non-tiered configs: `csa run --sa-mode false --model fast "quick check"`.
+In tiered projects, prefer `--tier <name>` and reserve exact model selection
+for the global tier-policy escape hatch.
 
 ## Configuration Commands
 

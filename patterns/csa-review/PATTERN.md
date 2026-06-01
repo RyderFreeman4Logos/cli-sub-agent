@@ -89,8 +89,9 @@ Review prompt instructs agent to:
 Tool: csa
 Tier: tier-3-complex
 
-The review tool is resolved from `[review] tool` in config (Step 2).
-If `review.tool = "auto"`, CSA selects a heterogeneous counterpart automatically.
+The review tier is canonical. `[review].tool` or `${REVIEW_TOOL}` is only a
+soft try-first preference inside the selected tier. If `review.tool = "auto"`,
+CSA selects a heterogeneous counterpart automatically.
 
 ### Fork-Based Review (Recommended for Post-Implementation)
 
@@ -116,7 +117,7 @@ are immediately visible. Also saves tokens by avoiding redundant file reads.
 When no implementation session is available, use standard review:
 
 ```bash
-SID=$(csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}")
+SID=$(csa run --tier tier-3-complex --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}")
 csa session wait --session "$SID"
 ```
 
@@ -154,7 +155,7 @@ fix did not land. Anchored at issue #820 (Option A, user-approved 2026-04-21)
 to circuit-break prior design flips per CLAUDE.md lesson #821.
 
 ```bash
-SID=$(csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
+SID=$(csa run --tier tier-3-complex --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
 csa session wait --session "$SID"
 ```
 
