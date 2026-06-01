@@ -50,8 +50,14 @@ impl GlobalConfig {
     ) -> Option<HashMap<String, String>> {
         let mut env = self.env_vars(tool).cloned().unwrap_or_default();
         // Drop any user-configured attempt to spoof CSA-owned execution env.
+        // This is the single funnel for tool-config `[tools.<name>].extra_env`
+        // (the sole reader of `env_vars`), so stripping the reserved keys here
+        // closes config-spoofing across every spawn path (#1741). CSA re-injects
+        // the authoritative subtree pin afterwards via
+        // `inject_subtree_model_pin_env`, which is the only surviving writer.
         env.remove(NO_FAILOVER_ENV_KEY);
         env.remove(NO_FLASH_FALLBACK_ENV_KEY);
+        csa_core::env::strip_reserved_pin_keys(&mut env);
 
         if options.no_failover {
             env.insert(NO_FAILOVER_ENV_KEY.to_string(), "1".to_string());

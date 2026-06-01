@@ -358,6 +358,41 @@ fn test_build_execution_env_drops_user_configured_no_failover_spoof() {
 }
 
 #[test]
+fn test_build_execution_env_drops_user_configured_subtree_pin_spoof() {
+    // #1741 round-3: tool-config extra_env must not be able to spoof a CSA-owned
+    // subtree model pin. build_execution_env is the single funnel for user env,
+    // so all reserved pin keys must be stripped here regardless of value.
+    let mut config = GlobalConfig::default();
+    config.tools.insert(
+        "codex".to_string(),
+        GlobalToolConfig {
+            env: HashMap::from([
+                (
+                    "CSA_MODEL_SPEC".to_string(),
+                    "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                ),
+                ("CSA_FORCE_IGNORE_TIER_SETTING".to_string(), "1".to_string()),
+                ("CSA_NO_FAILOVER".to_string(), "1".to_string()),
+                ("OTHER_VAR".to_string(), "keep".to_string()),
+            ]),
+            ..Default::default()
+        },
+    );
+
+    let env = config
+        .build_execution_env("codex", ExecutionEnvOptions::default())
+        .unwrap();
+    for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
+        assert!(
+            !env.contains_key(*key),
+            "user config must not be able to spoof CSA-owned subtree-pin key {key}"
+        );
+    }
+    // Non-reserved user env is preserved.
+    assert_eq!(env.get("OTHER_VAR").map(String::as_str), Some("keep"));
+}
+
+#[test]
 fn test_parse_toml() {
     let toml_str = r#"
 [defaults]
