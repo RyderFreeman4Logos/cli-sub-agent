@@ -18,18 +18,33 @@ pub(crate) async fn handle_claude_sub_agent(
         return Ok(1);
     };
 
-    let prompt = crate::run_helpers::read_prompt(args.question)?;
-
-    let parent_tool = crate::run_helpers::detect_parent_tool();
-    let (tool_name, resolved_model_spec, resolved_model) = resolve_claude_sub_agent_tool_and_model(
-        args.tool,
+    let inherited_trusted_pin = claude_sub_agent_inherited_trusted_pin(
+        args.model_spec.as_deref(),
+        args.model.as_deref(),
+        current_depth,
+    );
+    enforce_claude_sub_agent_tier_bypass_gate(
         args.model_spec.as_deref(),
         args.model.as_deref(),
         config.as_ref(),
         &global_config,
-        parent_tool.as_deref(),
-        &project_root,
+        inherited_trusted_pin,
     )?;
+
+    let prompt = crate::run_helpers::read_prompt(args.question)?;
+
+    let parent_tool = crate::run_helpers::detect_parent_tool();
+    let (tool_name, resolved_model_spec, resolved_model) =
+        resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
+            arg_tool: args.tool,
+            model_spec: args.model_spec.as_deref(),
+            model: args.model.as_deref(),
+            project_config: config.as_ref(),
+            global_config: &global_config,
+            parent_tool: parent_tool.as_deref(),
+            project_root: &project_root,
+            inherited_trusted_pin,
+        })?;
 
     // 8. Build executor and validate tool
     let executor = crate::pipeline::build_and_validate_executor(
@@ -120,43 +135,93 @@ pub(crate) async fn handle_claude_sub_agent(
     Ok(result.exit_code)
 }
 
-fn resolve_claude_sub_agent_tool_and_model(
+struct ClaudeSubAgentRoutingRequest<'a> {
     arg_tool: Option<ToolArg>,
-    model_spec: Option<&str>,
-    model: Option<&str>,
-    project_config: Option<&ProjectConfig>,
-    global_config: &GlobalConfig,
-    parent_tool: Option<&str>,
-    project_root: &Path,
+    model_spec: Option<&'a str>,
+    model: Option<&'a str>,
+    project_config: Option<&'a ProjectConfig>,
+    global_config: &'a GlobalConfig,
+    parent_tool: Option<&'a str>,
+    project_root: &'a Path,
+    inherited_trusted_pin: bool,
+}
+
+fn resolve_claude_sub_agent_tool_and_model(
+    request: ClaudeSubAgentRoutingRequest<'_>,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
-    let resolved_arg_tool =
-        resolve_tool_arg_alias(arg_tool, project_config, global_config).map_err(|e| anyhow!(e))?;
+    let resolved_arg_tool = resolve_tool_arg_alias(
+        request.arg_tool,
+        request.project_config,
+        request.global_config,
+    )
+    .map_err(|e| anyhow!(e))?;
     let user_explicit_tool = matches!(resolved_arg_tool, Some(ToolArg::Specific(_)));
-    let resolved_tool = if model_spec.is_some() && !user_explicit_tool {
+    let resolved_tool = if request.model_spec.is_some() && !user_explicit_tool {
         None
     } else {
         Some(resolve_claude_tool(
             resolved_arg_tool,
-            project_config,
-            global_config,
-            parent_tool,
-            project_root,
+            request.project_config,
+            request.global_config,
+            request.parent_tool,
+            request.project_root,
         )?)
     };
 
     crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
         tool: resolved_tool,
-        model_spec,
-        model,
+        model_spec: request.model_spec,
+        model: request.model,
         thinking: None, // claude-sub-agent does not support --thinking
-        config: project_config,
-        project_root,
+        config: request.project_config,
+        project_root: request.project_root,
         force: false,                      // claude-sub-agent does not support --force
         force_override_user_config: false, // claude-sub-agent does not support --force-override-user-config
         needs_edit: false, // claude-sub-agent does not require edit-capable tool filtering
         tier: None,        // claude-sub-agent does not support --tier
         force_ignore_tier_setting: false, // claude-sub-agent does not support --force-ignore-tier-setting
+        tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
+            request.project_config,
+            request.global_config,
+            request.inherited_trusted_pin,
+        ),
         tool_is_auto_resolved: !user_explicit_tool, // treat auto/implicit selection as non-explicit
+    })
+}
+
+fn claude_sub_agent_inherited_trusted_pin(
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    current_depth: u32,
+) -> bool {
+    let Some(model_spec) = model_spec else {
+        return false;
+    };
+    if model.is_some() {
+        return false;
+    }
+    crate::run_cmd_model_pin::inherited_model_pin_from_env(current_depth)
+        .is_some_and(|pin| pin.force_ignore_tier_setting && pin.model_spec == model_spec)
+}
+
+fn enforce_claude_sub_agent_tier_bypass_gate(
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    inherited_trusted_pin: bool,
+) -> Result<()> {
+    crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
+        project_config,
+        global_config,
+        flags: crate::run_helpers::TierBypassGateFlags {
+            model_spec: model_spec.is_some(),
+            force: false,
+            force_ignore_tier_setting: false,
+            model: model.is_some(),
+            thinking: false,
+        },
+        inherited_trusted_pin,
     })
 }
 

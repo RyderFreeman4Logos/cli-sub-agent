@@ -15,10 +15,10 @@ pub(crate) fn allow_cross_tool_failover(
         return false;
     }
 
-    // Explicit `--tool` (from CLI or skill agent_config) is the user's hard
-    // selection: never silently fall over to a different tool, even when a
-    // tier is also specified (#1440). Tier still drives model selection for
-    // the chosen tool via `resolve_requested_tool_from_tier`.
+    // Without an active tier, explicit `--tool` (from CLI or skill
+    // agent_config) is the user's hard selection: never silently fall over to a
+    // different tool (#1440). Active tier failover is handled by the scheduler
+    // using the resolved tier model specs, not by this generic slot fallback.
     !matches!(strategy, ToolSelectionStrategy::Explicit(_))
 }
 

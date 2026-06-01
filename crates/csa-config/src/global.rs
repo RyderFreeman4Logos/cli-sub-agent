@@ -32,6 +32,9 @@ pub struct GlobalConfig {
     pub debate: DebateConfig,
     #[serde(default)]
     pub fallback: FallbackConfig,
+    /// Global-only tier bypass policy.
+    #[serde(default)]
+    pub tier_policy: TierPolicyConfig,
     #[serde(default)]
     pub todo: TodoDisplayConfig,
     /// Memory system configuration.
@@ -273,6 +276,17 @@ pub struct PreferencesConfig {
     /// Empty list (default) preserves existing behavior.
     #[serde(default)]
     pub tool_priority: Vec<String>,
+}
+
+/// Global policy for exact-model and force bypasses when project tiers exist.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TierPolicyConfig {
+    /// Allow emergency bypasses such as `--model-spec`, `--force`, and
+    /// `--force-ignore-tier-setting` even when `[tiers]` are configured.
+    ///
+    /// This is global-only; project `.csa/config.toml` must not grant this.
+    #[serde(default)]
+    pub allow_force_bypass: bool,
 }
 
 /// Configuration for the code review workflow.

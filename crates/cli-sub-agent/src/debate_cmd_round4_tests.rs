@@ -254,7 +254,6 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             all_tier_models_failed: true,
             project_config: None,
             resolved_tier_name: Some("quality"),
-            tier_filter: None,
             failures: &failures,
             debate_mode: DebateMode::Heterogeneous,
             output_header: None,
@@ -262,6 +261,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");

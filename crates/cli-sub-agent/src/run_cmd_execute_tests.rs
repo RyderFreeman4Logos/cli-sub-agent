@@ -1,6 +1,6 @@
 use super::{
-    RunModelSelectionFlags, finalize_prompt_text, resolve_primary_writer_spec_for_run,
-    resolve_run_no_failover, resolve_run_tier_context,
+    RunModelSelectionFlags, enforce_run_tier_bypass_gate, finalize_prompt_text,
+    resolve_primary_writer_spec_for_run, resolve_run_no_failover, resolve_run_tier_context,
 };
 use crate::run_cmd_tool_selection::{resolve_skill_and_prompt, resolve_tool_by_strategy};
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -423,7 +423,7 @@ fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
             true,
         );
 
-    assert!(!tier_auto_select);
+    assert!(tier_auto_select);
     assert!(failover_on_crash_enabled);
     assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
 }
@@ -431,6 +431,18 @@ fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
 #[test]
 fn run_explicit_tool_defaults_to_no_failover() {
     assert!(resolve_run_no_failover(
+        true,
+        false,
+        &ToolSelectionStrategy::Explicit(ToolName::Codex),
+        false,
+        false,
+    ));
+}
+
+#[test]
+fn run_explicit_tool_with_tier_keeps_failover_enabled() {
+    assert!(!resolve_run_no_failover(
+        true,
         true,
         &ToolSelectionStrategy::Explicit(ToolName::Codex),
         false,
@@ -442,10 +454,54 @@ fn run_explicit_tool_defaults_to_no_failover() {
 fn run_explicit_tool_allow_fallback_keeps_failover_enabled() {
     assert!(!resolve_run_no_failover(
         true,
+        false,
         &ToolSelectionStrategy::Explicit(ToolName::Codex),
         false,
         true,
     ));
+}
+
+#[test]
+fn run_tier_bypass_gate_rejects_bare_cli_thinking_when_tiers_configured() {
+    let config = make_test_config();
+    let flags = RunModelSelectionFlags {
+        thinking: true,
+        cli_thinking: true,
+        ..Default::default()
+    };
+
+    let err = enforce_run_tier_bypass_gate(
+        Some(&config),
+        &GlobalConfig::default(),
+        flags,
+        false,
+        false,
+        false,
+    )
+    .expect_err("bare --thinking must be gated when tiers exist");
+    let msg = err.to_string();
+
+    assert!(msg.contains("Tier bypass is disabled"), "{msg}");
+    assert!(msg.contains("Refused flags: --thinking"), "{msg}");
+}
+
+#[test]
+fn run_tier_bypass_gate_allows_bare_cli_thinking_with_global_opt_in() {
+    let config = make_test_config();
+    let global = GlobalConfig {
+        tier_policy: csa_config::TierPolicyConfig {
+            allow_force_bypass: true,
+        },
+        ..Default::default()
+    };
+    let flags = RunModelSelectionFlags {
+        thinking: true,
+        cli_thinking: true,
+        ..Default::default()
+    };
+
+    enforce_run_tier_bypass_gate(Some(&config), &global, flags, false, false, false)
+        .expect("global tier-policy opt-in should allow bare --thinking");
 }
 
 #[test]

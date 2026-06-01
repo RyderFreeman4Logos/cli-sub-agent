@@ -122,7 +122,7 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
     assert_eq!(gemini_invocations.lines().count(), 2);
     assert!(
         !codex_invocation_log.exists(),
-        "codex should not be invoked when --tool gemini-cli whitelists gemini-only candidates"
+        "codex should not be invoked because the preferred gemini fallback succeeds first"
     );
 
     let session_dir =

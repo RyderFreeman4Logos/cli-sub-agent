@@ -34,8 +34,8 @@ mod tier_guard;
 use post_exec_gate::{execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner};
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
-    RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
-    resolve_run_no_failover, resolve_run_tier_context,
+    RunModelSelectionFlags, enforce_run_tier_bypass_gate, resolve_primary_writer_spec_for_run,
+    resolve_run_effective_tier, resolve_run_no_failover, resolve_run_tier_context,
 };
 use run_cli_flags::{
     resolve_return_target, warn_deprecated_session_flags,
@@ -98,6 +98,8 @@ pub(crate) async fn handle_run(
     extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
     let cli_model_spec_explicit = model_spec.is_some();
+    let cli_model_explicit = model.is_some();
+    let cli_thinking_explicit = thinking.is_some();
     let mut auto_route = auto_route;
     let mut model_spec = model_spec;
     let mut tier = tier;
@@ -243,7 +245,6 @@ pub(crate) async fn handle_run(
     let thinking = skill_res.thinking;
     let model = skill_res.model;
     let skill_session_tag = skill.as_deref().map(skill_session_description);
-
     let model_selection_flags = RunModelSelectionFlags {
         tool: user_explicit_tool,
         auto_route: auto_route.is_some(),
@@ -251,9 +252,28 @@ pub(crate) async fn handle_run(
         model_spec: model_spec.is_some(),
         model: model.is_some(),
         thinking: thinking.is_some(),
+        cli_model: cli_model_explicit,
+        cli_thinking: cli_thinking_explicit,
         tier: tier.is_some(),
         hint_difficulty: hint_difficulty.is_some() || frontmatter_difficulty.is_some(),
     };
+    enforce_run_tier_bypass_gate(
+        config.as_ref(),
+        &global_config,
+        model_selection_flags,
+        force,
+        force_ignore_tier_setting,
+        model_pin_resolution.inherited_trusted_pin,
+    )?;
+    if model_selection_flags.model_spec
+        && crate::run_helpers::tier_bypass_allowed(
+            config.as_ref(),
+            &global_config,
+            model_pin_resolution.inherited_trusted_pin,
+        )
+    {
+        force_ignore_tier_setting = true;
+    }
     let primary_writer_spec =
         resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
     let model_spec = model_spec.or(primary_writer_spec);
@@ -341,8 +361,13 @@ pub(crate) async fn handle_run(
         .resolve_alias(&merged_aliases)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .into_strategy();
-    let effective_no_failover =
-        resolve_run_no_failover(user_explicit_tool, &strategy, no_failover, allow_fallback);
+    let effective_no_failover = resolve_run_no_failover(
+        user_explicit_tool,
+        effective_tier.is_some(),
+        &strategy,
+        no_failover,
+        allow_fallback,
+    );
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let idle_timeout_seconds = if no_idle_timeout {
         info!("Idle timeout disabled via --no-idle-timeout");

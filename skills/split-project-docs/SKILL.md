@@ -44,7 +44,7 @@ drafts/project-rules-ref/
 The source file exceeds 8000 tokens. Do NOT read it in main agent context.
 
 ```
-csa run --tool auto "Analyze @<file_path> for documentation splitting.
+csa run --sa-mode true --tier <tier-name> --tool auto "Analyze @<file_path> for documentation splitting.
 Report:
 1. Total token count
 2. All ## sections with approximate token counts

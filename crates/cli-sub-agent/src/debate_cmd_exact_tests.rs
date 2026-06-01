@@ -179,7 +179,6 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             all_tier_models_failed: true,
             project_config: None,
             resolved_tier_name: Some("quality"),
-            tier_filter: None,
             failures: &failures,
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
@@ -187,6 +186,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");
@@ -360,7 +360,6 @@ Verdict: APPROVE
             all_tier_models_failed: false,
             project_config: None,
             resolved_tier_name: None,
-            tier_filter: None,
             failures: &[],
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
@@ -368,6 +367,7 @@ Verdict: APPROVE
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("explicit verdict should finalize");
@@ -453,7 +453,6 @@ Verdict: APPROVE
             all_tier_models_failed: false,
             project_config: None,
             resolved_tier_name: Some("quality"),
-            tier_filter: None,
             failures: &failures,
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
@@ -461,6 +460,7 @@ Verdict: APPROVE
             fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("fallback chain should finalize");
@@ -547,7 +547,6 @@ Verdict: APPROVE
             all_tier_models_failed: false,
             project_config: Some(&config),
             resolved_tier_name: Some("quality"),
-            tier_filter: None,
             failures: &[],
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
@@ -557,6 +556,7 @@ Verdict: APPROVE
             // claude-code (pos1) is the winning debater; the BEFORE-winner codex
             // exclusion (pos0) is still persisted (#1714).
             selected_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
+            tier_preference_order: &[],
         },
     )
     .expect("build-time fallback chain should finalize");
@@ -656,7 +656,6 @@ Summary: Needs changes from terminal non-success verdict.
             all_tier_models_failed: false,
             project_config: Some(&config),
             resolved_tier_name: Some("quality"),
-            tier_filter: None,
             failures: &[],
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
@@ -664,6 +663,7 @@ Summary: Needs changes from terminal non-success verdict.
             fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_reason: None,
             selected_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
+            tier_preference_order: &[],
         },
     )
     .expect("revise verdict should finalize");
@@ -742,7 +742,6 @@ Verdict: REVISE
             all_tier_models_failed: false,
             project_config: None,
             resolved_tier_name: None,
-            tier_filter: None,
             failures: &[],
             debate_mode: debate_cmd::DebateMode::Heterogeneous,
             output_header: None,
@@ -750,6 +749,7 @@ Verdict: REVISE
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("revise verdict should finalize");

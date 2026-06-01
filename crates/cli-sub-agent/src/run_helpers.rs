@@ -26,6 +26,8 @@ mod prompt;
 mod routing_conflict;
 #[path = "run_helpers_routing_request.rs"]
 mod routing_request;
+#[path = "run_helpers_tier_bypass_gate.rs"]
+mod tier_bypass_gate;
 #[path = "run_helpers_tier_resolution.rs"]
 mod tier_resolution;
 #[path = "run_helpers_token_parse.rs"]
@@ -48,9 +50,13 @@ pub(crate) use prompt::{
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
+pub(crate) use tier_bypass_gate::tier_bypass_allowed;
+pub(crate) use tier_bypass_gate::{
+    TierBypassGateCtx, TierBypassGateFlags, enforce_tier_bypass_gate,
+};
 pub(crate) use tier_resolution::{
-    TierToolResolution, collect_available_tier_models, evaluate_tier_models,
-    resolve_requested_tool_from_tier, resolve_tool_from_tier,
+    TierToolResolution, collect_available_tier_models, collect_preferred_tier_models,
+    evaluate_tier_models, resolve_preferred_tool_from_tier, resolve_tool_from_tier,
 };
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
@@ -90,14 +96,14 @@ pub(crate) fn validate_direct_tool_tier_restriction(
     direct_tool_requested: bool,
     project_config: Option<&ProjectConfig>,
     effective_tier: Option<&str>,
-    force_override_user_config: bool,
+    _force_override_user_config: bool,
     force_ignore_tier_setting: bool,
     model_spec_provided: bool,
 ) -> Result<()> {
     let Some(cfg) = project_config else {
         return Ok(());
     };
-    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+    let bypass_tier = force_ignore_tier_setting;
     if cfg.tiers.is_empty()
         || bypass_tier
         || effective_tier.is_some()
@@ -112,8 +118,9 @@ pub(crate) fn validate_direct_tool_tier_restriction(
     anyhow::bail!(
         "Direct --tool is restricted when tiers are configured. \
          Use --tier <name> to specify which tier's model/thinking config to use, \
-         --hint-difficulty <label> to route through [tier_mapping], \
-         or add --force-ignore-tier-setting to override. \
+         or --hint-difficulty <label> to route through [tier_mapping]. \
+         Emergency direct-tool bypasses require \
+         [tier_policy].allow_force_bypass = true in the global CSA config. \
          Available tiers: [{}]{alias_hint}",
         available.join(", ")
     );
@@ -186,15 +193,16 @@ pub(crate) fn resolve_tool_and_model(
         needs_edit,
         tier,
         force_ignore_tier_setting,
+        tier_bypass_allowed,
         tool_is_auto_resolved,
     } = request;
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
-    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+    let bypass_tier = force_ignore_tier_setting || tier_bypass_allowed;
     let exact_selection_active = model_spec.is_some();
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
-    // unless --force-ignore-tier-setting (or --force) is active. --model-spec is
-    // exact selection, but it must still match a configured tier model below.
+    // unless a shared tier-bypass gate has accepted an explicit bypass. --model-spec is
+    // exact selection, but it must still match a configured tier model unless bypassed below.
     // Auto-resolved tools (from HeterogeneousPreferred etc.) don't count as user-explicit.
     let tool_triggers_enforcement = tool.is_some() && !tool_is_auto_resolved;
     validate_tool_tier_override_flags(tool_triggers_enforcement, tier, force_ignore_tier_setting)?;
@@ -202,7 +210,7 @@ pub(crate) fn resolve_tool_and_model(
         && !bypass_tier
         && tier.is_none()
         && !exact_selection_active
-        && (tool_triggers_enforcement || model.is_some())
+        && (tool_triggers_enforcement || model.is_some() || thinking.is_some())
     {
         let cfg = config.unwrap();
         let mut tier_list = String::new();
@@ -216,7 +224,8 @@ pub(crate) fn resolve_tool_and_model(
         anyhow::bail!(
             "Direct --tool/--model/--thinking is restricted when tiers are configured.\n\
              Use --tier <name> to specify which tier's model/thinking config to use, \
-             or add --force-ignore-tier-setting to override.\n\
+             or set [tier_policy].allow_force_bypass = true in the global CSA config \
+             for emergency bypasses.\n\
              Available tiers: [{tier_list}]{alias_hint}\n\
              Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );
@@ -239,7 +248,7 @@ pub(crate) fn resolve_tool_and_model(
                 "When using --force-ignore-tier-setting to bypass tier enforcement, \
                  you must provide complete model specification.\n\
                  Missing required flags: {}\n\
-                 Example: csa run --force-ignore-tier-setting --tool claude-code \
+                 Example: csa run --sa-mode <true|false> --force-ignore-tier-setting --tool claude-code \
                  --model claude-3-5-sonnet-20241022 --thinking medium \"prompt\"",
                 missing.join(", ")
             );
@@ -280,22 +289,16 @@ pub(crate) fn resolve_tool_and_model(
         None
     };
 
-    // Case 0: --tier provided → resolve tool/model from tier definition.
-    // A user-explicit `--tool` acts as a filter inside the selected tier.
+    // Case 0: --tier provided -> resolve tool/model from tier definition.
+    // A user-explicit `--tool` is a soft preference inside the selected tier:
+    // prefer matching candidates first, then keep the rest of the tier failover chain.
     if let Some(ref canonical_name) = canonical_tier
         && let Some(cfg) = config
     {
         let resolution = if let Some(requested_tool) = tool.filter(|_| !tool_is_auto_resolved) {
-            resolve_requested_tool_from_tier(
-                canonical_name,
-                cfg,
-                None,
-                requested_tool,
-                force_override_user_config,
-                &[],
-            )?
-        } else if let Some(resolution) =
-            resolve_tool_from_tier(canonical_name, cfg, None, None, &[])
+            let preference_order = [requested_tool.as_str().to_string()];
+            resolve_preferred_tool_from_tier(canonical_name, cfg, None, &preference_order, &[])?
+        } else if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, &[], &[])
         {
             resolution
         } else {

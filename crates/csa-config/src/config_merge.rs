@@ -1,3 +1,5 @@
+use anyhow::{Result, bail};
+
 /// Warn about deprecated config keys that serde silently ignores.
 pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
     if let Some(resources) = raw.get("resources")
@@ -16,6 +18,25 @@ pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
              Move this to global '[kv_cache].long_poll_seconds'; CSA currently keeps the legacy key only for migration compatibility."
         );
     }
+}
+
+/// Reject project-level attempts to enable global-only tier bypass policy.
+///
+/// `[tier_policy].allow_force_bypass` grants permission to bypass configured
+/// tiers with exact model specs and force flags. Only the global config may set
+/// it; allowing a project overlay to set this would let a repository grant
+/// itself the bypass.
+pub(crate) fn reject_project_tier_policy(raw: &toml::Value, source: &str) -> Result<()> {
+    let Some(tier_policy) = raw.get("tier_policy").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    if tier_policy.contains_key("allow_force_bypass") {
+        bail!(
+            "{source}: [tier_policy].allow_force_bypass is global-only. \
+             Set it in ~/.config/cli-sub-agent/config.toml, not project .csa/config.toml."
+        );
+    }
+    Ok(())
 }
 
 /// Deep merge two TOML values. Overlay wins for non-table values.

@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::acp::AcpConfig;
 use crate::config_filesystem_sandbox::FilesystemSandboxConfig;
 use crate::config_merge::{
-    enforce_global_tool_disables, merge_toml_values, strip_review_project_only_from_global,
-    warn_deprecated_keys,
+    enforce_global_tool_disables, merge_toml_values, reject_project_tier_policy,
+    strip_review_project_only_from_global, warn_deprecated_keys,
 };
 pub use crate::config_resources::ResourcesConfig;
 use crate::global::{
@@ -267,7 +267,7 @@ impl ProjectConfig {
                 // Safety: user_exists guarantees user_path is Some
                 Self::load_from_path(user_path.unwrap())
             }
-            (false, true) => Self::load_from_path(project_path),
+            (false, true) => Self::load_project_from_path(project_path),
             (true, true) => {
                 // Safety: user_exists guarantees user_path is Some
                 Self::load_merged(user_path.unwrap(), project_path)
@@ -281,6 +281,23 @@ impl ProjectConfig {
         // Check for deprecated keys before deserializing (serde silently ignores them)
         if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             warn_deprecated_keys(&raw, &path.display().to_string());
+            crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
+                .with_context(|| format!("Invalid config: {}", path.display()))?;
+        }
+        let mut config: Self = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config: {}", path.display()))?;
+        config.sanitize_filesystem_sandbox();
+        crate::validate::validate_tool_transport_overrides(&config)?;
+        Ok(Some(config))
+    }
+
+    fn load_project_from_path(path: &Path) -> Result<Option<Self>> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config: {}", path.display()))?;
+        if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
+            warn_deprecated_keys(&raw, &path.display().to_string());
+            reject_project_tier_policy(&raw, &path.display().to_string())
+                .with_context(|| format!("Invalid config: {}", path.display()))?;
             crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
                 .with_context(|| format!("Invalid config: {}", path.display()))?;
         }
@@ -312,6 +329,8 @@ impl ProjectConfig {
         // Check for deprecated keys in both configs
         warn_deprecated_keys(&base_val, &base_path.display().to_string());
         warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
+        reject_project_tier_policy(&overlay_val, &overlay_path.display().to_string())
+            .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
         crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val)
             .with_context(|| format!("Invalid user config: {}", base_path.display()))?;
         crate::validate::validate_tool_transport_overrides_in_raw_config(&overlay_val)

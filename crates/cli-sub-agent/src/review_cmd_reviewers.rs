@@ -43,10 +43,10 @@ fn collect_tier_reviewer_specs(
                     .as_ref()
                     .map(|review| &review.tool)
                     .unwrap_or(&global_config.review.tool);
-                crate::run_helpers::collect_available_tier_models(
+                crate::run_helpers::collect_preferred_tier_models(
                     tier_name,
                     cfg,
-                    effective_selection.whitelist(),
+                    &effective_selection.preference_order(),
                     &[],
                 )
             })
@@ -54,15 +54,15 @@ fn collect_tier_reviewer_specs(
         .unwrap_or_default()
 }
 
-fn effective_review_tool_whitelist<'a>(
-    config: Option<&'a ProjectConfig>,
-    global_config: &'a GlobalConfig,
-) -> Option<&'a [String]> {
+fn effective_review_tool_preferences(
+    config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Vec<String> {
     config
         .and_then(|cfg| cfg.review.as_ref())
         .map(|review| &review.tool)
         .unwrap_or(&global_config.review.tool)
-        .whitelist()
+        .preference_order()
 }
 
 fn collect_unique_tier_tools(
@@ -81,16 +81,12 @@ fn build_selected_tool_subset(
     primary_tool: ToolName,
     tier_reviewer_tools: &[ToolName],
     reviewers: usize,
-    whitelist: Option<&[String]>,
+    _preference_order: &[String],
 ) -> Vec<ToolName> {
-    let tool_allowed =
-        |tool: ToolName| whitelist.is_none_or(|wl| wl.iter().any(|w| w == tool.as_str()));
     let mut selected = Vec::new();
-    if tool_allowed(primary_tool) {
-        selected.push(primary_tool);
-    }
+    selected.push(primary_tool);
     for tool in tier_reviewer_tools {
-        if tool_allowed(*tool) && !selected.contains(tool) {
+        if !selected.contains(tool) {
             selected.push(*tool);
         }
     }
@@ -123,12 +119,12 @@ pub(crate) fn resolve_auto_reviewer_selection(
         request.global_config,
     );
     let tier_reviewer_tools = collect_unique_tier_tools(&tier_reviewer_specs);
-    let whitelist = effective_review_tool_whitelist(request.config, request.global_config);
+    let preference_order = effective_review_tool_preferences(request.config, request.global_config);
     let unique_pool = build_selected_tool_subset(
         request.primary_tool,
         &tier_reviewer_tools,
         MAX_AUTO_HETEROGENEOUS_REVIEWERS,
-        whitelist,
+        &preference_order,
     );
 
     (unique_pool.len() >= 2).then_some(AutoReviewerSelection {
@@ -171,20 +167,15 @@ pub(crate) fn resolve_multi_reviewer_pool(
     let tier_reviewer_specs =
         collect_tier_reviewer_specs(resolved_tier_name, config, global_config);
     let tier_reviewer_tools = collect_unique_tier_tools(&tier_reviewer_specs);
-    let whitelist = effective_review_tool_whitelist(config, global_config);
+    let preference_order = effective_review_tool_preferences(config, global_config);
 
     if let Some(tier_name) = resolved_tier_name {
-        let unique_reviewer_tools = if whitelist.is_some() {
-            build_selected_tool_subset(primary_tool, &tier_reviewer_tools, usize::MAX, whitelist)
-                .len()
-        } else {
-            validate_multi_reviewer_tier_pool(
-                tier_name,
-                reviewers,
-                primary_tool,
-                &tier_reviewer_tools,
-            )?
-        };
+        let unique_reviewer_tools = validate_multi_reviewer_tier_pool(
+            tier_name,
+            reviewers,
+            primary_tool,
+            &tier_reviewer_tools,
+        )?;
         if reviewers > unique_reviewer_tools {
             warn!(
                 tier = tier_name,
@@ -196,12 +187,14 @@ pub(crate) fn resolve_multi_reviewer_pool(
     }
 
     let reviewer_tools = if resolved_tier_name.is_some() && explicit_tool.is_none() {
-        let pool =
-            build_selected_tool_subset(primary_tool, &tier_reviewer_tools, usize::MAX, whitelist);
+        let pool = build_selected_tool_subset(
+            primary_tool,
+            &tier_reviewer_tools,
+            usize::MAX,
+            &preference_order,
+        );
         if pool.is_empty() {
-            anyhow::bail!(
-                "Review tier resolved no reviewer tools after applying [review].tool whitelist"
-            );
+            anyhow::bail!("Review tier resolved no reviewer tools");
         }
         repeat_reviewer_pool(&pool, reviewers)
     } else {
@@ -401,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_range_reviewer_roster_respects_review_tool_whitelist() {
+    fn auto_range_reviewer_roster_prefers_review_tool_without_filtering_tier() {
         let (_env_lock, _available_guard) = assume_review_tools_available();
         let config = project_config_with_tier_and_review_tool(
             &[
@@ -420,13 +413,16 @@ mod tests {
             Some(&config),
             &global,
         )
-        .expect("whitelisted single-tool roster should resolve");
+        .expect("preferred single-tool roster should resolve");
 
-        assert_eq!(pool.reviewer_tools, vec![ToolName::Codex, ToolName::Codex]);
+        assert_eq!(
+            pool.reviewer_tools,
+            vec![ToolName::Codex, ToolName::GeminiCli]
+        );
         assert!(
             pool.tier_reviewer_specs
                 .iter()
-                .all(|resolution| resolution.tool == ToolName::Codex)
+                .any(|resolution| resolution.tool == ToolName::GeminiCli)
         );
     }
 

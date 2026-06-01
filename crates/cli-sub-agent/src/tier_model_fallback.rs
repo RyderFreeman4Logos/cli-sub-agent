@@ -4,33 +4,6 @@ use csa_scheduler::RateLimitDetected;
 use std::path::Path;
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TierFilter {
-    All,
-    Whitelist(Vec<String>),
-}
-
-impl TierFilter {
-    pub(crate) fn all() -> Self {
-        Self::All
-    }
-
-    pub(crate) fn whitelist<I, S>(tools: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Self::Whitelist(tools.into_iter().map(Into::into).collect())
-    }
-
-    pub(crate) fn whitelist_slice(&self) -> Option<&[String]> {
-        match self {
-            Self::All => None,
-            Self::Whitelist(tools) => Some(tools.as_slice()),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct TierAttemptFailure {
     pub(crate) model_spec: String,
@@ -44,9 +17,8 @@ pub(crate) struct TierAttemptFailure {
     /// [`crate::failover_trace::FailoverSkipKind::classify`] would mislabel it as
     /// transient (#1714), so the structured boolean is carried straight through
     /// to [`csa_core::types::FallbackAttempt::quota_exhausted`]. `None` for
-    /// build-time exclusions (disabled / undetected / whitelist-filtered specs
-    /// that never produced a `RateLimitDetected`); those keep classifying from
-    /// `reason`.
+    /// build-time exclusions (disabled / undetected specs that never produced a
+    /// `RateLimitDetected`); those keep classifying from `reason`.
     pub(crate) quota_exhausted: Option<bool>,
 }
 
@@ -69,20 +41,14 @@ pub(crate) fn ordered_tier_candidates(
     config: Option<&ProjectConfig>,
     global_config: Option<&GlobalConfig>,
     tier_fallback_enabled: bool,
-    tier_filter: Option<&TierFilter>,
+    tier_preference_order: &[String],
 ) -> Vec<(ToolName, Option<String>)> {
     if !tier_fallback_enabled {
         return vec![(initial_tool, initial_model_spec.map(str::to_string))];
     }
 
     let Some(tier_name) = tier_name else {
-        return ordered_global_candidates(
-            initial_tool,
-            initial_model_spec,
-            config,
-            global_config,
-            tier_filter,
-        );
+        return ordered_global_candidates(initial_tool, initial_model_spec, config, global_config);
     };
     let Some(cfg) = config else {
         return vec![(initial_tool, initial_model_spec.map(str::to_string))];
@@ -93,10 +59,10 @@ pub(crate) fn ordered_tier_candidates(
         ordered.push((initial_tool, Some(spec.to_string())));
     }
 
-    for resolution in crate::run_helpers::collect_available_tier_models(
+    for resolution in crate::run_helpers::collect_preferred_tier_models(
         tier_name,
         cfg,
-        tier_filter.and_then(TierFilter::whitelist_slice),
+        tier_preference_order,
         &[],
     ) {
         if ordered.iter().any(|(_, existing_spec)| {
@@ -120,31 +86,27 @@ pub(crate) fn ordered_tier_candidates(
 /// successful later candidate still leaves a trace for earlier build-time skips.
 ///
 /// `selected_model_spec` is the WINNING model (when the run succeeded). It bounds
-/// the emitted build-time exclusions to tier specs BEFORE the winner so a
-/// first-choice success does not falsely persist later, never-reached tier
-/// models as skips (#1714). Pass `None` on the all-models-failed path (no
-/// winner) to keep the full chain.
+/// the emitted build-time exclusions to tier specs BEFORE the winner in the
+/// actual preference-aware execution order, so a first-choice success does not
+/// falsely persist later, never-reached tier models as skips (#1714, #1749).
+/// Pass `None` on the all-models-failed path (no winner) to keep the full chain.
 pub(crate) fn build_fallback_chain_for_result(
     project_config: Option<&ProjectConfig>,
     tier_name: Option<&str>,
-    tier_filter: Option<&TierFilter>,
     failures: &[TierAttemptFailure],
     selected_model_spec: Option<&str>,
+    tier_preference_order: &[String],
 ) -> Vec<FallbackAttempt> {
-    let ordered_specs: Vec<String> = tier_name
-        .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
-        .map(|tier| tier.models.clone())
-        .unwrap_or_default();
+    let ordered_specs: Vec<String> = match (tier_name, project_config) {
+        (Some(name), Some(cfg)) => cfg
+            .tiers
+            .get(name)
+            .map(|tier| preference_ordered_specs(&tier.models, tier_preference_order))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let exclusions = match (tier_name, project_config) {
-        (Some(name), Some(cfg)) => {
-            crate::run_helpers::evaluate_tier_models(
-                name,
-                cfg,
-                tier_filter.and_then(TierFilter::whitelist_slice),
-                &[],
-            )
-            .1
-        }
+        (Some(name), Some(cfg)) => crate::run_helpers::evaluate_tier_models(name, cfg, &[]).1,
         _ => Vec::new(),
     };
     let attempt_failures: Vec<crate::failover_trace::AttemptFailure> = failures
@@ -163,12 +125,42 @@ pub(crate) fn build_fallback_chain_for_result(
     )
 }
 
+fn preference_ordered_specs(
+    tier_models: &[String],
+    tier_preference_order: &[String],
+) -> Vec<String> {
+    if tier_preference_order.is_empty() {
+        return tier_models.to_vec();
+    }
+
+    let mut ordered = Vec::with_capacity(tier_models.len());
+    let mut remaining: Vec<&String> = tier_models.iter().collect();
+
+    for preferred_tool in tier_preference_order {
+        let mut next_remaining = Vec::new();
+        for spec in remaining {
+            if model_spec_tool(spec) == preferred_tool {
+                ordered.push(spec.clone());
+            } else {
+                next_remaining.push(spec);
+            }
+        }
+        remaining = next_remaining;
+    }
+
+    ordered.extend(remaining.into_iter().cloned());
+    ordered
+}
+
+fn model_spec_tool(spec: &str) -> &str {
+    spec.split('/').next().unwrap_or(spec)
+}
+
 fn ordered_global_candidates(
     initial_tool: ToolName,
     initial_model_spec: Option<&str>,
     config: Option<&ProjectConfig>,
     global_config: Option<&GlobalConfig>,
-    tier_filter: Option<&TierFilter>,
 ) -> Vec<(ToolName, Option<String>)> {
     let mut ordered = vec![(initial_tool, initial_model_spec.map(str::to_string))];
     let Some(global_config) = global_config else {
@@ -181,11 +173,6 @@ fn ordered_global_candidates(
         global_config,
     ) {
         if tool == initial_tool {
-            continue;
-        }
-        if let Some(whitelist) = tier_filter.and_then(TierFilter::whitelist_slice)
-            && !whitelist.iter().any(|candidate| candidate == tool.as_str())
-        {
             continue;
         }
         if config.is_some_and(|cfg| !cfg.is_tool_auto_selectable(tool.as_str())) {
@@ -337,7 +324,7 @@ pub(crate) fn persist_result_warning(project_root: &Path, session_id: &str, warn
 
 #[cfg(test)]
 mod tests {
-    use super::{TierFilter, ordered_tier_candidates};
+    use super::ordered_tier_candidates;
     use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
     use csa_core::types::ToolName;
     use std::collections::HashMap;
@@ -401,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn tier_fallback_respects_original_tool_whitelist() {
+    fn tier_fallback_prefers_original_tool_then_keeps_full_tier() {
         let _availability = crate::test_env_lock::ScopedEnvVarRestore::set(
             crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
             "1",
@@ -423,15 +410,25 @@ mod tests {
             Some(&cfg),
             None,
             true,
-            Some(&TierFilter::whitelist(["codex"])),
+            &["codex".to_string()],
         );
 
         assert_eq!(
             candidates,
-            vec![(
-                ToolName::Codex,
-                Some("codex/openai/gpt-5.4/high".to_string())
-            )]
+            vec![
+                (
+                    ToolName::Codex,
+                    Some("codex/openai/gpt-5.4/high".to_string()),
+                ),
+                (
+                    ToolName::GeminiCli,
+                    Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+                ),
+                (
+                    ToolName::ClaudeCode,
+                    Some("claude-code/anthropic/sonnet-4.6/xhigh".to_string()),
+                ),
+            ]
         );
     }
 
@@ -444,24 +441,13 @@ mod tests {
         let mut global = GlobalConfig::default();
         global.preferences.tool_priority =
             vec!["claude-code".to_string(), "gemini-cli".to_string()];
+        let candidates =
+            ordered_tier_candidates(ToolName::Codex, None, None, None, Some(&global), true, &[]);
 
-        let candidates = ordered_tier_candidates(
-            ToolName::Codex,
-            None,
-            None,
-            None,
-            Some(&global),
-            true,
-            Some(&TierFilter::whitelist(["gemini-cli", "claude-code"])),
-        );
-
-        assert_eq!(
-            candidates,
-            vec![
-                (ToolName::Codex, None),
-                (ToolName::ClaudeCode, None),
-                (ToolName::GeminiCli, None),
-            ]
-        );
+        assert!(candidates.starts_with(&[
+            (ToolName::Codex, None),
+            (ToolName::ClaudeCode, None),
+            (ToolName::GeminiCli, None),
+        ]));
     }
 }

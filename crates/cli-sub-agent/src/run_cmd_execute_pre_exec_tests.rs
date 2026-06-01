@@ -75,7 +75,7 @@ fn run_config_without_routable_tools() -> ProjectConfig {
 }
 
 #[tokio::test]
-async fn handle_run_persists_result_for_model_spec_tier_conflict() {
+async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let config = run_config_with_tier(
@@ -135,34 +135,26 @@ async fn handle_run_persists_result_for_model_spec_tier_conflict() {
     .expect_err("model-spec + tier conflict must return an error");
 
     assert!(
-        crate::run_helpers::is_routing_conflict(&err),
-        "routing conflict classification should be structured: {err:#}"
-    );
-    assert!(
         err.chain()
-            .any(|cause| cause.to_string().contains("Conflicting routing flags")),
+            .any(|cause| cause.to_string().contains("Tier bypass is disabled")),
         "unexpected error chain: {err:#}"
     );
     assert!(
         err.chain().any(|cause| cause
             .to_string()
-            .contains("--model-spec and --tier are mutually exclusive")),
-        "tier/model-spec conflict hint should be present: {err:#}"
+            .contains("[tier_policy].allow_force_bypass")),
+        "tier bypass escape hatch hint should be present: {err:#}"
+    );
+    assert!(
+        err.chain()
+            .any(|cause| cause.to_string().contains("Refused flags: --model-spec")),
+        "refused flag should be named: {err:#}"
     );
 
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
-    assert_eq!(sessions.len(), 1, "expected one failed run session");
-
-    let result = csa_session::load_result(project_dir.path(), &sessions[0].meta_session_id)
-        .unwrap()
-        .expect("result.toml must be written for pre-exec routing conflicts");
-    assert_eq!(result.status, "failure");
-    assert_eq!(result.exit_code, 1);
-    assert!(result.summary.contains("pre-exec:"));
     assert!(
-        result
-            .summary
-            .contains("--model-spec and --tier are mutually exclusive")
+        sessions.is_empty(),
+        "tier bypass gate should reject before session creation"
     );
 }
 

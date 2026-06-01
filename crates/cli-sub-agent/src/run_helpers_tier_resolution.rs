@@ -1,6 +1,7 @@
 use anyhow::Result;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
+use tracing::warn;
 
 use super::{is_tool_binary_available_for_config, parse_tool_name};
 use crate::failover_trace::{FailoverSkipKind, TierModelExclusion};
@@ -24,7 +25,6 @@ pub(crate) struct TierToolResolution {
 pub(crate) fn evaluate_tier_models(
     tier_name: &str,
     config: &ProjectConfig,
-    whitelist: Option<&[String]>,
     skip_specs: &[String],
 ) -> (Vec<TierToolResolution>, Vec<TierModelExclusion>) {
     let mut included = Vec::new();
@@ -71,16 +71,6 @@ pub(crate) fn evaluate_tier_models(
             });
             continue;
         }
-        if let Some(wl) = whitelist
-            && !wl.iter().any(|w| w == tool_str)
-        {
-            excluded.push(TierModelExclusion {
-                model_spec: spec.clone(),
-                tool: Some(tool),
-                kind: FailoverSkipKind::WhitelistFiltered,
-            });
-            continue;
-        }
         included.push(TierToolResolution {
             tool,
             model_spec: spec.clone(),
@@ -96,53 +86,89 @@ pub(crate) fn evaluate_tier_models(
 pub(crate) fn collect_available_tier_models(
     tier_name: &str,
     config: &ProjectConfig,
-    whitelist: Option<&[String]>,
     skip_specs: &[String],
 ) -> Vec<TierToolResolution> {
-    evaluate_tier_models(tier_name, config, whitelist, skip_specs).0
+    evaluate_tier_models(tier_name, config, skip_specs).0
 }
 
-pub(crate) fn resolve_requested_tool_from_tier(
+pub(crate) fn collect_preferred_tier_models(
+    tier_name: &str,
+    config: &ProjectConfig,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Vec<TierToolResolution> {
+    let available = collect_available_tier_models(tier_name, config, skip_specs);
+    if preference_order.is_empty() {
+        return available;
+    }
+
+    for preferred_tool in preference_order {
+        if !available
+            .iter()
+            .any(|resolution| resolution.tool.as_str() == preferred_tool)
+        {
+            warn!(
+                tier = tier_name,
+                tool = preferred_tool,
+                "Preferred tier tool is not available; continuing with the full tier candidate list"
+            );
+        }
+    }
+
+    let mut ordered = Vec::new();
+    let mut remaining = available;
+    for preferred_tool in preference_order {
+        let mut next_remaining = Vec::new();
+        for resolution in remaining {
+            if resolution.tool.as_str() == preferred_tool {
+                ordered.push(resolution);
+            } else {
+                next_remaining.push(resolution);
+            }
+        }
+        remaining = next_remaining;
+    }
+    ordered.extend(remaining);
+    ordered
+}
+
+pub(crate) fn resolve_preferred_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
     parent_tool: Option<&str>,
-    requested_tool: ToolName,
-    force_override_user_config: bool,
+    preference_order: &[String],
     skip_specs: &[String],
 ) -> Result<TierToolResolution> {
-    let requested_tool_name = requested_tool.as_str();
     let Some(tier) = config.tiers.get(tier_name) else {
         anyhow::bail!("Tier '{}' not found.", tier_name);
     };
-    let tool_in_tier = tier.models.iter().any(|spec| {
-        !skip_specs.iter().any(|skip| skip == spec)
-            && spec
-                .split('/')
-                .next()
-                .is_some_and(|tool_name| tool_name == requested_tool_name)
-    });
-    if !tool_in_tier {
-        let suggestions = config.suggest_compatible_alternatives(requested_tool_name, tier_name);
-        anyhow::bail!(
-            "Tool '{}' is not available in tier '{}'\n\n{}",
-            requested_tool_name,
-            tier_name,
-            suggestions
-        );
+
+    for preferred_tool in preference_order {
+        if !tier.models.iter().any(|spec| {
+            !skip_specs.iter().any(|skip| skip == spec)
+                && spec
+                    .split('/')
+                    .next()
+                    .is_some_and(|tool_name| tool_name == preferred_tool)
+        }) {
+            let suggestions = config.suggest_compatible_alternatives(preferred_tool, tier_name);
+            warn!(
+                tier = tier_name,
+                tool = preferred_tool,
+                suggestions = %suggestions,
+                "Preferred tool is not configured in tier; ignoring preference"
+            );
+        }
     }
 
-    config.enforce_tool_enabled(requested_tool_name, force_override_user_config)?;
-    let whitelist = [requested_tool_name.to_string()];
     if let Some(resolution) =
-        resolve_tool_from_tier(tier_name, config, parent_tool, Some(&whitelist), skip_specs)
+        resolve_tool_from_tier(tier_name, config, parent_tool, preference_order, skip_specs)
     {
         return Ok(resolution);
     }
 
     anyhow::bail!(
-        "Requested tool '{}' is configured in tier '{}' but is not currently available. \
-         Ensure it is installed and enabled.",
-        requested_tool_name,
+        "Tier '{}' has no currently available tools. Ensure at least one tier tool is installed and enabled.",
         tier_name
     );
 }
@@ -151,15 +177,18 @@ pub(crate) fn resolve_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
     parent_tool: Option<&str>,
-    whitelist: Option<&[String]>,
+    preference_order: &[String],
     skip_specs: &[String],
 ) -> Option<TierToolResolution> {
     let parent_family = parent_tool
         .and_then(|p| parse_tool_name(p).ok())
         .map(|t| t.model_family());
-    let available = collect_available_tier_models(tier_name, config, whitelist, skip_specs);
+    let available = collect_preferred_tier_models(tier_name, config, preference_order, skip_specs);
     if available.is_empty() {
         return None;
+    }
+    if !preference_order.is_empty() {
+        return Some(available[0].clone());
     }
     if let Some(parent_fam) = parent_family
         && let Some(resolution) = available

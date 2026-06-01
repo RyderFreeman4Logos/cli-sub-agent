@@ -10,6 +10,14 @@ use serde_json::Value;
 // TODO(manual-e2e): Run a live Haiku end-to-end validation with real API credentials.
 // This suite intentionally uses local mock MCP backends and does not hit external APIs.
 
+fn scrub_inherited_csa_env(cmd: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CSA_") {
+            cmd.env_remove(key);
+        }
+    }
+}
+
 fn write_mock_mcp_script(dir: &Path) -> Result<PathBuf> {
     let script_path = dir.join("mock-mcp.sh");
     fs::write(
@@ -166,7 +174,9 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget()
 
     let socket_path = runtime_dir.join("mcp-hub.sock");
 
-    let mut hub = Command::new(env!("CARGO_BIN_EXE_csa"))
+    let mut hub_command = Command::new(env!("CARGO_BIN_EXE_csa"));
+    scrub_inherited_csa_env(&mut hub_command);
+    let mut hub = hub_command
         .args([
             "mcp-hub",
             "serve",
@@ -355,7 +365,9 @@ fn hub_http_streamable_transport_forwards_requests() -> Result<()> {
     let socket_path = runtime_dir.join("mcp-hub.sock");
     let http_port = reserve_local_port()?;
 
-    let mut hub = Command::new(env!("CARGO_BIN_EXE_csa"))
+    let mut hub_command = Command::new(env!("CARGO_BIN_EXE_csa"));
+    scrub_inherited_csa_env(&mut hub_command);
+    let mut hub = hub_command
         .args([
             "mcp-hub",
             "serve",

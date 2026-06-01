@@ -14,18 +14,20 @@ csa run --sa-mode false [OPTIONS] [PROMPT]
 | Flag | Description |
 |------|-------------|
 | `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
-| `--tool <TOOL>` | Tool selection: `auto` (default), `any-available`, or specific name |
+| `--tool <TOOL>` | Tool selection or preference: `auto` (default), `any-available`, or specific name. With `--tier`, this is a soft try-first preference |
+| `--tier <NAME>` | Canonical selector when `[tiers]` is configured; accepts tier names, aliases, or unambiguous prefixes |
 | `--auto-route <INTENT>` | Resolve routing intent through `[tier_mapping]` or a tier selector while keeping tool choice automatic |
-| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier`/`--model-spec` is set |
+| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier` or permitted direct model bypass is set |
 | `--skill <NAME>` | Run a named skill as a sub-agent |
 | `--session <ID>` | Resume existing session (ULID or prefix) |
 | `--last` | Resume the most recent session |
 | `--description <TEXT>` | Description for a new session |
 | `--ephemeral` | Ephemeral session (no project files, auto-cleanup) |
-| `--model-spec <SPEC>` | Full model spec: `tool/provider/model/thinking` |
+| `--model-spec <SPEC>` | Exact model spec: `tool/provider/model/thinking`. With configured tiers, rejected unless the global tier-policy escape hatch is enabled or an inherited trusted subtree pin is active |
 | `--model <MODEL>` | Override tool default model |
 | `--thinking <LEVEL>` | Thinking budget: `low`, `medium`, `high`, `xhigh` |
-| `--force` | Bypass tier whitelist enforcement |
+| `--force` | Emergency direct-routing override. With configured tiers, rejected unless the global tier-policy escape hatch is enabled |
+| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass for direct tool/model routing. Invalid with `--tier`; rejected under configured tiers unless the global tier-policy escape hatch is enabled |
 | `--no-failover` | Disable automatic 429 failover |
 | `--wait` | Block-wait for a free slot instead of failing |
 | `--idle-timeout <SECS>` | Kill when no output for N seconds |
@@ -36,16 +38,25 @@ csa run --sa-mode false [OPTIONS] [PROMPT]
 
 If `PROMPT` is omitted, reads from stdin.
 
+When `[tiers]` is non-empty, `--tier <name>` is the canonical way to pick
+quality/cost/speed. `--tool`, `[review].tool`, and `[debate].tool` only
+reorder the selected tier so preferred tools are tried in the order listed,
+then remaining tier models are tried in tier order; they no longer hard-filter
+the tier. Exact model and force-bypass flags are reserved
+for emergency use and require `[tier_policy].allow_force_bypass = true` in the
+global config, not project `.csa/config.toml`, unless CSA is continuing an
+already-trusted inherited subtree pin.
+
 **Examples:**
 
 ```bash
 csa run --sa-mode false "fix the login bug"
-csa run --sa-mode false --tool codex --thinking high "refactor error handling"
+csa run --sa-mode false --tier tier-2-standard "refactor error handling"
+csa run --sa-mode false --tier tier-2-standard --tool codex "try codex first, then fall back through the tier"
 csa run --sa-mode false --tool claude --hint-difficulty quick_question "answer briefly"
 csa run --sa-mode false --auto-route analysis "trace the auth flow"
-csa run --sa-mode false --model-spec "codex/openai/gpt-5.3-codex/xhigh" "complex task"
 csa run --sa-mode false --last "continue where I left off"
-echo "analyze this" | csa run --sa-mode false --tool gemini-cli
+echo "analyze this" | csa run --sa-mode false --tier tier-1-quick --tool gemini-cli
 ```
 
 ## `csa review` -- Code review
@@ -64,9 +75,11 @@ csa review --sa-mode false [OPTIONS]
 | `--commit <SHA>` | Review a specific commit |
 | `--files <PATHSPEC>` | Review specific files |
 | `--branch <BRANCH>` | Compare against branch (default: main) |
-| `--tool <TOOL>` | Override tool selection |
-| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier`/`--model-spec` is set |
+| `--tool <TOOL>` | Tool preference. With `--tier`, try this tool first and fall back through the rest of the tier |
+| `--tier <NAME>` | Canonical selector when `[tiers]` is configured |
+| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier` or permitted direct model bypass is set |
 | `--model <MODEL>` | Override model |
+| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass; rejected under configured tiers unless the global tier-policy escape hatch is enabled |
 | `--fix` | Review-and-fix mode (apply fixes directly) |
 | `--security-mode <MODE>` | `auto`, `on`, or `off` |
 | `--reviewers <N>` | Number of parallel reviewers (default: 1) |
@@ -81,7 +94,7 @@ csa review --sa-mode false [OPTIONS]
 
 ```bash
 csa review --sa-mode false --diff
-csa review --sa-mode false --tool claude-code --hint-difficulty code_review --diff
+csa review --sa-mode false --tier tier-2-standard --tool claude-code --diff
 csa review --sa-mode false --range main...HEAD
 csa review --sa-mode false --diff --reviewers 3 --consensus majority
 csa review --sa-mode false --diff --fix --security-mode on
@@ -98,11 +111,13 @@ csa debate --sa-mode false [OPTIONS] [QUESTION]
 | Flag | Description |
 |------|-------------|
 | `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
-| `--tool <TOOL>` | Override tool selection |
-| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier`/`--model-spec` is set |
+| `--tool <TOOL>` | Tool preference. With `--tier`, try this tool first and fall back through the rest of the tier |
+| `--tier <NAME>` | Canonical selector when `[tiers]` is configured |
+| `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier` or permitted direct model bypass is set |
 | `--session <ID>` | Resume existing debate session |
 | `--model <MODEL>` | Override model |
 | `--thinking <LEVEL>` | Thinking budget |
+| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass; rejected under configured tiers unless the global tier-policy escape hatch is enabled |
 | `--rounds <N>` | Number of debate rounds (default: 3) |
 | `--timeout <SECS>` | Absolute wall-clock timeout |
 | `--idle-timeout <SECS>` | Kill on output silence |
@@ -111,7 +126,7 @@ csa debate --sa-mode false [OPTIONS] [QUESTION]
 
 ```bash
 csa debate --sa-mode false "Should we use anyhow or thiserror?"
-csa debate --sa-mode false --tool claude-code --hint-difficulty architecture_design "Pick the storage boundary"
+csa debate --sa-mode false --tier tier-3-complex --tool claude-code "Pick the storage boundary"
 csa debate --sa-mode false --session 01JK "reconsider with performance data"
 csa debate --sa-mode false --rounds 5 "Redis vs Memcached for session storage"
 ```

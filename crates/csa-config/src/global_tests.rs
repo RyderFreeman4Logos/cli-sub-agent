@@ -52,6 +52,24 @@ fn test_kv_cache_defaults_parse_when_section_omitted() {
 }
 
 #[test]
+fn test_tier_policy_defaults_to_force_bypass_disabled() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert!(!config.tier_policy.allow_force_bypass);
+}
+
+#[test]
+fn test_tier_policy_allow_force_bypass_parses_from_global_config() {
+    let config: GlobalConfig = toml::from_str(
+        r#"
+[tier_policy]
+allow_force_bypass = true
+"#,
+    )
+    .unwrap();
+    assert!(config.tier_policy.allow_force_bypass);
+}
+
+#[test]
 fn test_session_wait_defaults_parse_when_section_omitted() {
     let config: GlobalConfig = toml::from_str("").unwrap();
     assert_eq!(config.session_wait.memory_warn_mb, None);
@@ -457,6 +475,8 @@ fn test_default_template_is_valid_comment_only() {
     assert!(template.contains("[defaults]"));
     assert!(template.contains("max_concurrent"));
     assert!(template.contains("# tool = \"codex\""));
+    assert!(template.contains("[tier_policy]"));
+    assert!(template.contains("allow_force_bypass = false"));
 }
 
 #[test]

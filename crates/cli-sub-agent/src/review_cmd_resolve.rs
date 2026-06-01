@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use crate::cli::{ReviewArgs, ReviewMode};
@@ -10,10 +10,17 @@ use crate::review_context::{
 };
 use crate::review_prior_rounds::REVIEW_FINDINGS_TOML_INSTRUCTION;
 use crate::review_routing::{ReviewRoutingMetadata, detect_review_routing_metadata};
-use crate::tier_model_fallback::TierFilter;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
+
+#[path = "review_cmd_resolve_selection.rs"]
+pub(crate) mod selection;
+#[cfg(test)]
+pub(crate) use selection::resolve_review_tool;
+pub(crate) use selection::{
+    resolve_review_selection, validate_review_direct_tool_tier_restriction,
+};
 
 /// Verify the review pattern is installed before attempting execution.
 ///
@@ -74,261 +81,6 @@ pub(crate) fn resolve_review_stream_mode(
     } else {
         csa_process::StreamMode::BufferOnly
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedReviewSelection {
-    pub(crate) tool: ToolName,
-    pub(crate) model_spec: Option<String>,
-    pub(crate) tier_filter: Option<TierFilter>,
-}
-
-pub(crate) fn validate_review_direct_tool_tier_restriction(
-    direct_tool_requested: bool,
-    project_config: Option<&ProjectConfig>,
-    effective_tier: Option<&str>,
-    force_override_user_config: bool,
-    force_ignore_tier_setting: bool,
-    model_spec_provided: bool,
-) -> Result<()> {
-    crate::run_helpers::validate_direct_tool_tier_restriction(
-        direct_tool_requested,
-        project_config,
-        effective_tier,
-        force_override_user_config,
-        force_ignore_tier_setting,
-        model_spec_provided,
-    )
-}
-
-/// Returns (tool, optional_model_spec). When tier resolves, model_spec is set.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_review_selection(
-    arg_tool: Option<ToolName>,
-    arg_model_spec: Option<&str>,
-    project_config: Option<&ProjectConfig>,
-    global_config: &GlobalConfig,
-    parent_tool: Option<&str>,
-    project_root: &Path,
-    force_override_user_config: bool,
-    cli_tier: Option<&str>,
-    force_ignore_tier_setting: bool,
-) -> Result<ResolvedReviewSelection> {
-    crate::run_helpers::validate_tool_tier_override_flags(
-        arg_tool.is_some(),
-        cli_tier,
-        force_ignore_tier_setting,
-    )?;
-    crate::run_helpers::validate_model_spec_tier_conflict(arg_model_spec, cli_tier, "review")?;
-
-    if let Some(model_spec) = arg_model_spec {
-        let (tool, resolved_model_spec, _) =
-            crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
-                tool: arg_tool,
-                model_spec: Some(model_spec),
-                model: None,
-                thinking: None, // thinking not relevant for review command
-                config: project_config,
-                project_root,
-                force: false,
-                force_override_user_config,
-                needs_edit: false,
-                tier: cli_tier,
-                force_ignore_tier_setting,
-                tool_is_auto_resolved: false,
-            })?;
-        return Ok(ResolvedReviewSelection {
-            tool,
-            model_spec: resolved_model_spec,
-            tier_filter: None,
-        });
-    }
-
-    // Enforce tier routing: block direct --tool when tiers are configured,
-    // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
-    validate_review_direct_tool_tier_restriction(
-        arg_tool.is_some(),
-        project_config,
-        cli_tier,
-        force_override_user_config,
-        force_ignore_tier_setting,
-        arg_model_spec.is_some(),
-    )?;
-
-    let tier_name = resolve_review_tier_name(
-        project_config,
-        global_config,
-        cli_tier,
-        force_override_user_config,
-        force_ignore_tier_setting,
-    )?;
-
-    if let Some(tool) = arg_tool {
-        if let Some(ref tier) = tier_name
-            && let Some(cfg) = project_config
-        {
-            let resolution = crate::run_helpers::resolve_requested_tool_from_tier(
-                tier,
-                cfg,
-                parent_tool,
-                tool,
-                force_override_user_config,
-                &[],
-            )?;
-            return Ok(ResolvedReviewSelection {
-                tool: resolution.tool,
-                model_spec: Some(resolution.model_spec),
-                tier_filter: Some(TierFilter::all()),
-            });
-        }
-
-        if let Some(cfg) = project_config {
-            cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
-        }
-        return Ok(ResolvedReviewSelection {
-            tool,
-            model_spec: None,
-            tier_filter: None,
-        });
-    }
-
-    // Compute effective whitelist from tool selection (project > global).
-    // IMPORTANT (#648): When [review].tool is set, it acts as a whitelist filter
-    // on the tier's model list, silently narrowing a multi-tool tier to only the
-    // specified tool(s). To use the full tier fallback chain, set tool = "auto".
-    let effective_whitelist = project_config
-        .and_then(|cfg| cfg.review.as_ref())
-        .map(|r| &r.tool)
-        .unwrap_or(&global_config.review.tool);
-    let whitelist = effective_whitelist.whitelist();
-
-    if let Some(ref tier) = tier_name {
-        let cfg = project_config.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Review tier '{}' is configured, but no tier definitions are available. \
-                 Run `csa init --full` or define [tiers.*] in config.",
-                tier
-            )
-        })?;
-
-        let tier_tools = cfg.list_tools_in_tier(tier);
-        if let Some(wl) = whitelist {
-            let matching_tools: Vec<&str> = tier_tools
-                .iter()
-                .filter(|(tool_name, _)| wl.iter().any(|allowed| allowed == tool_name))
-                .map(|(tool_name, _)| tool_name.as_str())
-                .collect();
-            if matching_tools.is_empty() {
-                let tier_tool_names: Vec<&str> = tier_tools
-                    .iter()
-                    .map(|(tool_name, _)| tool_name.as_str())
-                    .collect();
-                anyhow::bail!(
-                    "Tier '{}' has no tools matching [review].tool whitelist [{}]. \
-                     The active review tier remains authoritative.\n\
-                     Tier tools: [{}].\n\
-                     Update [review].tool or choose a different tier.",
-                    tier,
-                    wl.join(", "),
-                    tier_tool_names.join(", ")
-                );
-            }
-        }
-
-        if let Some(resolution) =
-            crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
-        {
-            return Ok(ResolvedReviewSelection {
-                tool: resolution.tool,
-                model_spec: Some(resolution.model_spec),
-                tier_filter: Some(match whitelist {
-                    Some(wl) => TierFilter::whitelist(wl.iter().cloned()),
-                    None => TierFilter::all(),
-                }),
-            });
-        }
-
-        let filtered_tools =
-            crate::run_helpers::collect_available_tier_models(tier, cfg, whitelist, &[]);
-        let configured_tools: Vec<&str> = tier_tools
-            .iter()
-            .map(|(tool_name, _)| tool_name.as_str())
-            .collect();
-        let available_tools: Vec<&str> = filtered_tools
-            .iter()
-            .map(|resolution| resolution.tool.as_str())
-            .collect();
-        anyhow::bail!(
-            "Tier '{}' resolved for review, but none of its tools are currently available.\n\
-             Configured tier tools: [{}].\n\
-             Available tier tools after enablement/install checks: [{}].",
-            tier,
-            configured_tools.join(", "),
-            available_tools.join(", ")
-        );
-    }
-
-    if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
-        return resolve_review_tool_from_selection(
-            &project_review.tool,
-            parent_tool,
-            project_config,
-            global_config,
-            project_root,
-        )
-        .map(|t| ResolvedReviewSelection {
-            tool: t,
-            model_spec: None,
-            tier_filter: None,
-        })
-        .with_context(|| {
-            format!(
-                "Failed to resolve review tool from project config: {}",
-                ProjectConfig::config_path(project_root).display()
-            )
-        });
-    }
-
-    // Global config tool selection
-    resolve_review_tool_from_selection(
-        &global_config.review.tool,
-        parent_tool,
-        project_config,
-        global_config,
-        project_root,
-    )
-    .map(|t| ResolvedReviewSelection {
-        tool: t,
-        model_spec: None,
-        tier_filter: None,
-    })
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_review_tool(
-    arg_tool: Option<ToolName>,
-    arg_model_spec: Option<&str>,
-    project_config: Option<&ProjectConfig>,
-    global_config: &GlobalConfig,
-    parent_tool: Option<&str>,
-    project_root: &Path,
-    force_override_user_config: bool,
-    cli_tier: Option<&str>,
-    force_ignore_tier_setting: bool,
-) -> Result<(ToolName, Option<String>)> {
-    let resolved = resolve_review_selection(
-        arg_tool,
-        arg_model_spec,
-        project_config,
-        global_config,
-        parent_tool,
-        project_root,
-        force_override_user_config,
-        cli_tier,
-        force_ignore_tier_setting,
-    )?;
-    Ok((resolved.tool, resolved.model_spec))
 }
 
 pub(crate) fn resolve_review_tier_name(

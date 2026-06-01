@@ -1,15 +1,18 @@
 //! Tool selection type for review/debate configuration.
 //!
-//! Supports both single tool string and whitelist array.
+//! Supports both a single tool string and an ordered tool array. Outside an
+//! active tier, arrays keep the legacy whitelist semantics for auto-selection.
+//! Active-tier callers should use [`ToolSelection::preference_order`] so the
+//! same values become soft ordering preferences instead of hard filters.
 
 use serde::{Deserialize, Serialize};
 
-/// Tool selection for review/debate: supports both single string and whitelist array.
+/// Tool selection for review/debate: supports both single string and ordered array.
 ///
 /// TOML examples:
 /// ```toml
 /// tool = "codex"                      # Single: always use codex
-/// tool = ["codex", "gemini-cli"]      # Whitelist: auto-select from these
+/// tool = ["codex", "gemini-cli"]      # Legacy no-tier auto whitelist; active-tier preference order
 /// tool = []                           # Empty: same as "auto"
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -50,9 +53,26 @@ impl ToolSelection {
         }
     }
 
+    /// Returns ordered tool preferences for active-tier candidate ordering.
+    ///
+    /// - `Single("auto")` -> empty preference list
+    /// - `Single("codex")` -> `["codex"]`
+    /// - `Whitelist(["codex", "gemini-cli"])` -> same ordered list
+    /// - `Whitelist([])` -> empty preference list
+    pub fn preference_order(&self) -> Vec<String> {
+        match self {
+            Self::Single(s) if s != "auto" => vec![s.clone()],
+            Self::Whitelist(v) => v.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Check if a tool name is allowed by this selection.
     ///
-    /// Returns true when: no whitelist (Single or empty Whitelist), or tool is in whitelist.
+    /// Returns true when: no legacy whitelist (Single or empty Whitelist), or
+    /// tool is in the whitelist. Active-tier callers should use
+    /// [`ToolSelection::preference_order`] instead so non-preferred tier models
+    /// remain eligible fallbacks.
     pub fn allows(&self, tool: &str) -> bool {
         match self.whitelist() {
             Some(list) => list.iter().any(|t| t == tool),
@@ -150,6 +170,28 @@ mod tests {
         let sel = ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()]);
         assert!(!sel.is_auto());
         assert_eq!(sel.whitelist().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn preference_order_returns_single_tool() {
+        let sel = ToolSelection::Single("codex".into());
+        assert_eq!(sel.preference_order(), vec!["codex"]);
+    }
+
+    #[test]
+    fn preference_order_returns_ordered_array() {
+        let sel = ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()]);
+        assert_eq!(sel.preference_order(), vec!["codex", "gemini-cli"]);
+    }
+
+    #[test]
+    fn preference_order_treats_auto_as_empty() {
+        assert!(ToolSelection::default().preference_order().is_empty());
+        assert!(
+            ToolSelection::Whitelist(vec![])
+                .preference_order()
+                .is_empty()
+        );
     }
 
     #[test]

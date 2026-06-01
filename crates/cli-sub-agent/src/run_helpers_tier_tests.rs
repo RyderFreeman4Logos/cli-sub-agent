@@ -227,7 +227,7 @@ fn resolve_tool_from_tier_returns_none_for_missing_tier() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_from_tier("nonexistent-tier", &cfg, None, None, &[]);
+    let result = super::resolve_tool_from_tier("nonexistent-tier", &cfg, None, &[], &[]);
     assert!(result.is_none());
 }
 
@@ -239,7 +239,7 @@ fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None, &[]);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, &[], &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::GeminiCli);
@@ -258,7 +258,7 @@ fn resolve_tool_from_tier_prefers_heterogeneous() {
         ],
         &["claude-code", "gemini-cli"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), None, &[]);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), &[], &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::GeminiCli);
@@ -275,7 +275,7 @@ fn resolve_tool_from_tier_falls_back_to_same_family_when_no_heterogeneous() {
         vec!["claude-code/anthropic/default/xhigh"],
         &["claude-code"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), None, &[]);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), &[], &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::ClaudeCode);
@@ -293,7 +293,7 @@ fn resolve_tool_from_tier_skips_disabled_tools() {
         ],
         &["claude-code"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None, &[]);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, &[], &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::ClaudeCode);
@@ -308,13 +308,13 @@ fn resolve_tool_from_tier_returns_none_when_all_disabled() {
         vec!["gemini-cli/google/default/xhigh"],
         &[], // no enabled tools
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None, &[]);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, &[], &[]);
     assert!(result.is_none());
 }
 
 // --- Phase 2: tier enforcement tests ---
 
-/// When tiers are configured, direct --tool without --force-ignore-tier-setting is blocked.
+/// When tiers are configured, direct --tool without an active tier is blocked.
 #[test]
 fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
     let cfg = config_with_tier(
@@ -334,8 +334,12 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
         "unexpected error: {msg}"
     );
     assert!(
-        msg.contains("--force-ignore-tier-setting"),
-        "should mention override flag: {msg}"
+        msg.contains("[tier_policy].allow_force_bypass"),
+        "should mention global escape hatch: {msg}"
+    );
+    assert!(
+        !msg.contains("--force-ignore-tier-setting"),
+        "direct-tool guard should not recommend bypass flags as normal remediation: {msg}"
     );
 }
 
@@ -404,6 +408,27 @@ fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
     );
 }
 
+/// When tiers are configured, direct --thinking alone is blocked.
+#[test]
+fn resolve_tool_and_model_blocks_direct_thinking_alone_when_tiers_configured() {
+    let cfg = config_with_tier(
+        "default",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        thinking: Some("low"),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("restricted when tiers are configured"),
+        "unexpected error: {msg}"
+    );
+}
+
 /// --force-ignore-tier-setting bypasses the enforcement.
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
@@ -425,9 +450,9 @@ fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
     assert_eq!(tool, ToolName::Codex);
 }
 
-/// --force (force_override_user_config) also bypasses tier enforcement.
+/// --force-override-user-config only bypasses tool enablement, not tier enforcement.
 #[test]
-fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
+fn resolve_tool_and_model_force_override_user_config_does_not_bypass_tiers() {
     let cfg = config_with_tier(
         "default",
         vec!["gemini-cli/google/default/xhigh"],
@@ -436,12 +461,15 @@ fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
         config: Some(&cfg),
-        force_override_user_config: true, // force_override_user_config → bypasses tier enforcement
+        force_override_user_config: true,
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
-    assert!(result.is_ok(), "should bypass: {}", result.unwrap_err());
-    let (tool, _, _) = result.unwrap();
-    assert_eq!(tool, ToolName::Codex);
+    assert!(result.is_err(), "force-override should not bypass tiers");
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Direct --tool/--model/--thinking is restricted"),
+        "{msg}"
+    );
 }
 
 /// When tiers HashMap is empty (no tiers configured), direct --tool works normally.
@@ -573,7 +601,8 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
 }
 
 #[test]
-fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
+fn resolve_tool_and_model_tier_with_tool_uses_tier_when_preferred_tool_missing() {
+    let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "quality",
         vec![
@@ -590,15 +619,11 @@ fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
 
-    let err = result.expect_err("missing tool in tier must error");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Tool 'codex' is not available in tier 'quality'"),
-        "unexpected error: {msg}"
-    );
-    assert!(
-        msg.contains("Available tools in tier 'quality'"),
-        "unexpected error: {msg}"
+    let (tool, model_spec, _) = result.expect("missing preferred tool should not hard-fail");
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
     );
 }
 

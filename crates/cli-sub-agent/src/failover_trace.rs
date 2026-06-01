@@ -37,8 +37,6 @@ pub(crate) enum FailoverSkipKind {
     AttemptedAndErrored,
     /// Spec malformed: could not parse `tool/provider/model/thinking`.
     MalformedSpec,
-    /// Excluded by an explicit tool whitelist (requested-tool / heterogeneity filter).
-    WhitelistFiltered,
 }
 
 impl FailoverSkipKind {
@@ -53,7 +51,6 @@ impl FailoverSkipKind {
             Self::TransportError => "transport-error",
             Self::AttemptedAndErrored => "attempted-and-errored",
             Self::MalformedSpec => "malformed-spec",
-            Self::WhitelistFiltered => "whitelist-filtered",
         }
     }
 
@@ -218,8 +215,8 @@ fn failure_attempt(failure: &AttemptFailure) -> FallbackAttempt {
 
 /// Build the per-tool failover chain for a review/debate run.
 ///
-/// `ordered_specs` is the tier's model list in definition order; it drives a
-/// coherent, deterministic trace. `exclusions` are models filtered out at
+/// `ordered_specs` is the tier's model list in actual execution order; it drives
+/// a coherent, deterministic trace. `exclusions` are models filtered out at
 /// candidate-build time; `attempt_failures` are [`AttemptFailure`] records for
 /// candidates that were actually tried and errored (each carrying the scheduler's
 /// authoritative `quota_exhausted` flag when known). Models present in

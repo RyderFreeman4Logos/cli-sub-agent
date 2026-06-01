@@ -111,10 +111,13 @@ csa run --sa-mode false "analyze the authentication flow"
 # Auto-route by intent via [tier_mapping]
 csa run --sa-mode false --auto-route analysis "trace the authentication flow"
 
-# Specify a tool
-csa run --sa-mode false --tool codex "implement user auth module"
+# Select a tier when [tiers] is configured
+csa run --sa-mode false --tier tier-2-standard "implement user auth module"
 
-# Auto-select tool (explicit)
+# Prefer a tool within the selected tier
+csa run --sa-mode false --tier tier-2-standard --tool codex "implement user auth module"
+
+# Auto-select tool (explicit, simple projects without tiers)
 csa run --sa-mode false --tool auto "fix login page bug"
 ```
 
