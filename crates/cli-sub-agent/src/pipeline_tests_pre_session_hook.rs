@@ -90,6 +90,7 @@ printf 'ok\n'
         project_root,
         None,
         Some(&extra_env),
+        None, // subtree_pin (#1741)
         None,
         None,
         None,

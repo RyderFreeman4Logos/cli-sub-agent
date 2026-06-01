@@ -558,15 +558,17 @@ async fn execute_task(
             };
         }
     };
-    let mut extra_env = global_config.build_execution_env(
+    let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
     );
     // #1741: a batch task picks its own tool/model from the batch TOML and does
     // NOT consume the parent's subtree pin for that choice, but it MUST still
     // cascade an inherited pin so nested CSA calls from the task stay pinned all
-    // the way down. Pass-through (no-op unless this process is a pinned child).
-    crate::run_cmd_model_pin::propagate_inherited_subtree_pin(&mut extra_env);
+    // the way down. The pin is carried out-of-band as a typed value (None unless
+    // this process is a pinned child) and applied by the executor's trusted
+    // channel — never via the env map.
+    let subtree_pin = crate::run_cmd_model_pin::inherited_subtree_model_pin();
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
     let initial_response_timeout_seconds =
@@ -637,6 +639,7 @@ async fn execute_task(
         project_root,
         config,
         extra_env_ref,
+        subtree_pin.as_ref(),
         Some("batch"),
         None, // batch does not use tier-based selection
         None, // batch does not override context loading options

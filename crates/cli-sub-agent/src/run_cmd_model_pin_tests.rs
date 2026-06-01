@@ -129,23 +129,29 @@ fn explicit_child_model_spec_overrides_inherited_pin() {
 
 #[test]
 fn subtree_env_requires_force_ignore_pin() {
-    let mut env = None;
-    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), false, true);
-    assert!(env.is_none());
+    // Without force_ignore_tier_setting, no typed pin is produced.
+    assert!(resolve_subtree_model_pin(Some(PINNED_SPEC), false, true).is_none());
 
-    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), true, true);
-    let env = env.expect("pin env");
+    // With it, a typed pin is produced whose env entries carry the spec, the
+    // paired force-ignore marker, and (here) the no-failover flag.
+    let pin = resolve_subtree_model_pin(Some(PINNED_SPEC), true, true).expect("pin");
+    let entries: std::collections::HashMap<&str, String> = pin
+        .pin_env_entries()
+        .into_iter()
+        .map(|(k, v)| (k, v))
+        .collect();
     assert_eq!(
-        env.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
         Some(PINNED_SPEC)
     );
     assert_eq!(
-        env.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+        entries
+            .get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
             .map(String::as_str),
         Some("1")
     );
     assert_eq!(
-        env.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
+        entries.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
         Some("1")
     );
 }
@@ -204,9 +210,14 @@ fn malformed_inherited_model_spec_is_ignored() {
 /// child depth) still propagates — the legitimate subtree-pin path stays green.
 #[test]
 fn csa_injected_pin_still_propagates() {
-    let mut env = None;
-    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), true, true);
-    let env = env.expect("CSA-injected pin env");
+    // Build the exact child env CSA's trusted typed channel writes for a pinned
+    // subtree, then prove the reader honors it (the legitimate path stays green).
+    let typed_pin = resolve_subtree_model_pin(Some(PINNED_SPEC), true, true).expect("typed pin");
+    let env: std::collections::HashMap<String, String> = typed_pin
+        .pin_env_entries()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
 
     let lookup = |key: &str| env.get(key).cloned();
     let pin = inherited_model_pin_from_lookup(1, lookup).expect("CSA-injected pin is honored");
@@ -380,45 +391,52 @@ fn review_debate_depth_zero_ignores_env_pin() {
     assert!(!resolved.inherited);
 }
 
-// ── #1741 round-4: propagation into the spawned child env ────────────────────
+// ── #1741 round-4/5: propagation into the spawned child env ──────────────────
 //
 // review/debate are pin-CONSUMING: at their spawn site they call
-// inject_subtree_model_pin_env with the model spec they are running as. This
-// proves the exact call those sites make writes the pin keys into the child env
-// so a nested Layer-N+1 call stays pinned.
+// resolve_subtree_model_pin with the model spec they are running as. The typed
+// pin it returns is the ONLY value the executor's trusted channel writes into
+// the child env, so a nested Layer-N+1 call stays pinned. (Round-5: the pin is
+// carried out-of-band as a typed SubtreeModelPin, never via the env map, so a
+// caller cannot spoof it by smuggling keys through request/config env.)
+
+/// Collect a pin's env entries into a map for assertion.
+fn pin_entries_map(
+    pin: &csa_core::env::SubtreeModelPin,
+) -> std::collections::HashMap<&str, String> {
+    pin.pin_env_entries().into_iter().collect()
+}
 
 #[test]
 fn review_debate_spawn_propagates_pin_into_child_env() {
-    let mut env: Option<std::collections::HashMap<String, String>> = None;
     // Mirrors review_cmd_execute / debate_cmd: attempt_model_spec + the pin
     // flags (force_ignore_tier_setting from the consumed pin, no_failover).
-    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), true, true);
-
-    let env = env.expect("reviewer/debater child env must carry the subtree pin");
+    let pin = resolve_subtree_model_pin(Some(PINNED_SPEC), true, true)
+        .expect("reviewer/debater child env must carry the subtree pin");
+    let entries = pin_entries_map(&pin);
     assert_eq!(
-        env.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
         Some(PINNED_SPEC)
     );
     assert_eq!(
-        env.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+        entries
+            .get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
             .map(String::as_str),
         Some("1")
     );
     assert_eq!(
-        env.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
+        entries.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
         Some("1")
     );
 }
 
 #[test]
 fn review_debate_spawn_unpinned_does_not_inject_pin() {
-    // Not pinned (force_ignore false) → reviewer/debater child env stays clean,
-    // so tier routing is preserved for nested calls.
-    let mut env: Option<std::collections::HashMap<String, String>> = None;
-    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), false, false);
+    // Not pinned (force_ignore false) → no typed pin, so the reviewer/debater
+    // child env stays clean and tier routing is preserved for nested calls.
     assert!(
-        env.is_none(),
-        "unpinned review/debate must not inject a pin"
+        resolve_subtree_model_pin(Some(PINNED_SPEC), false, false).is_none(),
+        "unpinned review/debate must not produce a pin"
     );
 }
 
@@ -435,16 +453,15 @@ fn propagate_inherited_subtree_pin_passes_pin_through_at_child_depth() {
         "2",
     ));
 
-    let mut env: Option<std::collections::HashMap<String, String>> = None;
-    propagate_inherited_subtree_pin(&mut env);
-
-    let env = env.expect("inherited pin must cascade to the child env");
+    let pin = inherited_subtree_model_pin().expect("inherited pin must cascade to the child env");
+    let entries = pin_entries_map(&pin);
     assert_eq!(
-        env.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
         Some(PINNED_SPEC)
     );
     assert_eq!(
-        env.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+        entries
+            .get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
             .map(String::as_str),
         Some("1")
     );
@@ -462,9 +479,10 @@ fn propagate_inherited_subtree_pin_noop_at_root_depth() {
         "0",
     ));
 
-    let mut env: Option<std::collections::HashMap<String, String>> = None;
-    propagate_inherited_subtree_pin(&mut env);
-    assert!(env.is_none(), "root-depth must not cascade a pin");
+    assert!(
+        inherited_subtree_model_pin().is_none(),
+        "root-depth must not cascade a pin"
+    );
 }
 
 #[test]
@@ -477,9 +495,10 @@ fn propagate_inherited_subtree_pin_noop_when_unpinned() {
     let _g1 = ScopedEnvVarRestore::unset(CSA_MODEL_SPEC_ENV_KEY);
     let _g2 = ScopedEnvVarRestore::set("CSA_DEPTH", "3");
 
-    let mut env: Option<std::collections::HashMap<String, String>> = None;
-    propagate_inherited_subtree_pin(&mut env);
-    assert!(env.is_none(), "unpinned child must not cascade a pin");
+    assert!(
+        inherited_subtree_model_pin().is_none(),
+        "unpinned child must not cascade a pin"
+    );
 }
 
 fn config_with_tier_models(models: &[&str]) -> ProjectConfig {

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use csa_core::env::{
     CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY,
 };
@@ -62,11 +60,12 @@ where
 
     // Defense-in-depth (#1741): a CSA-injected subtree pin is ALWAYS written
     // together with CSA_FORCE_IGNORE_TIER_SETTING (see
-    // `inject_subtree_model_pin_env`). A bare CSA_MODEL_SPEC without the paired
-    // marker therefore cannot be a CSA pin — ignore it so a stray/ambient value
-    // never silently pins the subtree and drops tier routing. (The ambient
-    // value is also reserved at the spawn boundary; this is the reader-side
-    // belt to the spawn-side braces.)
+    // `SubtreeModelPin::pin_env_entries`, applied by the executor's trusted
+    // typed channel). A bare CSA_MODEL_SPEC without the paired marker therefore
+    // cannot be a CSA pin — ignore it so a stray/ambient value never silently
+    // pins the subtree and drops tier routing. (The ambient value is also
+    // reserved at the spawn boundary; this is the reader-side belt to the
+    // spawn-side braces.)
     let force_ignore_tier_setting = lookup(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
         .as_deref()
         .is_some_and(is_truthy_env_value);
@@ -217,30 +216,32 @@ pub(crate) fn resolve_handle_run_model_pin(
     }
 }
 
-pub(crate) fn inject_subtree_model_pin_env(
-    extra_env: &mut Option<HashMap<String, String>>,
+/// Resolve CSA's authoritative subtree model pin for a spawn (#1741).
+///
+/// Returns a typed [`SubtreeModelPin`] ONLY when CSA itself decided to pin:
+/// a non-blank `model_spec` together with `force_ignore_tier_setting` (a CSA
+/// subtree pin is, by definition, a force-ignore-tier pin). Otherwise returns
+/// `None`.
+///
+/// The returned pin is carried OUT-OF-BAND from the generic `extra_env` map —
+/// it is NEVER written into `extra_env` — and is applied to the child by the
+/// executor's trusted typed channel, after every generic env merge (which
+/// unconditionally strips the pin keys). This makes pin spoofing impossible by
+/// construction: no user/request/config env can introduce the pin keys.
+///
+/// `model_spec` MUST originate from validated CSA state (the spec the caller
+/// resolved itself, or one returned by [`inherited_model_pin_from_env`], which
+/// gates on the force-ignore marker + `ModelSpec` well-formedness).
+pub(crate) fn resolve_subtree_model_pin(
     model_spec: Option<&str>,
     force_ignore_tier_setting: bool,
     no_failover: bool,
-) {
-    let Some(model_spec) = model_spec.filter(|spec| !spec.trim().is_empty()) else {
-        return;
-    };
+) -> Option<csa_core::env::SubtreeModelPin> {
+    let model_spec = model_spec.filter(|spec| !spec.trim().is_empty())?;
     if !force_ignore_tier_setting {
-        return;
+        return None;
     }
-
-    let env = extra_env.get_or_insert_with(HashMap::new);
-    env.insert(CSA_MODEL_SPEC_ENV_KEY.to_string(), model_spec.to_string());
-    env.insert(
-        CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
-        "1".to_string(),
-    );
-    if no_failover {
-        env.insert(CSA_NO_FAILOVER_ENV_KEY.to_string(), "1".to_string());
-    } else {
-        env.remove(CSA_NO_FAILOVER_ENV_KEY);
-    }
+    csa_core::env::SubtreeModelPin::from_validated_spec(model_spec, no_failover)
 }
 
 /// Current CSA recursion depth as seen by this process, from `CSA_DEPTH`.
@@ -256,32 +257,28 @@ pub(crate) fn current_depth_from_env() -> u32 {
         .unwrap_or(0)
 }
 
-/// Pass an inherited subtree model pin straight through to a child CSA-recursion
+/// Resolve an inherited subtree model pin to cascade to a child CSA-recursion
 /// spawn that did NOT itself consume the pin for tool selection.
 ///
 /// Used by CSA-recursion spawn sites that pick their own per-spawn tool/model
 /// from explicit input (batch task, plan step, claude-sub-agent): they still
 /// must cascade an inherited pin so a nested Layer-N+1 call stays pinned all the
-/// way down (#1741). Call AFTER `build_execution_env` (so the injected pin
-/// survives the round-3 config funnel strip) and BEFORE handing the env to the
-/// child.
+/// way down (#1741). The returned [`SubtreeModelPin`] is carried out-of-band
+/// from `extra_env` and applied by the executor's trusted typed channel.
 ///
 /// Pin-CONSUMING sites (csa run / review / debate) instead call
-/// [`inject_subtree_model_pin_env`] directly with the spec they resolved — the
-/// canonical pattern at `run_cmd_attempt.rs`. This function is the no-consume
-/// counterpart; it reads the inherited pin from the environment (already
-/// validated + force-ignore-gated by [`inherited_model_pin_from_env`]) and
-/// re-injects it. Depth is read from `CSA_DEPTH` so call sites need not thread
-/// it. No-op when the parent did not pin (depth 0 or no pin env).
-pub(crate) fn propagate_inherited_subtree_pin(extra_env: &mut Option<HashMap<String, String>>) {
-    if let Some(inherited) = inherited_model_pin_from_env(current_depth_from_env()) {
-        inject_subtree_model_pin_env(
-            extra_env,
-            Some(&inherited.model_spec),
-            inherited.force_ignore_tier_setting,
-            inherited.no_failover,
-        );
-    }
+/// [`resolve_subtree_model_pin`] with the spec they resolved. This function is
+/// the no-consume counterpart; it reads the inherited pin from the environment
+/// (already validated + force-ignore-gated by [`inherited_model_pin_from_env`]).
+/// Depth is read from `CSA_DEPTH` so call sites need not thread it. Returns
+/// `None` when the parent did not pin (depth 0 or no pin env).
+pub(crate) fn inherited_subtree_model_pin() -> Option<csa_core::env::SubtreeModelPin> {
+    let inherited = inherited_model_pin_from_env(current_depth_from_env())?;
+    resolve_subtree_model_pin(
+        Some(&inherited.model_spec),
+        inherited.force_ignore_tier_setting,
+        inherited.no_failover,
+    )
 }
 
 pub(crate) fn subtree_model_pin_prompt_guard(

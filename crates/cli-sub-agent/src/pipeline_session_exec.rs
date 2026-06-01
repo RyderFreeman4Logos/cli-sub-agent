@@ -62,6 +62,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     project_root: &Path,
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
+    // CSA-decided subtree model pin (#1741), carried out-of-band from
+    // `extra_env`. Applied to the child by the executor's trusted typed channel
+    // after every generic env merge (which strips the pin keys). `None` when CSA
+    // did not pin. NEVER sourced from `extra_env`/request/config env.
+    subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     task_type: Option<&str>,
     tier_name: Option<&str>,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
@@ -394,6 +399,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let error_marker_scan_enabled =
         !cli_no_error_marker_scan && config.is_none_or(|cfg| cfg.resources.error_marker_scan);
     execute_options = execute_options.with_error_marker_scan_enabled(error_marker_scan_enabled);
+    // #1741: carry CSA's trusted subtree pin via the typed ExecuteOptions
+    // channel (never via the generic env map), so it is the sole writer of the
+    // pin keys at the spawn boundary.
+    execute_options = execute_options.with_subtree_pin(subtree_pin.cloned());
     apply_transport_failover_overrides(&mut execute_options, merged_env_ref);
     if let Some(pre_session_hook) = pre_session_hook {
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);

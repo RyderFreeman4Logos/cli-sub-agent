@@ -234,6 +234,7 @@ async fn state_dir_cap_failure_persists_result_for_fresh_spawn() {
         project_root,
         None,
         None,
+        None, // subtree_pin (#1741)
         Some("run"),
         None,
         None,
@@ -297,6 +298,7 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
         project_root,
         Some(&config),
         None,
+        None, // subtree_pin (#1741)
         Some("run"),
         None,
         None,
@@ -411,6 +413,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
         project_root,
         None,
         None,
+        None, // subtree_pin (#1741)
         Some("run"),
         None,
         None,

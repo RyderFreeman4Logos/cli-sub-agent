@@ -153,6 +153,7 @@ impl AcpTransport {
         &self,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     ) -> HashMap<String, String> {
         let mut env = HashMap::new();
         if let Some(extra) = extra_env {
@@ -163,7 +164,18 @@ impl AcpTransport {
                     .map(|(k, v)| (k.clone(), v.clone())),
             );
         }
+        // #1741: a generic env map may NEVER carry the subtree-pin keys; strip
+        // them unconditionally so request/config env cannot spoof a pin. CSA's
+        // authoritative pin is applied below via the trusted typed channel.
+        csa_core::env::strip_reserved_pin_keys(&mut env);
         self.insert_csa_owned_env(&mut env, session);
+        // Apply the trusted subtree pin LAST (after every generic merge/strip) —
+        // the only writer of the pin keys in the ACP env.
+        if let Some(pin) = subtree_pin {
+            for (key, value) in pin.pin_env_entries() {
+                env.insert(key.to_string(), value);
+            }
+        }
 
         // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
         // `gh pr merge` unless pr-bot has completed.  This is deterministic
@@ -431,7 +443,7 @@ mod tests {
         let session = sample_session();
         let extra = HashMap::from([(CSA_FS_SANDBOXED_ENV.to_string(), "1".to_string())]);
 
-        let env = transport.build_env(&session, Some(&extra));
+        let env = transport.build_env(&session, Some(&extra), None);
 
         assert!(
             !env.contains_key(CSA_FS_SANDBOXED_ENV),
@@ -447,7 +459,7 @@ mod tests {
         let session = sample_session();
         let extra = HashMap::from([(CSA_FS_SANDBOXED_ENV.to_string(), "0".to_string())]);
 
-        let env = transport.build_env(&session, Some(&extra));
+        let env = transport.build_env(&session, Some(&extra), None);
 
         assert_eq!(
             env.get(CSA_FS_SANDBOXED_ENV).map(String::as_str),
@@ -503,7 +515,7 @@ mod tests {
             ("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string()),
         ]);
 
-        let env = transport.build_env(&session, Some(&extra));
+        let env = transport.build_env(&session, Some(&extra), None);
 
         assert_eq!(
             env.get(CSA_SESSION_ID_ENV).map(String::as_str),

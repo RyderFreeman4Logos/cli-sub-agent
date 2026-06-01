@@ -81,7 +81,7 @@ fn test_build_command_with_empty_prompt() {
         runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -108,7 +108,7 @@ fn test_build_command_prompt_with_special_characters() {
     let session = make_test_session();
     let special_prompt = "Fix the bug in `fn main()` \u{2014} use \"quotes\" & $ENV_VAR\nnewline";
 
-    let (cmd, stdin_data) = exec.build_command(special_prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(special_prompt, None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let args: Vec<_> = cmd
         .as_std()
@@ -148,7 +148,7 @@ fn test_override_model_sets_none_to_some() {
     };
     exec.override_model("gemini-3.1-pro-preview".to_string());
     let session = make_test_session();
-    let (cmd, _) = exec.build_command("test", None, &session, None);
+    let (cmd, _) = exec.build_command("test", None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -172,7 +172,7 @@ fn test_build_command_no_model_override_omits_model_flag() {
         runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -202,7 +202,7 @@ fn test_build_command_executable_program() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     assert_eq!(
@@ -222,7 +222,7 @@ fn test_build_command_current_dir() {
     let mut session = make_test_session();
     session.project_path = "/home/user/my-project".to_string();
 
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     assert_eq!(
@@ -271,8 +271,14 @@ fn test_stripped_env_vars_reserves_subtree_pin() {
     }
 }
 
+/// #1741 round-5 spoof rejection: pin keys placed in the GENERIC `extra_env`
+/// map (the channel a caller can influence via request/config env or
+/// `SpawnConfig.env`) MUST NOT reach the child. `inject_env` strips
+/// `SUBTREE_PIN_ENV_KEYS` unconditionally, so a caller cannot forge a subtree
+/// pin by smuggling the keys through `extra_env`. With no trusted pin supplied,
+/// the keys must be env_removed (reserved), never re-applied.
 #[test]
-fn test_build_command_reserves_ambient_subtree_pin_but_keeps_csa_injected() {
+fn test_build_command_strips_spoofed_subtree_pin_from_extra_env() {
     let exec = Executor::ClaudeCode {
         model_override: None,
         thinking_budget: None,
@@ -280,8 +286,8 @@ fn test_build_command_reserves_ambient_subtree_pin_but_keeps_csa_injected() {
     };
     let session = make_test_session();
 
-    // CSA-injected pin arrives via extra_env (mirrors inject_subtree_model_pin_env
-    // output: the spec plus its paired force-ignore marker).
+    // A malicious/ambient caller smuggles a full pin (spec + force-ignore marker
+    // + no-failover) through the generic extra_env map.
     let mut extra_env = HashMap::new();
     extra_env.insert(
         csa_core::env::CSA_MODEL_SPEC_ENV_KEY.to_string(),
@@ -291,29 +297,75 @@ fn test_build_command_reserves_ambient_subtree_pin_but_keeps_csa_injected() {
         csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
         "1".to_string(),
     );
+    extra_env.insert(
+        csa_core::env::CSA_NO_FAILOVER_ENV_KEY.to_string(),
+        "1".to_string(),
+    );
 
-    let (cmd, _stdin) = exec.build_command("test", None, &session, Some(&extra_env));
+    // No trusted pin is supplied (subtree_pin = None), mirroring a spawn CSA did
+    // NOT decide to pin.
+    let (cmd, _stdin) = exec.build_command("test", None, &session, Some(&extra_env), None);
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
         cmd.as_std().get_envs().collect();
 
-    // The CSA-injected pin (present in extra_env) must survive the strip — it is
-    // the deliberate inject_env exception.
+    for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "spoofed subtree-pin key {key} smuggled via extra_env must be \
+             stripped (env_removed), never re-applied"
+        );
+    }
+}
+
+/// #1741 round-5 legit survival: CSA's authoritative pin, supplied out-of-band
+/// via the typed [`csa_core::env::SubtreeModelPin`] trusted channel, IS applied
+/// to the child — even when the same keys were absent from (or, here, also
+/// spoofed into) the generic `extra_env` map. The trusted pin runs LAST and is
+/// the sole writer of the pin keys, so it deterministically wins.
+#[test]
+fn test_build_command_applies_trusted_subtree_pin_over_extra_env() {
+    let exec = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
+    };
+    let session = make_test_session();
+
+    // A caller spoofs a DIFFERENT spec via extra_env; it must be stripped and
+    // overridden by the trusted pin's spec.
+    let mut extra_env = HashMap::new();
+    extra_env.insert(
+        csa_core::env::CSA_MODEL_SPEC_ENV_KEY.to_string(),
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+    );
+
+    let pin = csa_core::env::SubtreeModelPin::from_validated_spec(
+        "codex/openai/gpt-5.5/xhigh",
+        true, // no_failover
+    )
+    .expect("non-blank spec yields a pin");
+
+    let (cmd, _stdin) =
+        exec.build_command("test", None, &session, Some(&extra_env), Some(&pin));
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+
+    // The trusted pin's spec wins over the spoofed extra_env spec.
     assert_eq!(
         env_map.get(std::ffi::OsStr::new("CSA_MODEL_SPEC")),
         Some(&Some(std::ffi::OsStr::new("codex/openai/gpt-5.5/xhigh"))),
-        "CSA-injected CSA_MODEL_SPEC must be re-applied (subtree pin propagation)"
+        "trusted pin spec must be applied (and override any extra_env spoof)"
     );
     assert_eq!(
         env_map.get(std::ffi::OsStr::new("CSA_FORCE_IGNORE_TIER_SETTING")),
         Some(&Some(std::ffi::OsStr::new("1"))),
-        "CSA-injected force-ignore marker must be re-applied"
+        "trusted pin always pairs the force-ignore marker"
     );
-    // CSA_NO_FAILOVER was NOT injected; with no ambient strip override visible,
-    // it must remain reserved (env_removed = None), never leaking an ambient on.
     assert_eq!(
         env_map.get(std::ffi::OsStr::new("CSA_NO_FAILOVER")),
-        Some(&None),
-        "CSA_NO_FAILOVER must stay reserved (env_removed) when not CSA-injected"
+        Some(&Some(std::ffi::OsStr::new("1"))),
+        "trusted pin with no_failover=true sets CSA_NO_FAILOVER"
     );
 }
 
@@ -325,7 +377,7 @@ fn test_build_command_strips_claudecode_env() {
         runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("test", None, &session, None, None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -371,7 +423,7 @@ fn test_build_command_strips_claudecode_for_all_executors() {
     let session = make_test_session();
     for exec in executors {
         let tool = exec.tool_name().to_string();
-        let (cmd, _) = exec.build_command("test", None, &session, None);
+        let (cmd, _) = exec.build_command("test", None, &session, None, None);
         let envs: Vec<_> = cmd.as_std().get_envs().collect();
         let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             envs.into_iter().collect();
@@ -394,7 +446,7 @@ fn test_build_execute_in_command_strips_claudecode_env() {
         runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let work_dir = std::path::Path::new("/tmp/test-project");
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None);
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None, None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -425,7 +477,7 @@ fn test_build_command_codex_strips_lefthook_env_reinjected_by_extra_env() {
         ("SAFE_ENV".to_string(), "ok".to_string()),
     ]);
 
-    let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra_env));
+    let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra_env), None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -468,7 +520,7 @@ fn test_build_execute_in_command_codex_strips_lefthook_env_reinjected_by_extra_e
         ("SAFE_ENV".to_string(), "ok".to_string()),
     ]);
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra_env));
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra_env), None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -524,7 +576,7 @@ fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
     let work_dir = std::path::Path::new("/tmp/test-project");
     for exec in executors {
         let tool = exec.tool_name().to_string();
-        let (cmd, _) = exec.build_execute_in_command("test", work_dir, None);
+        let (cmd, _) = exec.build_execute_in_command("test", work_dir, None, None);
         let envs: Vec<_> = cmd.as_std().get_envs().collect();
         let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
             envs.into_iter().collect();
@@ -546,7 +598,7 @@ fn test_build_command_gemini_strips_inherited_api_key_env() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, _) = exec.build_command("test", None, &session, None);
+    let (cmd, _) = exec.build_command("test", None, &session, None, None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -571,7 +623,7 @@ fn test_build_command_non_gemini_does_not_strip_gemini_env() {
         runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, _) = exec.build_command("test", None, &session, None);
+    let (cmd, _) = exec.build_command("test", None, &session, None, None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -594,7 +646,7 @@ fn test_build_command_gemini_extra_env_overrides_strip() {
     let mut extra = HashMap::new();
     extra.insert("GEMINI_API_KEY".to_string(), "test-fallback-key".to_string());
 
-    let (cmd, _) = exec.build_command("test", None, &session, Some(&extra));
+    let (cmd, _) = exec.build_command("test", None, &session, Some(&extra), None);
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
 
@@ -613,7 +665,7 @@ fn test_build_execute_in_command_gemini_strips_inherited_api_key_env() {
         thinking_budget: None,
     };
     let work_dir = std::path::Path::new("/tmp/test-project");
-    let (cmd, _) = exec.build_execute_in_command("test", work_dir, None);
+    let (cmd, _) = exec.build_execute_in_command("test", work_dir, None, None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -646,7 +698,7 @@ fn test_build_execute_in_command_codex_notify_suppressed() {
     let mut extra = HashMap::new();
     extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra), None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -674,7 +726,7 @@ fn test_build_execute_in_command_codex_notify_not_suppressed() {
     let mut extra = HashMap::new();
     extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "0".to_string());
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra), None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -699,7 +751,7 @@ fn test_build_execute_in_command_codex_fast_mode_adds_enable_flag() {
     exec.enable_codex_fast_mode();
     let work_dir = std::path::Path::new("/tmp/test-project");
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None);
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -724,7 +776,7 @@ fn test_codex_dual_c_flags_coexist() {
     let mut extra = HashMap::new();
     extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra), None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -764,7 +816,7 @@ fn test_build_execute_in_command_gemini_adds_include_directories_from_env() {
         format!("{},{}", include_a.display(), include_b.display()),
     );
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra), None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -803,7 +855,7 @@ fn test_build_execute_in_command_gemini_includes_external_instruction_symlink_ta
     std::os::unix::fs::symlink("AGENTS.md", workspace.path().join("GEMINI.md"))
         .expect("link GEMINI.md -> AGENTS.md");
 
-    let (cmd, _stdin_data) = exec.build_execute_in_command("review", workspace.path(), None);
+    let (cmd, _stdin_data) = exec.build_execute_in_command("review", workspace.path(), None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()

@@ -60,6 +60,7 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
         temp.path(),
         Some(&config),
         None,
+        None, // subtree_pin (#1741)
         Some("run"),
         None,
         None,
@@ -173,6 +174,7 @@ async fn execute_with_session_and_meta_runs_preflight_for_fresh_spawn_override()
         temp.path(),
         Some(&config),
         None,
+        None, // subtree_pin (#1741)
         Some("run"),
         None,
         None,
@@ -253,6 +255,7 @@ async fn execute_with_session_and_meta_skips_preflight_for_resume_session() {
         temp.path(),
         Some(&config),
         None,
+        None, // subtree_pin (#1741)
         Some("run"),
         None,
         None,

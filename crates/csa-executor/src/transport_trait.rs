@@ -24,11 +24,13 @@ pub trait Transport: Send + Sync {
         options: TransportOptions<'_>,
     ) -> Result<TransportResult>;
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_in(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,

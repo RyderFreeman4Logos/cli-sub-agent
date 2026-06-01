@@ -265,6 +265,7 @@ async fn test_execute_in_permanent_quota_exhaustion_does_not_api_key_fallback() 
             "permanent quota exhaustion",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),

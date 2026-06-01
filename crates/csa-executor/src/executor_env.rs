@@ -30,6 +30,22 @@ pub const STRIPPED_ENV_VARS: &[&str] = &[
     csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
 ];
 
+/// Apply a CSA-decided subtree model pin to a child command (#1741).
+///
+/// This is the single executor-side writer of the subtree-pin env keys. It MUST
+/// be called AFTER any generic env injection (which unconditionally strips the
+/// pin keys via [`STRIPPED_ENV_VARS`] / [`csa_core::env::strip_reserved_pin_keys`])
+/// so the trusted pin is the last writer and cannot be displaced by, or
+/// forged from, user/request/config env. A `None` pin is a no-op, leaving the
+/// keys env-removed (reserved) as the generic strip left them.
+pub(crate) fn apply_subtree_pin(cmd: &mut Command, pin: Option<&csa_core::env::SubtreeModelPin>) {
+    if let Some(pin) = pin {
+        for (key, value) in pin.pin_env_entries() {
+            cmd.env(key, value);
+        }
+    }
+}
+
 pub(crate) fn inject_git_guard_env(cmd: &mut Command) {
     let mut guard_env = HashMap::new();
     if let Some(path) = cmd

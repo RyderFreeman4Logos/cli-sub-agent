@@ -49,16 +49,18 @@ pub(crate) async fn handle_claude_sub_agent(
 
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
-    let mut extra_env = global_config.build_execution_env(
+    let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
     );
     // #1741: claude-sub-agent selects its own tool/model (incl. an explicit
     // --model-spec for THIS spawn) and does NOT consume the parent's subtree pin
     // for that choice, but it MUST still cascade an inherited pin so nested CSA
-    // calls stay pinned. Pass-through (no-op unless this process is a pinned
-    // child). The explicit --model-spec governs only this spawn, not the pin.
-    crate::run_cmd_model_pin::propagate_inherited_subtree_pin(&mut extra_env);
+    // calls stay pinned. The pin is carried out-of-band as a typed value (None
+    // unless this process is a pinned child) and applied by the executor's
+    // trusted channel — never via the env map. The explicit --model-spec governs
+    // only this spawn, not the pin.
+    let subtree_pin = crate::run_cmd_model_pin::inherited_subtree_model_pin();
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
     let initial_response_timeout_seconds =
@@ -82,6 +84,7 @@ pub(crate) async fn handle_claude_sub_agent(
         &project_root,
         config.as_ref(),
         extra_env_ref,
+        subtree_pin.as_ref(),
         Some("run"),
         None, // claude-sub-agent does not use tier-based selection
         None, // claude-sub-agent does not override context loading options

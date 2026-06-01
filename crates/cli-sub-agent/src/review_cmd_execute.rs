@@ -270,17 +270,18 @@ pub(crate) async fn execute_review_with_tier_filter(
             effective_prompt = format!("{guard}\n\n{effective_prompt}");
         }
 
-        let mut base_env_owned = global_config.build_execution_env(
+        let base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             review_execution_env_options(no_failover),
         );
         // #1741: keep a pinned subtree pinned through the reviewer child so a
         // nested Layer-N+1 call from the reviewer does not re-select the tier
         // default. Mirrors csa run (run_cmd_attempt.rs). `attempt_model_spec` is
-        // the spec this reviewer is actually running as; self-gated on the pin
-        // (no-op unless force_ignore_tier_setting + a non-empty spec).
-        crate::run_cmd_model_pin::inject_subtree_model_pin_env(
-            &mut base_env_owned,
+        // the spec this reviewer is actually running as. The pin is carried
+        // out-of-band as a typed value (no-op unless force_ignore_tier_setting +
+        // a non-empty spec) and applied by the executor's trusted channel —
+        // never via the env map, so no request/config env can spoof it.
+        let subtree_pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
             attempt_model_spec.as_deref(),
             force_ignore_tier_setting,
             no_failover,
@@ -298,6 +299,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             project_root,
             project_config,
             extra_env_owned.as_ref(),
+            subtree_pin.as_ref(),
             tier_name.as_deref(),
             global_config,
             pre_session_hook.clone(),
@@ -452,6 +454,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     project_root,
                     project_config,
                     Some(&api_key_env),
+                    subtree_pin.as_ref(),
                     tier_name.as_deref(),
                     global_config,
                     pre_session_hook.clone(),
@@ -657,6 +660,7 @@ async fn execute_review_once(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
     extra_env: Option<&HashMap<String, String>>,
+    subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     tier_name: Option<&str>,
     global_config: &GlobalConfig,
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
@@ -681,6 +685,7 @@ async fn execute_review_once(
         project_root,
         project_config,
         extra_env,
+        subtree_pin,
         Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         tier_name,
         None,
@@ -712,6 +717,7 @@ async fn execute_review_once_with_artifact_guard(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
     extra_env: Option<&HashMap<String, String>>,
+    subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     tier_name: Option<&str>,
     global_config: &GlobalConfig,
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
@@ -734,6 +740,7 @@ async fn execute_review_once_with_artifact_guard(
         project_root,
         project_config,
         extra_env,
+        subtree_pin,
         tier_name,
         global_config,
         pre_session_hook,

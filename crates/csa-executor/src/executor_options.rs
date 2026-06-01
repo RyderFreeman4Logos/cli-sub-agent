@@ -37,6 +37,13 @@ pub struct ExecuteOptions {
     /// Optional global-only pre-session hook invocation used to prepend context
     /// to the first user message before it reaches the selected transport.
     pub pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
+    /// CSA-decided subtree model pin, carried out-of-band from `extra_env`.
+    ///
+    /// When `Some`, the trusted pin keys are injected into the child AFTER all
+    /// generic env merges (which unconditionally strip those keys). This is the
+    /// only channel through which the subtree-pin env keys may reach a child;
+    /// user/request/config env can never introduce them (#1741).
+    pub subtree_pin: Option<csa_core::env::SubtreeModelPin>,
 }
 
 /// Sandbox configuration resolved from project/tool config.
@@ -75,7 +82,14 @@ impl ExecuteOptions {
             initial_response_timeout_seconds: None,
             sandbox: None,
             pre_session_hook: None,
+            subtree_pin: None,
         }
+    }
+
+    /// Attach the CSA-decided subtree model pin (trusted typed channel, #1741).
+    pub fn with_subtree_pin(mut self, pin: Option<csa_core::env::SubtreeModelPin>) -> Self {
+        self.subtree_pin = pin;
+        self
     }
 
     /// Override stdin write timeout (seconds) for spawned child processes.

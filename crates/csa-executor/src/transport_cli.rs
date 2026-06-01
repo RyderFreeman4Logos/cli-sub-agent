@@ -131,24 +131,36 @@ impl ClaudeCodeCliTransport {
         session: Option<&MetaSessionState>,
         resume_session_id: Option<&str>,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     ) -> Command {
         let mut cmd = Command::new(self.executor.executable_name());
         cmd.current_dir(work_dir);
         // Mirror the env-stripping rule used by both the legacy CLI path and
         // the ACP path so a CSA-spawned `claude` does not trip its own
-        // recursion guard or inherit lefthook bypass markers.
+        // recursion guard or inherit lefthook bypass markers. The subtree-pin
+        // keys are in CLI_TRANSPORT_STRIPPED_ENV_VARS, so a generic env map can
+        // never set them — only the trusted pin below may (#1741).
         for var in CLI_TRANSPORT_STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
         if let Some(env) = extra_env {
             for (key, value) in env {
-                if !CLI_TRANSPORT_CSA_OWNED_ENV_VARS.contains(&key.as_str()) {
+                if !CLI_TRANSPORT_CSA_OWNED_ENV_VARS.contains(&key.as_str())
+                    && !CLI_TRANSPORT_STRIPPED_ENV_VARS.contains(&key.as_str())
+                {
                     cmd.env(key, value);
                 }
             }
         }
         if let Some(session) = session {
             inject_cli_session_env(&mut cmd, session);
+        }
+        // #1741: apply CSA's trusted subtree pin LAST (after the generic merge,
+        // which stripped the pin keys) — the only writer of the pin keys here.
+        if let Some(pin) = subtree_pin {
+            for (key, value) in pin.pin_env_entries() {
+                cmd.env(key, value);
+            }
         }
         for arg in Self::build_argv(&self.executor, prompt, resume_session_id) {
             cmd.arg(arg);
@@ -166,6 +178,7 @@ impl ClaudeCodeCliTransport {
             request.session,
             request.resume_session_id,
             request.extra_env,
+            request.subtree_pin,
         );
         // Mirror `LegacyTransport::execute_single_attempt` (transport.rs L313):
         // route every spawn through `spawn_tool_sandboxed` so cgroup/bwrap/
@@ -224,6 +237,7 @@ struct ExecuteOnceRequest<'a> {
     session: Option<&'a MetaSessionState>,
     resume_session_id: Option<&'a str>,
     extra_env: Option<&'a HashMap<String, String>>,
+    subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     initial_response_timeout: ResolvedTimeout,
@@ -282,6 +296,7 @@ impl Transport for ClaudeCodeCliTransport {
             session: Some(session),
             resume_session_id,
             extra_env,
+            subtree_pin: options.subtree_pin.as_ref(),
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
             initial_response_timeout: options.initial_response_timeout,
@@ -297,6 +312,7 @@ impl Transport for ClaudeCodeCliTransport {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -307,6 +323,7 @@ impl Transport for ClaudeCodeCliTransport {
             session: None,
             resume_session_id: None,
             extra_env,
+            subtree_pin,
             stream_mode,
             idle_timeout_seconds,
             initial_response_timeout,
@@ -409,9 +426,11 @@ const CLI_TRANSPORT_STRIPPED_ENV_VARS: &[&str] = &[
     "CSA_PARENT_SESSION_DIR",
     "CSA_DAEMON_SESSION_DIR",
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
-    // Subtree model-pin context vars are reserved from the ambient environment
-    // (#1741); the CSA-injected pin in `extra_env` is deliberately NOT in
-    // CLI_TRANSPORT_CSA_OWNED_ENV_VARS, so it still passes the inject filter.
+    // Subtree model-pin context vars are reserved from EVERY generic env source
+    // (ambient + the `extra_env` map): `build_command` env-removes them and also
+    // skips them in the `extra_env` inject loop, so a generic env map can never
+    // set them. CSA's authoritative pin reaches the child only via the trusted
+    // typed `SubtreeModelPin` channel, applied after the generic merge (#1741).
     csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
     csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
     csa_core::env::CSA_NO_FAILOVER_ENV_KEY,

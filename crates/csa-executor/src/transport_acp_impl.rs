@@ -207,6 +207,7 @@ impl Transport for AcpTransport {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: super::ResolvedTimeout,
@@ -234,6 +235,7 @@ impl Transport for AcpTransport {
                 setting_sources: None,
                 sandbox: None,
                 thinking_budget: None,
+                subtree_pin: subtree_pin.cloned(),
             },
         )
         .await

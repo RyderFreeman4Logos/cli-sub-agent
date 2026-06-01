@@ -279,7 +279,7 @@ fn test_acp_build_env_propagates_extra_env() {
 
     let mut extra = HashMap::new();
     extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
-    let env = transport.build_env(&session, Some(&extra));
+    let env = transport.build_env(&session, Some(&extra), None);
     assert_eq!(
         env.get("CSA_SUPPRESS_NOTIFY"),
         Some(&"1".to_string()),
@@ -287,7 +287,7 @@ fn test_acp_build_env_propagates_extra_env() {
     );
 
     // Without extra_env, suppress_notify should NOT be present.
-    let env_no_extra = transport.build_env(&session, None);
+    let env_no_extra = transport.build_env(&session, None, None);
     assert_eq!(
         env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
         None,
@@ -333,7 +333,7 @@ fn test_acp_build_env_includes_csa_session_dir() {
         identity_version: 1,
     };
 
-    let env = transport.build_env(&session, None);
+    let env = transport.build_env(&session, None, None);
     let session_dir = env
         .get("CSA_SESSION_DIR")
         .expect("CSA_SESSION_DIR should be present in env");
@@ -405,7 +405,7 @@ fn test_acp_build_env_reserved_session_paths_override_extra_env() {
         "/tmp/fake-session/result.toml".to_string(),
     );
 
-    let env = transport.build_env(&session, Some(&extra));
+    let env = transport.build_env(&session, Some(&extra), None);
     let session_dir = env
         .get("CSA_SESSION_DIR")
         .expect("CSA_SESSION_DIR should be present");
@@ -682,6 +682,7 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
             "test retry loop",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -731,6 +732,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         setting_sources: None,
         sandbox: None,
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let result = transport

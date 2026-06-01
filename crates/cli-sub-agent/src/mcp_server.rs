@@ -629,6 +629,10 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
                 prompt,
                 temp_dir.path(),
                 extra_env_ref,
+                // The MCP hub spawn path resolves no subtree pin (tier-routed
+                // tool selection only); pin keys are stripped at
+                // build_execution_env, so it never sets a pin (#1741).
+                None,
                 csa_process::StreamMode::BufferOnly,
                 idle_timeout_seconds,
                 direct_entry_resolved_timeout(initial_response_timeout_seconds),
@@ -647,6 +651,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             &project_root,
             config.as_ref(),
             extra_env_ref,
+            None, // MCP hub resolves no subtree pin (#1741)
             Some("run"),
             None, // MCP server does not use tier-based selection
             None, // MCP server does not override context loading options

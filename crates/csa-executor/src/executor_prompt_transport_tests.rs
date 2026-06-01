@@ -50,7 +50,7 @@ fn test_build_command_short_prompt_uses_argv_and_no_stdin_data() {
     let session = make_test_session();
     let prompt = "short prompt";
 
-    let (cmd, stdin_data) = exec.build_command(prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(prompt, None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -74,7 +74,7 @@ fn test_build_command_long_prompt_uses_stdin_for_stdin_capable_tool() {
     let session = make_test_session();
     let prompt = "p".repeat(MAX_ARGV_PROMPT_LEN + 1);
 
-    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -101,7 +101,7 @@ fn test_build_command_long_prompt_uses_stdin_for_gemini_cli() {
     let session = make_test_session();
     let prompt = "g".repeat(MAX_ARGV_PROMPT_LEN + 1);
 
-    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -133,7 +133,7 @@ fn test_build_command_long_prompt_uses_stdin_for_claude_code() {
     let session = make_test_session();
     let prompt = "c".repeat(MAX_ARGV_PROMPT_LEN + 1);
 
-    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -172,7 +172,7 @@ fn test_build_command_long_prompt_opencode_stays_in_argv() {
     let session = make_test_session();
     let prompt = "o".repeat(MAX_ARGV_PROMPT_LEN + 1);
 
-    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -248,7 +248,7 @@ fn test_build_command_long_prompt_opencode_emits_warning() {
         .finish();
 
     tracing::subscriber::with_default(subscriber, || {
-        let (_cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+        let (_cmd, stdin_data) = exec.build_command(&prompt, None, &session, None, None);
         assert!(
             stdin_data.is_none(),
             "argv-only tools should not return stdin payload"

@@ -39,11 +39,12 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         None,
         None,
         project_root,
-        None,
-        None,
-        None,
-        None,
-        None,
+        None, // config
+        None, // extra_env
+        None, // subtree_pin (#1741)
+        None, // task_type
+        None, // tier_name
+        None, // context_load_options
         csa_process::StreamMode::BufferOnly,
         DEFAULT_IDLE_TIMEOUT_SECONDS,
         None,

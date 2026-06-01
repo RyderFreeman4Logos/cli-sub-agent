@@ -350,6 +350,7 @@ impl Executor {
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),
             thinking_budget: self.thinking_budget().cloned(),
+            subtree_pin: options.subtree_pin.clone(),
         };
         let transport = self.transport(session_config)?;
         let effective_prompt = self.apply_pre_session_hook(prompt, session, &options).await;
@@ -367,11 +368,17 @@ impl Executor {
     }
 
     /// Execute in a specific directory (ephemeral sessions, `extra_env` for API keys etc.).
+    ///
+    /// `subtree_pin` carries CSA's authoritative subtree model pin (#1741),
+    /// out-of-band from `extra_env`; it is the only channel that may set the
+    /// pin keys on the child. Pass `None` when CSA did not decide to pin.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_in(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -381,6 +388,7 @@ impl Executor {
                 prompt,
                 work_dir,
                 extra_env,
+                subtree_pin,
                 stream_mode,
                 idle_timeout_seconds,
                 initial_response_timeout,
@@ -390,11 +398,13 @@ impl Executor {
     }
 
     /// Execute in a specific directory and keep transport metadata.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_in_with_transport(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -405,6 +415,7 @@ impl Executor {
                 prompt,
                 work_dir,
                 extra_env,
+                subtree_pin,
                 stream_mode,
                 idle_timeout_seconds,
                 initial_response_timeout,

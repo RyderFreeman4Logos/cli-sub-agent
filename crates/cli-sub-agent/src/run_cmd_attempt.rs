@@ -306,13 +306,15 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             ExecutionEnvOptions::from_no_failover(request.no_failover),
         );
         crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
-        // #1741 parity (canonical pin-CONSUMING propagation): csa run resolved a
-        // subtree pin (explicit or inherited) and injects it so the child stays
-        // pinned. review/debate mirror this directly with their own resolved
-        // spec; batch/plan/claude-sub-agent (which do NOT consume the pin) use
-        // propagate_inherited_subtree_pin to cascade it. Self-gated on the pin.
-        crate::run_cmd_model_pin::inject_subtree_model_pin_env(
-            &mut extra_env,
+        // #1741 (canonical pin-CONSUMING resolution): csa run resolved a subtree
+        // pin (explicit or inherited). It is carried OUT-OF-BAND from `extra_env`
+        // as a typed `SubtreeModelPin` and applied by the executor's trusted
+        // channel after the generic env merge — never via the env map, so no
+        // user/request/config env can spoof it. review/debate mirror this with
+        // their own resolved spec; batch/plan/claude-sub-agent (which do NOT
+        // consume the pin) cascade an inherited pin via
+        // `inherited_subtree_model_pin`. Self-gated on the pin.
+        let subtree_pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
             request.subtree_model_pin_spec,
             request.force_ignore_tier_setting,
             request.no_failover,
@@ -389,6 +391,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                         effective_prompt: &effective_prompt,
                         project_root: request.project_root,
                         extra_env: extra_env.as_ref(),
+                        subtree_pin: subtree_pin.as_ref(),
                         stream_mode: request.stream_mode,
                         idle_timeout_seconds: request.idle_timeout_seconds,
                         initial_response_timeout_seconds,
@@ -409,6 +412,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.project_root,
                     request.config,
                     extra_env.as_ref(),
+                    subtree_pin.as_ref(),
                     request.resolved_tier_name,
                     request.context_load_options,
                     request.stream_mode,
@@ -435,6 +439,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 effective_prompt: &effective_prompt,
                 project_root: request.project_root,
                 extra_env: extra_env.as_ref(),
+                subtree_pin: subtree_pin.as_ref(),
                 stream_mode: request.stream_mode,
                 idle_timeout_seconds: request.idle_timeout_seconds,
                 initial_response_timeout_seconds,
@@ -453,6 +458,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 request.project_root,
                 request.config,
                 extra_env.as_ref(),
+                subtree_pin.as_ref(),
                 request.resolved_tier_name,
                 request.context_load_options,
                 request.stream_mode,

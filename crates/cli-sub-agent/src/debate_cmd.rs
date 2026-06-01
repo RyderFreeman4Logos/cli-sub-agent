@@ -326,15 +326,17 @@ pub(crate) async fn handle_debate(
         if effective_fast_mode {
             executor.enable_codex_fast_mode();
         }
-        let mut base_env_owned = global_config.build_execution_env(
+        let base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             debate_execution_env_options(args.no_failover),
         );
         // #1741: keep a pinned subtree pinned through the debater child so a
         // nested Layer-N+1 call does not re-select the tier default. Mirrors
-        // csa run (run_cmd_attempt.rs); self-gated on the pin.
-        crate::run_cmd_model_pin::inject_subtree_model_pin_env(
-            &mut base_env_owned,
+        // csa run (run_cmd_attempt.rs). The pin is carried out-of-band as a
+        // typed value (self-gated on force_ignore_tier_setting + a non-empty
+        // spec) and applied by the executor's trusted channel — never via the
+        // env map, so no request/config env can spoof it.
+        let subtree_pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
             attempt_model_spec.as_deref(),
             args.force_ignore_tier_setting,
             args.no_failover,
@@ -362,6 +364,7 @@ pub(crate) async fn handle_debate(
                 &project_root,
                 config.as_ref(),
                 extra_env,
+                subtree_pin.as_ref(),
                 Some("debate"),
                 resolved_tier_name.as_deref(),
                 None,

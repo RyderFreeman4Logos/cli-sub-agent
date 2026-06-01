@@ -469,6 +469,7 @@ impl TmuxTransport {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         idle_timeout_seconds: u64,
         session: Option<&MetaSessionState>,
     ) -> Result<TransportResult> {
@@ -502,6 +503,10 @@ impl TmuxTransport {
         // with inject_cli_session_env in transport_cli.rs.
         let (merged_env, session_dir) = {
             let mut env = extra_env.cloned().unwrap_or_default();
+            // #1741: a generic env map may NEVER carry the subtree-pin keys;
+            // strip them before merging CSA-owned env so request/config env
+            // cannot spoof a pin. The trusted pin is applied last, below.
+            csa_core::env::strip_reserved_pin_keys(&mut env);
             let mut dir = None;
             if let Some(session) = session {
                 env.insert("CSA_SESSION_ID".into(), session.meta_session_id.clone());
@@ -543,6 +548,14 @@ impl TmuxTransport {
                         "CSA_PARENT_SESSION_DIR".into(),
                         parent_dir.to_string_lossy().into_owned(),
                     );
+                }
+            }
+            // #1741: apply CSA's trusted subtree pin LAST, after every generic
+            // merge (which stripped the pin keys) — the only writer of the pin
+            // keys in the tmux child env.
+            if let Some(pin) = subtree_pin {
+                for (key, value) in pin.pin_env_entries() {
+                    env.insert(key.to_string(), value);
                 }
             }
             (env, dir)
@@ -671,6 +684,7 @@ impl Transport for TmuxTransport {
             prompt,
             &work_dir,
             extra_env,
+            options.subtree_pin.as_ref(),
             options.idle_timeout_seconds,
             Some(session),
         )
@@ -682,12 +696,20 @@ impl Transport for TmuxTransport {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         _stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         _initial_response_timeout: ResolvedTimeout,
     ) -> Result<TransportResult> {
-        self.execute_session(prompt, work_dir, extra_env, idle_timeout_seconds, None)
-            .await
+        self.execute_session(
+            prompt,
+            work_dir,
+            extra_env,
+            subtree_pin,
+            idle_timeout_seconds,
+            None,
+        )
+        .await
     }
 
     #[cfg(test)]
