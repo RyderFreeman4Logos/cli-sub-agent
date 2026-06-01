@@ -519,8 +519,19 @@ pub(crate) fn detect_parent_tool() -> Option<String> {
 /// 1. Detected parent tool from runtime context
 /// 2. `~/.config/cli-sub-agent/config.toml` `[defaults].tool`
 /// 3. None
+///
+/// The literal `"auto"` is the documented auto-select sentinel (see
+/// `csa-config::tool_selection`), NOT a concrete tool name. It is normalized to
+/// `None` here so callers that feed the result into `parse_tool_name` (the
+/// heterogeneous strategy arms) treat "no concrete parent" rather than bailing
+/// with `Unknown tool: auto`. Without this, a pinned SA-nested worker spawned in
+/// a detached process tree (no ancestor tool detectable) and a global
+/// `[defaults].tool = "auto"` would crash instead of honoring the inherited
+/// `--model-spec` pin (#1741).
 pub(crate) fn resolve_tool(detected: Option<String>, config: &GlobalConfig) -> Option<String> {
-    detected.or_else(|| config.defaults.tool.clone())
+    detected
+        .or_else(|| config.defaults.tool.clone())
+        .filter(|tool| tool.trim() != "auto" && !tool.trim().is_empty())
 }
 
 #[cfg(test)]

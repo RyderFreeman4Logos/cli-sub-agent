@@ -71,6 +71,30 @@ fn test_gemini_quota_exceeded() {
 }
 
 #[test]
+fn test_gemini_oauth_browser_prompt_is_auth_unavailable_failover() {
+    let result = detect_rate_limit(
+        "gemini-cli",
+        "Opening authentication page in your browser. Do you want to continue? [Y/n]:",
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    );
+
+    let detected = result.expect("OAuth browser prompt should classify");
+    assert_eq!(detected.reason, "auth_unavailable");
+    assert_eq!(
+        detected.matched_pattern,
+        "opening authentication page in your browser"
+    );
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
+    assert_eq!(
+        detected.model_spec.as_deref(),
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
+    );
+}
+
+#[test]
 fn test_gemini_resource_exhausted_uppercase() {
     let result = detect_rate_limit(
         "gemini-cli",

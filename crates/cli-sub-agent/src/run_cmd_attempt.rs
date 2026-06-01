@@ -306,6 +306,12 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             ExecutionEnvOptions::from_no_failover(request.no_failover),
         );
         crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
+        crate::run_cmd_model_pin::inject_subtree_model_pin_env(
+            &mut extra_env,
+            request.subtree_model_pin_spec,
+            request.force_ignore_tier_setting,
+            request.no_failover,
+        );
         let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(
@@ -323,6 +329,13 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         // Prepend context recovery instructions for rate-limit failover retries.
         if let Some(ref addendum) = failover_context_addendum {
             effective_prompt = format!("{addendum}\n\n---\n\n{effective_prompt}");
+        }
+        if let Some(guard) = crate::run_cmd_model_pin::subtree_model_pin_prompt_guard(
+            request.subtree_model_pin_spec,
+            request.force_ignore_tier_setting,
+            request.no_failover,
+        ) {
+            effective_prompt = format!("{guard}\n\n{effective_prompt}");
         }
 
         if request.fork_call

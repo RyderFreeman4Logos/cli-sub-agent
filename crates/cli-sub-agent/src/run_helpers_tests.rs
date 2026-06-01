@@ -557,6 +557,28 @@ fn resolve_tool_returns_none_when_both_missing() {
 }
 
 #[test]
+fn resolve_tool_normalizes_auto_sentinel_default_to_none() {
+    // #1741: `[defaults].tool = "auto"` is the auto-select sentinel, not a tool
+    // name. A pinned SA-nested worker in a detached process tree (no ancestor
+    // detected) must NOT crash with `Unknown tool: auto` when consulting the
+    // heterogeneous strategy — `resolve_tool` normalizes the sentinel to None so
+    // the inherited `--model-spec` pin is honored.
+    let mut config = GlobalConfig::default();
+    config.defaults.tool = Some("auto".to_string());
+
+    assert!(resolve_tool(None, &config).is_none());
+}
+
+#[test]
+fn resolve_tool_normalizes_detected_auto_sentinel_to_none() {
+    // A detected ancestor reported as the literal "auto" is likewise a sentinel,
+    // not a parseable tool name (#1741).
+    let config = GlobalConfig::default();
+
+    assert!(resolve_tool(Some("auto".to_string()), &config).is_none());
+}
+
+#[test]
 fn parse_tool_name_unknown_errors() {
     assert!(super::parse_tool_name("nvim").is_err());
 }

@@ -195,6 +195,18 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         // without a parallel pattern table (#1629).
         "gemini-cli" | "antigravity-cli" => &[
             FailoverPattern {
+                pattern: "oauth browser prompt detected",
+                reason: "auth_unavailable",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
+                pattern: "opening authentication page in your browser",
+                reason: "auth_unavailable",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
                 pattern: "429_quota_exhausted",
                 reason: "429_quota_exhausted",
                 advance_to_next_model: true,
