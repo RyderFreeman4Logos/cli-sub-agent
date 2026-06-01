@@ -60,11 +60,39 @@ where
         return None;
     }
 
+    // Defense-in-depth (#1741): a CSA-injected subtree pin is ALWAYS written
+    // together with CSA_FORCE_IGNORE_TIER_SETTING (see
+    // `inject_subtree_model_pin_env`). A bare CSA_MODEL_SPEC without the paired
+    // marker therefore cannot be a CSA pin — ignore it so a stray/ambient value
+    // never silently pins the subtree and drops tier routing. (The ambient
+    // value is also reserved at the spawn boundary; this is the reader-side
+    // belt to the spawn-side braces.)
+    let force_ignore_tier_setting = lookup(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+        .as_deref()
+        .is_some_and(is_truthy_env_value);
+    if !force_ignore_tier_setting {
+        tracing::warn!(
+            model_spec,
+            "ignoring CSA_MODEL_SPEC without paired CSA_FORCE_IGNORE_TIER_SETTING \
+             (not a CSA-injected subtree pin)"
+        );
+        return None;
+    }
+
+    // Validate the inherited spec is well-formed (tool/provider/model/thinking)
+    // before applying. A malformed/garbage value is ignored rather than pinned.
+    if let Err(err) = csa_executor::ModelSpec::parse(model_spec) {
+        tracing::warn!(
+            model_spec,
+            error = %err,
+            "ignoring malformed inherited CSA_MODEL_SPEC subtree pin"
+        );
+        return None;
+    }
+
     Some(InheritedModelPin {
         model_spec: model_spec.to_string(),
-        force_ignore_tier_setting: lookup(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
-            .as_deref()
-            .is_some_and(is_truthy_env_value),
+        force_ignore_tier_setting,
         no_failover: lookup(CSA_NO_FAILOVER_ENV_KEY)
             .as_deref()
             .is_some_and(is_truthy_env_value),

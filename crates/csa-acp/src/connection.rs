@@ -12,6 +12,9 @@ use agent_client_protocol::{
 use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator};
 use tokio::{process::Child, task::LocalSet};
 
+#[path = "connection_env.rs"]
+mod connection_env;
+
 #[path = "connection_status.rs"]
 mod connection_status;
 use connection_status::{format_stderr, process_exited_error};
@@ -87,27 +90,10 @@ pub struct AcpConnection {
 impl AcpConnection {
     /// Environment variables stripped before spawning ACP child processes.
     ///
-    /// These are set by the parent Claude Code instance and interfere with
-    /// the child ACP adapter or the tool it wraps.
-    pub(crate) const STRIPPED_ENV_VARS: &[&str] = &[
-        // Claude Code sets this to detect recursive invocations.  When
-        // inherited by a child claude-code-acp → claude-code chain, the
-        // child refuses to start.
-        "CLAUDECODE",
-        // Entrypoint tracking for the parent session — not meaningful for
-        // the ACP subprocess.
-        "CLAUDE_CODE_ENTRYPOINT",
-        // Gemini auth/routing must be controlled by CSA retry state so each
-        // fresh invocation still starts on the quota-backed path.
-        "GEMINI_API_KEY",
-        "GOOGLE_GEMINI_BASE_URL",
-        // Lefthook hook-bypass env vars must never leak into child tool
-        // processes.  If the parent process has these set (e.g. from a
-        // user's shell), the child tool would silently skip pre-commit
-        // hooks, violating AGENTS.md rule 029.
-        "LEFTHOOK",
-        "LEFTHOOK_SKIP",
-    ];
+    /// Backed by [`connection_env::STRIPPED_ENV_VARS`]; see that list for the
+    /// per-variable rationale (recursion guards, hook bypass, gemini auth, and
+    /// the CSA-owned subtree model-pin reservation, #1741).
+    pub(crate) const STRIPPED_ENV_VARS: &[&str] = connection_env::STRIPPED_ENV_VARS;
 
     /// Internal constructor used by `connection_spawn` after assembling parts.
     #[allow(clippy::too_many_arguments)]

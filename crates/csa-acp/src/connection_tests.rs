@@ -74,6 +74,22 @@ fn stripped_env_vars_contains_claudecode() {
 }
 
 #[test]
+fn strips_subtree_pin_env_vars() {
+    // #1741: ambient subtree model-pin vars must be reserved so a value leaked
+    // into the shell can never silently pin an otherwise-unpinned subtree.
+    for var in [
+        "CSA_MODEL_SPEC",
+        "CSA_FORCE_IGNORE_TIER_SETTING",
+        "CSA_NO_FAILOVER",
+    ] {
+        assert!(
+            AcpConnection::STRIPPED_ENV_VARS.contains(&var),
+            "STRIPPED_ENV_VARS must reserve {var} from the ambient environment (#1741)"
+        );
+    }
+}
+
+#[test]
 fn format_stderr_empty() {
     assert_eq!(AcpConnection::format_stderr(""), String::new());
 }

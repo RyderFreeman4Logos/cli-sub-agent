@@ -4,9 +4,19 @@ use super::*;
 
 impl Executor {
     /// Inject environment variables from global config into a Command.
+    ///
+    /// Keys present in [`Self::STRIPPED_ENV_VARS`] are skipped so that
+    /// config-supplied values cannot re-introduce a freshly-stripped
+    /// recursion guard or session-scoped var. The subtree model-pin keys are
+    /// the deliberate exception: they live in the strip list to reserve them
+    /// from the *ambient* environment, but CSA itself injects them here (via
+    /// `inject_subtree_model_pin_env`) when the parent was explicitly
+    /// `--model-spec`-pinned, so the CSA-owned value MUST pass through (#1741).
     pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
         for (key, value) in env_vars {
-            if !Self::STRIPPED_ENV_VARS.contains(&key.as_str()) {
+            let is_stripped = Self::STRIPPED_ENV_VARS.contains(&key.as_str());
+            let is_csa_owned_pin = csa_core::env::SUBTREE_PIN_ENV_KEYS.contains(&key.as_str());
+            if !is_stripped || is_csa_owned_pin {
                 cmd.env(key, value);
             }
         }

@@ -166,6 +166,55 @@ fn inherited_pin_from_lookup_requires_child_depth() {
     assert!(pin.no_failover);
 }
 
+/// #1741: an ambient CSA_MODEL_SPEC set in a NON-pinned root (no paired
+/// CSA_FORCE_IGNORE_TIER_SETTING marker) must NOT be honored as a subtree pin —
+/// the child preserves tier auto-routing.
+#[test]
+fn ambient_model_spec_without_force_ignore_is_not_inherited() {
+    let lookup = |key: &str| match key {
+        CSA_MODEL_SPEC_ENV_KEY => Some(PINNED_SPEC.to_string()),
+        // No CSA_FORCE_IGNORE_TIER_SETTING — simulates a value leaked into the
+        // shell rather than a CSA-injected pin.
+        _ => None,
+    };
+
+    assert!(
+        inherited_model_pin_from_lookup(2, lookup).is_none(),
+        "bare CSA_MODEL_SPEC without the paired force-ignore marker must be ignored"
+    );
+}
+
+/// #1741: a malformed inherited CSA_MODEL_SPEC is ignored (not applied), even
+/// when the force-ignore marker is present.
+#[test]
+fn malformed_inherited_model_spec_is_ignored() {
+    let lookup = |key: &str| match key {
+        CSA_MODEL_SPEC_ENV_KEY => Some("not-a-valid-spec".to_string()),
+        CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY => Some("1".to_string()),
+        _ => None,
+    };
+
+    assert!(
+        inherited_model_pin_from_lookup(1, lookup).is_none(),
+        "a CSA_MODEL_SPEC that does not parse as tool/provider/model/thinking must be ignored"
+    );
+}
+
+/// #1741: a CSA-injected pin (paired force-ignore marker + well-formed spec at
+/// child depth) still propagates — the legitimate subtree-pin path stays green.
+#[test]
+fn csa_injected_pin_still_propagates() {
+    let mut env = None;
+    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), true, true);
+    let env = env.expect("CSA-injected pin env");
+
+    let lookup = |key: &str| env.get(key).cloned();
+    let pin = inherited_model_pin_from_lookup(1, lookup).expect("CSA-injected pin is honored");
+    assert_eq!(pin.model_spec, PINNED_SPEC);
+    assert!(pin.force_ignore_tier_setting);
+    assert!(pin.no_failover);
+}
+
 #[test]
 fn subtree_prompt_guard_mentions_required_flags() {
     let guard =

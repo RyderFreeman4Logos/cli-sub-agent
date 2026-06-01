@@ -409,6 +409,12 @@ const CLI_TRANSPORT_STRIPPED_ENV_VARS: &[&str] = &[
     "CSA_PARENT_SESSION_DIR",
     "CSA_DAEMON_SESSION_DIR",
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
+    // Subtree model-pin context vars are reserved from the ambient environment
+    // (#1741); the CSA-injected pin in `extra_env` is deliberately NOT in
+    // CLI_TRANSPORT_CSA_OWNED_ENV_VARS, so it still passes the inject filter.
+    csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+    csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+    csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
 ];
 
 const CLI_TRANSPORT_CSA_OWNED_ENV_VARS: &[&str] = &[

@@ -260,6 +260,64 @@ fn test_stripped_env_vars_contains_lefthook() {
 }
 
 #[test]
+fn test_stripped_env_vars_reserves_subtree_pin() {
+    // #1741: ambient subtree model-pin vars must be reserved so an ambient
+    // value can never silently pin an otherwise-unpinned nested worker.
+    for var in csa_core::env::SUBTREE_PIN_ENV_KEYS {
+        assert!(
+            Executor::STRIPPED_ENV_VARS.contains(var),
+            "STRIPPED_ENV_VARS must reserve subtree-pin var {var} from the ambient environment"
+        );
+    }
+}
+
+#[test]
+fn test_build_command_reserves_ambient_subtree_pin_but_keeps_csa_injected() {
+    let exec = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
+    };
+    let session = make_test_session();
+
+    // CSA-injected pin arrives via extra_env (mirrors inject_subtree_model_pin_env
+    // output: the spec plus its paired force-ignore marker).
+    let mut extra_env = HashMap::new();
+    extra_env.insert(
+        csa_core::env::CSA_MODEL_SPEC_ENV_KEY.to_string(),
+        "codex/openai/gpt-5.5/xhigh".to_string(),
+    );
+    extra_env.insert(
+        csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+        "1".to_string(),
+    );
+
+    let (cmd, _stdin) = exec.build_command("test", None, &session, Some(&extra_env));
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+
+    // The CSA-injected pin (present in extra_env) must survive the strip — it is
+    // the deliberate inject_env exception.
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_MODEL_SPEC")),
+        Some(&Some(std::ffi::OsStr::new("codex/openai/gpt-5.5/xhigh"))),
+        "CSA-injected CSA_MODEL_SPEC must be re-applied (subtree pin propagation)"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_FORCE_IGNORE_TIER_SETTING")),
+        Some(&Some(std::ffi::OsStr::new("1"))),
+        "CSA-injected force-ignore marker must be re-applied"
+    );
+    // CSA_NO_FAILOVER was NOT injected; with no ambient strip override visible,
+    // it must remain reserved (env_removed = None), never leaking an ambient on.
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_NO_FAILOVER")),
+        Some(&None),
+        "CSA_NO_FAILOVER must stay reserved (env_removed) when not CSA-injected"
+    );
+}
+
+#[test]
 fn test_build_command_strips_claudecode_env() {
     let exec = Executor::ClaudeCode {
         model_override: None,
