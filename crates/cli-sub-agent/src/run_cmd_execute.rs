@@ -98,6 +98,8 @@ pub(crate) async fn handle_run(
     extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
     let cli_model_spec_explicit = model_spec.is_some();
+    let cli_model_explicit = model.is_some();
+    let cli_thinking_explicit = thinking.is_some();
     let mut auto_route = auto_route;
     let mut model_spec = model_spec;
     let mut tier = tier;
@@ -243,6 +245,20 @@ pub(crate) async fn handle_run(
     let thinking = skill_res.thinking;
     let model = skill_res.model;
     let skill_session_tag = skill.as_deref().map(skill_session_description);
+    let tier_selection_requested = tier.is_some()
+        || auto_route.is_some()
+        || hint_difficulty.is_some()
+        || frontmatter_difficulty.is_some();
+    crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
+        project_config: config.as_ref(),
+        global_config: &global_config,
+        model_spec: cli_model_spec_explicit,
+        force,
+        force_ignore_tier_setting,
+        model_tier_override: cli_model_explicit && tier_selection_requested,
+        thinking_tier_override: cli_thinking_explicit && tier_selection_requested,
+        inherited_trusted_pin: model_pin_resolution.inherited_trusted_pin,
+    })?;
 
     let model_selection_flags = RunModelSelectionFlags {
         tool: user_explicit_tool,

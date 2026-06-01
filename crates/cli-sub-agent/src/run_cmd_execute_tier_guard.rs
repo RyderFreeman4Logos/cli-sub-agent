@@ -38,10 +38,10 @@ pub(super) fn enforce_direct_tool_tier_guard(ctx: DirectToolTierGuardCtx<'_>) ->
     let err = anyhow::anyhow!(
         "Direct --tool is blocked when tiers are configured.\n\
          Use --tier <name> for tier-based routing, --auto-route <intent> or \
-         --hint-difficulty <label> to route through [tier_mapping], \
-         --model-spec <tool/provider/model/thinking> for exact model selection, or \
-         --force-ignore-tier-setting to bypass.\n\
-         Examples: csa run --tier <name> ...; csa run --tool <tool> --model-spec <tool/provider/model/thinking> ...\n\
+         --hint-difficulty <label> to route through [tier_mapping]. \
+         Emergency exact-model/force bypasses require \
+         [tier_policy].allow_force_bypass = true in the global CSA config.\n\
+         Example: csa run --tier <name> ...\n\
          Available tiers: {}",
         tier_list.join(", ")
     );

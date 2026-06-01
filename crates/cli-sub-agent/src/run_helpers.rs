@@ -26,6 +26,8 @@ mod prompt;
 mod routing_conflict;
 #[path = "run_helpers_routing_request.rs"]
 mod routing_request;
+#[path = "run_helpers_tier_bypass_gate.rs"]
+mod tier_bypass_gate;
 #[path = "run_helpers_tier_resolution.rs"]
 mod tier_resolution;
 #[path = "run_helpers_token_parse.rs"]
@@ -48,6 +50,7 @@ pub(crate) use prompt::{
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
+pub(crate) use tier_bypass_gate::{TierBypassGateCtx, enforce_tier_bypass_gate};
 pub(crate) use tier_resolution::{
     TierToolResolution, collect_available_tier_models, evaluate_tier_models,
     resolve_requested_tool_from_tier, resolve_tool_from_tier,
@@ -90,14 +93,14 @@ pub(crate) fn validate_direct_tool_tier_restriction(
     direct_tool_requested: bool,
     project_config: Option<&ProjectConfig>,
     effective_tier: Option<&str>,
-    force_override_user_config: bool,
+    _force_override_user_config: bool,
     force_ignore_tier_setting: bool,
     model_spec_provided: bool,
 ) -> Result<()> {
     let Some(cfg) = project_config else {
         return Ok(());
     };
-    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+    let bypass_tier = force_ignore_tier_setting;
     if cfg.tiers.is_empty()
         || bypass_tier
         || effective_tier.is_some()
@@ -112,8 +115,9 @@ pub(crate) fn validate_direct_tool_tier_restriction(
     anyhow::bail!(
         "Direct --tool is restricted when tiers are configured. \
          Use --tier <name> to specify which tier's model/thinking config to use, \
-         --hint-difficulty <label> to route through [tier_mapping], \
-         or add --force-ignore-tier-setting to override. \
+         or --hint-difficulty <label> to route through [tier_mapping]. \
+         Emergency direct-tool bypasses require \
+         [tier_policy].allow_force_bypass = true in the global CSA config. \
          Available tiers: [{}]{alias_hint}",
         available.join(", ")
     );
@@ -189,7 +193,7 @@ pub(crate) fn resolve_tool_and_model(
         tool_is_auto_resolved,
     } = request;
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
-    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+    let bypass_tier = force_ignore_tier_setting;
     let exact_selection_active = model_spec.is_some();
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
@@ -216,7 +220,8 @@ pub(crate) fn resolve_tool_and_model(
         anyhow::bail!(
             "Direct --tool/--model/--thinking is restricted when tiers are configured.\n\
              Use --tier <name> to specify which tier's model/thinking config to use, \
-             or add --force-ignore-tier-setting to override.\n\
+             or set [tier_policy].allow_force_bypass = true in the global CSA config \
+             for emergency bypasses.\n\
              Available tiers: [{tier_list}]{alias_hint}\n\
              Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );

@@ -37,6 +37,7 @@ pub(crate) struct HandleRunModelPinResolution {
     pub(crate) auto_route: Option<String>,
     pub(crate) force_ignore_tier_setting: bool,
     pub(crate) no_failover: bool,
+    pub(crate) inherited_trusted_pin: bool,
     pub(crate) subtree_model_pin_active: bool,
 }
 
@@ -212,6 +213,7 @@ pub(crate) fn resolve_handle_run_model_pin(
         auto_route: resolution.auto_route,
         force_ignore_tier_setting: resolution.force_ignore_tier_setting,
         no_failover: resolution.no_failover,
+        inherited_trusted_pin: inherited_pin_active,
         subtree_model_pin_active,
     }
 }

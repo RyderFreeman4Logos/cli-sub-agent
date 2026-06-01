@@ -425,9 +425,9 @@ fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
     assert_eq!(tool, ToolName::Codex);
 }
 
-/// --force (force_override_user_config) also bypasses tier enforcement.
+/// --force-override-user-config only bypasses tool enablement, not tier enforcement.
 #[test]
-fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
+fn resolve_tool_and_model_force_override_user_config_does_not_bypass_tiers() {
     let cfg = config_with_tier(
         "default",
         vec!["gemini-cli/google/default/xhigh"],
@@ -436,12 +436,15 @@ fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
         config: Some(&cfg),
-        force_override_user_config: true, // force_override_user_config → bypasses tier enforcement
+        force_override_user_config: true,
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
-    assert!(result.is_ok(), "should bypass: {}", result.unwrap_err());
-    let (tool, _, _) = result.unwrap();
-    assert_eq!(tool, ToolName::Codex);
+    assert!(result.is_err(), "force-override should not bypass tiers");
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Direct --tool/--model/--thinking is restricted"),
+        "{msg}"
+    );
 }
 
 /// When tiers HashMap is empty (no tiers configured), direct --tool works normally.
