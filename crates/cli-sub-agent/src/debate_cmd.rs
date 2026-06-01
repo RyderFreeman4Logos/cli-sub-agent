@@ -88,11 +88,13 @@ pub(crate) async fn handle_debate(
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
-        model_spec: args.model_spec.is_some(),
-        force: false,
-        force_ignore_tier_setting: args.force_ignore_tier_setting,
-        model_tier_override: args.model.is_some(),
-        thinking_tier_override: args.thinking.is_some(),
+        flags: crate::run_helpers::TierBypassGateFlags {
+            model_spec: args.model_spec.is_some(),
+            force: false,
+            force_ignore_tier_setting: args.force_ignore_tier_setting,
+            model: args.model.is_some(),
+            thinking: args.thinking.is_some(),
+        },
         inherited_trusted_pin,
     })?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();

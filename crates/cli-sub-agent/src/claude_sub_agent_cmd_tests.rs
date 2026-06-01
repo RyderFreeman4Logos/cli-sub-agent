@@ -117,7 +117,7 @@ fn resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_too
             needs_edit: false,
             tier: None,
             force_ignore_tier_setting: false,
-            model_spec_tier_bypass_allowed: false,
+            tier_bypass_allowed: false,
             tool_is_auto_resolved: true,
         })
         .expect("auto-selected claude-sub-agent tool should not block explicit model_spec");

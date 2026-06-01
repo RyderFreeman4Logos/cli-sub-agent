@@ -58,12 +58,11 @@ csa debate --sa-mode true "Should we use gRPC or REST for our new microservice A
 # Continue debate — pass counterargument in existing session
 csa debate --sa-mode true --session <SESSION_ID> "I disagree because gRPC adds complexity for our small team"
 
-# Override tool selection (bypass auto routing — only when necessary)
-# Note: when tiers are configured, add --force-ignore-tier-setting before --tool
-csa debate --sa-mode true --force-ignore-tier-setting --tool codex "How should we handle distributed transactions?"
+# Prefer a tool within the selected tier
+csa debate --sa-mode true --tier tier-3-complex --tool codex "How should we handle distributed transactions?"
 
-# Override model within selected tool (use models from `csa tiers list`)
-csa debate --sa-mode true --model <MODEL> "What caching strategy should we use?"
+# Select a stronger configured tier
+csa debate --sa-mode true --tier tier-4-critical "What caching strategy should we use?"
 
 # Pipe long prompts via stdin
 echo "Given this architecture: ... Should we refactor?" | csa debate --sa-mode true
@@ -77,11 +76,11 @@ This is the pattern for embedding `csa debate` as the standard decision-making s
 
 ```
 1. You (the caller) have a question or proposal
-2. Run: csa debate "your question/proposal"
+2. Run: csa debate --sa-mode true "your question/proposal"
 3. Read the independent model's response
 4. If you agree → adopt the strategy, note the consensus
 5. If you disagree → counter-argue:
-   csa debate --session <ID> "I disagree because X. My alternative is Y."
+   csa debate --sa-mode true --session <ID> "I disagree because X. My alternative is Y."
 6. Read the response, repeat steps 4-5 until consensus
 7. Document the final decision with the debate session ID for audit trail
 ```
@@ -93,10 +92,10 @@ This is the pattern for embedding `csa debate` as the standard decision-making s
 
 Before any non-trivial design decision (architecture, API design, data model, error handling strategy):
 
-1. Run `csa debate "describe the decision and your initial leaning"`
+1. Run `csa debate --sa-mode true "describe the decision and your initial leaning"`
 2. Read the independent model's analysis
 3. If the model raises valid concerns you hadn't considered, revise your approach
-4. If you disagree, counter-argue: `csa debate --session <ID> "your counterpoint"`
+4. If you disagree, counter-argue: `csa debate --sa-mode true --session <ID> "your counterpoint"`
 5. Continue until consensus or 3 rounds (whichever comes first)
 6. Document: "Decided X after debate (session: <ID>)"
 
@@ -180,14 +179,15 @@ For the selected tier, build the `models[]` list:
 
 ### Step 3: Debate Loop
 
-Within the selected tier, models alternate via round-robin:
-- `models[0]` = Proposer (Round 1), Responder (Round 2), ...
-- `models[1]` = Critic (Round 1), Proposer (Round 2), ...
-- `models[2]` = next in rotation if available
+Within the selected tier, CSA resolves model specs from the tier while the orchestrator
+uses tool preferences to keep proposer and critic roles heterogeneous when possible:
+- `{proposer_tool}` = preferred proposer tool for this round
+- `{critic_tool}` = preferred critic tool for this round
+- Escalation updates `{current_tier}` and reruns the same tier-based commands
 
 **Round N (Proposal)**:
 ```bash
-SID=$(csa run --model-spec "{models[proposer_index]}" --ephemeral \
+SID=$(csa run --sa-mode true --tier "{current_tier}" --tool "{proposer_tool}" --ephemeral \
   "Question: {question}
 
 You are the PROPOSER in an adversarial debate. {context_from_previous_rounds}
@@ -202,7 +202,7 @@ csa session wait --session "$SID"
 
 **Round N (Critique)**:
 ```bash
-SID=$(csa run --model-spec "{models[critic_index]}" --ephemeral \
+SID=$(csa run --sa-mode true --tier "{current_tier}" --tool "{critic_tool}" --ephemeral \
   "Question: {question}
 
 You are the CRITIC in an adversarial debate.
@@ -222,7 +222,7 @@ csa session wait --session "$SID"
 
 **Round N (Response)**:
 ```bash
-SID=$(csa run --model-spec "{models[responder_index]}" --ephemeral \
+SID=$(csa run --sa-mode true --tier "{current_tier}" --tool "{proposer_tool}" --ephemeral \
   "Question: {question}
 
 You are the PROPOSER responding to criticism.
@@ -263,11 +263,11 @@ When escalation is triggered:
 1. Find the next higher tier (by sorted tier name order).
 2. If no higher tier exists, end the debate with current best result.
 3. Summarize the debate so far as context for the new tier.
-4. Restart the debate loop with the higher tier's models.
+4. Restart the debate loop with the higher tier.
 
 ```bash
 # Example: escalating from tier-1-quick to tier-2-standard
-SID=$(csa run --model-spec "{higher_tier_models[0]}" --ephemeral \
+SID=$(csa run --sa-mode true --tier "{higher_tier}" --ephemeral \
   "Question: {question}
 
 PREVIOUS DEBATE SUMMARY (lower-tier models could not resolve):
@@ -379,12 +379,12 @@ rather than omitting the section.
 ```
 User: "Should we refactor the auth module to use JWT instead of sessions?"
 
-Agent runs: csa debate "We're considering replacing server-side sessions with JWT for our auth module. Current system uses Redis-backed sessions. Team size: 3 developers. Scale: ~10k DAU."
+Agent runs: csa debate --sa-mode true "We're considering replacing server-side sessions with JWT for our auth module. Current system uses Redis-backed sessions. Team size: 3 developers. Scale: ~10k DAU."
 
 # Heterogeneous model responds with analysis, arguments for/against
 
 Agent disagrees with a point:
-csa debate --session 01JK... "Your concern about token revocation is valid, but we plan to use short-lived tokens (15min) with refresh rotation, which mitigates this."
+csa debate --sa-mode true --session 01JK... "Your concern about token revocation is valid, but we plan to use short-lived tokens (15min) with refresh rotation, which mitigates this."
 
 # Model responds to counterpoint
 
@@ -414,5 +414,5 @@ Debate flow:
 4. No hardcoded model names in any invocation.
 5. Zero direct tool invocations (all through CSA).
 6. If any CSA command failed, debate was stopped and error reported.
-7. **All participant model specs listed in `tool/provider/model/thinking_budget` format** (audit trail).
+7. **Selected tiers, tool preferences, and resolved participant model specs recorded** (audit trail).
 8. **If used for PR arbitration**: debate result posted to PR comment with full model specs and round summaries (see PR Integration section above).

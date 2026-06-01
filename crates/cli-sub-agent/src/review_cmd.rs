@@ -113,11 +113,13 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
-        model_spec: args.model_spec.is_some(),
-        force: false,
-        force_ignore_tier_setting: args.force_ignore_tier_setting,
-        model_tier_override: args.model.is_some(),
-        thinking_tier_override: args.thinking.is_some(),
+        flags: crate::run_helpers::TierBypassGateFlags {
+            model_spec: args.model_spec.is_some(),
+            force: false,
+            force_ignore_tier_setting: args.force_ignore_tier_setting,
+            model: args.model.is_some(),
+            thinking: args.thinking.is_some(),
+        },
         inherited_trusted_pin,
     })?;
     validate_review_direct_tool_tier_restriction(

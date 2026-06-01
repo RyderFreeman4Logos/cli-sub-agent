@@ -156,7 +156,7 @@ fn resolve_claude_sub_agent_tool_and_model(
         needs_edit: false, // claude-sub-agent does not require edit-capable tool filtering
         tier: None,        // claude-sub-agent does not support --tier
         force_ignore_tier_setting: false, // claude-sub-agent does not support --force-ignore-tier-setting
-        model_spec_tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
+        tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
             project_config,
             global_config,
             false,

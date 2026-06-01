@@ -1,14 +1,20 @@
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TierBypassGateFlags {
+    pub(crate) model_spec: bool,
+    pub(crate) force: bool,
+    /// Backed by `--force-ignore-tier-setting` and its `--force-tier` alias.
+    pub(crate) force_ignore_tier_setting: bool,
+    pub(crate) model: bool,
+    pub(crate) thinking: bool,
+}
+
 pub(crate) struct TierBypassGateCtx<'a> {
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) global_config: &'a GlobalConfig,
-    pub(crate) model_spec: bool,
-    pub(crate) force: bool,
-    pub(crate) force_ignore_tier_setting: bool,
-    pub(crate) model_tier_override: bool,
-    pub(crate) thinking_tier_override: bool,
+    pub(crate) flags: TierBypassGateFlags,
     pub(crate) inherited_trusted_pin: bool,
 }
 
@@ -53,19 +59,19 @@ pub(crate) fn tier_bypass_allowed(
 
 fn refused_tier_bypass_flags(ctx: &TierBypassGateCtx<'_>) -> Vec<&'static str> {
     let mut flags = Vec::new();
-    if ctx.model_spec {
+    if ctx.flags.model_spec {
         flags.push("--model-spec");
     }
-    if ctx.force {
+    if ctx.flags.force {
         flags.push("--force");
     }
-    if ctx.force_ignore_tier_setting {
+    if ctx.flags.force_ignore_tier_setting {
         flags.push("--force-ignore-tier-setting");
     }
-    if ctx.model_tier_override {
+    if ctx.flags.model {
         flags.push("--model");
     }
-    if ctx.thinking_tier_override {
+    if ctx.flags.thinking {
         flags.push("--thinking");
     }
     flags

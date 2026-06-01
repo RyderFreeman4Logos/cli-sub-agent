@@ -78,20 +78,21 @@ impl RunModelSelectionFlags {
 pub(super) fn enforce_run_tier_bypass_gate(
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
-    flags: RunModelSelectionFlags,
+    selection_flags: RunModelSelectionFlags,
     force: bool,
     force_ignore_tier_setting: bool,
     inherited_trusted_pin: bool,
 ) -> Result<()> {
-    let tier_selection_requested = flags.tier || flags.auto_route || flags.hint_difficulty;
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config,
         global_config,
-        model_spec: flags.model_spec,
-        force,
-        force_ignore_tier_setting,
-        model_tier_override: flags.cli_model && tier_selection_requested,
-        thinking_tier_override: flags.cli_thinking && tier_selection_requested,
+        flags: crate::run_helpers::TierBypassGateFlags {
+            model_spec: selection_flags.model_spec,
+            force,
+            force_ignore_tier_setting,
+            model: selection_flags.cli_model,
+            thinking: selection_flags.cli_thinking,
+        },
         inherited_trusted_pin,
     })
 }

@@ -39,11 +39,13 @@ fn tier_bypass_gate_allows_bypass_flags_when_no_tiers_configured() {
     super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
         global_config: &GlobalConfig::default(),
-        model_spec: true,
-        force: true,
-        force_ignore_tier_setting: true,
-        model_tier_override: true,
-        thinking_tier_override: true,
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: true,
+            force_ignore_tier_setting: true,
+            model: true,
+            thinking: true,
+        },
         inherited_trusted_pin: false,
     })
     .expect("no tiers configured should preserve exact/force bypass behavior");
@@ -62,11 +64,13 @@ fn tier_bypass_gate_allows_bypass_flags_with_global_opt_in() {
     super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
         global_config: &global,
-        model_spec: true,
-        force: true,
-        force_ignore_tier_setting: true,
-        model_tier_override: true,
-        thinking_tier_override: true,
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: true,
+            force_ignore_tier_setting: true,
+            model: true,
+            thinking: true,
+        },
         inherited_trusted_pin: false,
     })
     .expect("global opt-in should allow emergency exact/force bypasses");
@@ -93,11 +97,13 @@ fn tier_bypass_gate_rejects_model_spec_and_force_by_default() {
     let err = super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
         global_config: &GlobalConfig::default(),
-        model_spec: true,
-        force: false,
-        force_ignore_tier_setting: true,
-        model_tier_override: false,
-        thinking_tier_override: false,
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: false,
+            force_ignore_tier_setting: true,
+            model: false,
+            thinking: false,
+        },
         inherited_trusted_pin: false,
     })
     .expect_err("tier bypass should be gated by default when tiers exist");
@@ -111,17 +117,46 @@ fn tier_bypass_gate_rejects_model_spec_and_force_by_default() {
 }
 
 #[test]
+fn tier_bypass_gate_rejects_all_gated_flags_by_default() {
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+
+    let err = super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
+        project_config: Some(&cfg),
+        global_config: &GlobalConfig::default(),
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: true,
+            force_ignore_tier_setting: true,
+            model: true,
+            thinking: true,
+        },
+        inherited_trusted_pin: false,
+    })
+    .expect_err("all gated flags should be rejected by default when tiers exist");
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains(
+            "Refused flags: --model-spec, --force, --force-ignore-tier-setting, --model, --thinking"
+        ),
+        "{msg}"
+    );
+}
+
+#[test]
 fn tier_bypass_gate_allows_inherited_trusted_pin() {
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
 
     super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
         global_config: &GlobalConfig::default(),
-        model_spec: false,
-        force: false,
-        force_ignore_tier_setting: true,
-        model_tier_override: false,
-        thinking_tier_override: false,
+        flags: super::TierBypassGateFlags {
+            model_spec: false,
+            force: false,
+            force_ignore_tier_setting: true,
+            model: false,
+            thinking: false,
+        },
         inherited_trusted_pin: true,
     })
     .expect("trusted inherited #1741 subtree pins should continue under gate-off");
@@ -276,11 +311,13 @@ fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
     super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
         global_config: &global,
-        model_spec: true,
-        force: false,
-        force_ignore_tier_setting: false,
-        model_tier_override: false,
-        thinking_tier_override: false,
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: false,
+            force_ignore_tier_setting: false,
+            model: false,
+            thinking: false,
+        },
         inherited_trusted_pin: false,
     })
     .expect("global opt-in should allow bare --model-spec tier bypass");
@@ -288,7 +325,7 @@ fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         model_spec: Some("codex/openai/gpt-5.4/high"),
         config: Some(&cfg),
-        model_spec_tier_bypass_allowed: super::tier_bypass_allowed(Some(&cfg), &global, false),
+        tier_bypass_allowed: super::tier_bypass_allowed(Some(&cfg), &global, false),
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     })
     .expect("opted-in bare --model-spec should resolve exact model");
@@ -296,6 +333,32 @@ fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
     assert_eq!(result.0, ToolName::Codex);
     assert_eq!(result.1.as_deref(), Some("codex/openai/gpt-5.4/high"));
     assert!(result.2.is_none());
+}
+
+#[test]
+fn resolve_tool_and_model_allows_thinking_when_global_tier_bypass_opted_in() {
+    let _guard = assume_tier_tools_available();
+    let mut cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.4/high"], &["codex"]);
+    cfg.tier_mapping
+        .insert("default".to_string(), "tier-1".to_string());
+    let global = GlobalConfig {
+        tier_policy: csa_config::TierPolicyConfig {
+            allow_force_bypass: true,
+        },
+        ..Default::default()
+    };
+
+    let bypass_allowed = super::tier_bypass_allowed(Some(&cfg), &global, false);
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        thinking: Some("low"),
+        config: Some(&cfg),
+        tier_bypass_allowed: bypass_allowed,
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    })
+    .expect("opted-in bare --thinking should resolve through the default tier");
+
+    assert_eq!(result.0, ToolName::Codex);
+    assert_eq!(result.1.as_deref(), Some("codex/openai/gpt-5.4/high"));
 }
 
 #[test]

@@ -408,6 +408,27 @@ fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
     );
 }
 
+/// When tiers are configured, direct --thinking alone is blocked.
+#[test]
+fn resolve_tool_and_model_blocks_direct_thinking_alone_when_tiers_configured() {
+    let cfg = config_with_tier(
+        "default",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        thinking: Some("low"),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("restricted when tiers are configured"),
+        "unexpected error: {msg}"
+    );
+}
+
 /// --force-ignore-tier-setting bypasses the enforcement.
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {

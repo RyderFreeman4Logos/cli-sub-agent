@@ -174,6 +174,7 @@ pub(crate) fn resolve_tool_by_strategy(
     force_ignore_tier_setting: bool,
 ) -> Result<StrategyResolution> {
     crate::run_helpers::validate_model_spec_tier_conflict(model_spec, tier, "run")?;
+    let tier_bypass_allowed = crate::run_helpers::tier_bypass_allowed(config, global_config, false);
     match strategy {
         ToolSelectionStrategy::Explicit(t) => {
             let (tool, ms, m) = resolve_tool_and_model(crate::run_helpers::RoutingRequest {
@@ -187,6 +188,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
+                tier_bypass_allowed,
                 tool_is_auto_resolved: false,
                 ..crate::run_helpers::RoutingRequest::new(project_root)
             })?;
@@ -211,6 +213,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
+                tier_bypass_allowed,
                 tool_is_auto_resolved: true,
                 ..crate::run_helpers::RoutingRequest::new(project_root)
             })?;
@@ -299,6 +302,7 @@ fn resolve_heterogeneous_preferred(
 ) -> Result<StrategyResolution> {
     let detected_parent_tool = detect_parent_tool();
     let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
+    let tier_bypass_allowed = crate::run_helpers::tier_bypass_allowed(config, global_config, false);
 
     if let Some(parent_str) = parent_tool_name.as_deref() {
         let parent_tool = parse_tool_name(parent_str)?;
@@ -324,6 +328,7 @@ fn resolve_heterogeneous_preferred(
                     needs_edit,
                     tier,
                     force_ignore_tier_setting,
+                    tier_bypass_allowed,
                     tool_is_auto_resolved: true,
                     ..crate::run_helpers::RoutingRequest::new(project_root)
                 })?;
@@ -353,6 +358,7 @@ fn resolve_heterogeneous_preferred(
                     needs_edit,
                     tier,
                     force_ignore_tier_setting,
+                    tier_bypass_allowed,
                     tool_is_auto_resolved: true,
                     ..crate::run_helpers::RoutingRequest::new(project_root)
                 })?;
@@ -381,6 +387,7 @@ fn resolve_heterogeneous_preferred(
             needs_edit,
             tier,
             force_ignore_tier_setting,
+            tier_bypass_allowed,
             tool_is_auto_resolved: true,
             ..crate::run_helpers::RoutingRequest::new(project_root)
         })?;
@@ -410,6 +417,7 @@ fn resolve_heterogeneous_strict(
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     let detected_parent_tool = detect_parent_tool();
     let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
+    let tier_bypass_allowed = crate::run_helpers::tier_bypass_allowed(config, global_config, false);
 
     if let Some(parent_str) = parent_tool_name.as_deref() {
         let parent_tool = parse_tool_name(parent_str)?;
@@ -427,6 +435,7 @@ fn resolve_heterogeneous_strict(
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
+                tier_bypass_allowed,
                 tool_is_auto_resolved: true,
                 ..crate::run_helpers::RoutingRequest::new(project_root)
             }),
@@ -454,6 +463,7 @@ fn resolve_heterogeneous_strict(
             needs_edit,
             tier,
             force_ignore_tier_setting,
+            tier_bypass_allowed,
             tool_is_auto_resolved: true,
             ..crate::run_helpers::RoutingRequest::new(project_root)
         })

@@ -106,7 +106,7 @@ The review prompt instructs the agent to: read project context (CLAUDE.md + AGEN
 ### Step 3: Execute Review via CSA
 
 ```bash
-SID=$(csa run --sa-mode true --force-ignore-tier-setting --tool {review_tool} \
+SID=$(csa run --sa-mode true --tier tier-3-complex --tool {review_tool} \
   --description "code-review: {scope}" \
   "{REVIEW_PROMPT}")
 csa session wait --session "$SID"
@@ -195,7 +195,7 @@ to fix issues found during review. This is the recommended way to implement
 the "reviewer fixes its own findings" pattern:
 
 ```bash
-csa review --branch main --fix --max-rounds 3
+csa review --sa-mode true --branch main --fix --max-rounds 3
 ```
 
 **How it works:**

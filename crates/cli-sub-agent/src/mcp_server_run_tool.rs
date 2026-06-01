@@ -69,11 +69,13 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
-        model_spec: model_spec.is_some(),
-        force: false,
-        force_ignore_tier_setting: force_ignore_tier,
-        model_tier_override: false,
-        thinking_tier_override: false,
+        flags: crate::run_helpers::TierBypassGateFlags {
+            model_spec: model_spec.is_some(),
+            force: false,
+            force_ignore_tier_setting: force_ignore_tier,
+            model: false,
+            thinking: false,
+        },
         inherited_trusted_pin: false,
     })?;
 
@@ -91,7 +93,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
             needs_edit: false,                 // MCP tool dispatch always uses explicit tool
             tier: tier_arg,                    // --tier from MCP arguments
             force_ignore_tier_setting: force_ignore_tier, // --force-ignore-tier-setting from MCP arguments
-            model_spec_tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
+            tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
                 config.as_ref(),
                 &global_config,
                 false,

@@ -51,7 +51,9 @@ pub(crate) use prompt::{
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
 pub(crate) use tier_bypass_gate::tier_bypass_allowed;
-pub(crate) use tier_bypass_gate::{TierBypassGateCtx, enforce_tier_bypass_gate};
+pub(crate) use tier_bypass_gate::{
+    TierBypassGateCtx, TierBypassGateFlags, enforce_tier_bypass_gate,
+};
 pub(crate) use tier_resolution::{
     TierToolResolution, collect_available_tier_models, collect_preferred_tier_models,
     evaluate_tier_models, resolve_preferred_tool_from_tier, resolve_tool_from_tier,
@@ -191,17 +193,16 @@ pub(crate) fn resolve_tool_and_model(
         needs_edit,
         tier,
         force_ignore_tier_setting,
-        model_spec_tier_bypass_allowed,
+        tier_bypass_allowed,
         tool_is_auto_resolved,
     } = request;
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
-    let bypass_tier = force_ignore_tier_setting;
-    let bypass_model_spec_tier_check = bypass_tier || model_spec_tier_bypass_allowed;
+    let bypass_tier = force_ignore_tier_setting || tier_bypass_allowed;
     let exact_selection_active = model_spec.is_some();
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
-    // unless --force-ignore-tier-setting (or --force) is active. --model-spec is
-    // exact selection, but it must still match a configured tier model below.
+    // unless a shared tier-bypass gate has accepted an explicit bypass. --model-spec is
+    // exact selection, but it must still match a configured tier model unless bypassed below.
     // Auto-resolved tools (from HeterogeneousPreferred etc.) don't count as user-explicit.
     let tool_triggers_enforcement = tool.is_some() && !tool_is_auto_resolved;
     validate_tool_tier_override_flags(tool_triggers_enforcement, tier, force_ignore_tier_setting)?;
@@ -209,7 +210,7 @@ pub(crate) fn resolve_tool_and_model(
         && !bypass_tier
         && tier.is_none()
         && !exact_selection_active
-        && (tool_triggers_enforcement || model.is_some())
+        && (tool_triggers_enforcement || model.is_some() || thinking.is_some())
     {
         let cfg = config.unwrap();
         let mut tier_list = String::new();
@@ -340,7 +341,7 @@ pub(crate) fn resolve_tool_and_model(
         // Enforce tool enablement from user config
         if let Some(cfg) = config {
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
-            if !force && !bypass_model_spec_tier_check {
+            if !force && !bypass_tier {
                 if cfg.tiers.is_empty() {
                     enforce_model_spec_matches_tool_default(cfg, &parsed, spec)?;
                 } else {
