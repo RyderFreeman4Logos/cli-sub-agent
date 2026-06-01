@@ -107,6 +107,60 @@ pub(crate) fn apply_inherited_model_pin(
     }
 }
 
+/// Resolved subtree pin for the `csa review` / `csa debate` execution paths.
+///
+/// Mirrors the `csa run` inheritance: when the command carries no explicit
+/// `--model-spec` but a parent pinned the SA subtree via `CSA_MODEL_SPEC`
+/// (at child depth > 0), the child inherits the spec (and the OR-ed
+/// `force_ignore_tier_setting` / `no_failover`) and drops tier routing so the
+/// pinned tool is selected instead of the tier's first tool. An explicit
+/// `--model-spec` on the call overrides; an unpinned / depth-0 invocation is
+/// returned unchanged so tier routing is preserved (#1741).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InheritedPinForReviewDebate {
+    pub(crate) model_spec: Option<String>,
+    pub(crate) tier: Option<String>,
+    pub(crate) force_ignore_tier_setting: bool,
+    pub(crate) no_failover: bool,
+    /// True when a parent subtree pin was actually inherited (i.e. the spec/tier
+    /// were overridden from the environment). Unchanged on explicit-spec,
+    /// unpinned, or depth-0 paths.
+    pub(crate) inherited: bool,
+}
+
+/// Apply the inherited SA subtree pin to a `csa review` / `csa debate` call.
+///
+/// Reuses the same [`inherited_model_pin_from_env`] + [`apply_inherited_model_pin`]
+/// machinery as `csa run`, so precedence is identical: explicit `--model-spec`
+/// wins over the inherited env pin, which wins over tier, which wins over
+/// defaults. `auto_route` has no analog for review/debate, so `None` is passed
+/// through.
+pub(crate) fn apply_inherited_pin_for_review_debate(
+    model_spec: Option<String>,
+    tier: Option<String>,
+    force_ignore_tier_setting: bool,
+    no_failover: bool,
+    current_depth: u32,
+) -> InheritedPinForReviewDebate {
+    let resolution = apply_inherited_model_pin(
+        RunModelPinInput {
+            model_spec,
+            tier,
+            auto_route: None,
+            force_ignore_tier_setting,
+            no_failover,
+        },
+        inherited_model_pin_from_env(current_depth),
+    );
+    InheritedPinForReviewDebate {
+        model_spec: resolution.model_spec,
+        tier: resolution.tier,
+        force_ignore_tier_setting: resolution.force_ignore_tier_setting,
+        no_failover: resolution.no_failover,
+        inherited: resolution.inherited_pin.is_some(),
+    }
+}
+
 pub(crate) fn resolve_handle_run_model_pin(
     input: RunModelPinInput,
     current_depth: u32,
@@ -194,239 +248,5 @@ fn is_truthy_env_value(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::run_cmd_tool_selection::resolve_tool_by_strategy;
-    use csa_config::global::DefaultsConfig;
-    use csa_config::{
-        GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy,
-        ToolConfig,
-    };
-    use csa_core::types::{ToolName, ToolSelectionStrategy};
-
-    const PINNED_SPEC: &str = "codex/openai/gpt-5.5/xhigh";
-
-    #[test]
-    fn pinned_child_inherits_model_spec_and_drops_tier_routing() {
-        let resolution = apply_inherited_model_pin(
-            RunModelPinInput {
-                model_spec: None,
-                tier: Some("tier-4-critical".to_string()),
-                auto_route: Some("complex".to_string()),
-                force_ignore_tier_setting: false,
-                no_failover: false,
-            },
-            Some(InheritedModelPin {
-                model_spec: PINNED_SPEC.to_string(),
-                force_ignore_tier_setting: true,
-                no_failover: true,
-            }),
-        );
-
-        assert_eq!(resolution.model_spec.as_deref(), Some(PINNED_SPEC));
-        assert!(resolution.tier.is_none());
-        assert!(resolution.auto_route.is_none());
-        assert!(resolution.force_ignore_tier_setting);
-        assert!(resolution.no_failover);
-        assert!(resolution.inherited_pin.is_some());
-    }
-
-    #[test]
-    fn inherited_pin_selects_pinned_model_instead_of_tier_first_tool() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let config = config_with_tier_models(&[
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-            PINNED_SPEC,
-        ]);
-        let resolution = apply_inherited_model_pin(
-            RunModelPinInput {
-                model_spec: None,
-                tier: Some("tier-4-critical".to_string()),
-                auto_route: None,
-                force_ignore_tier_setting: false,
-                no_failover: false,
-            },
-            Some(InheritedModelPin {
-                model_spec: PINNED_SPEC.to_string(),
-                force_ignore_tier_setting: true,
-                no_failover: true,
-            }),
-        );
-        let global_config = GlobalConfig {
-            defaults: DefaultsConfig {
-                tool: Some("auto".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let selected = resolve_tool_by_strategy(
-            &ToolSelectionStrategy::HeterogeneousPreferred,
-            resolution.model_spec.as_deref(),
-            None,
-            None,
-            Some(&config),
-            &global_config,
-            temp.path(),
-            false,
-            false,
-            true,
-            resolution.tier.as_deref(),
-            resolution.force_ignore_tier_setting,
-        )
-        .expect("resolve inherited pin");
-
-        assert_eq!(selected.tool, ToolName::Codex);
-        assert_eq!(selected.model_spec.as_deref(), Some(PINNED_SPEC));
-        assert!(selected.resolved_tier_name.is_none());
-    }
-
-    #[test]
-    fn unpinned_child_preserves_tier_routing() {
-        let resolution = apply_inherited_model_pin(
-            RunModelPinInput {
-                model_spec: None,
-                tier: Some("tier-4-critical".to_string()),
-                auto_route: Some("complex".to_string()),
-                force_ignore_tier_setting: false,
-                no_failover: false,
-            },
-            None,
-        );
-
-        assert!(resolution.model_spec.is_none());
-        assert_eq!(resolution.tier.as_deref(), Some("tier-4-critical"));
-        assert_eq!(resolution.auto_route.as_deref(), Some("complex"));
-        assert!(!resolution.force_ignore_tier_setting);
-        assert!(!resolution.no_failover);
-    }
-
-    #[test]
-    fn explicit_child_model_spec_overrides_inherited_pin() {
-        let explicit_spec = "gemini-cli/google/gemini-3.1-pro-preview/xhigh";
-        let resolution = apply_inherited_model_pin(
-            RunModelPinInput {
-                model_spec: Some(explicit_spec.to_string()),
-                tier: None,
-                auto_route: None,
-                force_ignore_tier_setting: false,
-                no_failover: false,
-            },
-            Some(InheritedModelPin {
-                model_spec: PINNED_SPEC.to_string(),
-                force_ignore_tier_setting: true,
-                no_failover: true,
-            }),
-        );
-
-        assert_eq!(resolution.model_spec.as_deref(), Some(explicit_spec));
-        assert!(!resolution.force_ignore_tier_setting);
-        assert!(!resolution.no_failover);
-        assert!(resolution.inherited_pin.is_none());
-    }
-
-    #[test]
-    fn subtree_env_requires_force_ignore_pin() {
-        let mut env = None;
-        inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), false, true);
-        assert!(env.is_none());
-
-        inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), true, true);
-        let env = env.expect("pin env");
-        assert_eq!(
-            env.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
-            Some(PINNED_SPEC)
-        );
-        assert_eq!(
-            env.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
-                .map(String::as_str),
-            Some("1")
-        );
-        assert_eq!(
-            env.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
-            Some("1")
-        );
-    }
-
-    #[test]
-    fn inherited_pin_from_lookup_requires_child_depth() {
-        let lookup = |key: &str| match key {
-            CSA_MODEL_SPEC_ENV_KEY => Some(PINNED_SPEC.to_string()),
-            CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY => Some("true".to_string()),
-            CSA_NO_FAILOVER_ENV_KEY => Some("yes".to_string()),
-            _ => None,
-        };
-
-        assert!(inherited_model_pin_from_lookup(0, lookup).is_none());
-        let pin = inherited_model_pin_from_lookup(1, lookup).expect("child pin");
-        assert_eq!(pin.model_spec, PINNED_SPEC);
-        assert!(pin.force_ignore_tier_setting);
-        assert!(pin.no_failover);
-    }
-
-    #[test]
-    fn subtree_prompt_guard_mentions_required_flags() {
-        let guard =
-            subtree_model_pin_prompt_guard(Some(PINNED_SPEC), true, true).expect("prompt guard");
-
-        assert!(guard.contains("--model-spec codex/openai/gpt-5.5/xhigh"));
-        assert!(guard.contains("--force-ignore-tier-setting"));
-        assert!(guard.contains("--no-failover"));
-        assert!(guard.contains("CSA_MODEL_SPEC"));
-    }
-
-    fn config_with_tier_models(models: &[&str]) -> ProjectConfig {
-        let mut tools = std::collections::HashMap::new();
-        for tool in csa_config::global::all_known_tools() {
-            let name = tool.as_str();
-            tools.insert(
-                name.to_string(),
-                ToolConfig {
-                    enabled: matches!(name, "codex" | "gemini-cli"),
-                    ..Default::default()
-                },
-            );
-        }
-
-        ProjectConfig {
-            schema_version: csa_config::config::CURRENT_SCHEMA_VERSION,
-            project: ProjectMeta {
-                name: "test".to_string(),
-                created_at: chrono::Utc::now(),
-                max_recursion_depth: 5,
-            },
-            resources: ResourcesConfig::default(),
-            acp: Default::default(),
-            tools,
-            review: None,
-            debate: None,
-            tiers: std::collections::HashMap::from([(
-                "tier-4-critical".to_string(),
-                TierConfig {
-                    description: "Critical tier".to_string(),
-                    models: models.iter().map(|model| (*model).to_string()).collect(),
-                    strategy: TierStrategy::default(),
-                    token_budget: None,
-                    max_turns: None,
-                },
-            )]),
-            tier_mapping: std::collections::HashMap::from([(
-                "default".to_string(),
-                "tier-4-critical".to_string(),
-            )]),
-            aliases: std::collections::HashMap::new(),
-            tool_aliases: std::collections::HashMap::new(),
-            preferences: None,
-            github: None,
-            session: Default::default(),
-            memory: Default::default(),
-            hooks: Default::default(),
-            run: Default::default(),
-            execution: Default::default(),
-            session_wait: None,
-            preflight: Default::default(),
-            vcs: Default::default(),
-            filesystem_sandbox: Default::default(),
-        }
-    }
-}
+#[path = "run_cmd_model_pin_tests.rs"]
+mod tests;

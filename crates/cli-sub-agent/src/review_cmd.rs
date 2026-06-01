@@ -59,6 +59,8 @@ mod resolve;
 mod result_handling;
 #[path = "review_cmd_reviewers.rs"]
 mod reviewers;
+#[path = "review_cmd_subtree_pin.rs"]
+mod subtree_pin;
 #[cfg(test)]
 pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
 #[cfg(test)]
@@ -93,7 +95,7 @@ use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count };
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 
-pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
+pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     if args.check_verdict {
         return check_verdict::handle_check_verdict(&project_root, &args);
@@ -104,6 +106,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     else {
         return Ok(1);
     };
+    // #1741: honor a pinned SA subtree's inherited model spec for `csa review`
+    // (see subtree_pin::apply_subtree_pin).
+    subtree_pin::apply_subtree_pin(&mut args, current_depth);
     let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
     validate_review_direct_tool_tier_restriction(
         args_tool.is_some(),
