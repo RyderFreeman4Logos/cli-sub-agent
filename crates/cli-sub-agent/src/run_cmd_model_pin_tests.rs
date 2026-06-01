@@ -380,6 +380,108 @@ fn review_debate_depth_zero_ignores_env_pin() {
     assert!(!resolved.inherited);
 }
 
+// ── #1741 round-4: propagation into the spawned child env ────────────────────
+//
+// review/debate are pin-CONSUMING: at their spawn site they call
+// inject_subtree_model_pin_env with the model spec they are running as. This
+// proves the exact call those sites make writes the pin keys into the child env
+// so a nested Layer-N+1 call stays pinned.
+
+#[test]
+fn review_debate_spawn_propagates_pin_into_child_env() {
+    let mut env: Option<std::collections::HashMap<String, String>> = None;
+    // Mirrors review_cmd_execute / debate_cmd: attempt_model_spec + the pin
+    // flags (force_ignore_tier_setting from the consumed pin, no_failover).
+    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), true, true);
+
+    let env = env.expect("reviewer/debater child env must carry the subtree pin");
+    assert_eq!(
+        env.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        Some(PINNED_SPEC)
+    );
+    assert_eq!(
+        env.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+            .map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        env.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
+fn review_debate_spawn_unpinned_does_not_inject_pin() {
+    // Not pinned (force_ignore false) → reviewer/debater child env stays clean,
+    // so tier routing is preserved for nested calls.
+    let mut env: Option<std::collections::HashMap<String, String>> = None;
+    inject_subtree_model_pin_env(&mut env, Some(PINNED_SPEC), false, false);
+    assert!(
+        env.is_none(),
+        "unpinned review/debate must not inject a pin"
+    );
+}
+
+#[test]
+fn propagate_inherited_subtree_pin_passes_pin_through_at_child_depth() {
+    // batch / plan / claude-sub-agent path: the process inherited a pin
+    // (CSA_DEPTH>0 + pin env) and must cascade it to its child unchanged.
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    let mut guards = set_subtree_pin_env(PINNED_SPEC, true, true);
+    guards.push(crate::test_env_lock::ScopedEnvVarRestore::set(
+        "CSA_DEPTH",
+        "2",
+    ));
+
+    let mut env: Option<std::collections::HashMap<String, String>> = None;
+    propagate_inherited_subtree_pin(&mut env);
+
+    let env = env.expect("inherited pin must cascade to the child env");
+    assert_eq!(
+        env.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        Some(PINNED_SPEC)
+    );
+    assert_eq!(
+        env.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+            .map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
+fn propagate_inherited_subtree_pin_noop_at_root_depth() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    let mut guards = set_subtree_pin_env(PINNED_SPEC, true, true);
+    // Root process (depth 0) never inherits a pin, so nothing cascades.
+    guards.push(crate::test_env_lock::ScopedEnvVarRestore::set(
+        "CSA_DEPTH",
+        "0",
+    ));
+
+    let mut env: Option<std::collections::HashMap<String, String>> = None;
+    propagate_inherited_subtree_pin(&mut env);
+    assert!(env.is_none(), "root-depth must not cascade a pin");
+}
+
+#[test]
+fn propagate_inherited_subtree_pin_noop_when_unpinned() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    use crate::test_env_lock::ScopedEnvVarRestore;
+    // Child depth but no pin env → nothing to cascade.
+    let _g1 = ScopedEnvVarRestore::unset(CSA_MODEL_SPEC_ENV_KEY);
+    let _g2 = ScopedEnvVarRestore::set("CSA_DEPTH", "3");
+
+    let mut env: Option<std::collections::HashMap<String, String>> = None;
+    propagate_inherited_subtree_pin(&mut env);
+    assert!(env.is_none(), "unpinned child must not cascade a pin");
+}
+
 fn config_with_tier_models(models: &[&str]) -> ProjectConfig {
     let mut tools = std::collections::HashMap::new();
     for tool in csa_config::global::all_known_tools() {

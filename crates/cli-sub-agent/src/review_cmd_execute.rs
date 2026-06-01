@@ -270,9 +270,20 @@ pub(crate) async fn execute_review_with_tier_filter(
             effective_prompt = format!("{guard}\n\n{effective_prompt}");
         }
 
-        let base_env_owned = global_config.build_execution_env(
+        let mut base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             review_execution_env_options(no_failover),
+        );
+        // #1741: keep a pinned subtree pinned through the reviewer child so a
+        // nested Layer-N+1 call from the reviewer does not re-select the tier
+        // default. Mirrors csa run (run_cmd_attempt.rs). `attempt_model_spec` is
+        // the spec this reviewer is actually running as; self-gated on the pin
+        // (no-op unless force_ignore_tier_setting + a non-empty spec).
+        crate::run_cmd_model_pin::inject_subtree_model_pin_env(
+            &mut base_env_owned,
+            attempt_model_spec.as_deref(),
+            force_ignore_tier_setting,
+            no_failover,
         );
         let extra_env_owned =
             with_readonly_session_env(base_env_owned.as_ref(), review_prompt_is_readonly(&prompt));

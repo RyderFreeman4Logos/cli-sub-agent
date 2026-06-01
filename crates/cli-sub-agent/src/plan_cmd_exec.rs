@@ -197,10 +197,15 @@ pub(super) async fn execute_csa_step(
     check_tool_installed(executor.runtime_binary_name()).await?;
 
     let global_config = csa_config::GlobalConfig::load()?;
-    let extra_env = global_config.build_execution_env(
+    let mut extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
     );
+    // #1741: a plan step uses its own per-step tool/model and does NOT consume
+    // the parent's subtree pin for that choice, but it MUST still cascade an
+    // inherited pin so nested CSA calls from the step stay pinned. Pass-through
+    // (no-op unless this process is a pinned child).
+    crate::run_cmd_model_pin::propagate_inherited_subtree_pin(&mut extra_env);
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
     let initial_response_timeout_seconds =
         crate::pipeline::resolve_initial_response_timeout_for_tool(

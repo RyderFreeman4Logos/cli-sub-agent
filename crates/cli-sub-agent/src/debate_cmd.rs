@@ -326,9 +326,18 @@ pub(crate) async fn handle_debate(
         if effective_fast_mode {
             executor.enable_codex_fast_mode();
         }
-        let base_env_owned = global_config.build_execution_env(
+        let mut base_env_owned = global_config.build_execution_env(
             executor.tool_name(),
             debate_execution_env_options(args.no_failover),
+        );
+        // #1741: keep a pinned subtree pinned through the debater child so a
+        // nested Layer-N+1 call does not re-select the tier default. Mirrors
+        // csa run (run_cmd_attempt.rs); self-gated on the pin.
+        crate::run_cmd_model_pin::inject_subtree_model_pin_env(
+            &mut base_env_owned,
+            attempt_model_spec.as_deref(),
+            args.force_ignore_tier_setting,
+            args.no_failover,
         );
         let extra_env_owned = with_readonly_session_env(base_env_owned.as_ref(), true);
         let extra_env = extra_env_owned.as_ref();

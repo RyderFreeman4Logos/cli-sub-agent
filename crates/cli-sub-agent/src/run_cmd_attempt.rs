@@ -306,6 +306,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             ExecutionEnvOptions::from_no_failover(request.no_failover),
         );
         crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
+        // #1741 parity (canonical pin-CONSUMING propagation): csa run resolved a
+        // subtree pin (explicit or inherited) and injects it so the child stays
+        // pinned. review/debate mirror this directly with their own resolved
+        // spec; batch/plan/claude-sub-agent (which do NOT consume the pin) use
+        // propagate_inherited_subtree_pin to cascade it. Self-gated on the pin.
         crate::run_cmd_model_pin::inject_subtree_model_pin_env(
             &mut extra_env,
             request.subtree_model_pin_spec,

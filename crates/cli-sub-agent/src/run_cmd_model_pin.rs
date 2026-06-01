@@ -243,6 +243,47 @@ pub(crate) fn inject_subtree_model_pin_env(
     }
 }
 
+/// Current CSA recursion depth as seen by this process, from `CSA_DEPTH`.
+///
+/// `CSA_DEPTH` is set by the parent on every CSA child spawn
+/// (`inject_csa_owned_env`), so it is the canonical "am I a child?" signal for
+/// code paths that did not thread `current_depth` as a parameter. Defaults to 0
+/// (root) when unset/unparsable.
+pub(crate) fn current_depth_from_env() -> u32 {
+    std::env::var("CSA_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Pass an inherited subtree model pin straight through to a child CSA-recursion
+/// spawn that did NOT itself consume the pin for tool selection.
+///
+/// Used by CSA-recursion spawn sites that pick their own per-spawn tool/model
+/// from explicit input (batch task, plan step, claude-sub-agent): they still
+/// must cascade an inherited pin so a nested Layer-N+1 call stays pinned all the
+/// way down (#1741). Call AFTER `build_execution_env` (so the injected pin
+/// survives the round-3 config funnel strip) and BEFORE handing the env to the
+/// child.
+///
+/// Pin-CONSUMING sites (csa run / review / debate) instead call
+/// [`inject_subtree_model_pin_env`] directly with the spec they resolved — the
+/// canonical pattern at `run_cmd_attempt.rs`. This function is the no-consume
+/// counterpart; it reads the inherited pin from the environment (already
+/// validated + force-ignore-gated by [`inherited_model_pin_from_env`]) and
+/// re-injects it. Depth is read from `CSA_DEPTH` so call sites need not thread
+/// it. No-op when the parent did not pin (depth 0 or no pin env).
+pub(crate) fn propagate_inherited_subtree_pin(extra_env: &mut Option<HashMap<String, String>>) {
+    if let Some(inherited) = inherited_model_pin_from_env(current_depth_from_env()) {
+        inject_subtree_model_pin_env(
+            extra_env,
+            Some(&inherited.model_spec),
+            inherited.force_ignore_tier_setting,
+            inherited.no_failover,
+        );
+    }
+}
+
 pub(crate) fn subtree_model_pin_prompt_guard(
     model_spec: Option<&str>,
     force_ignore_tier_setting: bool,
