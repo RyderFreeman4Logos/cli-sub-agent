@@ -10,6 +10,10 @@ struct EnvVarGuard {
     original: Option<String>,
 }
 
+struct CsaEnvGuard {
+    original: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+
 impl EnvVarGuard {
     fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let original = std::env::var(key).ok();
@@ -31,13 +35,53 @@ impl Drop for EnvVarGuard {
     }
 }
 
+impl CsaEnvGuard {
+    fn clear() -> Self {
+        let original: Vec<_> = std::env::vars_os()
+            .filter(|(key, _)| key.to_string_lossy().starts_with("CSA_"))
+            .collect();
+        // SAFETY: these e2e tests are serialized while mutating process-wide env.
+        unsafe {
+            for (key, _) in &original {
+                std::env::remove_var(key);
+            }
+        }
+        Self { original }
+    }
+}
+
+impl Drop for CsaEnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: these e2e tests are serialized while restoring process-wide env.
+        unsafe {
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("CSA_") {
+                    std::env::remove_var(key);
+                }
+            }
+            for (key, value) in &self.original {
+                std::env::set_var(key, value);
+            }
+        }
+    }
+}
+
 fn csa_cmd(tmp: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
+    scrub_inherited_csa_env(&mut cmd);
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
         .env("TOKIO_WORKER_THREADS", "1");
     cmd
+}
+
+fn scrub_inherited_csa_env(cmd: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CSA_") {
+            cmd.env_remove(key);
+        }
+    }
 }
 
 fn write_pre_exec_failure_result(session_dir: &Path) {
@@ -67,6 +111,7 @@ fn create_empty_output_failure_session(
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", tmp);
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let _csa_env_guard = CsaEnvGuard::clear();
 
     let project = tmp.join(name);
     std::fs::create_dir_all(&project).expect("create project");
@@ -214,9 +259,9 @@ fn session_wait_env_verbose_streams_stdout_log() {
         create_empty_output_failure_session(tmp.path(), "wait-env-verbose-output");
     std::fs::write(session_dir.join("stdout.log"), "env verbose visible\n")
         .expect("write stdout log");
-    let _verbose_guard = EnvVarGuard::set("CSA_WAIT_VERBOSE", "1");
 
     let output = csa_cmd(tmp.path())
+        .env("CSA_WAIT_VERBOSE", "1")
         .args([
             "session",
             "wait",

@@ -21,10 +21,19 @@ use std::process::Command;
 /// and XDG_CONFIG_HOME redirected to the given temp directory.
 fn csa_cmd(tmp: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
+    scrub_inherited_csa_env(&mut cmd);
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"));
     cmd
+}
+
+fn scrub_inherited_csa_env(cmd: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CSA_") {
+            cmd.env_remove(key);
+        }
+    }
 }
 
 /// Compute the session directory path that CSA will use for a given project
@@ -183,7 +192,7 @@ fn daemon_child_err_path_captures_stderr_and_writes_completion() {
     // resolution actually runs (not blocked by tier check).
     // --allow-base-branch-working keeps this non-repo daemon stderr test focused
     // on the alias-resolution error path.
-    let child = Command::new(env!("CARGO_BIN_EXE_csa"))
+    let child = csa_cmd(tmp.path())
         .args([
             "run",
             "--daemon-child",
@@ -200,9 +209,7 @@ fn daemon_child_err_path_captures_stderr_and_writes_completion() {
             "1800",
             "test prompt for scenario B",
         ])
-        .env("HOME", tmp.path())
         .env("XDG_STATE_HOME", &xdg_state_home)
-        .env("XDG_CONFIG_HOME", tmp.path().join(".config"))
         .env("CSA_DAEMON_SESSION_DIR", &session_dir)
         .env("CSA_DAEMON_PROJECT_ROOT", &project_root)
         .current_dir(&project_root)
@@ -307,7 +314,7 @@ fn daemon_child_review_err_writes_completion() {
     // install_daemon_stderr_rotation may fail (cd=/nonexistent), which is best-effort.
     // handle_review calls determine_project_root(Some("/nonexistent")) → Err.
     // report_daemon_error_or_exit_code catches Err → eprintln! → finalize → exit(1).
-    let output = Command::new(env!("CARGO_BIN_EXE_csa"))
+    let output = csa_cmd(tmp.path())
         .args([
             "review",
             "--daemon-child",
@@ -319,9 +326,7 @@ fn daemon_child_review_err_writes_completion() {
             "--cd",
             "/nonexistent/path/for/daemon/stderr/e2e/test",
         ])
-        .env("HOME", tmp.path())
         .env("XDG_STATE_HOME", &xdg_state_home)
-        .env("XDG_CONFIG_HOME", tmp.path().join(".config"))
         .env("CSA_DAEMON_SESSION_DIR", &session_dir)
         .env("CSA_DAEMON_PROJECT_ROOT", &project_root)
         .current_dir(&project_root)

@@ -18,11 +18,20 @@ use std::process::Command;
 /// real user state.
 fn csa_cmd(tmp: &std::path::Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
+    scrub_inherited_csa_env(&mut cmd);
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
         .env("TOKIO_WORKER_THREADS", "1");
     cmd
+}
+
+fn scrub_inherited_csa_env(cmd: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CSA_") {
+            cmd.env_remove(key);
+        }
+    }
 }
 
 fn global_config_path(tmp: &Path) -> std::path::PathBuf {

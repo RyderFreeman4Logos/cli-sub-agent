@@ -125,8 +125,12 @@ fn test_debate_blocks_direct_tool_when_tiers_configured() {
         "unexpected error: {msg}"
     );
     assert!(
-        msg.contains("--force-ignore-tier-setting"),
-        "should mention override flag: {msg}"
+        msg.contains("[tier_policy].allow_force_bypass"),
+        "should mention global escape hatch: {msg}"
+    );
+    assert!(
+        !msg.contains("--force-ignore-tier-setting"),
+        "direct-tool guard should not recommend bypass flags as normal remediation: {msg}"
     );
 }
 

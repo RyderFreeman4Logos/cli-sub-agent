@@ -314,7 +314,7 @@ fn resolve_tool_from_tier_returns_none_when_all_disabled() {
 
 // --- Phase 2: tier enforcement tests ---
 
-/// When tiers are configured, direct --tool without --force-ignore-tier-setting is blocked.
+/// When tiers are configured, direct --tool without an active tier is blocked.
 #[test]
 fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
     let cfg = config_with_tier(
@@ -334,8 +334,12 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
         "unexpected error: {msg}"
     );
     assert!(
-        msg.contains("--force-ignore-tier-setting"),
-        "should mention override flag: {msg}"
+        msg.contains("[tier_policy].allow_force_bypass"),
+        "should mention global escape hatch: {msg}"
+    );
+    assert!(
+        !msg.contains("--force-ignore-tier-setting"),
+        "direct-tool guard should not recommend bypass flags as normal remediation: {msg}"
     );
 }
 
