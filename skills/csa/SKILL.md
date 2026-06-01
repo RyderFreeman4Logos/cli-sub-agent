@@ -25,7 +25,7 @@ Before constructing ANY `csa run`, `csa review`, or `csa debate` command, verify
 
 1. **`--sa-mode true|false`** — REQUIRED at root depth (CSA_DEPTH=0). Sub-agent calls (depth > 0) inherit automatically.
 2. **`--tier <name>`** — canonical selector whenever project `[tiers]` is non-empty.
-3. **`--tool <tool>`** — only a soft try-first preference inside the selected tier. `[review].tool` and `[debate].tool` behave the same way; they no longer hard-whitelist the tier.
+3. **`--tool <tool>`** — only a soft try-first preference inside the selected tier. `[review].tool` and `[debate].tool` behave the same way; ordered arrays are tried in listed order before remaining tier models, and they no longer hard-whitelist the tier.
 4. **Direct model or force bypass** — `--model-spec`, `--force-ignore-tier-setting`/`--force-tier`, and broad direct-routing force flags are emergency-only under configured tiers. They are rejected unless `[tier_policy].allow_force_bypass = true` is set in the global config, or CSA is continuing an already-trusted inherited #1741 subtree pin. Project `.csa/config.toml` cannot grant this.
 
 **Priority chain**: inherited trusted pin > `--tier` > config tier / tier mapping > soft tool preference > auto-select. Direct bypass is outside the normal chain and requires the global escape hatch.
@@ -52,8 +52,7 @@ csa run --sa-mode true --tool codex "Implement feature X"
 Prefer this form for general `csa` dispatch when tiers are configured:
 
 ```bash
-csa run \
-  --sa-mode true \
+csa run --sa-mode true \
   --tier <tier-name> \
   --timeout 7200 \
   --prompt-file /path/to/prompt.md
@@ -62,8 +61,7 @@ csa run \
 Add `--tool <tool>` only when you want try-first ordering inside that tier:
 
 ```bash
-csa run \
-  --sa-mode true \
+csa run --sa-mode true \
   --tier <tier-name> \
   --tool codex \
   --timeout 7200 \
@@ -168,8 +166,8 @@ csa run --sa-mode true "Implement feature X"
 csa review --sa-mode true --range main...HEAD
 csa debate --sa-mode true "REST vs gRPC?"
 
-# Internal sub-agent call (depth > 0) — --sa-mode is optional
-csa run "Sub-task Y"  # inherits from parent via CSA_DEPTH
+# Internal sub-agent call (depth > 0) accepts explicit --sa-mode; inherited mode is also supported
+csa run --sa-mode true "Sub-task Y"
 ```
 
 **Error if omitted at root depth:**
@@ -223,7 +221,7 @@ csa config validate   # Validate config file
 ### Spawning Sub-Agents
 ```bash
 # Sub-agent inherits depth tracking via CSA_DEPTH env var
-csa run --tier <tier-name> --parent $CSA_SESSION_ID \
+csa run --sa-mode true --tier <tier-name> --parent $CSA_SESSION_ID \
   "Research PostgreSQL extensions"
 ```
 
@@ -234,8 +232,8 @@ Max recursion depth is configurable (default: 5).
 Multiple analysis tasks can run in parallel safely:
 ```bash
 # Sub-agent calls (depth > 0) — --sa-mode inherited from parent
-csa run --session research-db "Query database docs" &
-csa run --session research-ui "Query frontend docs" &
+csa run --sa-mode true --session research-db "Query database docs" &
+csa run --sa-mode true --session research-ui "Query frontend docs" &
 wait
 ```
 
@@ -257,8 +255,8 @@ Potential issues:
 **Recommended pattern**:
 ```bash
 # Step 1: Parallel research (read-only, sub-agent depth — --sa-mode inherited)
-csa run --session research-1 "Research A" &
-csa run --session research-2 "Research B" &
+csa run --sa-mode true --session research-1 "Research A" &
+csa run --sa-mode true --session research-2 "Research B" &
 wait
 
 # Step 2: Serial implementation (write)

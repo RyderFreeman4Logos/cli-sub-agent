@@ -76,9 +76,9 @@ allow_force_bypass = false
 
 When a project has a non-empty `[tiers]` table, `--tier <name>` is the
 canonical selector. `--tool`, `[review].tool`, and `[debate].tool` are soft
-ordering preferences: CSA tries the preferred tool first, then falls back
-through the remaining enabled models in the selected tier. They are not
-hard whitelists.
+ordering preferences: CSA tries preferred tools in the order listed, then falls
+back through the remaining enabled models in the selected tier's order. They
+are not hard whitelists.
 
 Direct exact-model and force-bypass routes are rejected under configured tiers
 unless `allow_force_bypass = true` is set in the global config at
@@ -290,9 +290,10 @@ token count.
 
 **Selection logic:** select a tier first, then iterate its models in order and
 return the first enabled tool. If a tool preference is present through
-`--tool`, `[review].tool`, or `[debate].tool`, matching models are tried first
-and the rest of the tier remains available as fallback. Use `--tier <name>` as
-the canonical selector whenever `[tiers]` is non-empty.
+`--tool`, `[review].tool`, or `[debate].tool`, preferred tools are tried in the
+order listed, then the rest of the tier remains available as fallback in tier
+order. Use `--tier <name>` as the canonical selector whenever `[tiers]` is
+non-empty.
 
 ### `[tier_mapping]` -- Task to Tier Mapping
 

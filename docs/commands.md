@@ -40,8 +40,9 @@ If `PROMPT` is omitted, reads from stdin.
 
 When `[tiers]` is non-empty, `--tier <name>` is the canonical way to pick
 quality/cost/speed. `--tool`, `[review].tool`, and `[debate].tool` only
-reorder the selected tier so the preferred tool is tried first; they no
-longer hard-filter the tier. Exact model and force-bypass flags are reserved
+reorder the selected tier so preferred tools are tried in the order listed,
+then remaining tier models are tried in tier order; they no longer hard-filter
+the tier. Exact model and force-bypass flags are reserved
 for emergency use and require `[tier_policy].allow_force_bypass = true` in the
 global config, not project `.csa/config.toml`, unless CSA is continuing an
 already-trusted inherited subtree pin.
