@@ -61,18 +61,30 @@ pub(super) fn write_fatal_error_marker_sidecar(
     let Some(cfg) = config else {
         return Ok(());
     };
-    csa_process::write_fatal_error_markers(session_dir, &cfg.resources.fatal_error_markers).map_err(
-        |err| {
-            persist_pipeline_pre_exec_failure(
-                project_root,
-                session,
-                tool_name,
-                anyhow::anyhow!(err).context("Failed to write fatal error marker sidecar"),
-                cleanup_guard,
-                None,
-            )
-        },
-    )
+    let fatal_error_markers =
+        fatal_error_markers_for_tool(&cfg.resources.fatal_error_markers, tool_name);
+    csa_process::write_fatal_error_markers(session_dir, &fatal_error_markers).map_err(|err| {
+        persist_pipeline_pre_exec_failure(
+            project_root,
+            session,
+            tool_name,
+            anyhow::anyhow!(err).context("Failed to write fatal error marker sidecar"),
+            cleanup_guard,
+            None,
+        )
+    })
+}
+
+fn fatal_error_markers_for_tool(config_markers: &[String], tool_name: &str) -> Vec<String> {
+    let mut markers = config_markers.to_vec();
+    if tool_name == "gemini-cli"
+        && !markers.iter().any(|marker| {
+            marker.eq_ignore_ascii_case(csa_executor::GEMINI_OAUTH_PROMPT_FATAL_MARKER)
+        })
+    {
+        markers.push(csa_executor::GEMINI_OAUTH_PROMPT_FATAL_MARKER.to_string());
+    }
+    markers
 }
 
 pub(super) fn persist_pipeline_pre_exec_failure(
@@ -100,4 +112,27 @@ pub(super) fn persist_pipeline_pre_exec_failure(
         cg.defuse();
     }
     err
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_marker_sidecar_includes_oauth_browser_prompt_marker() {
+        let markers = fatal_error_markers_for_tool(&["HTTP 429".to_string()], "gemini-cli");
+
+        assert!(
+            markers
+                .iter()
+                .any(|marker| { marker == csa_executor::GEMINI_OAUTH_PROMPT_FATAL_MARKER })
+        );
+    }
+
+    #[test]
+    fn non_gemini_marker_sidecar_preserves_config_markers_only() {
+        let markers = fatal_error_markers_for_tool(&["HTTP 429".to_string()], "codex");
+
+        assert_eq!(markers, vec!["HTTP 429".to_string()]);
+    }
 }

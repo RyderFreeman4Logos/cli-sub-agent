@@ -73,6 +73,7 @@ mod run_cmd;
 mod run_cmd_caller_fork;
 mod run_cmd_daemon;
 mod run_cmd_fork;
+mod run_cmd_model_pin;
 mod run_cmd_post;
 mod run_cmd_tool_selection;
 mod run_helpers;

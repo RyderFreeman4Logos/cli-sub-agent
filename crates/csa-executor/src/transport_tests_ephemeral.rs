@@ -153,6 +153,7 @@ echo "ok effort=$effort"
             "trigger direct execute_in codex stall retry",
             temp.path(),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(Some(1)),

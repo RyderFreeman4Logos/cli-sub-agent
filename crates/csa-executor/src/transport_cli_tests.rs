@@ -248,6 +248,7 @@ fn build_command_rebuilds_session_env_for_cli_transport() {
         Some(&session),
         None,
         Some(&extra_env),
+        None,
     );
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: StdHashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
@@ -705,6 +706,7 @@ async fn claude_cli_smoke() {
         .execute_in(
             "say 'hello from cli transport'",
             tmp.path(),
+            None,
             None,
             StreamMode::BufferOnly,
             30,

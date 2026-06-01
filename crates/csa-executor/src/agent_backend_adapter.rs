@@ -146,6 +146,12 @@ impl AgentBackend for ExecutorAgentBackend {
 
         let mut merged_env = self.base_env.clone();
         merged_env.extend(env);
+        // #1741: `SpawnConfig.env` is caller-supplied request env. A generic
+        // backend must NEVER let it introduce the reserved subtree-pin keys —
+        // otherwise a caller could spoof a pinned subtree and bypass tier
+        // routing. Strip them unconditionally; this backend has no CSA pin
+        // decision to inject, so the pin keys never reach the child.
+        csa_core::env::strip_reserved_pin_keys(&mut merged_env);
 
         Ok(Box::new(ExecutorAgentSession::new(
             name, prompt, executor, cwd, merged_env,
@@ -240,6 +246,11 @@ impl AgentSession for ExecutorAgentSession {
                 &prompt,
                 &self.cwd,
                 extra_env,
+                // #1741: this generic backend has NO validated subtree-pin
+                // state, so it never sets a pin. The pin keys were already
+                // stripped from `SpawnConfig.env` at construction, so a caller
+                // cannot smuggle a pin through `env`.
+                None,
                 csa_process::StreamMode::BufferOnly,
                 csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
                 Self::resolved_initial_response_timeout(&self.executor),

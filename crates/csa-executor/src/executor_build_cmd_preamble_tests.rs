@@ -8,7 +8,7 @@ fn test_claude_code_prompt_includes_identity_preamble() {
         runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("implement feature X", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("implement feature X", None, &session, None, None);
 
     let args: Vec<_> = cmd
         .as_std()
@@ -61,7 +61,7 @@ fn test_claude_code_preamble_reflects_session_depth() {
     let mut session = make_test_session();
     session.genealogy.depth = 3;
 
-    let (cmd, _stdin_data) = exec.build_command("deep task", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("deep task", None, &session, None, None);
 
     let args: Vec<_> = cmd
         .as_std()
@@ -87,7 +87,7 @@ fn test_gemini_prompt_has_no_preamble() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("hello world", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("hello world", None, &session, None, None);
 
     let args: Vec<_> = cmd
         .as_std()
@@ -113,7 +113,7 @@ fn test_codex_prompt_has_no_preamble() {
         runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("fix bug", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("fix bug", None, &session, None, None);
 
     let args: Vec<_> = cmd
         .as_std()
@@ -139,7 +139,7 @@ fn test_opencode_prompt_has_no_preamble() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("write tests", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("write tests", None, &session, None, None);
 
     let args: Vec<_> = cmd
         .as_std()

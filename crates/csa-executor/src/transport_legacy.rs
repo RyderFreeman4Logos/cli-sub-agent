@@ -10,6 +10,7 @@ struct ExecuteInAttempt<'a> {
     prompt: &'a str,
     work_dir: &'a Path,
     extra_env: Option<&'a HashMap<String, String>>,
+    subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     /// Already resolved by `Executor::execute_in_with_transport()`.
@@ -99,6 +100,7 @@ impl LegacyTransport {
             request.prompt,
             request.work_dir,
             request.extra_env,
+            request.subtree_pin,
         );
         let spawn_options = SpawnOptions {
             stdin_write_timeout: std::time::Duration::from_secs(
@@ -163,8 +165,13 @@ impl LegacyTransport {
         // when this function returns (#1620). For all other executors this
         // is `None` and a no-op.
         let _antigravity_guard = executor.antigravity_settings_guard()?;
-        let (cmd, stdin_data) =
-            executor.build_command(prompt, tool_state, session, attempt_env.extra_env);
+        let (cmd, stdin_data) = executor.build_command(
+            prompt,
+            tool_state,
+            session,
+            attempt_env.extra_env,
+            options.subtree_pin.as_ref(),
+        );
 
         let gemini_sandbox_plan = options
             .sandbox
@@ -223,7 +230,13 @@ impl LegacyTransport {
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
                 let fallback_cmd = executor
-                    .build_command(prompt, tool_state, session, attempt_env.extra_env)
+                    .build_command(
+                        prompt,
+                        tool_state,
+                        session,
+                        attempt_env.extra_env,
+                        options.subtree_pin.as_ref(),
+                    )
                     .0;
                 let child =
                     spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options).await?;

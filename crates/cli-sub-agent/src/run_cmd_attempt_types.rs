@@ -17,6 +17,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) initial_tool: ToolName,
     pub(crate) initial_model_spec: Option<String>,
     pub(crate) user_model_spec_explicit: bool,
+    pub(crate) subtree_model_pin_spec: Option<&'a str>,
     pub(crate) initial_model: Option<String>,
     pub(crate) runtime_fallback_candidates: Vec<ToolName>,
     pub(crate) project_root: &'a Path,

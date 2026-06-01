@@ -80,6 +80,7 @@ async fn test_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_added() {
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let error = transport
@@ -185,6 +186,7 @@ async fn test_legacy_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_add
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let error = transport
@@ -290,6 +292,7 @@ async fn test_execute_fails_fast_when_shared_npm_cache_path_violates_writable_al
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let error = transport
@@ -402,6 +405,7 @@ async fn test_legacy_execute_fails_fast_when_shared_npm_cache_path_violates_writ
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let error = transport
@@ -524,6 +528,7 @@ async fn test_execute_fails_fast_when_symlinked_shared_npm_cache_resolves_outsid
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let error = transport
@@ -659,6 +664,7 @@ async fn test_legacy_execute_fails_fast_when_symlinked_shared_npm_cache_resolves
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let error = transport

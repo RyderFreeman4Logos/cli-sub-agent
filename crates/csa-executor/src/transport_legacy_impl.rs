@@ -266,6 +266,7 @@ impl Transport for LegacyTransport {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: super::ResolvedTimeout,
@@ -275,6 +276,7 @@ impl Transport for LegacyTransport {
             prompt,
             work_dir,
             extra_env,
+            subtree_pin,
             stream_mode,
             idle_timeout_seconds,
             initial_response_timeout,
@@ -294,11 +296,13 @@ impl LegacyTransport {
     /// `initial_response_timeout_seconds` is already resolved by
     /// `Executor::execute_in_with_transport()`: `None` means disabled, and positive values are
     /// concrete watchdog durations. This layer must not re-apply executor defaults.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_in(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -366,6 +370,7 @@ impl LegacyTransport {
                         prompt,
                         work_dir,
                         extra_env: Some(&prepared_attempt_env),
+                        subtree_pin,
                         stream_mode,
                         idle_timeout_seconds,
                         resolved_initial_response_timeout: initial_response_timeout,
@@ -464,6 +469,7 @@ impl LegacyTransport {
                             prompt,
                             work_dir,
                             extra_env: Some(&prepared_attempt_env),
+                            subtree_pin,
                             stream_mode,
                             idle_timeout_seconds,
                             resolved_initial_response_timeout: initial_response_timeout,

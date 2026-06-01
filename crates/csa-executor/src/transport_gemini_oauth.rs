@@ -2,6 +2,7 @@ use csa_process::ExecutionResult;
 
 pub(crate) const GEMINI_OAUTH_PROMPT_SUMMARY: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no tool output produced";
+pub const GEMINI_OAUTH_PROMPT_FATAL_MARKER: &str = "Opening authentication page in your browser";
 
 pub(crate) fn is_gemini_oauth_prompt_result(execution: &ExecutionResult) -> bool {
     let stdout_has_auth_text =

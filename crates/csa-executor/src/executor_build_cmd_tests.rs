@@ -54,7 +54,7 @@ fn test_build_command_gemini_sets_csa_env_vars() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("hello world", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("hello world", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
@@ -89,7 +89,7 @@ fn test_build_command_sets_csa_session_dir() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("hello", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("hello", None, &session, None, None);
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -130,7 +130,7 @@ fn test_build_command_codex_sets_csa_env_vars() {
         runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
@@ -152,7 +152,7 @@ fn test_build_command_depth_increments() {
     let mut session = make_test_session();
     session.genealogy.depth = 3;
 
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -173,7 +173,7 @@ fn test_build_command_parent_session_env() {
     let mut session = make_test_session();
     session.genealogy.parent_session_id = Some("01HPARENT0000000000000000".to_string());
 
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -192,7 +192,7 @@ fn test_build_command_no_parent_session_env_when_root() {
     };
     let session = make_test_session(); // depth=0, no parent
 
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -218,7 +218,7 @@ fn test_build_command_extra_env_injection() {
     extra.insert("ANTHROPIC_API_KEY".to_string(), "sk-test-key".to_string());
     extra.insert("MY_CUSTOM_VAR".to_string(), "custom_value".to_string());
 
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, Some(&extra));
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, Some(&extra), None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
@@ -251,7 +251,7 @@ fn test_build_command_reserved_session_paths_override_extra_env() {
         "/tmp/fake-session/result.toml".to_string(),
     );
 
-    let (cmd, stdin_data) = exec.build_command("test", None, &session, Some(&extra));
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, Some(&extra), None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
@@ -309,7 +309,7 @@ fn test_build_command_rebuilds_session_env_after_extra_env_merge() {
         ),
     ]);
 
-    let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra));
+    let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra), None);
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
 
@@ -343,7 +343,7 @@ fn test_build_command_gemini_args_structure() {
         thinking_budget: Some(ThinkingBudget::High),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -383,7 +383,7 @@ fn test_build_command_gemini_default_model_omits_model_flag() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -426,7 +426,7 @@ fn test_build_command_gemini_adds_include_directories_from_env() {
         ),
     );
 
-    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra), None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -465,7 +465,7 @@ fn test_build_command_gemini_supports_fallback_include_directories_key() {
         fallback.to_string_lossy().to_string(),
     );
 
-    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra), None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -504,7 +504,7 @@ fn test_build_command_gemini_includes_external_instruction_symlink_target_direct
     let mut session = make_test_session();
     session.project_path = workspace.path().to_string_lossy().to_string();
 
-    let (cmd, stdin_data) = exec.build_command("run review", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("run review", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -544,7 +544,7 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
     std::fs::write(&file_path, "ok").expect("write fixture");
     let prompt = format!("Read and patch {}", file_path.display());
 
-    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -575,8 +575,13 @@ fn test_build_command_gemini_never_includes_filesystem_root_directory() {
         "/".to_string(),
     );
 
-    let (cmd, stdin_data) =
-        exec.build_command("Inspect / and summarize", None, &session, Some(&extra));
+    let (cmd, stdin_data) = exec.build_command(
+        "Inspect / and summarize",
+        None,
+        &session,
+        Some(&extra),
+        None,
+    );
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -603,7 +608,7 @@ fn test_build_command_claude_args_structure() {
         runtime_metadata: crate::claude_runtime::claude_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("do stuff", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("do stuff", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -665,7 +670,7 @@ fn test_build_command_codex_args_structure() {
         runtime_metadata: crate::codex_runtime::codex_runtime_metadata(),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -708,7 +713,7 @@ fn test_build_command_codex_fast_mode_adds_enable_flag() {
     exec.enable_codex_fast_mode();
     let session = make_test_session();
 
-    let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let args: Vec<_> = cmd
         .as_std()
@@ -730,7 +735,7 @@ fn test_build_command_opencode_args_structure() {
         thinking_budget: Some(ThinkingBudget::Xhigh),
     };
     let session = make_test_session();
-    let (cmd, stdin_data) = exec.build_command("write tests", None, &session, None);
+    let (cmd, stdin_data) = exec.build_command("write tests", None, &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
 
     let args: Vec<_> = cmd
@@ -786,7 +791,7 @@ fn test_build_command_antigravity_omits_model_flag_with_model_set() {
         thinking_budget: Some(ThinkingBudget::High),
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("analyze code", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("analyze code", None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -818,7 +823,7 @@ fn test_build_command_antigravity_omits_model_flag_without_model_set() {
         thinking_budget: None,
     };
     let session = make_test_session();
-    let (cmd, _stdin_data) = exec.build_command("analyze code", None, &session, None);
+    let (cmd, _stdin_data) = exec.build_command("analyze code", None, &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -838,7 +843,7 @@ fn test_build_execute_in_command_antigravity_omits_model_flag() {
         thinking_budget: None,
     };
     let (cmd, _stdin_data) =
-        exec.build_execute_in_command("analyze code", std::path::Path::new("/tmp"), None);
+        exec.build_execute_in_command("analyze code", std::path::Path::new("/tmp"), None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()

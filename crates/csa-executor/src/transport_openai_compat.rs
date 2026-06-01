@@ -231,6 +231,7 @@ impl Transport for OpenaiCompatTransport {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         _stream_mode: csa_process::StreamMode,
         _idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -258,6 +259,7 @@ impl Transport for OpenaiCompatTransport {
                 setting_sources: None,
                 sandbox: None,
                 thinking_budget: None,
+                subtree_pin: subtree_pin.cloned(),
             },
         )
         .await

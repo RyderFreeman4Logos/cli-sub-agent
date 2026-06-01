@@ -131,20 +131,51 @@ async fn spawn_bash(
     workflow_path: &Path,
 ) -> std::io::Result<std::process::Output> {
     let workflow_dir = workflow_path.parent().unwrap_or(project_root);
-    tokio::process::Command::new("bash")
-        .arg("-c")
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.arg("-c")
         .arg(script)
         .envs(env_vars.iter())
         .env("CSA_PROJECT_ROOT", project_root)
         .env("CSA_WORKFLOW_PATH", workflow_path)
         .env("CSA_WORKFLOW_DIR", workflow_dir)
         .env("CSA_DEPTH", next_csa_depth())
-        .env("CSA_INTERNAL_INVOCATION", "1")
-        .current_dir(project_root)
+        .env("CSA_INTERNAL_INVOCATION", "1");
+    // #1741: this bash step is marked as a nested CSA invocation (CSA_DEPTH set
+    // above), and `bash` inherits the parent's ambient environment. Any ambient
+    // SUBTREE_PIN_ENV_KEYS would otherwise be read by a nested `csa run` inside
+    // the step as a valid inherited subtree pin, letting a user-controlled
+    // ambient env spoof a pin and silently drop tier routing. Reserve the keys
+    // (env_remove) BEFORE re-applying CSA's own legitimately-inherited pin via
+    // the trusted typed channel — so the keys reach the child IFF CSA decided to
+    // pin, never from ambient/user env. (csa-core/src/env.rs reservation.)
+    apply_sanitized_subtree_pin(&mut cmd);
+    cmd.current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
         .await
+}
+
+/// Reserve the subtree-pin env keys on a child `Command` (which inherits the
+/// parent env), then re-apply CSA's own legitimately-inherited pin via the
+/// trusted typed channel (#1741).
+///
+/// Used by non-executor spawn paths that mark their child as a nested CSA
+/// invocation (set/propagate `CSA_DEPTH`) AND inherit the parent environment.
+/// Without the reservation, an ambient/user-controlled `CSA_MODEL_SPEC` +
+/// `CSA_FORCE_IGNORE_TIER_SETTING` pair would be honored as a subtree pin by a
+/// nested `csa run`. The typed [`SubtreeModelPin`] re-applied here is the sole
+/// writer of the pin keys (and only when this process genuinely inherited a
+/// pin), so a legitimately-propagated pin still cascades unbroken.
+fn apply_sanitized_subtree_pin(cmd: &mut tokio::process::Command) {
+    for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+    if let Some(pin) = crate::run_cmd_model_pin::inherited_subtree_model_pin() {
+        for (key, value) in pin.pin_env_entries() {
+            cmd.env(key, value);
+        }
+    }
 }
 
 fn reduce_bash_env_for_spawn(
@@ -201,6 +232,13 @@ pub(super) async fn execute_csa_step(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
     );
+    // #1741: a plan step uses its own per-step tool/model and does NOT consume
+    // the parent's subtree pin for that choice, but it MUST still cascade an
+    // inherited pin so nested CSA calls from the step stay pinned. The pin is
+    // carried out-of-band as a typed value (None unless this process is a pinned
+    // child) and applied by the executor's trusted channel — never via the env
+    // map.
+    let subtree_pin = crate::run_cmd_model_pin::inherited_subtree_model_pin();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
     let initial_response_timeout_seconds =
         crate::pipeline::resolve_initial_response_timeout_for_tool(
@@ -254,6 +292,7 @@ pub(super) async fn execute_csa_step(
             project_root,
             config,
             extra_env.as_ref(),
+            subtree_pin.as_ref(),
             Some("plan"),
             None,
             None,
@@ -368,167 +407,5 @@ pub(super) fn truncate(s: &str, max_len: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_env_lock::TEST_ENV_LOCK;
-
-    #[test]
-    fn is_step_runtime_var_only_matches_step_output_and_session() {
-        assert!(is_step_runtime_var("STEP_1_OUTPUT"));
-        assert!(is_step_runtime_var("STEP_22_SESSION"));
-        assert!(!is_step_runtime_var("STEP_OUTPUT"));
-        assert!(!is_step_runtime_var("STEP_1_OUTPUT_JSON"));
-        assert!(!is_step_runtime_var("STEP_A_OUTPUT"));
-        assert!(!is_step_runtime_var("USER_LANGUAGE"));
-    }
-
-    #[test]
-    fn reduce_bash_env_for_spawn_drops_unreferenced_step_runtime_vars() {
-        let env_vars = HashMap::from([
-            ("STEP_1_OUTPUT".to_string(), "large".to_string()),
-            ("STEP_2_SESSION".to_string(), "sid".to_string()),
-            (
-                "USER_LANGUAGE".to_string(),
-                "Chinese (Simplified)".to_string(),
-            ),
-        ]);
-
-        let reduced = reduce_bash_env_for_spawn("echo ok", &env_vars);
-        assert!(!reduced.contains_key("STEP_1_OUTPUT"));
-        assert!(!reduced.contains_key("STEP_2_SESSION"));
-        assert_eq!(
-            reduced.get("USER_LANGUAGE").map(String::as_str),
-            Some("Chinese (Simplified)")
-        );
-    }
-
-    #[test]
-    fn reduce_bash_env_for_spawn_keeps_referenced_step_runtime_vars() {
-        let env_vars = HashMap::from([
-            ("STEP_1_OUTPUT".to_string(), "payload".to_string()),
-            ("STEP_2_SESSION".to_string(), "sid".to_string()),
-            ("SCOPE".to_string(), "demo".to_string()),
-        ]);
-
-        let script = "printf '%s' \"${STEP_1_OUTPUT}\"; printenv STEP_2_SESSION >/dev/null";
-        let reduced = reduce_bash_env_for_spawn(script, &env_vars);
-        assert_eq!(
-            reduced.get("STEP_1_OUTPUT").map(String::as_str),
-            Some("payload")
-        );
-        assert_eq!(
-            reduced.get("STEP_2_SESSION").map(String::as_str),
-            Some("sid")
-        );
-        assert_eq!(reduced.get("SCOPE").map(String::as_str), Some("demo"));
-    }
-
-    #[test]
-    fn clean_step_output_extracts_codex_json_event_stream_text() {
-        let output = [
-            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
-            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"- [ ] write test"}}"#,
-            r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"schema_version = 1"}}"#,
-        ]
-        .join("\n");
-
-        assert_eq!(
-            clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
-            "- [ ] write test\nschema_version = 1"
-        );
-    }
-
-    #[test]
-    fn clean_step_output_ignores_codex_tool_result_items() {
-        let output = [
-            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
-            r#"{"type":"item.completed","item":{"id":"item_1","type":"tool_result","text":"secret shell output"}}"#,
-            r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"agent summary"}}"#,
-        ]
-        .join("\n");
-
-        assert_eq!(
-            clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
-            "agent summary"
-        );
-    }
-
-    #[test]
-    fn clean_step_output_drops_codex_stream_without_agent_messages() {
-        let output = [
-            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
-            r#"{"type":"item.completed","item":{"id":"item_1","type":"tool_result","text":"secret shell output"}}"#,
-        ]
-        .join("\n");
-
-        assert_eq!(
-            clean_step_output_for_env(&output, &ToolName::Codex, OutputFormat::Json),
-            ""
-        );
-    }
-
-    #[test]
-    fn clean_step_output_falls_back_for_codex_json_without_text() {
-        let output = "not json\n{\"type\":\"thread.started\"}";
-
-        assert_eq!(
-            clean_step_output_for_env(output, &ToolName::Codex, OutputFormat::Json),
-            output
-        );
-    }
-
-    #[test]
-    fn clean_step_output_leaves_clean_prose_for_non_codex_tools() {
-        let output = "plain summary\n- [ ] already clean";
-
-        assert_eq!(
-            clean_step_output_for_env(output, &ToolName::GeminiCli, OutputFormat::Json),
-            output
-        );
-        assert_eq!(
-            clean_step_output_for_env(output, &ToolName::ClaudeCode, OutputFormat::Json),
-            output
-        );
-    }
-
-    #[test]
-    fn clean_step_output_extracts_mixed_json_stream_and_ignores_trailing_prose() {
-        let output = [
-            r#"{"type":"thread.started","thread_id":"thread_1"}"#,
-            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"natural text"}}"#,
-            "trailing progress note",
-        ]
-        .join("\n");
-
-        assert_eq!(
-            clean_step_output_for_env(&output, &ToolName::GeminiCli, OutputFormat::Text),
-            "natural text"
-        );
-    }
-
-    #[test]
-    fn next_csa_depth_increments_or_defaults() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let original_depth = std::env::var("CSA_DEPTH").ok();
-
-        // SAFETY: test-scoped env mutation.
-        unsafe {
-            std::env::remove_var("CSA_DEPTH");
-        }
-        assert_eq!(next_csa_depth(), "1");
-
-        // SAFETY: test-scoped env mutation.
-        unsafe {
-            std::env::set_var("CSA_DEPTH", "2");
-        }
-        assert_eq!(next_csa_depth(), "3");
-
-        // SAFETY: restore original env value.
-        unsafe {
-            match original_depth {
-                Some(value) => std::env::set_var("CSA_DEPTH", value),
-                None => std::env::remove_var("CSA_DEPTH"),
-            }
-        }
-    }
-}
+#[path = "plan_cmd_exec_tests.rs"]
+mod tests;

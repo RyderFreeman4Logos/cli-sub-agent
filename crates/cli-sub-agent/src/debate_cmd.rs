@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 use tokio::time::Instant;
 use tracing::{debug, error, warn};
@@ -10,11 +10,16 @@ use crate::debate_cmd_resolve::{
     validate_debate_direct_tool_tier_restriction,
 };
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
-use crate::run_helpers::resolve_prompt_with_file;
 use csa_core::types::OutputFormat;
 
 use crate::debate_cmd_output::DebateOutputHeader;
 use crate::tier_model_fallback::{self, TierAttemptFailure};
+
+#[path = "debate_cmd_subtree_pin.rs"]
+mod subtree_pin;
+
+#[path = "debate_cmd_question.rs"]
+mod question;
 
 #[path = "debate_cmd_finalize.rs"]
 mod finalize;
@@ -60,7 +65,7 @@ pub(crate) enum DebateMode {
 }
 
 pub(crate) async fn handle_debate(
-    args: DebateArgs,
+    mut args: DebateArgs,
     current_depth: u32,
     output_format: OutputFormat,
 ) -> Result<i32> {
@@ -73,6 +78,9 @@ pub(crate) async fn handle_debate(
     else {
         return Ok(1);
     };
+    // #1741: honor a pinned SA subtree's inherited model spec for `csa debate`
+    // (see debate_cmd_subtree_pin::apply_subtree_pin).
+    subtree_pin::apply_subtree_pin(&mut args, current_depth);
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
 
     // 2b. Verify debate skill is available (fail fast before any execution)
@@ -87,34 +95,10 @@ pub(crate) async fn handle_debate(
         run_pre_debate_quality_gate(&project_root, config.as_ref(), &global_config).await?;
     }
 
-    // 3. Read question (from --prompt-file, positional arg, --topic, or stdin)
-    let effective_question =
-        crate::run_helpers::resolve_positional_stdin_sentinel(args.question)?.or(args.topic);
-    let mut question = resolve_prompt_with_file(effective_question, args.prompt_file.as_deref())?;
-    let parsed_question = crate::difficulty_routing::strip_difficulty_frontmatter(question)?;
-    let frontmatter_difficulty = parsed_question.difficulty;
-    question = parsed_question.prompt;
-    if let Some(ctx) = &args.context {
-        question = format!("<debate-context>\n{ctx}\n</debate-context>\n\n{question}");
-    }
-    if let Some(file_path) = &args.file {
-        const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
-        let metadata = std::fs::metadata(file_path)
-            .with_context(|| format!("Failed to stat --file: {file_path}"))?;
-        if metadata.len() > MAX_FILE_SIZE {
-            anyhow::bail!(
-                "--file '{}' is too large ({} bytes, max {} bytes)",
-                file_path,
-                metadata.len(),
-                MAX_FILE_SIZE
-            );
-        }
-        let file_content = std::fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read --file: {file_path}"))?;
-        question = format!(
-            "<attached-file path=\"{file_path}\">\n{file_content}\n</attached-file>\n\n{question}"
-        );
-    }
+    // 3. Read question (--prompt-file / positional / --topic / stdin), strip
+    // difficulty frontmatter, prepend --context / --file (see
+    // debate_cmd_question::build_debate_question).
+    let (question, frontmatter_difficulty) = question::build_debate_question(&mut args)?;
 
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
     let mut prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
@@ -346,6 +330,17 @@ pub(crate) async fn handle_debate(
             executor.tool_name(),
             debate_execution_env_options(args.no_failover),
         );
+        // #1741: keep a pinned subtree pinned through the debater child so a
+        // nested Layer-N+1 call does not re-select the tier default. Mirrors
+        // csa run (run_cmd_attempt.rs). The pin is carried out-of-band as a
+        // typed value (self-gated on force_ignore_tier_setting + a non-empty
+        // spec) and applied by the executor's trusted channel — never via the
+        // env map, so no request/config env can spoof it.
+        let subtree_pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
+            attempt_model_spec.as_deref(),
+            args.force_ignore_tier_setting,
+            args.no_failover,
+        );
         let extra_env_owned = with_readonly_session_env(base_env_owned.as_ref(), true);
         let extra_env = extra_env_owned.as_ref();
         let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
@@ -369,6 +364,7 @@ pub(crate) async fn handle_debate(
                 &project_root,
                 config.as_ref(),
                 extra_env,
+                subtree_pin.as_ref(),
                 Some("debate"),
                 resolved_tier_name.as_deref(),
                 None,

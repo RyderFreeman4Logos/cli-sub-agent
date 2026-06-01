@@ -275,6 +275,7 @@ echo "ok persistent"
                     setting_sources: None,
                     sandbox: None,
                     thinking_budget: None,
+                    subtree_pin: None,
                 },
             )
             .await
@@ -347,7 +348,7 @@ fn test_build_env_codex_strips_lefthook_bypass_env_only_for_codex() {
         ("SAFE_ENV".to_string(), "ok".to_string()),
     ]);
 
-    let env = transport.build_env(&session, Some(&extra));
+    let env = transport.build_env(&session, Some(&extra), None);
 
     assert!(!env.contains_key("LEFTHOOK"));
     assert!(!env.contains_key("LEFTHOOK_SKIP_PRE_COMMIT"));
@@ -371,7 +372,7 @@ fn test_build_env_non_codex_preserves_lefthook_bypass_env() {
         ("LEFTHOOK_SKIP_PRE_COMMIT".to_string(), "1".to_string()),
     ]);
 
-    let env = transport.build_env(&session, Some(&extra));
+    let env = transport.build_env(&session, Some(&extra), None);
 
     assert_eq!(env.get("LEFTHOOK").map(String::as_str), Some("0"));
     assert_eq!(
@@ -564,6 +565,7 @@ async fn test_gemini_3phase_oauth_fails_apikey_same_model_succeeds() {
             "test 3phase oauth-fail apikey-succeed",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -614,6 +616,7 @@ async fn test_gemini_3phase_all_oauth_and_apikey_same_fail_flash_succeeds() {
             "test 3phase all-fail-until-flash",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -671,6 +674,7 @@ async fn test_gemini_3phase_all_fail_returns_last_error() {
             "test 3phase all-fail",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -722,10 +726,14 @@ fn test_acp_build_env_injects_parent_session_dir_for_child_sessions() {
     session.meta_session_id = "01HTEST000000000000000000".to_string();
     session.genealogy.parent_session_id = Some("01HPARENT000000000000000000".to_string());
 
-    let env = transport.build_env(&session, Some(&HashMap::from([(
-        csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
-        "/tmp/spoofed-parent-session-dir".to_string(),
-    )])));
+    let env = transport.build_env(
+        &session,
+        Some(&HashMap::from([(
+            csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
+            "/tmp/spoofed-parent-session-dir".to_string(),
+        )])),
+        None,
+    );
 
     let parent_session_dir = env
         .get(csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY)

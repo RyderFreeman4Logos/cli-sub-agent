@@ -41,11 +41,11 @@ pub use session_id::{extract_session_id, extract_session_id_from_transport};
 pub use transport::AcpTransport;
 pub use transport::{
     CODEX_EXEC_INITIAL_STALL_REASON, ClaudeCodeCliTransport,
-    DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, LegacyTransport, PeakMemoryContext,
-    ResolvedTimeout, SandboxTransportConfig, Transport, TransportCapabilities, TransportFactory,
-    TransportFactoryError, TransportMode, TransportOptions, TransportResult,
-    apply_codex_exec_initial_stall_summary, classify_codex_exec_initial_stall,
-    contains_gemini_oauth_prompt, normalize_gemini_prompt_text, resolve_initial_response_timeout,
-    strip_ansi_escape_sequences,
+    DEFAULT_CODEX_INITIAL_RESPONSE_TIMEOUT_SECONDS, GEMINI_OAUTH_PROMPT_FATAL_MARKER,
+    LegacyTransport, PeakMemoryContext, ResolvedTimeout, SandboxTransportConfig, Transport,
+    TransportCapabilities, TransportFactory, TransportFactoryError, TransportMode,
+    TransportOptions, TransportResult, apply_codex_exec_initial_stall_summary,
+    classify_codex_exec_initial_stall, contains_gemini_oauth_prompt, normalize_gemini_prompt_text,
+    resolve_initial_response_timeout, strip_ansi_escape_sequences,
 };
 pub use transport_tmux::{TmuxReapStats, TmuxTransport, reap_orphan_tmux_sessions};

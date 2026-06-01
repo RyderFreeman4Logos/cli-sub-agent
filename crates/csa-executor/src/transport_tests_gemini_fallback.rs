@@ -76,6 +76,7 @@ async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
             "test api key fallback",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -122,6 +123,7 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
         setting_sources: None,
         sandbox: None,
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let result = transport
@@ -154,6 +156,7 @@ async fn test_execute_in_new_invocation_restarts_with_oauth_before_fallback() {
             "first invocation",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -167,6 +170,7 @@ async fn test_execute_in_new_invocation_restarts_with_oauth_before_fallback() {
             "second invocation",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -210,6 +214,7 @@ async fn test_execute_in_non_quota_failure_does_not_trigger_api_key_fallback() {
             "non quota failure",
             std::path::Path::new("/tmp"),
             Some(&env),
+            None,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -302,6 +307,7 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         setting_sources: None,
         sandbox: Some(&sandbox),
         thinking_budget: None,
+        subtree_pin: None,
     };
 
     let result = transport

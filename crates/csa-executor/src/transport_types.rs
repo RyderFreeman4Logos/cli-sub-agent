@@ -66,6 +66,11 @@ pub struct TransportOptions<'a> {
     /// When set and an ACP idle disconnect is detected, the retry uses a
     /// one-level-lower budget. `None` disables idle-disconnect downshift.
     pub thinking_budget: Option<ThinkingBudget>,
+    /// CSA-decided subtree model pin (#1741), carried out-of-band from
+    /// `extra_env`. Injected into the child AFTER generic env merges, which
+    /// unconditionally strip the pin keys. This typed channel is the only way
+    /// the subtree-pin env keys may reach a child process.
+    pub subtree_pin: Option<csa_core::env::SubtreeModelPin>,
 }
 
 #[derive(Debug, Clone)]

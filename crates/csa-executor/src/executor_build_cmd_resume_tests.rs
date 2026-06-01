@@ -17,7 +17,7 @@ fn test_build_command_with_session_resume_codex() {
         token_usage: None,
     };
 
-    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None);
+    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let args: Vec<_> = cmd
         .as_std()
@@ -56,7 +56,7 @@ fn test_build_command_with_session_resume_codex_long_prompt_uses_stdin_marker() 
     };
     let prompt = "p".repeat(MAX_ARGV_PROMPT_LEN + 1);
 
-    let (cmd, stdin_data) = exec.build_command(&prompt, Some(&tool_state), &session, None);
+    let (cmd, stdin_data) = exec.build_command(&prompt, Some(&tool_state), &session, None, None);
     let args: Vec<_> = cmd
         .as_std()
         .get_args()
@@ -101,7 +101,7 @@ fn test_build_command_with_session_resume_claude_cli_is_ignored() {
         token_usage: None,
     };
 
-    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None);
+    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let args: Vec<_> = cmd
         .as_std()
@@ -135,7 +135,7 @@ fn test_build_command_with_session_resume_gemini() {
         token_usage: None,
     };
 
-    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None);
+    let (cmd, stdin_data) = exec.build_command("continue", Some(&tool_state), &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let args: Vec<_> = cmd
         .as_std()
@@ -170,7 +170,7 @@ fn test_build_command_no_resume_without_provider_session_id() {
         token_usage: None,
     };
 
-    let (cmd, stdin_data) = exec.build_command("start", Some(&tool_state), &session, None);
+    let (cmd, stdin_data) = exec.build_command("start", Some(&tool_state), &session, None, None);
     assert!(stdin_data.is_none(), "Short prompts should stay on argv");
     let args: Vec<_> = cmd
         .as_std()

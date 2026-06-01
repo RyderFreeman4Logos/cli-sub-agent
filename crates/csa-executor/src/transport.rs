@@ -53,11 +53,12 @@ mod transport_acp_sandbox;
 use transport_acp_sandbox::{build_summary, run_acp_sandboxed};
 #[path = "transport_gemini_helpers.rs"]
 mod transport_gemini_helpers;
+pub use crate::transport_gemini_oauth::{
+    GEMINI_OAUTH_PROMPT_FATAL_MARKER, contains_gemini_oauth_prompt, normalize_gemini_prompt_text,
+    strip_ansi_escape_sequences,
+};
 use crate::transport_gemini_oauth::{
     classify_gemini_oauth_prompt_result, is_gemini_oauth_prompt_result,
-};
-pub use crate::transport_gemini_oauth::{
-    contains_gemini_oauth_prompt, normalize_gemini_prompt_text, strip_ansi_escape_sequences,
 };
 #[cfg(feature = "acp")]
 use transport_gemini_helpers::{
@@ -245,7 +246,7 @@ impl AcpTransport {
         acp_args: &[String],
         resume_session_id: Option<&str>,
     ) -> Result<TransportResult> {
-        let mut env = self.build_env(session, extra_env);
+        let mut env = self.build_env(session, extra_env, options.subtree_pin.as_ref());
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
         let mut acp_command = self.acp_command.clone();

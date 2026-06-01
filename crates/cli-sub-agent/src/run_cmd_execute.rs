@@ -1,7 +1,3 @@
-//! Top-level `csa run` command orchestration.
-//!
-//! Extracted from `run_cmd.rs` to keep module sizes manageable.
-
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -23,15 +19,20 @@ use crate::run_cmd_tool_selection::{
 };
 #[path = "run_cmd_execute_post_exec_gate.rs"]
 mod post_exec_gate;
+#[path = "run_cmd_execute_reuse_hint.rs"]
+mod reuse_hint;
 #[path = "run_cmd_execute_routing.rs"]
 mod routing;
 #[path = "run_cmd_execute_cli_flags.rs"]
 mod run_cli_flags;
 #[path = "run_cmd_execute_context.rs"]
 mod run_context;
+#[path = "run_cmd_execute_skill_resume.rs"]
+mod skill_resume;
 #[path = "run_cmd_execute_tier_guard.rs"]
 mod tier_guard;
 use post_exec_gate::{execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner};
+use reuse_hint::emit_reusable_session_hint;
 use routing::{
     RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
     resolve_run_no_failover, resolve_run_tier_context,
@@ -41,12 +42,12 @@ use run_cli_flags::{
     warn_if_fast_mode_has_no_codex_run_candidate,
 };
 use run_context::finalize_prompt_text;
+use skill_resume::maybe_auto_resume_interrupted_skill_session;
 use tier_guard::{DirectToolTierGuardCtx, enforce_direct_tool_tier_guard};
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
-    detect_effective_repo, find_recent_interrupted_skill_session, resolve_run_timeout_seconds,
-    skill_session_description,
+    detect_effective_repo, resolve_run_timeout_seconds, skill_session_description,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -96,6 +97,13 @@ pub(crate) async fn handle_run(
     extra_writable: Vec<PathBuf>,
     extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
+    let cli_model_spec_explicit = model_spec.is_some();
+    let mut auto_route = auto_route;
+    let mut model_spec = model_spec;
+    let mut tier = tier;
+    let mut force_ignore_tier_setting = force_ignore_tier_setting;
+    let mut no_failover = no_failover;
+
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
     let effective_repo =
         detect_effective_repo(&project_root).unwrap_or_else(|| "(unknown)".to_string());
@@ -181,13 +189,9 @@ pub(crate) async fn handle_run(
         return Ok(exit_code);
     }
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
-    // Track whether user explicitly provided --tool on the CLI (before skill
-    // resolution may override it).  This drives tier enforcement: explicit
-    // --tool (including --tool auto) is blocked when tiers are configured.
-    let user_explicit_tool = tool.is_some();
+    let mut user_explicit_tool = tool.is_some();
     let prompt = crate::run_helpers::resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
 
-    // Resolve --prompt-file into the prompt if provided.
     let prompt = if prompt_file.is_some() {
         Some(crate::run_helpers::resolve_prompt_with_file(
             prompt,
@@ -205,6 +209,24 @@ pub(crate) async fn handle_run(
         thinking,
         &project_root,
     )?;
+    let model_pin_resolution = crate::run_cmd_model_pin::resolve_handle_run_model_pin(
+        crate::run_cmd_model_pin::RunModelPinInput {
+            model_spec,
+            tier,
+            auto_route,
+            force_ignore_tier_setting,
+            no_failover,
+        },
+        current_depth,
+        cli_model_spec_explicit,
+        &mut skill_res,
+        &mut user_explicit_tool,
+    );
+    model_spec = model_pin_resolution.model_spec;
+    tier = model_pin_resolution.tier;
+    auto_route = model_pin_resolution.auto_route;
+    force_ignore_tier_setting = model_pin_resolution.force_ignore_tier_setting;
+    no_failover = model_pin_resolution.no_failover;
     let resolved_skill = skill_res.resolved_skill;
     let gate_prompt_text = skill_res.prompt_text.clone();
     let frontmatter_difficulty = skill_res.frontmatter_difficulty.clone();
@@ -235,6 +257,10 @@ pub(crate) async fn handle_run(
     let primary_writer_spec =
         resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
     let model_spec = model_spec.or(primary_writer_spec);
+    let subtree_model_pin_spec = model_pin_resolution
+        .subtree_model_pin_active
+        .then(|| model_spec.clone())
+        .flatten();
 
     let mut merged_aliases = global_config.tool_aliases.clone();
     if let Some(c) = config.as_ref() {
@@ -264,10 +290,6 @@ pub(crate) async fn handle_run(
         frontmatter_difficulty.as_deref(),
     )?;
 
-    // #1441: compound `--tier <tier>-<tool>` selector. When the literal tier
-    // name isn't a configured tier but parses as `<tier>-<tool>`, replace the
-    // tier with the canonical prefix and inject the parsed tool. Conflicting
-    // --tool surfaces as a routing error.
     let (effective_tier, compounded_tool) =
         match crate::run_helpers::apply_compound_tier_selector_arg(
             effective_tier,
@@ -296,9 +318,6 @@ pub(crate) async fn handle_run(
         };
     skill_res.tool = compounded_tool;
 
-    // Enforce tier routing: when tiers are configured, explicit --tool (any
-    // value, including "auto") is blocked unless --tier is also specified or
-    // --force-ignore-tier-setting is active.
     enforce_direct_tool_tier_guard(DirectToolTierGuardCtx {
         config: config.as_ref(),
         user_explicit_tool,
@@ -332,8 +351,6 @@ pub(crate) async fn handle_run(
         pipeline::resolve_effective_idle_timeout_seconds(config.as_ref(), idle_timeout, timeout)
     };
     let run_started_at = Instant::now();
-    // csa run is a write operation by default: exclude read-only tools from tier races
-    // unless the prompt explicitly indicates a read-only task.
     let needs_edit = task_needs_edit.unwrap_or(true);
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
@@ -381,19 +398,15 @@ pub(crate) async fn handle_run(
         resolved_tool,
         &heterogeneous_runtime_fallback_candidates,
     );
-    if session_arg.is_none()
-        && !is_fork
-        && !fork_call
-        && !ephemeral
-        && let Some(skill_name) = skill.as_deref()
-        && let Some(interrupted_session_id) =
-            find_recent_interrupted_skill_session(&project_root, skill_name, &resolved_tool)
-    {
-        eprintln!(
-            "Auto-resuming interrupted skill session {interrupted_session_id} for '{skill_name}'."
-        );
-        session_arg = Some(interrupted_session_id);
-    }
+    session_arg = maybe_auto_resume_interrupted_skill_session(
+        &project_root,
+        skill.as_deref(),
+        &resolved_tool,
+        session_arg,
+        is_fork,
+        fork_call,
+        ephemeral,
+    );
 
     let seed_result = try_auto_seed_fork(
         &project_root,
@@ -444,24 +457,12 @@ pub(crate) async fn handle_run(
 
     let effective_session_arg = if is_fork { None } else { session_arg.clone() };
 
-    if effective_session_arg.is_none() && !is_fork {
-        let tool_names = vec![resolved_tool.as_str().to_string()];
-        match csa_scheduler::session_reuse::find_reusable_sessions(
-            &project_root,
-            "run",
-            &tool_names,
-        ) {
-            Ok(candidates) if !candidates.is_empty() => {
-                let best = &candidates[0];
-                eprintln!(
-                    "hint: reusable session available for {}: --fork-from {}",
-                    best.tool_name,
-                    best.session_id.get(..8).unwrap_or(&best.session_id),
-                );
-            }
-            _ => {}
-        }
-    }
+    emit_reusable_session_hint(
+        &project_root,
+        resolved_tool,
+        effective_session_arg.as_deref(),
+        is_fork,
+    );
 
     let fallback_tier_name = skill_agent.and_then(|a| a.tier.clone()).or_else(|| {
         config.as_ref().and_then(|cfg| {
@@ -474,8 +475,6 @@ pub(crate) async fn handle_run(
             })
         })
     });
-    // Force-ignore bypass must not revive a tier at runtime, but ordinary
-    // auto/default routing still keeps its existing fallback tier context.
     let user_model_spec_explicit = model_spec.is_some();
     let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
         resolve_run_tier_context(
@@ -504,6 +503,7 @@ pub(crate) async fn handle_run(
         initial_tool: resolved_tool,
         initial_model_spec: resolved_model_spec,
         user_model_spec_explicit: false,
+        subtree_model_pin_spec: subtree_model_pin_spec.as_deref(),
         initial_model: resolved_model,
         runtime_fallback_candidates: heterogeneous_runtime_fallback_candidates,
         project_root: &project_root,

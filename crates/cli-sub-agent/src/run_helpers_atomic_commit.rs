@@ -122,7 +122,7 @@ mod tests {
             thinking_budget: None,
         };
         let session = make_test_session();
-        let (cmd, _stdin_data) = exec.build_command("hello", None, &session, None);
+        let (cmd, _stdin_data) = exec.build_command("hello", None, &session, None, None);
 
         let envs: Vec<_> = cmd.as_std().get_envs().collect();
         let env_map: HashMap<&OsStr, Option<&OsStr>> = envs.into_iter().collect();

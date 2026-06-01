@@ -3,7 +3,17 @@ use std::ffi::OsString;
 use super::*;
 
 impl Executor {
-    /// Inject environment variables from global config into a Command.
+    /// Inject environment variables from a generic (user/request/config) env map
+    /// into a Command.
+    ///
+    /// Keys present in [`Self::STRIPPED_ENV_VARS`] are skipped so that
+    /// generic-map values cannot re-introduce a freshly-stripped recursion
+    /// guard, session-scoped var, or hook-bypass switch. This includes the
+    /// subtree model-pin keys ([`csa_core::env::SUBTREE_PIN_ENV_KEYS`], which
+    /// are in `STRIPPED_ENV_VARS`): a generic env map may NEVER set them, so a
+    /// caller placing them in request/config env cannot spoof a subtree pin
+    /// (#1741). CSA's authoritative pin is applied separately, AFTER this merge,
+    /// via the trusted [`executor_env::apply_subtree_pin`] typed channel.
     pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
         for (key, value) in env_vars {
             if !Self::STRIPPED_ENV_VARS.contains(&key.as_str()) {
@@ -13,12 +23,17 @@ impl Executor {
     }
 
     /// Build a configured Command ready for execution (without spawning).
+    ///
+    /// `subtree_pin` carries CSA's authoritative subtree model pin (#1741) and
+    /// is applied LAST (after the generic `extra_env` merge, which strips the
+    /// pin keys) so it is the sole, unforgeable writer of those keys.
     pub fn build_command(
         &self,
         prompt: &str,
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     ) -> (Command, Option<Vec<u8>>) {
         // Prepend CSA identity preamble for claude-code (#1397).
         let preamble_buf;
@@ -38,6 +53,10 @@ impl Executor {
             Self::inject_env(&mut cmd, env);
         }
         self.inject_csa_owned_env(&mut cmd, session);
+        // #1741: apply CSA's trusted subtree pin LAST, after every generic env
+        // merge (which stripped the pin keys). This is the only writer of the
+        // pin keys, so user/request/config env can never spoof a pin.
+        executor_env::apply_subtree_pin(&mut cmd, subtree_pin);
         executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(Path::new(&session.project_path)));
@@ -59,11 +78,16 @@ impl Executor {
         (cmd, stdin_data)
     }
     /// Build command for execute_in() legacy path.
+    ///
+    /// `subtree_pin` carries CSA's authoritative subtree model pin (#1741) and
+    /// is applied LAST (after the generic `extra_env` merge, which strips the
+    /// pin keys) so it is the sole, unforgeable writer of those keys.
     pub(crate) fn build_execute_in_command(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
@@ -77,6 +101,9 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        // #1741: apply CSA's trusted subtree pin LAST (after the generic merge,
+        // which stripped the pin keys) — the only writer of the pin keys.
+        executor_env::apply_subtree_pin(&mut cmd, subtree_pin);
         executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(work_dir));
