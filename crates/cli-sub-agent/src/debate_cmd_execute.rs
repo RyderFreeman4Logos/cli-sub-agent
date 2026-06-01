@@ -350,6 +350,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
             fallback_tool: final_tool,
             fallback_reason,
             selected_model_spec: final_model_spec.as_deref(),
+            tier_preference_order: request.tier_preference_order,
         },
     )?;
     print_rendered_output(finalized.rendered_output);

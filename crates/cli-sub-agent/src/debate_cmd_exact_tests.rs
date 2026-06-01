@@ -186,6 +186,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");
@@ -366,6 +367,7 @@ Verdict: APPROVE
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("explicit verdict should finalize");
@@ -458,6 +460,7 @@ Verdict: APPROVE
             fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("fallback chain should finalize");
@@ -553,6 +556,7 @@ Verdict: APPROVE
             // claude-code (pos1) is the winning debater; the BEFORE-winner codex
             // exclusion (pos0) is still persisted (#1714).
             selected_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
+            tier_preference_order: &[],
         },
     )
     .expect("build-time fallback chain should finalize");
@@ -659,6 +663,7 @@ Summary: Needs changes from terminal non-success verdict.
             fallback_tool: Some(csa_core::types::ToolName::ClaudeCode),
             fallback_reason: None,
             selected_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
+            tier_preference_order: &[],
         },
     )
     .expect("revise verdict should finalize");
@@ -744,6 +749,7 @@ Verdict: REVISE
             fallback_tool: None,
             fallback_reason: None,
             selected_model_spec: None,
+            tier_preference_order: &[],
         },
     )
     .expect("revise verdict should finalize");

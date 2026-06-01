@@ -215,8 +215,8 @@ fn failure_attempt(failure: &AttemptFailure) -> FallbackAttempt {
 
 /// Build the per-tool failover chain for a review/debate run.
 ///
-/// `ordered_specs` is the tier's model list in definition order; it drives a
-/// coherent, deterministic trace. `exclusions` are models filtered out at
+/// `ordered_specs` is the tier's model list in actual execution order; it drives
+/// a coherent, deterministic trace. `exclusions` are models filtered out at
 /// candidate-build time; `attempt_failures` are [`AttemptFailure`] records for
 /// candidates that were actually tried and errored (each carrying the scheduler's
 /// authoritative `quota_exhausted` flag when known). Models present in

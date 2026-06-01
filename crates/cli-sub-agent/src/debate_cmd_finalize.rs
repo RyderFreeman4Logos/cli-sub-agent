@@ -33,6 +33,7 @@ pub(crate) struct DebateFinalizeContext<'a> {
     /// Winning debater model spec, if the debate succeeded. Bounds the persisted
     /// failover chain to before-winner skips (#1714).
     pub(crate) selected_model_spec: Option<&'a str>,
+    pub(crate) tier_preference_order: &'a [String],
 }
 
 fn build_unavailable_debate_summary(
@@ -192,6 +193,7 @@ pub(crate) fn finalize_debate_outcome(
                     context.resolved_tier_name,
                     context.failures,
                     context.selected_model_spec,
+                    context.tier_preference_order,
                 ),
             );
         }

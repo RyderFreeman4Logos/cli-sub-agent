@@ -86,20 +86,25 @@ pub(crate) fn ordered_tier_candidates(
 /// successful later candidate still leaves a trace for earlier build-time skips.
 ///
 /// `selected_model_spec` is the WINNING model (when the run succeeded). It bounds
-/// the emitted build-time exclusions to tier specs BEFORE the winner so a
-/// first-choice success does not falsely persist later, never-reached tier
-/// models as skips (#1714). Pass `None` on the all-models-failed path (no
-/// winner) to keep the full chain.
+/// the emitted build-time exclusions to tier specs BEFORE the winner in the
+/// actual preference-aware execution order, so a first-choice success does not
+/// falsely persist later, never-reached tier models as skips (#1714, #1749).
+/// Pass `None` on the all-models-failed path (no winner) to keep the full chain.
 pub(crate) fn build_fallback_chain_for_result(
     project_config: Option<&ProjectConfig>,
     tier_name: Option<&str>,
     failures: &[TierAttemptFailure],
     selected_model_spec: Option<&str>,
+    tier_preference_order: &[String],
 ) -> Vec<FallbackAttempt> {
-    let ordered_specs: Vec<String> = tier_name
-        .and_then(|name| project_config.and_then(|cfg| cfg.tiers.get(name)))
-        .map(|tier| tier.models.clone())
-        .unwrap_or_default();
+    let ordered_specs: Vec<String> = match (tier_name, project_config) {
+        (Some(name), Some(cfg)) => cfg
+            .tiers
+            .get(name)
+            .map(|tier| preference_ordered_specs(&tier.models, tier_preference_order))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let exclusions = match (tier_name, project_config) {
         (Some(name), Some(cfg)) => crate::run_helpers::evaluate_tier_models(name, cfg, &[]).1,
         _ => Vec::new(),
@@ -118,6 +123,37 @@ pub(crate) fn build_fallback_chain_for_result(
         &attempt_failures,
         selected_model_spec,
     )
+}
+
+fn preference_ordered_specs(
+    tier_models: &[String],
+    tier_preference_order: &[String],
+) -> Vec<String> {
+    if tier_preference_order.is_empty() {
+        return tier_models.to_vec();
+    }
+
+    let mut ordered = Vec::with_capacity(tier_models.len());
+    let mut remaining: Vec<&String> = tier_models.iter().collect();
+
+    for preferred_tool in tier_preference_order {
+        let mut next_remaining = Vec::new();
+        for spec in remaining {
+            if model_spec_tool(spec) == preferred_tool {
+                ordered.push(spec.clone());
+            } else {
+                next_remaining.push(spec);
+            }
+        }
+        remaining = next_remaining;
+    }
+
+    ordered.extend(remaining.into_iter().cloned());
+    ordered
+}
+
+fn model_spec_tool(spec: &str) -> &str {
+    spec.split('/').next().unwrap_or(spec)
 }
 
 fn ordered_global_candidates(

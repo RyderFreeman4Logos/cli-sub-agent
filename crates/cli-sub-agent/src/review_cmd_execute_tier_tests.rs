@@ -46,6 +46,7 @@ fn build_failover_chain_records_build_time_exclusions_without_runtime_failures()
         Some("quality"),
         &[],
         Some("claude-code/anthropic/claude-sonnet/high"),
+        &[],
     );
 
     assert_eq!(chain.len(), 1);
@@ -59,6 +60,33 @@ fn build_failover_chain_records_build_time_exclusions_without_runtime_failures()
     assert!(
         chain.iter().all(|attempt| attempt.tool != "claude-code"),
         "the successful reviewer is not a fallback-chain skip"
+    );
+}
+
+#[test]
+fn build_failover_chain_uses_preference_order_before_winner() {
+    let _available_guard =
+        ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let config = config_with_review_tier(
+        &["claude-code"],
+        &[
+            "codex/openai/gpt-5.4/high",
+            "claude-code/anthropic/claude-sonnet/high",
+        ],
+    );
+    let preference_order = vec!["claude-code".to_string()];
+
+    let chain = crate::tier_model_fallback::build_fallback_chain_for_result(
+        Some(&config),
+        Some("quality"),
+        &[],
+        Some("claude-code/anthropic/claude-sonnet/high"),
+        &preference_order,
+    );
+
+    assert!(
+        chain.is_empty(),
+        "raw-tier predecessors must not be recorded before a preferred winner"
     );
 }
 
