@@ -31,7 +31,9 @@ mod run_context;
 mod skill_resume;
 #[path = "run_cmd_execute_tier_guard.rs"]
 mod tier_guard;
-use post_exec_gate::{execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner};
+use post_exec_gate::{
+    apply_post_exec_gate_after_success_with_runner, execute_post_exec_gate_command,
+};
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
     RunModelSelectionFlags, enforce_run_tier_bypass_gate, resolve_primary_writer_spec_for_run,
@@ -94,6 +96,7 @@ pub(crate) async fn handle_run(
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
     no_error_marker_scan: bool,
+    no_post_exec_gate: bool,
     extra_writable: Vec<PathBuf>,
     extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
@@ -587,28 +590,16 @@ pub(crate) async fn handle_run(
     let fork_resolution = loop_outcome.fork_resolution;
 
     if result.exit_code == 0 {
-        // Capture gate errors so we can overwrite the already-written result.toml
-        // before propagating.  Without this, result.toml shows status=success even
-        // when the gate rejected the session output (#1486).
-        if let Err(gate_err) = maybe_run_post_exec_gate_with_runner(
+        apply_post_exec_gate_after_success_with_runner(
             &project_root,
             &gate_prompt_text,
             executed_session_id.as_deref(),
             config.as_ref(),
             changed_paths.as_deref(),
+            no_post_exec_gate,
             execute_post_exec_gate_command,
         )
-        .await
-        {
-            if let Some(ref sid) = executed_session_id {
-                crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
-                    &project_root,
-                    sid,
-                    &gate_err,
-                );
-            }
-            return Err(gate_err);
-        }
+        .await?;
     }
 
     if fork_call {

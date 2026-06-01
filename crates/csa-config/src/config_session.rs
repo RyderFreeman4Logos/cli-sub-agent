@@ -12,7 +12,7 @@ fn default_post_exec_gate_command() -> String {
 }
 
 const fn default_post_exec_gate_timeout_seconds() -> u64 {
-    600
+    1800
 }
 
 /// Post-execution quality gate for successful `csa run` sessions.

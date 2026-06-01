@@ -125,7 +125,7 @@ long_poll_seconds = 240
 # [run.post_exec_gate]
 # enabled = true
 # command = "just pre-commit"
-# timeout_seconds = 600  # Default 600s (10 min). Increase for heavy Rust projects with long pre-commit hooks.
+# timeout_seconds = 1800  # Default 1800s (30 min). Increase for heavy Rust projects with long pre-commit hooks.
 # skip_on_no_changes = true
 
 # MCP (Model Context Protocol) servers injected into all tool sessions.

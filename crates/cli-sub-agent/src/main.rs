@@ -196,8 +196,6 @@ async fn run() -> Result<()> {
     let text_output = matches!(output_format, OutputFormat::Text);
     let command = cli.command;
 
-    // Resolve effective min_timeout_seconds from configs (project overrides global).
-    // This is a lightweight load; config errors are ignored (fall back to compile-time default).
     let min_timeout = resolve_effective_min_timeout();
 
     if let Err(err) = validate_command_args(&command, min_timeout) {
@@ -289,6 +287,7 @@ async fn run() -> Result<()> {
             stream_stdout,
             no_stream_stdout,
             no_error_marker_scan,
+            no_post_exec_gate,
             spec: _spec,
             tier,
             force_ignore_tier_setting,
@@ -379,12 +378,11 @@ async fn run() -> Result<()> {
                 force_ignore_tier_setting,
                 no_fs_sandbox,
                 no_error_marker_scan,
+                no_post_exec_gate,
                 extra_writable,
                 extra_readable,
             })
             .await;
-            // Report errors while fd 2 is still open (guard holds stderr rotation).
-            // Dropping the guard closes fd 2, so eprintln! must happen first.
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             // Post-session SA mode reminder so caller sees constraint before next action.
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(

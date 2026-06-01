@@ -146,7 +146,7 @@ fn build_project_display_toml_keeps_effective_post_exec_gate_defaults_visible() 
     assert!(rendered.contains("[run.post_exec_gate]"));
     assert!(rendered.contains("enabled = true"));
     assert!(rendered.contains("command = \"just pre-commit\""));
-    assert!(rendered.contains("timeout_seconds = 600"));
+    assert!(rendered.contains("timeout_seconds = 1800"));
     assert!(rendered.contains("skip_on_no_changes = true"));
 }
 
@@ -168,7 +168,7 @@ fn build_project_display_json_keeps_effective_post_exec_gate_defaults_visible() 
     );
     assert_eq!(
         gate.get("timeout_seconds").and_then(|value| value.as_u64()),
-        Some(600)
+        Some(1800)
     );
     assert_eq!(
         gate.get("skip_on_no_changes")

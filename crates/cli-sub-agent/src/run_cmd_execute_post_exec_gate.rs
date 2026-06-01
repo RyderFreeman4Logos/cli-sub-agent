@@ -18,6 +18,35 @@ pub(super) enum PostExecGateCommandOutcome {
 pub(super) enum PostExecGateOutcome {
     Passed,
     Skipped,
+    Failed(PostExecGateFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PostExecGateFailure {
+    kind: PostExecGateFailureKind,
+    diagnostic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PostExecGateFailureKind {
+    Exited(Option<i32>),
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostExecGateWorktreeState {
+    CommittedClean,
+    DirtyOrUnknown,
+}
+
+impl PostExecGateFailure {
+    fn into_error(self) -> anyhow::Error {
+        anyhow::anyhow!(self.diagnostic)
+    }
+
+    fn is_timeout(&self) -> bool {
+        matches!(self.kind, PostExecGateFailureKind::TimedOut)
+    }
 }
 
 type PostExecGateFuture = Pin<Box<dyn Future<Output = Result<PostExecGateCommandOutcome>> + Send>>;
@@ -83,6 +112,31 @@ fn git_head_changed_since(project_root: &Path, start_head: Option<&str>) -> Resu
     Ok(current_head.trim() != start_head)
 }
 
+fn current_git_head(project_root: &Path) -> Result<Option<String>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to inspect git HEAD for post-exec gate in {}",
+                project_root.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if head.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(head))
+    }
+}
+
 fn git_worktree_has_status_changes(project_root: &Path) -> Result<bool> {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -101,6 +155,32 @@ fn git_worktree_has_status_changes(project_root: &Path) -> Result<bool> {
     }
 
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+fn classify_post_exec_gate_worktree(
+    project_root: &Path,
+    session_id: Option<&str>,
+) -> PostExecGateWorktreeState {
+    if !crate::run_cmd::is_git_worktree(project_root) {
+        return PostExecGateWorktreeState::DirtyOrUnknown;
+    }
+
+    let Some(start_head) = session_id.and_then(|id| session_start_head(project_root, id)) else {
+        return PostExecGateWorktreeState::DirtyOrUnknown;
+    };
+
+    let Ok(Some(current_head)) = current_git_head(project_root) else {
+        return PostExecGateWorktreeState::DirtyOrUnknown;
+    };
+
+    if current_head.trim() == start_head.trim() {
+        return PostExecGateWorktreeState::DirtyOrUnknown;
+    }
+
+    match git_worktree_has_status_changes(project_root) {
+        Ok(false) => PostExecGateWorktreeState::CommittedClean,
+        Ok(true) | Err(_) => PostExecGateWorktreeState::DirtyOrUnknown,
+    }
 }
 
 fn strip_inherited_csa_env(cmd: &mut Command) {
@@ -215,32 +295,124 @@ where
     .await?
     {
         PostExecGateCommandOutcome::Exited(Some(0)) => Ok(PostExecGateOutcome::Passed),
-        PostExecGateCommandOutcome::Exited(code) => anyhow::bail!(
-            "csa: post-exec gate failed (exit={}).\n\
-             gate command: {}\n\
-             cwd: {}\n\
-             employee session: {}\n\
-             branch: {}\n\
-             next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
-            code.map_or_else(|| "signal".to_string(), |value| value.to_string()),
-            gate_config.command,
-            project_root.display(),
-            session_id.unwrap_or("(ephemeral)"),
-            branch,
-        ),
-        PostExecGateCommandOutcome::TimedOut => anyhow::bail!(
-            "csa: post-exec gate timed out after {} seconds.\n\
-             gate command: {}\n\
-             cwd: {}\n\
-             employee session: {}\n\
-             branch: {}\n\
-             next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
-            gate_config.timeout_seconds,
-            gate_config.command,
-            project_root.display(),
-            session_id.unwrap_or("(ephemeral)"),
-            branch,
-        ),
+        PostExecGateCommandOutcome::Exited(code) => {
+            Ok(PostExecGateOutcome::Failed(PostExecGateFailure {
+                kind: PostExecGateFailureKind::Exited(code),
+                diagnostic: format!(
+                    "csa: post-exec gate failed (exit={}).\n\
+                     gate command: {}\n\
+                     cwd: {}\n\
+                     employee session: {}\n\
+                     branch: {}\n\
+                     next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
+                    code.map_or_else(|| "signal".to_string(), |value| value.to_string()),
+                    gate_config.command,
+                    project_root.display(),
+                    session_id.unwrap_or("(ephemeral)"),
+                    branch,
+                ),
+            }))
+        }
+        PostExecGateCommandOutcome::TimedOut => {
+            Ok(PostExecGateOutcome::Failed(PostExecGateFailure {
+                kind: PostExecGateFailureKind::TimedOut,
+                diagnostic: format!(
+                    "csa: post-exec gate timed out after {} seconds.\n\
+                     gate command: {}\n\
+                     cwd: {}\n\
+                     employee session: {}\n\
+                     branch: {}\n\
+                     next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
+                    gate_config.timeout_seconds,
+                    gate_config.command,
+                    project_root.display(),
+                    session_id.unwrap_or("(ephemeral)"),
+                    branch,
+                ),
+            }))
+        }
+    }
+}
+
+pub(super) async fn apply_post_exec_gate_after_success_with_runner<F>(
+    project_root: &Path,
+    prompt_text: &str,
+    session_id: Option<&str>,
+    config: Option<&ProjectConfig>,
+    changed_paths: Option<&[String]>,
+    no_post_exec_gate: bool,
+    runner: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &Path, u64) -> PostExecGateFuture,
+{
+    if no_post_exec_gate {
+        if let Some(session_id) = session_id {
+            crate::run_cmd_post::record_post_exec_gate_skipped_by_flag(project_root, session_id);
+        }
+        return Ok(());
+    }
+
+    let gate_outcome = match maybe_run_post_exec_gate_with_runner(
+        project_root,
+        prompt_text,
+        session_id,
+        config,
+        changed_paths,
+        runner,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            if let Some(session_id) = session_id {
+                crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
+                    project_root,
+                    session_id,
+                    &format!("could not run the post-exec gate: {err}"),
+                    false,
+                );
+            }
+            return Err(err);
+        }
+    };
+
+    match gate_outcome {
+        PostExecGateOutcome::Passed | PostExecGateOutcome::Skipped => Ok(()),
+        PostExecGateOutcome::Failed(failure) if failure.is_timeout() => {
+            if classify_post_exec_gate_worktree(project_root, session_id)
+                == PostExecGateWorktreeState::CommittedClean
+            {
+                if let Some(session_id) = session_id {
+                    crate::run_cmd_post::record_post_exec_gate_timeout_advisory(
+                        project_root,
+                        session_id,
+                    );
+                }
+                Ok(())
+            } else {
+                if let Some(session_id) = session_id {
+                    crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
+                        project_root,
+                        session_id,
+                        "timeout left dirty/uncommitted work unverified",
+                        true,
+                    );
+                }
+                Err(failure.into_error())
+            }
+        }
+        PostExecGateOutcome::Failed(failure) => {
+            if let Some(session_id) = session_id {
+                crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
+                    project_root,
+                    session_id,
+                    &format!("post-exec gate failed: {}", failure.diagnostic),
+                    false,
+                );
+            }
+            Err(failure.into_error())
+        }
     }
 }
 
