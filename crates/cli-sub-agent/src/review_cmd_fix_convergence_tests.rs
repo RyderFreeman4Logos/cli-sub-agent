@@ -1,4 +1,7 @@
-use super::{CLEAN, persist_fix_final_artifacts_for_tests_with_output};
+use super::{
+    CLEAN, fix_exit_code_for_convergence, persist_fix_final_artifacts_for_tests_with_output,
+    reached_genuine_clean_convergence,
+};
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
@@ -149,6 +152,70 @@ fn assert_clean_convergence_artifacts(session_dir: &Path) {
         artifact.severity_counts.values().all(|count| *count == 0),
         "clean convergence must persist all-zero severity counts"
     );
+}
+
+#[test]
+fn fix_loop_terminal_outcome_truth_table() {
+    struct Case {
+        name: &'static str,
+        quality_gate_passed: bool,
+        final_decision: ReviewDecision,
+        exit_code: i32,
+        clean_marker: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "genuine clean convergence",
+            quality_gate_passed: true,
+            final_decision: ReviewDecision::Pass,
+            exit_code: 0,
+            clean_marker: true,
+        },
+        Case {
+            name: "converged but post-consistency decision non-clean",
+            quality_gate_passed: true,
+            final_decision: ReviewDecision::Fail,
+            exit_code: 1,
+            clean_marker: false,
+        },
+        Case {
+            name: "exhausted with failing gate and artifact-inferred clean",
+            quality_gate_passed: false,
+            final_decision: ReviewDecision::Pass,
+            exit_code: 1,
+            clean_marker: false,
+        },
+        Case {
+            name: "exhausted with review findings still present",
+            quality_gate_passed: false,
+            final_decision: ReviewDecision::Fail,
+            exit_code: 1,
+            clean_marker: false,
+        },
+        Case {
+            name: "error or abort path",
+            quality_gate_passed: false,
+            final_decision: ReviewDecision::Unavailable,
+            exit_code: 1,
+            clean_marker: false,
+        },
+    ];
+
+    for case in cases {
+        assert_eq!(
+            fix_exit_code_for_convergence(case.quality_gate_passed, case.final_decision),
+            case.exit_code,
+            "{} exit code",
+            case.name
+        );
+        assert_eq!(
+            reached_genuine_clean_convergence(case.quality_gate_passed, case.final_decision),
+            case.clean_marker,
+            "{} clean marker",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -381,6 +448,132 @@ fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate
     assert!(
         session_dir.join("output").join("suggestion.toml").exists(),
         "suggestion.toml must follow the post-consistency fail decision"
+    );
+    let persisted_meta = read_review_meta(&session_dir);
+    assert_eq!(persisted_meta.decision, final_decision.as_str());
+    assert_eq!(persisted_meta.exit_code, 1);
+}
+
+#[test]
+fn persist_fix_final_artifacts_exhausted_failing_gate_empty_artifacts_blocks_exit_and_gate_marker()
+{
+    let branch = "fix-1754-exhausted-empty-artifacts";
+    let project_root = temp_git_project_root("persist-fix-exhausted-empty-artifacts", branch);
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXEXHAUSTEDEMPTY");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output =
+        "<!-- CSA:SECTION:summary -->\nVerdict: CLEAN.\n<!-- CSA:SECTION:summary:END -->\n";
+    csa_session::persist_structured_output(&session_dir, current_output)
+        .expect("persist clean structured output");
+    write_findings_toml(&session_dir, &FindingsFile::default()).expect("write empty findings");
+    let empty_review_findings = serde_json::json!({
+        "findings": [],
+        "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0 },
+        "overall_risk": "low"
+    });
+    fs::write(
+        session_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&empty_review_findings).expect("serialize empty findings"),
+    )
+    .expect("write empty review-findings.json");
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.head_sha = csa_session::detect_git_head(&project_root).expect("detect HEAD");
+    meta.decision = ReviewDecision::Fail.as_str().to_string();
+    meta.verdict = "HAS_ISSUES".to_string();
+    meta.exit_code = 1;
+    meta.fix_rounds = 3;
+    crate::review_gate::write_review_gate_marker(
+        &project_root,
+        branch,
+        &meta.head_sha,
+        &meta.session_id,
+        &meta.scope,
+    );
+    let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
+    assert!(marker_path.exists(), "test must seed a stale clean marker");
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output(
+        &project_root,
+        &meta,
+        false,
+        current_output,
+    );
+
+    assert_eq!(
+        final_decision,
+        ReviewDecision::Pass,
+        "empty artifacts reproduce the artifact-inferred clean decision"
+    );
+    assert_eq!(
+        fix_exit_code_for_convergence(false, final_decision),
+        1,
+        "exhaustion with a failing gate must force a non-zero exit"
+    );
+    assert!(
+        !marker_path.exists(),
+        "exhaustion with a failing gate must remove a stale clean marker"
+    );
+    let persisted_meta = read_review_meta(&session_dir);
+    assert_eq!(persisted_meta.decision, final_decision.as_str());
+    assert_eq!(
+        persisted_meta.exit_code, 1,
+        "persisted review meta exit must follow the genuine-convergence predicate"
+    );
+}
+
+#[test]
+fn persist_fix_final_artifacts_exhausted_failing_gate_non_clean_artifacts_blocks_exit_and_gate_marker()
+ {
+    let branch = "fix-1754-exhausted-non-clean-artifacts";
+    let project_root = temp_git_project_root("persist-fix-exhausted-non-clean-artifacts", branch);
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXEXHAUSTEDFAIL");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output = "<!-- CSA:SECTION:summary -->\nBlocking issues remain.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nHigh: src/lib.rs:7 current-round blocker.\n<!-- CSA:SECTION:details:END -->\n";
+    csa_session::persist_structured_output(&session_dir, current_output)
+        .expect("persist blocking structured output");
+    write_findings_toml(
+        &session_dir,
+        &FindingsFile {
+            findings: vec![stale_finding()],
+        },
+    )
+    .expect("write blocking findings");
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.head_sha = csa_session::detect_git_head(&project_root).expect("detect HEAD");
+    meta.decision = ReviewDecision::Fail.as_str().to_string();
+    meta.verdict = "HAS_ISSUES".to_string();
+    meta.exit_code = 1;
+    meta.fix_rounds = 3;
+    crate::review_gate::write_review_gate_marker(
+        &project_root,
+        branch,
+        &meta.head_sha,
+        &meta.session_id,
+        &meta.scope,
+    );
+    let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
+    assert!(marker_path.exists(), "test must seed a stale clean marker");
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output(
+        &project_root,
+        &meta,
+        false,
+        current_output,
+    );
+
+    assert_ne!(
+        final_decision,
+        ReviewDecision::Pass,
+        "non-clean artifacts must remain non-clean"
+    );
+    assert_eq!(fix_exit_code_for_convergence(false, final_decision), 1);
+    assert!(
+        !marker_path.exists(),
+        "exhaustion with non-clean artifacts must remove a stale clean marker"
     );
     let persisted_meta = read_review_meta(&session_dir);
     assert_eq!(persisted_meta.decision, final_decision.as_str());

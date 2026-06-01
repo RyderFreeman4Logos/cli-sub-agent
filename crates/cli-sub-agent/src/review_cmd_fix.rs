@@ -21,11 +21,8 @@ use super::output::{
 };
 use super::resolve::ANTI_RECURSION_PREAMBLE;
 
-const CLEAN_CONVERGENCE_STALE_OUTPUT_FILES: &[&str] = &[
-    "suggestion.toml",
-    super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER,
-];
-const REVIEW_PROSE_SECTION_IDS: &[&str] = &["summary", "details"];
+#[path = "review_cmd_fix_clean_output.rs"]
+mod clean_output;
 
 /// All context needed to run the fix loop after a review finds issues.
 pub(crate) struct FixLoopContext<'a> {
@@ -61,10 +58,14 @@ pub(crate) struct FixLoopContext<'a> {
 /// Run fix rounds, returning the final exit code.
 ///
 /// Each round resumes the review session with a fix prompt, then re-runs
-/// the quality gate.  Returns `Ok(0)` on first passing round, or
-/// `Ok(1)` when all rounds are exhausted.
+/// the quality gate. Returns `Ok(0)` only after the quality gate passes and
+/// the persisted final review decision is clean; all other terminal outcomes
+/// return `Ok(1)` or an error.
 pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     let mut session_id = ctx.initial_session_id;
+    // Entering the fix loop means the current review is not clean; any existing
+    // marker for this SHA is stale until genuine clean convergence rewrites it.
+    remove_review_gate_marker_for_current_head(ctx.project_root, &session_id);
 
     for round in 1..=ctx.max_rounds {
         info!(round, max_rounds = ctx.max_rounds, session_id = %session_id, "Fix round starting");
@@ -231,7 +232,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                     "Final verdict is non-clean"
                 );
             }
-            return Ok(fix_exit_code_for_decision(final_decision));
+            return Ok(fix_exit_code_for_convergence(true, final_decision));
         }
     }
 
@@ -259,18 +260,18 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         max_rounds = ctx.max_rounds,
         "All fix rounds exhausted — quality gate still failing"
     );
-    Ok(fix_exit_code_for_decision(final_decision))
+    Ok(fix_exit_code_for_convergence(false, final_decision))
 }
 
 fn persist_fix_final_artifacts(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
-    converged_clean: bool,
+    quality_gate_passed: bool,
 ) -> ReviewDecision {
     persist_fix_final_artifacts_with_current_output(
         project_root,
         review_meta,
-        converged_clean,
+        quality_gate_passed,
         None,
     )
 }
@@ -278,11 +279,11 @@ fn persist_fix_final_artifacts(
 fn persist_fix_final_artifacts_with_current_output(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
-    converged_clean: bool,
+    quality_gate_passed: bool,
     current_fix_output: Option<&str>,
 ) -> ReviewDecision {
     persist_review_meta(project_root, review_meta);
-    if converged_clean {
+    if quality_gate_passed {
         match csa_session::get_session_dir(project_root, &review_meta.session_id) {
             Ok(session_dir) => {
                 if let Err(error) = write_findings_toml(&session_dir, &FindingsFile::default()) {
@@ -310,7 +311,7 @@ fn persist_fix_final_artifacts_with_current_output(
                         );
                     }
                 }
-                clear_clean_convergence_fail_signals(
+                clean_output::clear_clean_convergence_fail_signals(
                     &session_dir,
                     &review_meta.session_id,
                     current_fix_output,
@@ -328,9 +329,10 @@ fn persist_fix_final_artifacts_with_current_output(
     remove_stale_review_verdict(project_root, review_meta);
     persist_review_verdict(project_root, review_meta, &[], Vec::new());
     let final_verdict = read_persisted_fix_final_verdict(project_root, review_meta);
-    let final_meta = review_meta_for_final_verdict(review_meta, &final_verdict);
+    let final_meta =
+        review_meta_for_final_verdict(review_meta, &final_verdict, quality_gate_passed);
     persist_review_meta(project_root, &final_meta);
-    if final_verdict.decision == ReviewDecision::Pass {
+    if reached_genuine_clean_convergence(quality_gate_passed, final_verdict.decision) {
         crate::review_gate::maybe_write_review_gate_marker(
             project_root,
             &final_meta.head_sha,
@@ -398,20 +400,29 @@ fn fail_closed_final_fix_verdict() -> FinalFixVerdict {
 fn review_meta_for_final_verdict(
     review_meta: &ReviewSessionMeta,
     final_verdict: &FinalFixVerdict,
+    quality_gate_passed: bool,
 ) -> ReviewSessionMeta {
     let mut final_meta = review_meta.clone();
     final_meta.decision = final_verdict.decision.as_str().to_string();
     final_meta.verdict = final_verdict.verdict_legacy.clone();
-    final_meta.exit_code = fix_exit_code_for_decision(final_verdict.decision);
+    final_meta.exit_code =
+        fix_exit_code_for_convergence(quality_gate_passed, final_verdict.decision);
     final_meta
 }
 
-fn fix_exit_code_for_decision(decision: ReviewDecision) -> i32 {
-    if decision == ReviewDecision::Pass {
+fn fix_exit_code_for_convergence(quality_gate_passed: bool, final_decision: ReviewDecision) -> i32 {
+    if reached_genuine_clean_convergence(quality_gate_passed, final_decision) {
         0
     } else {
         1
     }
+}
+
+fn reached_genuine_clean_convergence(
+    quality_gate_passed: bool,
+    final_decision: ReviewDecision,
+) -> bool {
+    quality_gate_passed && final_decision == ReviewDecision::Pass
 }
 
 fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionMeta) {
@@ -431,7 +442,16 @@ fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionM
 }
 
 fn remove_review_gate_marker_for_head(project_root: &Path, review_meta: &ReviewSessionMeta) {
-    if review_meta.head_sha.is_empty() {
+    remove_review_gate_marker(project_root, &review_meta.session_id, &review_meta.head_sha);
+}
+
+fn remove_review_gate_marker_for_current_head(project_root: &Path, session_id: &str) {
+    let head_sha = csa_session::detect_git_head(project_root).unwrap_or_default();
+    remove_review_gate_marker(project_root, session_id, &head_sha);
+}
+
+fn remove_review_gate_marker(project_root: &Path, session_id: &str, head_sha: &str) {
+    if head_sha.is_empty() {
         return;
     }
     let backend = csa_session::create_vcs_backend(project_root);
@@ -439,7 +459,7 @@ fn remove_review_gate_marker_for_head(project_root: &Path, review_meta: &ReviewS
         Ok(identity) => identity.ref_name.unwrap_or_default(),
         Err(error) => {
             warn!(
-                session_id = %review_meta.session_id, error = %error, "Cannot resolve VCS identity"
+                session_id, error = %error, "Cannot resolve VCS identity"
             );
             return;
         }
@@ -447,223 +467,14 @@ fn remove_review_gate_marker_for_head(project_root: &Path, review_meta: &ReviewS
     if branch.is_empty() {
         return;
     }
-    let marker_path = crate::review_gate::marker_path(project_root, &branch, &review_meta.head_sha);
+    let marker_path = crate::review_gate::marker_path(project_root, &branch, head_sha);
     if let Err(error) = fs::remove_file(&marker_path)
         && error.kind() != std::io::ErrorKind::NotFound
     {
         warn!(
-            session_id = %review_meta.session_id, path = %marker_path.display(), error = %error,
+            session_id, path = %marker_path.display(), error = %error,
             "Cannot remove review-gate marker"
         );
-    }
-}
-
-fn clear_clean_convergence_fail_signals(
-    session_dir: &Path,
-    session_id: &str,
-    current_fix_output: Option<&str>,
-) {
-    let output_dir = session_dir.join("output");
-    for stale_file in CLEAN_CONVERGENCE_STALE_OUTPUT_FILES {
-        let stale_path = output_dir.join(stale_file);
-        if let Err(error) = fs::remove_file(&stale_path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            warn!(
-                session_id,
-                stale_file,
-                error = %error,
-                "Failed to remove stale review output artifact after CLEAN convergence"
-            );
-        }
-    }
-    retain_current_review_prose_sections(session_dir, session_id, current_fix_output);
-}
-
-fn retain_current_review_prose_sections(
-    session_dir: &Path,
-    session_id: &str,
-    current_fix_output: Option<&str>,
-) {
-    let output_dir = session_dir.join("output");
-    let index_path = output_dir.join("index.toml");
-    if !index_path.exists() {
-        remove_legacy_review_prose_files(&output_dir, session_id);
-        return;
-    }
-
-    let contents = match fs::read_to_string(&index_path) {
-        Ok(contents) => contents,
-        Err(error) => {
-            warn!(
-                session_id,
-                error = %error,
-                "Failed to read output/index.toml while clearing stale review prose"
-            );
-            return;
-        }
-    };
-    let mut index: csa_session::OutputIndex = match toml::from_str(&contents) {
-        Ok(index) => index,
-        Err(error) => {
-            warn!(
-                session_id,
-                error = %error,
-                "Failed to parse output/index.toml while clearing stale review prose"
-            );
-            return;
-        }
-    };
-
-    let current_review_sections = current_fix_output
-        .map(current_output_review_prose_section_ids)
-        .unwrap_or_default();
-    let keep = review_prose_keep_mask(&index, &current_review_sections);
-
-    if keep.iter().all(|keep_section| *keep_section) {
-        return;
-    }
-
-    for (idx, section) in index.sections.iter().enumerate() {
-        if keep[idx] {
-            continue;
-        }
-        if let Some(file_path) = &section.file_path {
-            let stale_path = output_dir.join(file_path);
-            if let Err(error) = fs::remove_file(&stale_path)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                warn!(
-                    session_id,
-                    file_path,
-                    error = %error,
-                    "Failed to remove stale review prose section after CLEAN convergence"
-                );
-            }
-        }
-    }
-
-    index.sections = index
-        .sections
-        .into_iter()
-        .enumerate()
-        .filter_map(|(idx, section)| keep[idx].then_some(section))
-        .collect();
-    index.total_tokens = index
-        .sections
-        .iter()
-        .map(|section| section.token_estimate)
-        .sum();
-
-    match toml::to_string_pretty(&index) {
-        Ok(rendered) => {
-            if let Err(error) = fs::write(&index_path, rendered) {
-                warn!(
-                    session_id,
-                    error = %error,
-                    "Failed to rewrite output/index.toml after clearing stale review prose"
-                );
-            }
-        }
-        Err(error) => {
-            warn!(
-                session_id,
-                error = %error,
-                "Failed to render output/index.toml after clearing stale review prose"
-            );
-        }
-    }
-}
-
-fn review_prose_keep_mask(index: &csa_session::OutputIndex, current_ids: &[String]) -> Vec<bool> {
-    let mut keep = vec![true; index.sections.len()];
-    let mut expected_current = current_ids.iter().rev();
-    let mut next_expected = expected_current.next();
-
-    for (idx, section) in index.sections.iter().enumerate().rev() {
-        if !is_review_prose_section_id(&section.id) {
-            continue;
-        }
-
-        if next_expected.is_some_and(|expected| section.id == *expected) {
-            next_expected = expected_current.next();
-        } else {
-            keep[idx] = false;
-        }
-    }
-
-    keep
-}
-
-fn current_output_review_prose_section_ids(output: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    let mut open_section_id = None;
-
-    for line in output.lines() {
-        match parse_csa_section_marker(line) {
-            Some(CsaSectionMarker::Start(id)) => {
-                if let Some(previous_id) = open_section_id.take() {
-                    push_review_prose_section_id(&mut ids, previous_id);
-                }
-                open_section_id = Some(id);
-            }
-            Some(CsaSectionMarker::End(id)) if open_section_id.as_deref() == Some(id.as_str()) => {
-                push_review_prose_section_id(&mut ids, id);
-                open_section_id = None;
-            }
-            None => {}
-            Some(CsaSectionMarker::End(_)) => {}
-        }
-    }
-
-    if let Some(id) = open_section_id {
-        push_review_prose_section_id(&mut ids, id);
-    }
-
-    ids
-}
-
-fn push_review_prose_section_id(ids: &mut Vec<String>, section_id: String) {
-    if is_review_prose_section_id(&section_id) {
-        ids.push(section_id);
-    }
-}
-
-enum CsaSectionMarker {
-    Start(String),
-    End(String),
-}
-
-fn parse_csa_section_marker(line: &str) -> Option<CsaSectionMarker> {
-    let marker = line
-        .trim()
-        .strip_prefix("<!-- CSA:SECTION:")?
-        .strip_suffix("-->")?
-        .trim();
-    let marker = marker
-        .strip_suffix(":END")
-        .map(|section_id| CsaSectionMarker::End(section_id.trim().to_string()))
-        .unwrap_or_else(|| CsaSectionMarker::Start(marker.to_string()));
-    Some(marker)
-}
-
-fn is_review_prose_section_id(section_id: &str) -> bool {
-    REVIEW_PROSE_SECTION_IDS.contains(&section_id)
-}
-
-fn remove_legacy_review_prose_files(output_dir: &Path, session_id: &str) {
-    for section_id in REVIEW_PROSE_SECTION_IDS {
-        let stale_path = output_dir.join(format!("{section_id}.md"));
-        if let Err(error) = fs::remove_file(&stale_path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            warn!(
-                session_id,
-                section_id,
-                error = %error,
-                "Failed to remove legacy review prose file after CLEAN convergence"
-            );
-        }
     }
 }
 
@@ -671,22 +482,22 @@ fn remove_legacy_review_prose_files(output_dir: &Path, session_id: &str) {
 pub(crate) fn persist_fix_final_artifacts_for_tests(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
-    converged_clean: bool,
+    quality_gate_passed: bool,
 ) -> ReviewDecision {
-    persist_fix_final_artifacts(project_root, review_meta, converged_clean)
+    persist_fix_final_artifacts(project_root, review_meta, quality_gate_passed)
 }
 
 #[cfg(test)]
 pub(crate) fn persist_fix_final_artifacts_for_tests_with_output(
     project_root: &Path,
     review_meta: &ReviewSessionMeta,
-    converged_clean: bool,
+    quality_gate_passed: bool,
     current_fix_output: &str,
 ) -> ReviewDecision {
     persist_fix_final_artifacts_with_current_output(
         project_root,
         review_meta,
-        converged_clean,
+        quality_gate_passed,
         Some(current_fix_output),
     )
 }
