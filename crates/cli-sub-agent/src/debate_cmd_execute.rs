@@ -351,6 +351,8 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
             fallback_reason,
             selected_model_spec: final_model_spec.as_deref(),
             tier_preference_order: request.tier_preference_order,
+            fail_on_revise: request.args.fail_on_revise,
+            fail_on_reject: request.args.fail_on_reject,
         },
     )?;
     print_rendered_output(finalized.rendered_output);

@@ -8,7 +8,8 @@ use tracing::warn;
 use super::{DebateMode, render_debate_cli_output};
 use crate::debate_cmd_output::{
     DebateOutputHeader, DebateSummary, DebateVerdict, append_debate_artifacts_to_result,
-    extract_debate_summary, persist_debate_output_artifacts, render_debate_output,
+    extract_debate_summary, extract_explicit_verdict, persist_debate_output_artifacts,
+    render_debate_output,
 };
 use crate::tier_model_fallback::{
     TierAttemptFailure, format_all_models_failed_reason, persist_fallback_chain,
@@ -34,6 +35,8 @@ pub(crate) struct DebateFinalizeContext<'a> {
     /// failover chain to before-winner skips (#1714).
     pub(crate) selected_model_spec: Option<&'a str>,
     pub(crate) tier_preference_order: &'a [String],
+    pub(crate) fail_on_revise: bool,
+    pub(crate) fail_on_reject: bool,
 }
 
 fn build_unavailable_debate_summary(
@@ -63,14 +66,11 @@ pub(crate) fn finalize_debate_outcome(
     execution: Option<crate::pipeline::SessionExecutionResult>,
     context: DebateFinalizeContext<'_>,
 ) -> Result<FinalizedDebateOutcome> {
-    // `verdict_success_from_output`: a completed debate whose rendered output
-    // carries an explicit success verdict. When the tool *process* exited
-    // nonzero for an incidental reason (hook noise / in-turn command) but the
-    // debate reached a success verdict, the debate IS the product — it must not
-    // be reported as failure (#161). This flag is the authoritative success
-    // signal we previously computed and then discarded into `_exit_code`.
+    // A completed debate whose rendered output carries a recognized verdict
+    // ran successfully. Verdict polarity is debate content; only explicit
+    // fail-on flags turn REVISE/REJECT back into a non-zero pipeline signal.
     let (
-        verdict_success_from_output,
+        completed_debate_with_verdict,
         meta_session_id,
         persisted_session_id,
         output,
@@ -134,16 +134,9 @@ pub(crate) fn finalize_debate_outcome(
                 execution.execution.summary.as_str(),
                 context.debate_mode,
             );
-            // A success verdict drives the outcome regardless of an incidental
-            // nonzero tool-process exit; a non-success verdict (REVISE/REJECT)
-            // keeps the artifact authority (legitimate exit 1).
-            let verdict_success = output_has_explicit_debate_verdict(&output)
-                && crate::verdict_exit_code::exit_code_from_debate_verdict(
-                    debate_summary.verdict.as_str(),
-                    debate_summary.decision.as_deref(),
-                ) == 0;
+            let completed_debate_with_verdict = extract_explicit_verdict(&output).is_some();
             (
-                verdict_success,
+                completed_debate_with_verdict,
                 execution.meta_session_id,
                 persisted_session_id,
                 output,
@@ -156,16 +149,14 @@ pub(crate) fn finalize_debate_outcome(
     let final_exit_code = if let Some(session_id) = persisted_session_id.as_deref() {
         let session_dir = csa_session::get_session_dir(project_root, session_id)?;
         let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
-        // The persisted verdict artifact is the verdict authority; but if the
-        // debate reached an explicit success verdict, never report failure — this
-        // both recovers from an unreadable artifact (infra code 2) and honours an
-        // incidental nonzero tool-process exit on a successful debate (#161).
         let artifact_exit_code = persisted_debate_verdict_exit_code(&session_dir);
-        let resolved_exit_code = if verdict_success_from_output {
-            0
-        } else {
-            artifact_exit_code
-        };
+        let resolved_exit_code = resolve_debate_session_exit_code(
+            artifact_exit_code,
+            completed_debate_with_verdict,
+            &debate_summary,
+            context.fail_on_revise,
+            context.fail_on_reject,
+        );
         append_debate_artifacts_to_result(project_root, session_id, &artifacts, &debate_summary)?;
         persist_debate_exit_code(
             project_root,
@@ -198,8 +189,17 @@ pub(crate) fn finalize_debate_outcome(
             );
         }
         resolved_exit_code
-    } else if verdict_success_from_output {
-        0
+    } else if completed_debate_with_verdict {
+        resolve_debate_session_exit_code(
+            crate::verdict_exit_code::exit_code_from_debate_verdict(
+                debate_summary.verdict.as_str(),
+                debate_summary.decision.as_deref(),
+            ),
+            true,
+            &debate_summary,
+            context.fail_on_revise,
+            context.fail_on_reject,
+        )
     } else {
         crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE
     };
@@ -248,14 +248,34 @@ fn persisted_debate_verdict_exit_code(session_dir: &Path) -> i32 {
     )
 }
 
-fn output_has_explicit_debate_verdict(output: &str) -> bool {
-    output.lines().any(|line| {
-        let normalized = line.trim().to_ascii_lowercase();
-        normalized.starts_with("verdict:")
-            || normalized.starts_with("decision:")
-            || normalized.starts_with("final decision:")
-            || normalized.starts_with("csa_verdict:")
-    })
+fn resolve_debate_session_exit_code(
+    artifact_exit_code: i32,
+    completed_debate_with_verdict: bool,
+    summary: &DebateSummary,
+    fail_on_revise: bool,
+    fail_on_reject: bool,
+) -> i32 {
+    if artifact_exit_code == crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE {
+        return artifact_exit_code;
+    }
+    if !completed_debate_with_verdict {
+        return artifact_exit_code;
+    }
+    if fail_on_revise && debate_token_matches(summary, "REVISE") {
+        return 1;
+    }
+    if fail_on_reject && debate_token_matches(summary, "REJECT") {
+        return 1;
+    }
+    0
+}
+
+fn debate_token_matches(summary: &DebateSummary, expected: &str) -> bool {
+    summary.verdict.trim().eq_ignore_ascii_case(expected)
+        || summary
+            .decision
+            .as_deref()
+            .is_some_and(|decision| decision.trim().eq_ignore_ascii_case(expected))
 }
 
 fn persist_debate_exit_code(
@@ -268,6 +288,7 @@ fn persist_debate_exit_code(
         .ok_or_else(|| anyhow::anyhow!("Missing result.toml for debate session {session_id}"))?;
     if result.exit_code == exit_code
         && result.status == csa_session::SessionResult::status_from_exit_code(exit_code)
+        && result.summary == summary
     {
         return Ok(());
     }

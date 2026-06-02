@@ -258,7 +258,7 @@ pub(crate) fn render_debate_output(
     output
 }
 
-pub(crate) fn extract_verdict(output: &str) -> &'static str {
+pub(crate) fn extract_explicit_verdict(output: &str) -> Option<&'static str> {
     let mut matched = None;
     for line in output.lines() {
         let normalized = line.trim().to_ascii_uppercase();
@@ -303,7 +303,11 @@ pub(crate) fn extract_verdict(output: &str) -> &'static str {
         }
     }
 
-    matched.unwrap_or("REVISE")
+    matched
+}
+
+pub(crate) fn extract_verdict(output: &str) -> &'static str {
+    extract_explicit_verdict(output).unwrap_or("REVISE")
 }
 
 pub(crate) fn extract_confidence(output: &str) -> &'static str {
@@ -334,6 +338,17 @@ pub(crate) fn extract_confidence(output: &str) -> &'static str {
 }
 
 pub(crate) fn extract_one_line_summary(output: &str, fallback_summary: &str) -> String {
+    if let Some(summary) = extract_synthesis_summary(output) {
+        return summary;
+    }
+    extract_first_prose_summary(output, fallback_summary)
+}
+
+fn extract_synthesis_summary(output: &str) -> Option<String> {
+    extract_labeled_block_summary(output).or_else(|| extract_labeled_line_summary(output))
+}
+
+fn extract_labeled_line_summary(output: &str) -> Option<String> {
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -348,11 +363,72 @@ pub(crate) fn extract_one_line_summary(output: &str, fallback_summary: &str) -> 
                 .unwrap_or(trimmed);
             let cleaned = normalize_whitespace(value);
             if !cleaned.is_empty() {
-                return truncate_chars(cleaned.as_str(), 200);
+                return Some(truncate_chars(cleaned.as_str(), 200));
             }
         }
     }
 
+    None
+}
+
+fn extract_labeled_block_summary(output: &str) -> Option<String> {
+    let mut capture = false;
+    let mut lines = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if !capture {
+            let Some(rest) = strip_synthesis_label(trimmed) else {
+                continue;
+            };
+            let inline = normalize_whitespace(rest);
+            if !inline.is_empty() {
+                return Some(truncate_chars(inline.as_str(), 200));
+            }
+            capture = true;
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            if lines.is_empty() {
+                continue;
+            }
+            break;
+        }
+        if is_labeled_block_boundary(trimmed) {
+            break;
+        }
+        if is_non_summary_line(trimmed) {
+            continue;
+        }
+        lines.push(trimmed);
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        let cleaned = normalize_whitespace(&lines.join(" "));
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(truncate_chars(cleaned.as_str(), 200))
+        }
+    }
+}
+
+fn extract_fallback_summary(fallback_summary: &str) -> Option<String> {
+    let fallback = normalize_whitespace(fallback_summary);
+    if fallback.is_empty()
+        || is_non_summary_line(fallback.as_str())
+        || crate::session_summary_text::is_json_event_envelope(fallback.as_str())
+    {
+        None
+    } else {
+        Some(truncate_chars(fallback.as_str(), 200))
+    }
+}
+
+fn extract_first_prose_summary(output: &str, fallback_summary: &str) -> String {
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || is_non_summary_line(trimmed) {
@@ -365,12 +441,31 @@ pub(crate) fn extract_one_line_summary(output: &str, fallback_summary: &str) -> 
         }
     }
 
-    let fallback = normalize_whitespace(fallback_summary);
-    if fallback.is_empty() {
-        "No summary provided.".to_string()
-    } else {
-        truncate_chars(fallback.as_str(), 200)
+    extract_fallback_summary(fallback_summary).unwrap_or_else(|| "No summary provided.".to_string())
+}
+
+fn strip_synthesis_label(line: &str) -> Option<&str> {
+    let (label, rest) = line.split_once(':')?;
+    match label.trim().to_ascii_lowercase().as_str() {
+        "overall_assessment" | "overall assessment" | "final synthesis" | "synthesis" => {
+            Some(rest.trim())
+        }
+        _ => None,
     }
+}
+
+fn is_labeled_block_boundary(line: &str) -> bool {
+    if line.starts_with("<!-- CSA:SECTION:") {
+        return true;
+    }
+    let Some((label, _)) = line.split_once(':') else {
+        return false;
+    };
+    let normalized = label.trim();
+    !normalized.is_empty()
+        && normalized
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == '_' || ch == ' ')
 }
 
 pub(crate) fn extract_key_points(output: &str, fallback_summary: &str) -> Vec<String> {

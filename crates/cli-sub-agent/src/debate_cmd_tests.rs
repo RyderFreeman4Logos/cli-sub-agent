@@ -710,6 +710,22 @@ fn debate_cli_parses_both_timeouts() {
 }
 
 #[test]
+fn debate_cli_parses_fail_on_verdict_flags_with_tier() {
+    let args = parse_debate_args(&[
+        "csa",
+        "debate",
+        "--tier",
+        "quality",
+        "--fail-on-revise",
+        "--fail-on-reject",
+        "question",
+    ]);
+    assert_eq!(args.tier.as_deref(), Some("quality"));
+    assert!(args.fail_on_revise);
+    assert!(args.fail_on_reject);
+}
+
+#[test]
 fn debate_cli_parses_stream_stdout_flag() {
     let args = parse_debate_args(&["csa", "debate", "--stream-stdout", "question"]);
     assert!(args.stream_stdout);
