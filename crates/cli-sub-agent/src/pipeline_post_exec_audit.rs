@@ -8,7 +8,12 @@ pub(crate) fn maybe_record_repo_write_audit(
     session: &MetaSessionState,
     session_result: &mut SessionResult,
 ) {
-    if !should_audit_repo_tracked_writes(ctx.task_type, ctx.readonly_project_root, ctx.prompt) {
+    if !should_audit_repo_tracked_writes(
+        ctx.sa_mode,
+        ctx.task_type,
+        ctx.readonly_project_root,
+        ctx.prompt,
+    ) {
         return;
     }
 
@@ -158,10 +163,15 @@ fn string_array_value(paths: &[std::path::PathBuf]) -> toml::Value {
 }
 
 pub(crate) fn should_audit_repo_tracked_writes(
+    sa_mode: bool,
     task_type: Option<&str>,
     readonly_project_root: bool,
     prompt: &str,
 ) -> bool {
+    if crate::run_cmd::is_writer_session(sa_mode, task_type) {
+        return false;
+    }
+
     if !matches!(task_type, Some("run" | "plan" | "plan-step")) {
         return false;
     }

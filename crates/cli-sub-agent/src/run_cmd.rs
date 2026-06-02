@@ -34,7 +34,7 @@ pub(crate) use policy::{
     apply_unverifiable_commit_policy, execute_tool_calls_observed, extract_executed_shell_commands,
 };
 pub(crate) use shell::detect_no_verify_commit_commands;
-pub(crate) use uncommitted::format_uncommitted_warning;
+pub(crate) use uncommitted::{format_uncommitted_warning, is_writer_session};
 
 #[cfg(test)]
 pub(crate) use crate::pipeline::promote_idle_timeout_for_explicit_wall_timeout;
