@@ -150,6 +150,7 @@ pub(crate) fn build_multi_reviewer_instruction(
     tool: ToolName,
     project_root: &Path,
     prior_rounds_section: Option<&str>,
+    current_session_id: Option<&str>,
 ) -> String {
     let output_dir = reviewer_output_dir(reviewer_index);
     let mut prompt = format!(
@@ -175,8 +176,11 @@ Reviewer tool hint: {}.",
     if !prompt.contains("## Review iteration context")
         && let Some(branch) =
             crate::review_design_anchor::resolve_current_branch_via_vcs(project_root)
-        && let Some(iteration_context) =
-            review_iteration::render_review_iteration_context(project_root, &branch)
+        && let Some(iteration_context) = review_iteration::render_review_iteration_context(
+            project_root,
+            &branch,
+            current_session_id,
+        )
     {
         prompt.push_str("\n\n");
         prompt.push_str(&iteration_context);

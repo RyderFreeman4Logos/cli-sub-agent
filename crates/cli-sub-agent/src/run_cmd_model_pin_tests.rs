@@ -269,7 +269,7 @@ fn review_debate_inherits_env_pin_and_drops_tier() {
         Some("tier-4-critical".to_string()),
         false,
         false,
-        1,
+        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
     );
 
     assert_eq!(resolved.model_spec.as_deref(), Some(PINNED_SPEC));
@@ -291,7 +291,7 @@ fn review_debate_inherited_pin_selects_pinned_model_not_tier_first_tool() {
         Some("tier-4-critical".to_string()),
         false,
         false,
-        1,
+        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
     );
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -336,8 +336,13 @@ fn review_debate_explicit_model_spec_overrides_env_pin() {
     let _guards = set_subtree_pin_env(PINNED_SPEC, true, true);
     let explicit = "gemini-cli/google/gemini-3.1-pro-preview/xhigh";
 
-    let resolved =
-        apply_inherited_pin_for_review_debate(Some(explicit.to_string()), None, false, false, 1);
+    let resolved = apply_inherited_pin_for_review_debate(
+        Some(explicit.to_string()),
+        None,
+        false,
+        false,
+        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
+    );
 
     assert_eq!(resolved.model_spec.as_deref(), Some(explicit));
     assert!(!resolved.force_ignore_tier_setting);
@@ -358,7 +363,7 @@ fn review_debate_unpinned_preserves_tier() {
         Some("tier-4-critical".to_string()),
         false,
         false,
-        1,
+        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
     );
 
     assert!(resolved.model_spec.is_none());
@@ -380,7 +385,7 @@ fn review_debate_depth_zero_ignores_env_pin() {
         Some("tier-4-critical".to_string()),
         false,
         false,
-        0,
+        inherited_model_pin_from_lookup(0, |key| std::env::var(key).ok()),
     );
 
     assert!(resolved.model_spec.is_none());
@@ -450,7 +455,9 @@ fn propagate_inherited_subtree_pin_passes_pin_through_at_child_depth() {
         "2",
     ));
 
-    let pin = inherited_subtree_model_pin().expect("inherited pin must cascade to the child env");
+    let inherited = inherited_model_pin_from_lookup(2, |key| std::env::var(key).ok());
+    let pin = inherited_subtree_model_pin(inherited.as_ref())
+        .expect("inherited pin must cascade to the child env");
     let entries = pin_entries_map(&pin);
     assert_eq!(
         entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
@@ -477,7 +484,7 @@ fn propagate_inherited_subtree_pin_noop_at_root_depth() {
     ));
 
     assert!(
-        inherited_subtree_model_pin().is_none(),
+        inherited_subtree_model_pin(None).is_none(),
         "root-depth must not cascade a pin"
     );
 }
@@ -493,7 +500,7 @@ fn propagate_inherited_subtree_pin_noop_when_unpinned() {
     let _g2 = ScopedEnvVarRestore::set("CSA_DEPTH", "3");
 
     assert!(
-        inherited_subtree_model_pin().is_none(),
+        inherited_subtree_model_pin(None).is_none(),
         "unpinned child must not cascade a pin"
     );
 }

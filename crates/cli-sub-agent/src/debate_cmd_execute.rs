@@ -9,6 +9,7 @@ use tracing::{debug, error, warn};
 use crate::cli::DebateArgs;
 use crate::debate_cmd_output::DebateOutputHeader;
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
+use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{self, TierAttemptFailure};
 
 use super::dry_run::{
@@ -47,6 +48,7 @@ pub(crate) struct DebateExecutionRequest<'a> {
     pub(crate) idle_timeout_seconds: u64,
     pub(crate) initial_response_timeout_seconds: Option<u64>,
     pub(crate) readonly_project_root: bool,
+    pub(crate) startup_env: &'a StartupSubtreeEnv,
 }
 
 pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Result<i32> {
@@ -157,6 +159,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 &request.args.extra_writable,
                 &request.args.extra_readable,
                 false, // #1745: no debate flag; config decides (shared monitor).
+                request.startup_env,
             );
 
             let execute_result = if let Some(timeout_secs) = request.timeout_seconds {
@@ -390,6 +393,7 @@ async fn execute_debate_dry_run(
             request.debate_description,
             executor.tool_name(),
             request.resolved_tier_name,
+            request.startup_env.session_id(),
         )?,
         tool: executor.tool_name().to_string(),
         model: attempt_model_spec

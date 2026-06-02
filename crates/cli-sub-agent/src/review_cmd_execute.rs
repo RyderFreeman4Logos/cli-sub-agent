@@ -27,6 +27,7 @@ use csa_session::{
 use tracing::{info, warn};
 
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
+use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
     TierAttemptFailure, chain_failure_reasons, classify_next_model_failure_with_elapsed,
     fallback_reason_for_result, format_all_models_failed_reason, ordered_tier_candidates,
@@ -129,6 +130,7 @@ pub(crate) async fn execute_review(
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
 ) -> Result<ReviewExecutionOutcome> {
+    let startup_env = StartupSubtreeEnv::default();
     execute_review_with_tier_filter(
         tool,
         prompt,
@@ -158,6 +160,8 @@ pub(crate) async fn execute_review(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        0,
+        &startup_env,
     )
     .await
 }
@@ -192,10 +196,12 @@ pub(crate) async fn execute_review_with_tier_filter(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
     if session.is_none()
-        && let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID")
+        && let Some(inherited_session_id) = startup_env.session_id()
     {
         warn!(
             inherited_session_id = %inherited_session_id,
@@ -265,7 +271,9 @@ pub(crate) async fn execute_review_with_tier_filter(
         } else {
             prompt.clone()
         };
-        if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(project_config) {
+        if let Some(guard) =
+            crate::pipeline::prompt_guard::anti_recursion_guard(project_config, current_depth)
+        {
             effective_prompt = format!("{guard}\n\n{effective_prompt}");
         }
 
@@ -310,6 +318,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             extra_writable,
             extra_readable,
             no_error_marker_scan,
+            startup_env,
         )
         .await
         {
@@ -465,6 +474,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     extra_writable,
                     extra_readable,
                     no_error_marker_scan,
+                    startup_env,
                 )
                 .await
                 {
@@ -671,6 +681,7 @@ async fn execute_review_once(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     crate::pipeline::execute_with_session_and_meta_with_parent_source(
         executor,
@@ -702,6 +713,7 @@ async fn execute_review_once(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        startup_env,
     )
     .await
 }
@@ -728,6 +740,7 @@ async fn execute_review_once_with_artifact_guard(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let invocation_started_at = Utc::now();
     match execute_review_once(
@@ -751,6 +764,7 @@ async fn execute_review_once_with_artifact_guard(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        startup_env,
     )
     .await
     {

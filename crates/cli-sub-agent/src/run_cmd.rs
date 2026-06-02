@@ -151,6 +151,7 @@ impl SubagentRunConfig {
             false,
             Vec::new(),
             Vec::new(),
+            crate::startup_env::StartupSubtreeEnv::default(),
         )
         .await
     }

@@ -11,6 +11,7 @@ pub(crate) async fn dispatch(
     cmd: SkillCommands,
     current_depth: u32,
     output_format: OutputFormat,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
 ) -> Result<i32> {
     match cmd {
         SkillCommands::Install { source, target } => {
@@ -39,8 +40,14 @@ pub(crate) async fn dispatch(
             if inject {
                 return skill_run_cmd::handle_skill_inject(name, prompt).await;
             }
-            return skill_run_cmd::handle_skill_run(name, prompt, current_depth, output_format)
-                .await;
+            return skill_run_cmd::handle_skill_run(
+                name,
+                prompt,
+                current_depth,
+                output_format,
+                startup_env.clone(),
+            )
+            .await;
         }
     }
     Ok(0)

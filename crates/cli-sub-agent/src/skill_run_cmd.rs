@@ -42,6 +42,7 @@ pub(crate) async fn handle_skill_run(
     prompt: Vec<String>,
     current_depth: u32,
     output_format: OutputFormat,
+    startup_env: crate::startup_env::StartupSubtreeEnv,
 ) -> Result<i32> {
     let prompt_str = if prompt.is_empty() {
         None
@@ -97,6 +98,7 @@ pub(crate) async fn handle_skill_run(
         require_commit: false,
         extra_writable: vec![],
         extra_readable: vec![],
+        startup_env,
     })
     .await
 }

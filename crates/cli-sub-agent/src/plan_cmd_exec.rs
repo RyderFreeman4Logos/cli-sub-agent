@@ -16,6 +16,7 @@ use crate::pipeline::{
     ParentSessionSource, SessionCreationMode, execute_with_session_and_meta_with_parent_source,
 };
 use crate::run_helpers::build_executor;
+use crate::startup_env::StartupSubtreeEnv;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -31,6 +32,7 @@ pub(super) struct CsaStepExecutionOptions<'a> {
     pub(super) forwarded_session: Option<&'a str>,
     pub(super) no_fs_sandbox: bool,
     pub(super) readonly_project_root: bool,
+    pub(super) startup_env: &'a StartupSubtreeEnv,
 }
 
 pub(super) async fn run_with_heartbeat<F, T>(
@@ -67,6 +69,7 @@ pub(super) async fn execute_bash_step(
     env_vars: &HashMap<String, String>,
     project_root: &Path,
     workflow_path: &Path,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<StepExecutionOutcome> {
     let script = extract_bash_code_block(prompt).unwrap_or(prompt);
     info!("{} - Executing bash: {}", label, truncate(script, 80));
@@ -74,7 +77,8 @@ pub(super) async fn execute_bash_step(
         super::validate_variable_name(key)?;
     }
 
-    let output = match spawn_bash(script, env_vars, project_root, workflow_path).await {
+    let output = match spawn_bash(script, env_vars, project_root, workflow_path, startup_env).await
+    {
         Ok(output) => output,
         Err(spawn_error) if is_argument_list_too_long(&spawn_error) => {
             let reduced_env = reduce_bash_env_for_spawn(script, env_vars);
@@ -93,9 +97,15 @@ pub(super) async fn execute_bash_step(
                 "{} - bash spawn hit E2BIG; retrying with reduced STEP_* env (dropped {} vars / {} bytes)",
                 label, dropped_vars, dropped_bytes
             );
-            spawn_bash(script, &reduced_env, project_root, workflow_path)
-                .await
-                .context("Failed to spawn bash after reducing STEP_* environment")?
+            spawn_bash(
+                script,
+                &reduced_env,
+                project_root,
+                workflow_path,
+                startup_env,
+            )
+            .await
+            .context("Failed to spawn bash after reducing STEP_* environment")?
         }
         Err(spawn_error) => return Err(spawn_error).context("Failed to spawn bash"),
     };
@@ -116,19 +126,12 @@ pub(super) async fn execute_bash_step(
     })
 }
 
-fn next_csa_depth() -> String {
-    let current_depth = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(0);
-    current_depth.saturating_add(1).to_string()
-}
-
 async fn spawn_bash(
     script: &str,
     env_vars: &HashMap<String, String>,
     project_root: &Path,
     workflow_path: &Path,
+    startup_env: &StartupSubtreeEnv,
 ) -> std::io::Result<std::process::Output> {
     let workflow_dir = workflow_path.parent().unwrap_or(project_root);
     let mut cmd = tokio::process::Command::new("bash");
@@ -138,7 +141,7 @@ async fn spawn_bash(
         .env("CSA_PROJECT_ROOT", project_root)
         .env("CSA_WORKFLOW_PATH", workflow_path)
         .env("CSA_WORKFLOW_DIR", workflow_dir)
-        .env("CSA_DEPTH", next_csa_depth())
+        .env("CSA_DEPTH", startup_env.next_depth_string())
         .env("CSA_INTERNAL_INVOCATION", "1");
     // #1741: this bash step is marked as a nested CSA invocation (CSA_DEPTH set
     // above), and `bash` inherits the parent's ambient environment. Any ambient
@@ -148,7 +151,7 @@ async fn spawn_bash(
     // (env_remove) BEFORE re-applying CSA's own legitimately-inherited pin via
     // the trusted typed channel — so the keys reach the child IFF CSA decided to
     // pin, never from ambient/user env. (csa-core/src/env.rs reservation.)
-    apply_sanitized_subtree_pin(&mut cmd);
+    apply_sanitized_subtree_pin(&mut cmd, startup_env);
     cmd.current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -167,11 +170,15 @@ async fn spawn_bash(
 /// nested `csa run`. The typed [`SubtreeModelPin`] re-applied here is the sole
 /// writer of the pin keys (and only when this process genuinely inherited a
 /// pin), so a legitimately-propagated pin still cascades unbroken.
-fn apply_sanitized_subtree_pin(cmd: &mut tokio::process::Command) {
+fn apply_sanitized_subtree_pin(cmd: &mut tokio::process::Command, startup_env: &StartupSubtreeEnv) {
     for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
         cmd.env_remove(key);
     }
-    if let Some(pin) = crate::run_cmd_model_pin::inherited_subtree_model_pin() {
+    let inherited_model_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    if let Some(pin) =
+        crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref())
+    {
         for (key, value) in pin.pin_env_entries() {
             cmd.env(key, value);
         }
@@ -238,7 +245,10 @@ pub(super) async fn execute_csa_step(
     // carried out-of-band as a typed value (None unless this process is a pinned
     // child) and applied by the executor's trusted channel — never via the env
     // map.
-    let subtree_pin = crate::run_cmd_model_pin::inherited_subtree_model_pin();
+    let inherited_model_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(options.startup_env);
+    let subtree_pin =
+        crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref());
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
     let initial_response_timeout_seconds =
         crate::pipeline::resolve_initial_response_timeout_for_tool(
@@ -278,7 +288,7 @@ pub(super) async fn execute_csa_step(
         .map(str::trim)
         .filter(|session| !session.is_empty())
         .map(str::to_string);
-    let parent_session_id = std::env::var("CSA_SESSION_ID").ok();
+    let parent_session_id = options.startup_env.session_id().map(ToOwned::to_owned);
     let execute_once = |session_arg: Option<String>| {
         execute_with_session_and_meta_with_parent_source(
             &executor,
@@ -310,6 +320,7 @@ pub(super) async fn execute_csa_step(
             &[],   // extra_writable
             &[],   // extra_readable
             false, // cli_no_error_marker_scan: plan has no CLI flag; defer to config (#1745)
+            options.startup_env,
         )
     };
     let result = match execute_once(session_arg.clone()).await {

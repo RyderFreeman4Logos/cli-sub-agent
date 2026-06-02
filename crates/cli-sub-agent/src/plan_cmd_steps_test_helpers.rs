@@ -27,6 +27,7 @@ pub(crate) async fn execute_plan(
     let workflow_path = project_root.join("workflow.toml");
     let mut journal = PlanRunJournal::new(&plan.name, &workflow_path, variables.clone());
     let completed = HashSet::new();
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
     let mut run_ctx = PlanRunContext {
         project_root,
         workflow_path: &workflow_path,
@@ -38,6 +39,7 @@ pub(crate) async fn execute_plan(
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        startup_env: &startup_env,
     };
     execute_plan_with_journal(plan, variables, &mut run_ctx).await
 }
@@ -52,6 +54,7 @@ pub(crate) async fn execute_step(
     model_spec_override: Option<&String>,
 ) -> StepResult {
     let workflow_path_buf = project_root.join("workflow.toml");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
     execute_step_with_workflow(
         step,
         variables,
@@ -62,6 +65,7 @@ pub(crate) async fn execute_step(
             tool_override,
             model_spec_override,
             no_fs_sandbox: false,
+            startup_env: &startup_env,
         },
     )
     .await

@@ -1,8 +1,10 @@
+#[cfg(test)]
 use csa_core::env::{
     CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY,
 };
 
 use crate::run_cmd_tool_selection::SkillResolution;
+use crate::startup_env::StartupSubtreeEnv;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InheritedModelPin {
@@ -41,19 +43,45 @@ pub(crate) struct HandleRunModelPinResolution {
     pub(crate) subtree_model_pin_active: bool,
 }
 
-pub(crate) fn inherited_model_pin_from_env(current_depth: u32) -> Option<InheritedModelPin> {
-    inherited_model_pin_from_lookup(current_depth, |key| std::env::var(key).ok())
+pub(crate) fn inherited_model_pin_from_startup(
+    startup_env: &StartupSubtreeEnv,
+) -> Option<InheritedModelPin> {
+    inherited_model_pin_from_values(
+        startup_env.current_depth(),
+        startup_env.model_spec(),
+        startup_env.force_ignore_tier_setting(),
+        startup_env.no_failover(),
+    )
 }
 
+#[cfg(test)]
 fn inherited_model_pin_from_lookup<F>(current_depth: u32, lookup: F) -> Option<InheritedModelPin>
 where
     F: Fn(&str) -> Option<String>,
 {
+    inherited_model_pin_from_values(
+        current_depth,
+        lookup(CSA_MODEL_SPEC_ENV_KEY).as_deref(),
+        lookup(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+            .as_deref()
+            .is_some_and(is_truthy_env_value),
+        lookup(CSA_NO_FAILOVER_ENV_KEY)
+            .as_deref()
+            .is_some_and(is_truthy_env_value),
+    )
+}
+
+fn inherited_model_pin_from_values(
+    current_depth: u32,
+    model_spec: Option<&str>,
+    force_ignore_tier_setting: bool,
+    no_failover: bool,
+) -> Option<InheritedModelPin> {
     if current_depth == 0 {
         return None;
     }
 
-    let model_spec = lookup(CSA_MODEL_SPEC_ENV_KEY)?;
+    let model_spec = model_spec?;
     let model_spec = model_spec.trim();
     if model_spec.is_empty() {
         return None;
@@ -67,9 +95,6 @@ where
     // pins the subtree and drops tier routing. (The ambient value is also
     // reserved at the spawn boundary; this is the reader-side belt to the
     // spawn-side braces.)
-    let force_ignore_tier_setting = lookup(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
-        .as_deref()
-        .is_some_and(is_truthy_env_value);
     if !force_ignore_tier_setting {
         tracing::warn!(
             model_spec,
@@ -93,9 +118,7 @@ where
     Some(InheritedModelPin {
         model_spec: model_spec.to_string(),
         force_ignore_tier_setting,
-        no_failover: lookup(CSA_NO_FAILOVER_ENV_KEY)
-            .as_deref()
-            .is_some_and(is_truthy_env_value),
+        no_failover,
     })
 }
 
@@ -158,17 +181,17 @@ pub(crate) struct InheritedPinForReviewDebate {
 
 /// Apply the inherited SA subtree pin to a `csa review` / `csa debate` call.
 ///
-/// Reuses the same [`inherited_model_pin_from_env`] + [`apply_inherited_model_pin`]
-/// machinery as `csa run`, so precedence is identical: explicit `--model-spec`
-/// wins over the inherited env pin, which wins over tier, which wins over
-/// defaults. `auto_route` has no analog for review/debate, so `None` is passed
-/// through.
+/// Reuses the same startup-captured inherited pin +
+/// [`apply_inherited_model_pin`] machinery as `csa run`, so precedence is
+/// identical: explicit `--model-spec` wins over the inherited pin, which wins
+/// over tier, which wins over defaults. `auto_route` has no analog for
+/// review/debate, so `None` is passed through.
 pub(crate) fn apply_inherited_pin_for_review_debate(
     model_spec: Option<String>,
     tier: Option<String>,
     force_ignore_tier_setting: bool,
     no_failover: bool,
-    current_depth: u32,
+    inherited_pin: Option<InheritedModelPin>,
 ) -> InheritedPinForReviewDebate {
     let resolution = apply_inherited_model_pin(
         RunModelPinInput {
@@ -178,7 +201,7 @@ pub(crate) fn apply_inherited_pin_for_review_debate(
             force_ignore_tier_setting,
             no_failover,
         },
-        inherited_model_pin_from_env(current_depth),
+        inherited_pin,
     );
     InheritedPinForReviewDebate {
         model_spec: resolution.model_spec,
@@ -191,12 +214,12 @@ pub(crate) fn apply_inherited_pin_for_review_debate(
 
 pub(crate) fn resolve_handle_run_model_pin(
     input: RunModelPinInput,
-    current_depth: u32,
+    inherited_pin: Option<InheritedModelPin>,
     cli_model_spec_explicit: bool,
     skill_res: &mut SkillResolution,
     user_explicit_tool: &mut bool,
 ) -> HandleRunModelPinResolution {
-    let resolution = apply_inherited_model_pin(input, inherited_model_pin_from_env(current_depth));
+    let resolution = apply_inherited_model_pin(input, inherited_pin);
     let inherited_pin_active = resolution.inherited_pin.is_some();
     if inherited_pin_active {
         skill_res.tool = None;
@@ -232,8 +255,8 @@ pub(crate) fn resolve_handle_run_model_pin(
 /// construction: no user/request/config env can introduce the pin keys.
 ///
 /// `model_spec` MUST originate from validated CSA state (the spec the caller
-/// resolved itself, or one returned by [`inherited_model_pin_from_env`], which
-/// gates on the force-ignore marker + `ModelSpec` well-formedness).
+/// resolved itself, or one returned by the startup-captured inherited-pin
+/// reader, which gates on the force-ignore marker + `ModelSpec` well-formedness).
 pub(crate) fn resolve_subtree_model_pin(
     model_spec: Option<&str>,
     force_ignore_tier_setting: bool,
@@ -244,19 +267,6 @@ pub(crate) fn resolve_subtree_model_pin(
         return None;
     }
     csa_core::env::SubtreeModelPin::from_validated_spec(model_spec, no_failover)
-}
-
-/// Current CSA recursion depth as seen by this process, from `CSA_DEPTH`.
-///
-/// `CSA_DEPTH` is set by the parent on every CSA child spawn
-/// (`inject_csa_owned_env`), so it is the canonical "am I a child?" signal for
-/// code paths that did not thread `current_depth` as a parameter. Defaults to 0
-/// (root) when unset/unparsable.
-pub(crate) fn current_depth_from_env() -> u32 {
-    std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
 }
 
 /// Resolve an inherited subtree model pin to cascade to a child CSA-recursion
@@ -270,12 +280,12 @@ pub(crate) fn current_depth_from_env() -> u32 {
 ///
 /// Pin-CONSUMING sites (csa run / review / debate) instead call
 /// [`resolve_subtree_model_pin`] with the spec they resolved. This function is
-/// the no-consume counterpart; it reads the inherited pin from the environment
-/// (already validated + force-ignore-gated by [`inherited_model_pin_from_env`]).
-/// Depth is read from `CSA_DEPTH` so call sites need not thread it. Returns
-/// `None` when the parent did not pin (depth 0 or no pin env).
-pub(crate) fn inherited_subtree_model_pin() -> Option<csa_core::env::SubtreeModelPin> {
-    let inherited = inherited_model_pin_from_env(current_depth_from_env())?;
+/// the no-consume counterpart. Returns `None` when the parent did not pin
+/// (depth 0 or no pin env).
+pub(crate) fn inherited_subtree_model_pin(
+    inherited: Option<&InheritedModelPin>,
+) -> Option<csa_core::env::SubtreeModelPin> {
+    let inherited = inherited?;
     resolve_subtree_model_pin(
         Some(&inherited.model_spec),
         inherited.force_ignore_tier_setting,
@@ -308,6 +318,7 @@ pub(crate) fn subtree_model_pin_prompt_guard(
     ))
 }
 
+#[cfg(test)]
 fn is_truthy_env_value(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),

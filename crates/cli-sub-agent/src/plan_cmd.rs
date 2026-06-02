@@ -28,6 +28,7 @@ use weave::compiler::{ExecutionPlan, plan_from_toml};
 use crate::pattern_resolver;
 use crate::pipeline::determine_project_root;
 use crate::plan_display::{print_plan, print_summary};
+use crate::startup_env::StartupSubtreeEnv;
 
 #[path = "plan_cmd_exec.rs"]
 mod plan_cmd_exec;
@@ -173,6 +174,7 @@ pub(crate) struct PlanRunArgs {
     pub no_fs_sandbox: bool,
     pub current_depth: u32,
     pub pipeline_source: PlanRunPipelineSource,
+    pub startup_env: StartupSubtreeEnv,
 }
 
 /// Handle `csa plan run <file>` or `csa plan run --pattern <name>`.
@@ -196,6 +198,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         no_fs_sandbox,
         current_depth,
         pipeline_source,
+        startup_env,
     } = args;
 
     // 1. Determine project root
@@ -222,7 +225,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
     enforce_plan_run_tier_bypass_gate(
         config.as_ref(),
         model_spec_override.as_deref(),
-        current_depth,
+        &startup_env,
     )?;
 
     // 4. Load workflow: either from --resume journal or from file/pattern
@@ -353,6 +356,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         resume_completed_steps: &resume_context.completed_steps,
         chunked,
         no_fs_sandbox,
+        startup_env: &startup_env,
     };
 
     let results =
@@ -443,14 +447,14 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
 fn enforce_plan_run_tier_bypass_gate(
     config: Option<&ProjectConfig>,
     model_spec_override: Option<&str>,
-    current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let Some(model_spec) = model_spec_override else {
         return Ok(());
     };
     let global_config = csa_config::GlobalConfig::load()?;
     let inherited_trusted_pin =
-        crate::run_cmd_model_pin::inherited_model_pin_from_env(current_depth)
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env)
             .is_some_and(|pin| pin.force_ignore_tier_setting && pin.model_spec == model_spec);
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config,

@@ -10,6 +10,21 @@ pub const CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY: &str = "CSA_FORCE_IGNORE_TIER_S
 /// Whether nested CSA invocations should disable failover for the inherited model spec.
 pub const CSA_NO_FAILOVER_ENV_KEY: &str = "CSA_NO_FAILOVER";
 
+/// Current CSA session ULID inherited by a nested CSA process.
+pub const CSA_SESSION_ID_ENV_KEY: &str = "CSA_SESSION_ID";
+
+/// Current CSA recursion depth inherited by a nested CSA process.
+pub const CSA_DEPTH_ENV_KEY: &str = "CSA_DEPTH";
+
+/// Project root inherited by a nested CSA process.
+pub const CSA_PROJECT_ROOT_ENV_KEY: &str = "CSA_PROJECT_ROOT";
+
+/// Parent session ULID inherited by a nested CSA process.
+pub const CSA_PARENT_SESSION_ENV_KEY: &str = "CSA_PARENT_SESSION";
+
+/// Marker that a nested execution command was spawned by CSA itself.
+pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
+
 /// Subtree model-pin env vars that propagate a pinned SA subtree to nested
 /// workers.
 ///
@@ -127,6 +142,25 @@ pub const CSA_SESSION_DIR_ENV_KEY: &str = "CSA_SESSION_DIR";
 
 /// Absolute path to the parent session directory when this process is a child session.
 pub const CSA_PARENT_SESSION_DIR_ENV_KEY: &str = "CSA_PARENT_SESSION_DIR";
+
+/// CSA-owned subtree context env keys consumed once at CLI startup.
+///
+/// These keys describe the caller/session subtree and the trusted model-pin
+/// reservation. A child process may receive them from its CSA parent, but the
+/// CLI must immediately freeze and remove them so later code cannot observe a
+/// mutated ambient environment.
+pub const STARTUP_SUBTREE_ENV_KEYS: &[&str] = &[
+    CSA_SESSION_ID_ENV_KEY,
+    CSA_DEPTH_ENV_KEY,
+    CSA_PROJECT_ROOT_ENV_KEY,
+    CSA_SESSION_DIR_ENV_KEY,
+    CSA_PARENT_SESSION_ENV_KEY,
+    CSA_PARENT_SESSION_DIR_ENV_KEY,
+    CSA_INTERNAL_INVOCATION_ENV_KEY,
+    CSA_MODEL_SPEC_ENV_KEY,
+    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+    CSA_NO_FAILOVER_ENV_KEY,
+];
 
 #[cfg(test)]
 mod tests {

@@ -250,6 +250,7 @@ async fn state_dir_cap_failure_persists_result_for_fresh_spawn() {
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
     {
@@ -314,6 +315,7 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
     {
@@ -430,6 +432,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
     {

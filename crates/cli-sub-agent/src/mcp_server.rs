@@ -434,6 +434,7 @@ async fn handle_gc_tool(args: Value) -> Result<Value> {
         max_age_days,
         reap_runtime,
         crate::OutputFormat::Text,
+        None,
     )?;
 
     let msg = if dry_run {

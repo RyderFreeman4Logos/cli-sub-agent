@@ -450,7 +450,7 @@ fn test_handle_gc_reaps_runtime_after_retiring_stale_session() {
     );
     let _cwd = CurrentDirGuard::enter(&project_root);
 
-    handle_gc(false, None, false, OutputFormat::Text).unwrap();
+    handle_gc(false, None, false, OutputFormat::Text, None).unwrap();
 
     let sessions = list_sessions(&project_root, None).unwrap();
     let session = sessions
@@ -488,7 +488,7 @@ fn test_handle_gc_respects_reap_runtime_dirs_false() {
     );
     let _cwd = CurrentDirGuard::enter(&project_root);
 
-    handle_gc(false, None, false, OutputFormat::Text).unwrap();
+    handle_gc(false, None, false, OutputFormat::Text, None).unwrap();
 
     assert!(
         runtime_dir.exists(),
@@ -519,7 +519,7 @@ fn test_reap_runtime_global_covers_canonical_and_legacy_roots() {
         true,
     );
 
-    let stats = reap_runtime_payloads_global(false, 30).unwrap();
+    let stats = reap_runtime_payloads_global(false, 30, None).unwrap();
 
     assert_eq!(stats.sessions_reaped, 2);
     assert_eq!(stats.bytes_reclaimed, 2 * TWO_MIB);

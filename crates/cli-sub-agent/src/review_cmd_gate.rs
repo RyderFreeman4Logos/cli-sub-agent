@@ -8,6 +8,7 @@ pub(super) async fn run_pre_review_quality_gate(
     project_root: &Path,
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    current_depth: u32,
 ) -> Result<Option<String>> {
     let gate_steps = global_config.review.effective_gate_steps();
     let gate_timeout = config
@@ -16,7 +17,14 @@ pub(super) async fn run_pre_review_quality_gate(
         .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
     let gate_mode = &global_config.review.gate_mode;
     if gate_steps.is_empty() {
-        return run_single_quality_gate(project_root, config, gate_timeout, gate_mode).await;
+        return run_single_quality_gate(
+            project_root,
+            config,
+            gate_timeout,
+            gate_mode,
+            current_depth,
+        )
+        .await;
     }
 
     let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
@@ -24,6 +32,7 @@ pub(super) async fn run_pre_review_quality_gate(
         &gate_steps,
         gate_timeout,
         gate_mode,
+        current_depth,
     )
     .await?;
 
@@ -65,6 +74,7 @@ async fn run_single_quality_gate(
     config: Option<&ProjectConfig>,
     gate_timeout: u64,
     gate_mode: &GateMode,
+    current_depth: u32,
 ) -> Result<Option<String>> {
     let gate_command = config
         .and_then(|c| c.review.as_ref())
@@ -74,6 +84,7 @@ async fn run_single_quality_gate(
         gate_command,
         gate_timeout,
         gate_mode,
+        current_depth,
     )
     .await?;
 

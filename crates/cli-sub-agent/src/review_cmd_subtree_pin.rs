@@ -18,13 +18,16 @@ use crate::cli::ReviewArgs;
 /// env pin, which wins over tier, which wins over defaults. An unpinned /
 /// depth-0 review is unchanged (tier routing preserved). Returns `true` when a
 /// parent pin was inherited.
-pub(super) fn apply_subtree_pin(args: &mut ReviewArgs, current_depth: u32) -> bool {
+pub(super) fn apply_subtree_pin(
+    args: &mut ReviewArgs,
+    inherited_model_pin: Option<crate::run_cmd_model_pin::InheritedModelPin>,
+) -> bool {
     let inherited_pin = crate::run_cmd_model_pin::apply_inherited_pin_for_review_debate(
         args.model_spec.take(),
         args.tier.take(),
         args.force_ignore_tier_setting,
         args.no_failover,
-        current_depth,
+        inherited_model_pin,
     );
     args.model_spec = inherited_pin.model_spec;
     args.tier = inherited_pin.tier;

@@ -23,6 +23,7 @@ pub(crate) fn handle_gc_global(
     max_age_days: Option<u64>,
     reap_runtime: bool,
     format: OutputFormat,
+    current_session_id: Option<&str>,
 ) -> Result<()> {
     let state_bases = csa_config::paths::state_dir_all_roots();
     if state_bases.is_empty() {
@@ -36,7 +37,6 @@ pub(crate) fn handle_gc_global(
         project_roots.extend(discover_project_roots(state_base));
     }
 
-    let current_session_id = std::env::var("CSA_SESSION_ID").ok();
     let mut runtime_reap_enabled = false;
     let mut runtime_reap_stats = super::RuntimeReapStats::default();
 
@@ -263,7 +263,7 @@ pub(crate) fn handle_gc_global(
                 &sessions_for_reap,
                 dry_run,
                 days,
-                current_session_id.as_deref(),
+                current_session_id,
             ) {
                 Ok(stats) => merge_runtime_reap_stats(&mut runtime_reap_stats, stats),
                 Err(err) => {

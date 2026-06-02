@@ -132,6 +132,7 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
         false,
         Vec::new(),
         Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
     )
     .await
     .expect_err("model-spec + tier conflict must return an error");
@@ -214,6 +215,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         false,
         Vec::new(),
         Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
     )
     .await
     .expect_err("non-conflict pre-exec error must return an error");

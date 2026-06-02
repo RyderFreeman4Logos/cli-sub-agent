@@ -93,6 +93,7 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
             match crate::gc::reap_runtime_payloads_global(
                 false,
                 crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS,
+                None,
             ) {
                 Ok(stats) => {
                     crate::gc::invalidate_state_dir_size_cache();

@@ -1,15 +1,8 @@
 pub(crate) const PROMPT_GUARD_CALLER_INJECTION_ENV: &str = "CSA_EMIT_CALLER_GUARD_INJECTION";
 
-fn current_depth() -> u32 {
-    std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(0)
-}
-
-pub(super) fn should_emit_prompt_guard_to_caller() -> bool {
+pub(super) fn should_emit_prompt_guard_to_caller(current_depth: u32) -> bool {
     // Prompt-guard reverse injection is only for the top-level caller.
-    if current_depth() > 0 {
+    if current_depth > 0 {
         return false;
     }
 
@@ -53,8 +46,11 @@ pub(crate) fn effective_max_recursion_depth(config: Option<&csa_config::ProjectC
 /// ceiling (`DEFAULT_MAX_RECURSION_DEPTH`) is used so the prompt-level guard
 /// stays aligned with the same fallback that `pipeline::load_and_validate`
 /// applies at runtime.
-pub(crate) fn anti_recursion_guard(config: Option<&csa_config::ProjectConfig>) -> Option<String> {
-    let depth = current_depth();
+pub(crate) fn anti_recursion_guard(
+    config: Option<&csa_config::ProjectConfig>,
+    current_depth: u32,
+) -> Option<String> {
+    let depth = current_depth;
     let max_depth = effective_max_recursion_depth(config);
     if depth + 1 < max_depth {
         return None;
@@ -74,8 +70,12 @@ pub(crate) fn anti_recursion_guard(config: Option<&csa_config::ProjectConfig>) -
     ))
 }
 
-pub(super) fn emit_prompt_guard_to_caller(guard_block: &str, guard_count: usize) {
-    if !should_emit_prompt_guard_to_caller() || guard_block.trim().is_empty() {
+pub(super) fn emit_prompt_guard_to_caller(
+    guard_block: &str,
+    guard_count: usize,
+    current_depth: u32,
+) {
+    if !should_emit_prompt_guard_to_caller(current_depth) || guard_block.trim().is_empty() {
         return;
     }
     eprintln!("[csa-hook] reverse prompt injection for caller (guards={guard_count})");

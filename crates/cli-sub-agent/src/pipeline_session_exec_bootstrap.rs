@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::pipeline::{ParentSessionSource, SessionCreationMode};
 use crate::run_helpers::truncate_prompt;
+use crate::startup_env::StartupSubtreeEnv;
 
 pub(super) struct SessionBootstrap {
     pub(super) session: MetaSessionState,
@@ -32,11 +33,13 @@ pub(super) async fn bootstrap_session(
     tier_name: Option<&str>,
     parent_session_source: ParentSessionSource,
     session_creation_mode: SessionCreationMode,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionBootstrap> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(session_id) = session_arg
-        && let Ok(env_session) = std::env::var("CSA_SESSION_ID")
-        && env_session == session_id
+        && startup_env
+            .session_id()
+            .is_some_and(|env_session| env_session == session_id)
     {
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
@@ -59,7 +62,7 @@ pub(super) async fn bootstrap_session(
     crate::setup_cmds::spawn_review_gate_setup_if_needed(project_root, global_config);
 
     let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
-    let depth = crate::pipeline_env::current_csa_depth();
+    let depth = startup_env.current_depth();
     if let Some(wait) = compute_cooldown_wait(
         project_root,
         cd,
@@ -90,7 +93,7 @@ pub(super) async fn bootstrap_session(
         let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
         let parent_id = match parent_session_source {
             ParentSessionSource::ExplicitOrEnv => {
-                parent.or_else(|| std::env::var("CSA_SESSION_ID").ok())
+                parent.or_else(|| startup_env.session_id().map(ToOwned::to_owned))
             }
             ParentSessionSource::ExplicitOnly => parent,
         };
@@ -108,7 +111,7 @@ pub(super) async fn bootstrap_session(
                 Some(tool.as_str()),
             )?,
         };
-        crate::recall_cmd::spawn_recall_record_if_needed(project_root);
+        crate::recall_cmd::spawn_recall_record_if_needed(project_root, startup_env.current_depth());
         new_session.task_context = csa_session::TaskContext {
             task_type: task_type.map(|s| s.to_string()),
             tier_name: tier_name.map(|s| s.to_string()),

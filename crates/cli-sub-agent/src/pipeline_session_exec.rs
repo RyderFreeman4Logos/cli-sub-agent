@@ -10,6 +10,7 @@ use super::{
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
 use crate::session_guard::SessionCleanupGuard;
+use crate::startup_env::StartupSubtreeEnv;
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
@@ -87,8 +88,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     // this session, overriding config; `false` defers to `[resources].error_marker_scan`
     // (default-true). The idle/wall-clock timeouts always remain active (#1745).
     cli_no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
-    let memory_project_key = resolve_memory_project_key(project_root);
+    let memory_project_key = resolve_memory_project_key(project_root, startup_env.project_root());
     let session_exec_bootstrap::SessionBootstrap {
         mut session,
         resolved_provider_session_id,
@@ -106,6 +108,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         tier_name,
         parent_session_source,
         session_creation_mode,
+        startup_env,
     )
     .await?;
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
@@ -293,6 +296,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         config,
         global_config,
         executor.tool_name(),
+        startup_env.current_depth(),
     );
     crate::pipeline_env::apply_task_target_dir_guards(
         task_type,
@@ -343,6 +347,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         executor,
         session_arg.is_some(),
         &mut prompt_assembly,
+        startup_env.current_depth(),
     );
     // Inject structured output section markers when enabled in config.
     let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);

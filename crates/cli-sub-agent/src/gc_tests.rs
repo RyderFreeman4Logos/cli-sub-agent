@@ -354,7 +354,8 @@ scanned_at = 1
         );
     }
 
-    handle_gc_global(false, None, false, OutputFormat::Text).expect("global gc should succeed");
+    handle_gc_global(false, None, false, OutputFormat::Text, None)
+        .expect("global gc should succeed");
 
     for state_dir in [&canonical, &legacy] {
         let cache_path = state_dir.join(STATE_DIR_SIZE_CACHE_FILENAME);
@@ -391,7 +392,7 @@ scanned_at = 1
         );
     }
 
-    handle_gc_global(true, None, false, OutputFormat::Text)
+    handle_gc_global(true, None, false, OutputFormat::Text, None)
         .expect("global dry-run gc should succeed");
 
     for state_dir in [&canonical, &legacy] {

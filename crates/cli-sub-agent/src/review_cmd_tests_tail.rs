@@ -400,6 +400,7 @@ fn test_build_review_instruction_for_project_includes_rust_profile() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -422,6 +423,7 @@ fn test_build_review_instruction_for_project_includes_unknown_profile_for_empty_
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -704,7 +706,7 @@ async fn handle_review_fix_clean_initial_persists_no_fix_attempt() {
         "--no-fs-sandbox",
     ]);
 
-    let exit_code = handle_review(args, 0)
+    let exit_code = handle_review(args, 0, &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV)
         .await
         .expect("clean initial --fix review should succeed");
     assert_eq!(exit_code, 0);
@@ -773,7 +775,7 @@ async fn handle_review_rejects_direct_tool_tier_before_session_creation() {
         "codex",
     ]);
 
-    let err = handle_review(args, 0)
+    let err = handle_review(args, 0, &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV)
         .await
         .expect_err("direct --tool tier rejection must fail");
     assert!(

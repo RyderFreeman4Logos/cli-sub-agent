@@ -59,6 +59,7 @@ async fn execute_plan_stops_after_manual_handoff() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
     let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
@@ -97,6 +98,7 @@ async fn execute_plan_resume_replays_manual_handoff_step() {
             resume_completed_steps: &completed,
             chunked: false,
             no_fs_sandbox: false,
+            startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
         };
 
         let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
@@ -131,6 +133,7 @@ async fn execute_plan_resume_replays_manual_handoff_step() {
         resume_completed_steps: &resumed_completed,
         chunked: false,
         no_fs_sandbox: false,
+        startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
     let resumed_results = execute_plan_with_journal(&plan, &saved_journal.vars, &mut resumed_ctx)

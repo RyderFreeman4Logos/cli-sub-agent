@@ -583,6 +583,7 @@ pub(crate) fn resolve_return_target_session_id(
     project_root: &Path,
     fork_source_ref: Option<&str>,
     parent_flag: Option<&str>,
+    startup_session_id: Option<&str>,
 ) -> Result<Option<String>> {
     match return_target {
         ReturnTarget::Last => {
@@ -595,11 +596,10 @@ pub(crate) fn resolve_return_target_session_id(
             Ok(Some(resolved))
         }
         ReturnTarget::Auto => {
-            let env_parent = std::env::var("CSA_SESSION_ID").ok();
             let candidate = fork_source_ref
                 .map(ToOwned::to_owned)
                 .or_else(|| parent_flag.map(ToOwned::to_owned))
-                .or(env_parent);
+                .or_else(|| startup_session_id.map(ToOwned::to_owned));
 
             if let Some(session_ref) = candidate {
                 let resolved = resolve_session_reference(project_root, &session_ref)?;

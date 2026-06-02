@@ -52,6 +52,9 @@ pub(super) struct MultiReviewerReviewContext<'a> {
     pub idle_timeout_seconds: u64,
     pub readonly_project_root: bool,
     pub prior_rounds_section: Option<&'a str>,
+    pub current_session_id: Option<&'a str>,
+    pub current_depth: u32,
+    pub startup_env: &'a crate::startup_env::StartupSubtreeEnv,
 }
 
 pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_>) -> Result<i32> {
@@ -89,6 +92,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
             reviewer_tool,
             ctx.project_root,
             ctx.prior_rounds_section,
+            ctx.current_session_id,
         );
         let reviewer_model = ctx.review_model.clone();
         let reviewer_project_root = ctx.project_root.to_path_buf();
@@ -137,6 +141,8 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let stream_mode = ctx.stream_mode;
         let idle_timeout_seconds = ctx.idle_timeout_seconds;
         let readonly_project_root = ctx.readonly_project_root;
+        let current_depth = ctx.current_depth;
+        let startup_env = ctx.startup_env.clone();
         join_set.spawn(async move {
             let session_result = match execute_review_with_tier_filter(
                 reviewer_tool,
@@ -167,6 +173,8 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 &reviewer_extra_writable,
                 &reviewer_extra_readable,
                 reviewer_no_error_marker_scan,
+                current_depth,
+                &startup_env,
             )
             .await
             {

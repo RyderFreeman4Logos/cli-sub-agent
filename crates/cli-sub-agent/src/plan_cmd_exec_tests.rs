@@ -5,6 +5,18 @@
 use super::*;
 use crate::test_env_lock::TEST_ENV_LOCK;
 
+fn startup_env_with_pin(depth: u32) -> crate::startup_env::StartupSubtreeEnv {
+    crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (csa_core::env::CSA_DEPTH_ENV_KEY, depth.to_string()),
+        (csa_core::env::CSA_MODEL_SPEC_ENV_KEY, PIN_SPEC.to_string()),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+        (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+    ]))
+}
+
 #[test]
 fn is_step_runtime_var_only_matches_step_output_and_session() {
     assert!(is_step_runtime_var("STEP_1_OUTPUT"));
@@ -141,28 +153,11 @@ fn clean_step_output_extracts_mixed_json_stream_and_ignores_trailing_prose() {
 
 #[test]
 fn next_csa_depth_increments_or_defaults() {
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let original_depth = std::env::var("CSA_DEPTH").ok();
-
-    // SAFETY: test-scoped env mutation.
-    unsafe {
-        std::env::remove_var("CSA_DEPTH");
-    }
-    assert_eq!(next_csa_depth(), "1");
-
-    // SAFETY: test-scoped env mutation.
-    unsafe {
-        std::env::set_var("CSA_DEPTH", "2");
-    }
-    assert_eq!(next_csa_depth(), "3");
-
-    // SAFETY: restore original env value.
-    unsafe {
-        match original_depth {
-            Some(value) => std::env::set_var("CSA_DEPTH", value),
-            None => std::env::remove_var("CSA_DEPTH"),
-        }
-    }
+    assert_eq!(
+        crate::startup_env::StartupSubtreeEnv::default().next_depth_string(),
+        "1"
+    );
+    assert_eq!(startup_env_with_pin(2).next_depth_string(), "3");
 }
 
 const PIN_SPEC: &str = "codex/openai/gpt-5.5/xhigh";
@@ -211,8 +206,9 @@ fn spawn_bash_env_strips_ambient_subtree_pin_when_not_legitimately_inherited() {
         std::env::set_var(csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1");
     }
 
+    let startup_env = startup_env_with_pin(0);
     let mut cmd = tokio::process::Command::new("bash");
-    apply_sanitized_subtree_pin(&mut cmd);
+    apply_sanitized_subtree_pin(&mut cmd, &startup_env);
     let env = recorded_env(&cmd);
 
     for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
@@ -263,8 +259,9 @@ fn spawn_bash_env_reapplies_legitimately_inherited_subtree_pin() {
         std::env::set_var(csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1");
     }
 
+    let startup_env = startup_env_with_pin(2);
     let mut cmd = tokio::process::Command::new("bash");
-    apply_sanitized_subtree_pin(&mut cmd);
+    apply_sanitized_subtree_pin(&mut cmd, &startup_env);
     let env = recorded_env(&cmd);
 
     assert_eq!(

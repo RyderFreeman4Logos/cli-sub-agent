@@ -21,7 +21,7 @@ fn prompt_guard_caller_injection_defaults_to_enabled() {
         std::env::remove_var(PROMPT_GUARD_CALLER_INJECTION_ENV);
         std::env::remove_var("CSA_DEPTH");
     }
-    let enabled = should_emit_prompt_guard_to_caller();
+    let enabled = should_emit_prompt_guard_to_caller(0);
     restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original_guard);
     restore_env_var("CSA_DEPTH", original_depth);
     assert!(enabled);
@@ -39,7 +39,7 @@ fn prompt_guard_caller_injection_honors_disable_values() {
         // SAFETY: test-scoped env mutation, restored immediately.
         unsafe { std::env::set_var(PROMPT_GUARD_CALLER_INJECTION_ENV, value) };
         assert!(
-            !should_emit_prompt_guard_to_caller(),
+            !should_emit_prompt_guard_to_caller(0),
             "expected value '{value}' to disable caller injection"
         );
     }
@@ -61,7 +61,7 @@ fn prompt_guard_caller_injection_disabled_for_recursive_depth() {
     }
 
     assert!(
-        !should_emit_prompt_guard_to_caller(),
+        !should_emit_prompt_guard_to_caller(1),
         "recursive depth should suppress caller prompt injection"
     );
 
@@ -75,7 +75,7 @@ fn anti_recursion_guard_none_at_depth_zero() {
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::remove_var("CSA_DEPTH") };
-    let guard = super::prompt_guard::anti_recursion_guard(None);
+    let guard = super::prompt_guard::anti_recursion_guard(None, 0);
     restore_env_var("CSA_DEPTH", original_depth);
     assert!(guard.is_none(), "should be None at depth 0");
 }
@@ -89,7 +89,7 @@ fn anti_recursion_guard_none_for_legitimate_fractal_depths() {
         let original_depth = std::env::var("CSA_DEPTH").ok();
         // SAFETY: test-scoped env mutation, restored immediately.
         unsafe { std::env::set_var("CSA_DEPTH", depth) };
-        let guard = super::prompt_guard::anti_recursion_guard(None);
+        let guard = super::prompt_guard::anti_recursion_guard(None, depth.parse::<u32>().unwrap());
         restore_env_var("CSA_DEPTH", original_depth);
         assert!(
             guard.is_none(),
@@ -104,7 +104,7 @@ fn anti_recursion_guard_warns_near_default_ceiling() {
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::set_var("CSA_DEPTH", "4") };
-    let guard = super::prompt_guard::anti_recursion_guard(None);
+    let guard = super::prompt_guard::anti_recursion_guard(None, 4);
     restore_env_var("CSA_DEPTH", original_depth);
     let guard = guard.expect("should return Some near recursion ceiling (depth=4)");
     assert!(guard.contains("csa-depth-ceiling"));
@@ -122,7 +122,7 @@ fn anti_recursion_guard_warns_at_default_ceiling() {
     let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::set_var("CSA_DEPTH", "5") };
-    let guard = super::prompt_guard::anti_recursion_guard(None);
+    let guard = super::prompt_guard::anti_recursion_guard(None, 5);
     restore_env_var("CSA_DEPTH", original_depth);
     let guard = guard.expect("should return Some at recursion ceiling");
     assert!(guard.contains("csa-depth-ceiling"));
@@ -180,7 +180,7 @@ fn anti_recursion_guard_honors_custom_max_recursion_depth() {
 
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::set_var("CSA_DEPTH", "1") };
-    let below = super::prompt_guard::anti_recursion_guard(Some(&cfg_low));
+    let below = super::prompt_guard::anti_recursion_guard(Some(&cfg_low), 1);
     assert!(
         below.is_none(),
         "guard should not fire at depth 1 when ceiling=3 (remaining=2)"
@@ -188,7 +188,7 @@ fn anti_recursion_guard_honors_custom_max_recursion_depth() {
 
     // SAFETY: test-scoped env mutation, restored immediately.
     unsafe { std::env::set_var("CSA_DEPTH", "2") };
-    let near = super::prompt_guard::anti_recursion_guard(Some(&cfg_low));
+    let near = super::prompt_guard::anti_recursion_guard(Some(&cfg_low), 2);
     restore_env_var("CSA_DEPTH", original_depth);
 
     let near = near.expect("guard should fire at depth 2 when ceiling=3");

@@ -13,6 +13,7 @@ pub(super) fn inject_prompt_guards_if_needed(
     executor: &Executor,
     session_arg_present: bool,
     prompt_assembly: &mut PromptAssembly,
+    current_depth: u32,
 ) {
     // Suppress guards for debate (read-only, #467); review keeps them for --fix.
     if matches!(task_type, Some("debate")) || hooks_config.prompt_guard.is_empty() {
@@ -35,7 +36,7 @@ pub(super) fn inject_prompt_guards_if_needed(
             bytes = guard_block.len(),
             "Injecting prompt guard output into effective prompt"
         );
-        emit_prompt_guard_to_caller(&guard_block, guard_results.len());
+        emit_prompt_guard_to_caller(&guard_block, guard_results.len(), current_depth);
         prompt_assembly.append_dynamic_block(&guard_block);
     }
 }

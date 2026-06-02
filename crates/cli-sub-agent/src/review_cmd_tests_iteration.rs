@@ -119,6 +119,7 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -135,6 +136,7 @@ fn build_multi_reviewer_instruction_contains_design_preference_anchor() {
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
 
     assert!(prompt.contains("Design preferences vs correctness bugs"));
@@ -147,7 +149,7 @@ fn count_prior_reviews_zero_omits_iteration_block() {
     init_git_repo_with_branch(project_dir.path(), "feat/iter-zero");
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-zero")),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-zero"), None),
         0
     );
 
@@ -161,6 +163,7 @@ fn count_prior_reviews_zero_omits_iteration_block() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -182,7 +185,7 @@ fn count_prior_reviews_one_injects_iteration_two() {
     );
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-one")),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-one"), None),
         1
     );
 
@@ -196,6 +199,7 @@ fn count_prior_reviews_one_injects_iteration_two() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -232,7 +236,7 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
     );
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-three")),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-three"), None),
         3
     );
 
@@ -241,6 +245,7 @@ fn count_prior_reviews_three_adds_multi_round_escalation() {
         2,
         ToolName::Codex,
         project_dir.path(),
+        None,
         None,
     );
 
@@ -283,6 +288,7 @@ fn multi_round_escalation_keeps_persistent_correctness_bugs_blocking() {
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
 
     assert!(prompt.contains("persistent correctness bugs remain blocking"));
@@ -312,6 +318,7 @@ fn build_multi_reviewer_instruction_uses_explicit_project_root_outside_cwd() {
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
 
     assert!(prompt.contains("This is review iteration 2 on branch 'feat/iter-explicit-root'."));
@@ -338,7 +345,7 @@ fn count_prior_reviews_does_not_pull_reviews_from_other_branches() {
     );
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-current")),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-current"), None),
         0
     );
 }
@@ -365,7 +372,10 @@ fn count_prior_reviews_branch_unknown_returns_safe_zero() {
 
     // Branch-unknown must yield zero to avoid cross-branch contamination; mirror
     // review_context.rs:187 behavior.
-    assert_eq!(count_prior_reviews_for_branch(project_dir.path(), None), 0);
+    assert_eq!(
+        count_prior_reviews_for_branch(project_dir.path(), None, None),
+        0
+    );
 }
 
 #[test]
@@ -385,7 +395,7 @@ fn count_prior_reviews_uses_canonical_max_after_more_than_ten_prior_reviews() {
     }
 
     assert_eq!(
-        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-many")),
+        count_prior_reviews_for_branch(project_dir.path(), Some("feat/iter-many"), None),
         12
     );
 }

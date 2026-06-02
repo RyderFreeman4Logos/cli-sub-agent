@@ -142,8 +142,8 @@ mod tests {
         unsafe { std::env::remove_var("CSA_INTERNAL_INVOCATION") };
 
         let cli = Cli::try_parse_from(["csa", "run", "prompt"]).expect("cli parse should pass");
-        let err =
-            crate::validate_sa_mode(&cli.command, 0).expect_err("root should require sa-mode");
+        let err = crate::validate_sa_mode(&cli.command, 0, false)
+            .expect_err("root should require sa-mode");
         assert!(
             err.to_string()
                 .contains("--sa-mode true|false is required for root callers")
@@ -169,7 +169,7 @@ mod tests {
 
         for argv in cases {
             let cli = Cli::try_parse_from(*argv).expect("cli parse should pass");
-            let err = crate::validate_sa_mode(&cli.command, 0)
+            let err = crate::validate_sa_mode(&cli.command, 0, false)
                 .expect_err("root execution command should require --sa-mode");
             assert!(
                 err.to_string()
@@ -189,7 +189,7 @@ mod tests {
         unsafe { std::env::remove_var("CSA_INTERNAL_INVOCATION") };
 
         let cli = Cli::try_parse_from(["csa", "run", "prompt"]).expect("cli parse should pass");
-        let err = crate::validate_sa_mode(&cli.command, 1)
+        let err = crate::validate_sa_mode(&cli.command, 1, false)
             .expect_err("depth alone should not bypass sa-mode requirement");
         assert!(
             err.to_string()
@@ -208,7 +208,8 @@ mod tests {
         unsafe { std::env::set_var("CSA_INTERNAL_INVOCATION", "1") };
 
         let cli = Cli::try_parse_from(["csa", "run", "prompt"]).expect("cli parse should pass");
-        let resolved = crate::validate_sa_mode(&cli.command, 1).expect("internal call should pass");
+        let resolved =
+            crate::validate_sa_mode(&cli.command, 1, true).expect("internal call should pass");
         assert!(!resolved);
 
         restore_env_var("CSA_INTERNAL_INVOCATION", original_internal);
@@ -218,17 +219,17 @@ mod tests {
     fn validate_sa_mode_accepts_explicit_root_values() {
         let enabled_cli = Cli::try_parse_from(["csa", "run", "--sa-mode", "true", "prompt"])
             .expect("cli parse should pass");
-        assert!(crate::validate_sa_mode(&enabled_cli.command, 0).expect("should pass"));
+        assert!(crate::validate_sa_mode(&enabled_cli.command, 0, false).expect("should pass"));
 
         let disabled_cli = Cli::try_parse_from(["csa", "run", "--sa-mode", "false", "prompt"])
             .expect("cli parse should pass");
-        assert!(!crate::validate_sa_mode(&disabled_cli.command, 0).expect("should pass"));
+        assert!(!crate::validate_sa_mode(&disabled_cli.command, 0, false).expect("should pass"));
     }
 
     #[test]
     fn validate_sa_mode_ignores_non_execution_commands() {
         let cli = Cli::try_parse_from(["csa", "doctor"]).expect("cli parse should pass");
-        let resolved = crate::validate_sa_mode(&cli.command, 0).expect("doctor should pass");
+        let resolved = crate::validate_sa_mode(&cli.command, 0, false).expect("doctor should pass");
         assert!(!resolved);
     }
 
@@ -236,7 +237,8 @@ mod tests {
     fn validate_sa_mode_ignores_review_check_verdict() {
         let cli = Cli::try_parse_from(["csa", "review", "--check-verdict"])
             .expect("cli parse should pass");
-        let resolved = crate::validate_sa_mode(&cli.command, 0).expect("check-verdict should pass");
+        let resolved =
+            crate::validate_sa_mode(&cli.command, 0, false).expect("check-verdict should pass");
         assert!(!resolved);
     }
 

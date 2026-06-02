@@ -33,7 +33,7 @@ async fn handle_review_persists_result_for_prior_rounds_summary_parse_failure() 
         missing.to_str().expect("utf-8 path"),
     ]);
 
-    let err = handle_review(args, 0)
+    let err = handle_review(args, 0, &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV)
         .await
         .expect_err("missing prior-rounds summary must fail");
     assert!(

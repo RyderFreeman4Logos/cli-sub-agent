@@ -25,6 +25,7 @@ use super::{
     PlanRunJournal, apply_repo_fingerprint, detect_repo_fingerprint, persist_plan_journal,
     substitute_vars,
 };
+use crate::startup_env::StartupSubtreeEnv;
 
 const STEP_FAILURE_STDERR_TAIL_LINES: usize = 20;
 const STEP_FAILURE_STDERR_TAIL_MAX_CHARS: usize = 4000;
@@ -59,6 +60,7 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) resume_completed_steps: &'a HashSet<usize>,
     pub(super) chunked: bool,
     pub(super) no_fs_sandbox: bool,
+    pub(super) startup_env: &'a StartupSubtreeEnv,
 }
 
 pub(crate) struct StepExecutionContext<'a> {
@@ -68,6 +70,7 @@ pub(crate) struct StepExecutionContext<'a> {
     pub(crate) tool_override: Option<&'a ToolName>,
     pub(crate) model_spec_override: Option<&'a String>,
     pub(crate) no_fs_sandbox: bool,
+    pub(crate) startup_env: &'a StartupSubtreeEnv,
 }
 
 pub(super) async fn execute_plan_with_journal(
@@ -115,6 +118,7 @@ pub(super) async fn execute_plan_with_journal(
                 tool_override: run_ctx.tool_override,
                 model_spec_override: run_ctx.model_spec_override,
                 no_fs_sandbox: run_ctx.no_fs_sandbox,
+                startup_env: run_ctx.startup_env,
             },
         )
         .await;
@@ -200,9 +204,6 @@ pub(super) async fn execute_plan_with_journal(
             break;
         }
 
-        // Chunked mode: emit the single StepResult as JSON to stdout and stop.
-        // Skipped steps (condition-false) do not count as "executed" — continue
-        // to the next step so the caller gets a real execution per chunk.
         if run_ctx.chunked && !result.skipped {
             let json =
                 serde_json::to_string(&result).expect("StepResult serialization should never fail");
@@ -211,9 +212,6 @@ pub(super) async fn execute_plan_with_journal(
             break;
         }
 
-        // Emit CSA:NEXT_STEP directive for pipeline chaining.
-        // On success: point to the next step in the plan.
-        // On failure: no directive (pipeline stops on abort).
         if !is_failure
             && !result.skipped
             && let Some(next_step) = find_next_step(step, &plan.steps)
@@ -227,9 +225,6 @@ pub(super) async fn execute_plan_with_journal(
             eprintln!("{}", format_next_step_directive(&cmd, required));
         }
 
-        // Abort on failure when: on_fail=abort, or retry exhausted (retries
-        // already happened inside execute_step; reaching here means all failed),
-        // or delegate (unsupported in v1 — treated as abort).
         let abort = is_failure
             && matches!(
                 step.on_fail,
@@ -480,6 +475,7 @@ pub(crate) async fn execute_step_with_workflow(
                         variables,
                         step_ctx.project_root,
                         step_ctx.workflow_path,
+                        step_ctx.startup_env,
                     ),
                     start,
                 )

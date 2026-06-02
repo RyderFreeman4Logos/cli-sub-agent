@@ -45,6 +45,7 @@ pub(crate) fn handle_gc(
     max_age_days: Option<u64>,
     reap_runtime: bool,
     format: OutputFormat,
+    current_session_id: Option<&str>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(None)?;
     let session_root = get_session_root(&project_root)?;
@@ -201,7 +202,6 @@ pub(crate) fn handle_gc(
         }
     }
 
-    let current_session_id = std::env::var("CSA_SESSION_ID").ok();
     let runtime_reap_stats = runtime_reap_max_age_days
         .map(|days| {
             let sessions_for_reap = if dry_run {
@@ -214,7 +214,7 @@ pub(crate) fn handle_gc(
                 &sessions_for_reap,
                 dry_run,
                 days,
-                current_session_id.as_deref(),
+                current_session_id,
             )
         })
         .transpose()?;

@@ -22,6 +22,7 @@ use crate::pipeline::determine_project_root;
 use crate::plan_cmd::{
     self, FEATURE_INPUT_VAR, PlanRunArgs, PlanRunPipelineSource, handle_plan_run,
 };
+use crate::startup_env::StartupSubtreeEnv;
 use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
@@ -46,6 +47,7 @@ pub(crate) async fn dispatch(
     current_depth: u32,
     sa_mode_active: bool,
     text_output: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let PlanCommands::Run {
         file,
@@ -112,6 +114,7 @@ pub(crate) async fn dispatch(
         no_fs_sandbox,
         current_depth,
         pipeline_source,
+        startup_env: startup_env.clone(),
     };
     dispatch_plan_run(
         plan_args,

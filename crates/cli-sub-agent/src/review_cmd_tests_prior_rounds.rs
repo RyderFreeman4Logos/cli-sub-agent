@@ -53,6 +53,7 @@ invariant = "lock-losing resume cannot mutate metadata of winning session"
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: Some(&prior_rounds),
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -80,6 +81,7 @@ invariant = "lock-losing resume cannot mutate metadata of winning session"
         ToolName::Codex,
         project_dir.path(),
         Some(&prior_rounds),
+        None,
     );
     assert!(prompt.contains("Round 6 (commit 29b6c34c)"));
     assert!(prompt.contains("ACP codex sessions route to output.log"));
@@ -145,6 +147,7 @@ fn build_review_instruction_for_project_without_prior_rounds_flag_leaves_section
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -164,6 +167,7 @@ fn multi_reviewer_prompt_does_not_duplicate_prior_rounds_section_from_base_promp
         ToolName::Codex,
         tempdir().unwrap().path(),
         Some(prior_rounds),
+        None,
     );
 
     assert_eq!(prompt.matches(PRIOR_ROUNDS_SECTION_HEADING).count(), 1);

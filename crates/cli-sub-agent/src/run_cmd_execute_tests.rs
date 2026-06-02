@@ -11,12 +11,27 @@ use chrono::Utc;
 use csa_config::global::PreferencesConfig;
 use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, TierConfig, TierStrategy, ToolConfig};
 use csa_core::env::{
-    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY,
+    CSA_DEPTH_ENV_KEY, CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_MODEL_SPEC_ENV_KEY,
+    CSA_NO_FAILOVER_ENV_KEY, CSA_SESSION_ID_ENV_KEY,
 };
 use csa_core::types::{ToolName, ToolSelectionStrategy};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
+
+fn startup_env_for(
+    depth: Option<u32>,
+    session_id: Option<&str>,
+) -> crate::startup_env::StartupSubtreeEnv {
+    let mut values = HashMap::new();
+    if let Some(depth) = depth {
+        values.insert(CSA_DEPTH_ENV_KEY, depth.to_string());
+    }
+    if let Some(session_id) = session_id {
+        values.insert(CSA_SESSION_ID_ENV_KEY, session_id.to_string());
+    }
+    crate::startup_env::StartupSubtreeEnv::from_values(values)
+}
 
 fn make_test_config() -> ProjectConfig {
     let mut tiers = HashMap::new();
@@ -124,7 +139,9 @@ fn finalize_prompt_text_prepends_atomic_commit_preamble() {
         std::env::remove_var("CSA_SESSION_ID");
     }
 
-    let result = finalize_prompt_text(tmp.path(), "user task".to_string(), None).expect("finalize");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let result = finalize_prompt_text(tmp.path(), "user task".to_string(), None, &startup_env)
+        .expect("finalize");
     let preamble_body = atomic_commit_block(&result, "user task");
 
     assert!(
@@ -167,8 +184,14 @@ fn finalize_prompt_text_uses_subprocess_atomic_commit_preamble_when_csa_depth_po
         std::env::remove_var("CSA_SESSION_ID");
     }
 
-    let result =
-        finalize_prompt_text(tmp.path(), "subprocess task".to_string(), None).expect("finalize");
+    let startup_env = startup_env_for(Some(1), None);
+    let result = finalize_prompt_text(
+        tmp.path(),
+        "subprocess task".to_string(),
+        None,
+        &startup_env,
+    )
+    .expect("finalize");
     let preamble_body = atomic_commit_block(&result, "subprocess task");
 
     assert!(
@@ -202,8 +225,14 @@ fn finalize_prompt_text_uses_main_agent_preamble_when_csa_depth_missing() {
         std::env::remove_var("CSA_SESSION_ID");
     }
 
-    let result =
-        finalize_prompt_text(tmp.path(), "main agent task".to_string(), None).expect("finalize");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let result = finalize_prompt_text(
+        tmp.path(),
+        "main agent task".to_string(),
+        None,
+        &startup_env,
+    )
+    .expect("finalize");
     let preamble_body = atomic_commit_block(&result, "main agent task");
 
     assert!(
@@ -228,8 +257,14 @@ fn finalize_prompt_text_uses_main_agent_preamble_when_csa_depth_zero() {
         std::env::remove_var("CSA_SESSION_ID");
     }
 
-    let result =
-        finalize_prompt_text(tmp.path(), "depth zero task".to_string(), None).expect("finalize");
+    let startup_env = startup_env_for(Some(0), None);
+    let result = finalize_prompt_text(
+        tmp.path(),
+        "depth zero task".to_string(),
+        None,
+        &startup_env,
+    )
+    .expect("finalize");
     let preamble_body = atomic_commit_block(&result, "depth zero task");
 
     assert!(
@@ -256,8 +291,14 @@ fn finalize_prompt_text_uses_subprocess_preamble_when_only_session_id_is_set() {
         std::env::set_var("CSA_SESSION_ID", "01KPSX30G8HRHM5RHGBDB2XPSA");
     }
 
-    let result =
-        finalize_prompt_text(tmp.path(), "session-id task".to_string(), None).expect("finalize");
+    let startup_env = startup_env_for(None, Some("01KPSX30G8HRHM5RHGBDB2XPSA"));
+    let result = finalize_prompt_text(
+        tmp.path(),
+        "session-id task".to_string(),
+        None,
+        &startup_env,
+    )
+    .expect("finalize");
     let preamble_body = atomic_commit_block(&result, "session-id task");
 
     assert!(
@@ -283,8 +324,9 @@ fn intent_classifier_sees_original_prompt_not_preamble() {
         "sanity: original prompt must not be treated as mutating before preamble injection"
     );
 
-    let final_prompt =
-        finalize_prompt_text(tmp.path(), original.to_string(), None).expect("finalize");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let final_prompt = finalize_prompt_text(tmp.path(), original.to_string(), None, &startup_env)
+        .expect("finalize");
     assert!(
         final_prompt.contains("<atomic-commit-discipline>"),
         "preamble must still be in final prompt"
@@ -306,8 +348,9 @@ fn finalize_prompt_text_keeps_read_only_original_prompt_classification() {
     let tmp = TempDir::new().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let original = "Review auth flow and report issues in read-only mode";
-    let final_prompt =
-        finalize_prompt_text(tmp.path(), original.to_string(), None).expect("finalize");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let final_prompt = finalize_prompt_text(tmp.path(), original.to_string(), None, &startup_env)
+        .expect("finalize");
 
     assert!(
         final_prompt.contains("<atomic-commit-discipline>"),
@@ -345,9 +388,14 @@ fn finalize_prompt_text_prepends_review_context_for_skill_only_prompt() {
         resolve_skill_and_prompt(Some("demo"), None, None, None, None, tmp.path())
             .expect("resolve skill prompt");
 
-    let prompt_text =
-        finalize_prompt_text(tmp.path(), skill_resolution.prompt_text, Some(session_id))
-            .expect("finalize prompt text");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let prompt_text = finalize_prompt_text(
+        tmp.path(),
+        skill_resolution.prompt_text,
+        Some(session_id),
+        &startup_env,
+    )
+    .expect("finalize prompt text");
 
     let expected_review_context_prefix = format!(
         "<csa-review-context session=\"{session_id}\">\n<!-- summary.md -->\nSummary line\n"

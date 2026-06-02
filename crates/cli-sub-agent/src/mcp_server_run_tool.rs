@@ -42,11 +42,9 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
     let config = ProjectConfig::load(&project_root)?;
     let global_config = csa_config::GlobalConfig::load()?;
 
-    // Check recursion depth
-    let current_depth: u32 = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    // MCP server requests do not inherit the CLI startup subtree context.
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let current_depth = startup_env.current_depth();
     let max_depth = config
         .as_ref()
         .map(|c| c.project.max_recursion_depth)
@@ -240,6 +238,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
             &[],   // extra_writable
             &[],   // extra_readable
             false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
+            &startup_env,
         )
         .await?
     };

@@ -324,6 +324,7 @@ fn build_multi_reviewer_instruction_keeps_session_dir_deferred_when_env_exists()
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
 
     assert!(
@@ -352,6 +353,7 @@ fn build_multi_reviewer_instruction_does_not_capture_parent_session_dir_env() {
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
 
     assert!(
@@ -378,6 +380,7 @@ fn build_multi_reviewer_instruction_uses_parent_first_shell_fallback_when_env_mi
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
 
     assert!(
@@ -397,6 +400,7 @@ fn build_multi_reviewer_instruction_does_not_duplicate_findings_contract_from_ba
         4,
         ToolName::Codex,
         project_dir.path(),
+        None,
         None,
     );
 

@@ -432,9 +432,14 @@ async fn handle_debate_rejects_direct_tool_tier_before_session_creation() {
         "Should we refactor the API?",
     ]);
 
-    let err = handle_debate(args, 0, csa_core::types::OutputFormat::Text)
-        .await
-        .expect_err("direct --tool tier rejection must fail");
+    let err = handle_debate(
+        args,
+        0,
+        csa_core::types::OutputFormat::Text,
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
+    .await
+    .expect_err("direct --tool tier rejection must fail");
     assert!(
         err.chain().any(|cause| cause
             .to_string()
@@ -523,9 +528,14 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
         "Should we ship this migration?",
     ]);
 
-    let exit_code = handle_debate(args, 0, csa_core::types::OutputFormat::Json)
-        .await
-        .expect("all-tier-fail debate should return unavailable, not panic");
+    let exit_code = handle_debate(
+        args,
+        0,
+        csa_core::types::OutputFormat::Json,
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
+    .await
+    .expect("all-tier-fail debate should return unavailable, not panic");
     assert_eq!(exit_code, 1);
 
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
