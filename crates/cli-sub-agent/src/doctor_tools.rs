@@ -7,19 +7,19 @@ use std::process::Command;
 pub(super) async fn print_tool_availability(config: Option<&ProjectConfig>) {
     let tools = PRIMARY_TOOL_NAMES;
 
-    let mut installed_count = 0;
+    let mut ready_count = 0;
     let total_count = tools.len();
 
     for tool_name in tools.iter().copied() {
         let status = check_tool_status(tool_name, config);
         if status.is_ready() {
-            installed_count += 1;
+            ready_count += 1;
         }
         print_tool_status(&status);
     }
 
     println!();
-    println!("{installed_count}/{total_count} tools ready");
+    println!("{ready_count}/{total_count} tools ready");
 }
 
 pub(super) fn check_tool_status(
@@ -27,9 +27,11 @@ pub(super) fn check_tool_status(
     config: Option<&ProjectConfig>,
 ) -> ToolStatus {
     let binary_name = tool_exe_name(tool_name, config);
+    let config_enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(tool_name));
     match crate::run_helpers::tool_binary_availability(tool_name, config) {
         crate::run_helpers::ToolBinaryAvailability::Available { .. } => ToolStatus {
             name: tool_name,
+            config_enabled,
             availability: ToolAvailabilityState::Installed,
             binary_name: binary_name.clone(),
             version: check_tool_version(&binary_name),
@@ -38,6 +40,7 @@ pub(super) fn check_tool_status(
         },
         crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } => ToolStatus {
             name: tool_name,
+            config_enabled,
             availability: ToolAvailabilityState::Missing,
             binary_name,
             version: None,
@@ -66,13 +69,14 @@ fn print_tool_status(status: &ToolStatus) {
 
 pub(super) fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
     let checkmark = if status.is_ready() { "✓" } else { "✗" };
-    let status_msg = match status.availability {
-        ToolAvailabilityState::Installed => status
-            .version
-            .as_ref()
-            .map(|version| format!("installed ({version})"))
-            .unwrap_or_else(|| "installed (version unknown)".to_string()),
+    let binary_status_msg = match status.availability {
+        ToolAvailabilityState::Installed => installed_status_msg(status),
         ToolAvailabilityState::Missing => "not found".to_string(),
+    };
+    let status_msg = if status.config_enabled {
+        binary_status_msg
+    } else {
+        format!("disabled by config; {binary_status_msg}")
     };
 
     let mut lines = vec![format!(
@@ -81,6 +85,18 @@ pub(super) fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
         checkmark,
         status_msg
     )];
+    lines.push(format!(
+        "             Enabled: {}",
+        yes_no(status.is_ready())
+    ));
+    lines.push(format!(
+        "             Config enabled: {}",
+        yes_no(status.config_enabled)
+    ));
+    lines.push(format!(
+        "             Binary available: {}",
+        yes_no(status.binary_available())
+    ));
 
     if let Some(transport_status) = status.transport.as_ref() {
         lines.push(format!(
@@ -102,7 +118,7 @@ pub(super) fn render_tool_status_lines(status: &ToolStatus) -> Vec<String> {
         }
     }
 
-    if !status.is_ready()
+    if !status.binary_available()
         && let Some(hint) = status.hint.as_deref()
     {
         lines.push(format!(
@@ -119,7 +135,10 @@ pub(super) fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
     let mut entry = serde_json::json!({
         "name": status.name,
         "binary": status.binary_name,
-        "installed": status.is_ready(),
+        "enabled": status.is_ready(),
+        "config_enabled": status.config_enabled,
+        "binary_available": status.binary_available(),
+        "installed": status.binary_available(),
         "version": status.version,
         "hint": status.hint,
     });
@@ -150,6 +169,14 @@ pub(super) fn tool_status_json(status: &ToolStatus) -> serde_json::Value {
     }
 
     entry
+}
+
+fn installed_status_msg(status: &ToolStatus) -> String {
+    status
+        .version
+        .as_ref()
+        .map(|version| format!("installed ({version})"))
+        .unwrap_or_else(|| "installed (version unknown)".to_string())
 }
 
 fn tool_exe_name(tool_name: &str, config: Option<&ProjectConfig>) -> String {

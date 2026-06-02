@@ -61,6 +61,7 @@ struct ToolTransportDoctorStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolStatus {
     name: &'static str,
+    config_enabled: bool,
     availability: ToolAvailabilityState,
     binary_name: String,
     version: Option<String>,
@@ -69,8 +70,12 @@ struct ToolStatus {
 }
 
 impl ToolStatus {
-    fn is_ready(&self) -> bool {
+    fn binary_available(&self) -> bool {
         matches!(self.availability, ToolAvailabilityState::Installed)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.config_enabled && self.binary_available()
     }
 }
 
