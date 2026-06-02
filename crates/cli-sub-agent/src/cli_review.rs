@@ -479,6 +479,12 @@ pub struct DebateArgs {
     #[arg(long)]
     pub no_stream_stdout: bool,
 
+    /// Disable the fatal-error-marker silent-hang scan for this session. Use
+    /// when debate prose legitimately contains provider error markers. The
+    /// idle-timeout and wall-clock timeout still apply. Default: scan enabled.
+    #[arg(long)]
+    pub no_error_marker_scan: bool,
+
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,

@@ -837,6 +837,12 @@ fn debate_cli_parses_no_stream_stdout_flag() {
 }
 
 #[test]
+fn debate_cli_parses_no_error_marker_scan_flag() {
+    let args = parse_debate_args(&["csa", "debate", "--no-error-marker-scan", "question"]);
+    assert!(args.no_error_marker_scan);
+}
+
+#[test]
 fn debate_cli_defaults_no_timeout() {
     let args = parse_debate_args(&["csa", "debate", "question"]);
     assert_eq!(args.timeout, None);
@@ -844,6 +850,7 @@ fn debate_cli_defaults_no_timeout() {
     assert_eq!(args.thinking, None);
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
+    assert!(!args.no_error_marker_scan);
     assert!(!args.dry_run);
 }
 
