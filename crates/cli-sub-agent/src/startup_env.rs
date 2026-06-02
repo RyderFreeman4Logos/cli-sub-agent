@@ -86,11 +86,20 @@ impl StartupSubtreeEnv {
         self.session_id.as_deref()
     }
 
+    pub(crate) fn with_current_session(
+        mut self,
+        session_id: impl AsRef<str>,
+        session_dir: impl AsRef<str>,
+    ) -> Self {
+        self.session_id = non_empty_str(session_id.as_ref());
+        self.session_dir = non_empty_str(session_dir.as_ref());
+        self
+    }
+
     pub(crate) fn project_root(&self) -> Option<&str> {
         self.project_root.as_deref()
     }
 
-    #[cfg(test)]
     pub(crate) fn session_dir(&self) -> Option<&str> {
         self.session_dir.as_deref()
     }
@@ -133,10 +142,16 @@ where
 }
 
 fn non_empty(value: Option<&String>) -> Option<String> {
-    value
-        .map(|raw| raw.trim())
-        .filter(|raw| !raw.is_empty())
-        .map(str::to_string)
+    value.and_then(|raw| non_empty_str(raw))
+}
+
+fn non_empty_str(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 pub(crate) fn is_truthy_env_value(raw: &str) -> bool {

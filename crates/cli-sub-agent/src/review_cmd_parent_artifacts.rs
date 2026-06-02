@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
 use csa_core::types::ReviewDecision;
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
@@ -19,6 +18,7 @@ use crate::review_cmd::artifact_parse::parse_review_artifact_fields_lossy;
 use crate::review_consensus::{
     CLEAN, HAS_ISSUES, SKIP, UNAVAILABLE, build_consolidated_artifact, write_consolidated_artifact,
 };
+use crate::startup_env::StartupSubtreeEnv;
 
 use super::output::ReviewerOutcome;
 
@@ -34,12 +34,11 @@ pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) diff_fingerprint: Option<String>,
 }
 
-const CSA_DAEMON_SESSION_DIR_ENV_KEY: &str = "CSA_DAEMON_SESSION_DIR";
-const CSA_DAEMON_SESSION_ID_ENV_KEY: &str = "CSA_DAEMON_SESSION_ID";
-const CSA_SESSION_ID_ENV_KEY: &str = "CSA_SESSION_ID";
-
-pub(super) fn clear_multi_reviewer_artifact_dirs(reviewers: usize) -> Result<()> {
-    let Some((session_dir, _session_id)) = resolve_parent_session_env() else {
+pub(super) fn clear_multi_reviewer_artifact_dirs(
+    reviewers: usize,
+    startup_env: &StartupSubtreeEnv,
+) -> Result<()> {
+    let Some((session_dir, _session_id)) = resolve_parent_session(startup_env) else {
         return Ok(());
     };
 
@@ -174,9 +173,10 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     outcomes: &[ReviewerOutcome],
     final_verdict: &str,
     all_reviewers_unavailable: bool,
+    startup_env: &StartupSubtreeEnv,
     parent_review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<()> {
-    let Some((session_dir, session_id)) = resolve_parent_session_env() else {
+    let Some((session_dir, session_id)) = resolve_parent_session(startup_env) else {
         return Ok(());
     };
     let (reviewer_artifacts, persisted_indices) =
@@ -223,6 +223,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
 
 pub(super) fn write_multi_reviewer_consensus_artifacts(
     ctx: MultiReviewerConsensusArtifacts<'_>,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let final_review_meta = parent_consensus_review_meta(
         ctx.head_sha,
@@ -230,6 +231,7 @@ pub(super) fn write_multi_reviewer_consensus_artifacts(
         ctx.final_verdict,
         ctx.review_iterations,
         ctx.diff_fingerprint.clone(),
+        startup_env,
     );
     write_multi_reviewer_parent_artifacts(
         ctx.project_root,
@@ -237,6 +239,7 @@ pub(super) fn write_multi_reviewer_consensus_artifacts(
         ctx.outcomes,
         ctx.final_verdict,
         ctx.all_reviewers_unavailable,
+        startup_env,
         final_review_meta.as_ref(),
     )?;
     if final_review_meta.is_none() {
@@ -329,9 +332,10 @@ pub(super) fn parent_consensus_review_meta(
     final_verdict: &str,
     review_iterations: u32,
     diff_fingerprint: Option<String>,
+    startup_env: &StartupSubtreeEnv,
 ) -> Option<ReviewSessionMeta> {
     let decision = consensus_review_decision(final_verdict);
-    resolve_parent_session_env().map(|(_, session_id)| ReviewSessionMeta {
+    resolve_parent_session(startup_env).map(|(_, session_id)| ReviewSessionMeta {
         session_id,
         head_sha: head_sha.to_string(),
         decision: decision.as_str().to_string(),
@@ -366,16 +370,12 @@ fn consensus_review_decision(final_verdict: &str) -> ReviewDecision {
     }
 }
 
-fn resolve_parent_session_env() -> Option<(PathBuf, String)> {
-    if let Some(session_dir) = std::env::var_os(CSA_DAEMON_SESSION_DIR_ENV_KEY) {
-        let session_id =
-            std::env::var(CSA_DAEMON_SESSION_ID_ENV_KEY).unwrap_or_else(|_| "unknown".to_string());
-        return Some((PathBuf::from(session_dir), session_id));
-    }
-
-    let session_dir = std::env::var_os(CSA_SESSION_DIR_ENV_KEY)?;
-    let session_id =
-        std::env::var(CSA_SESSION_ID_ENV_KEY).unwrap_or_else(|_| "unknown".to_string());
+fn resolve_parent_session(startup_env: &StartupSubtreeEnv) -> Option<(PathBuf, String)> {
+    let session_dir = startup_env.session_dir()?;
+    let session_id = startup_env
+        .session_id()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "unknown".to_string());
     Some((PathBuf::from(session_dir), session_id))
 }
 

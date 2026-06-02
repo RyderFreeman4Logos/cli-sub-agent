@@ -1,7 +1,8 @@
 use super::*;
 use crate::pipeline::SessionExecutionResult;
+use csa_core::env::{CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY};
 use csa_process::ExecutionResult;
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 
 fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
     ReviewExecutionOutcome {
@@ -26,6 +27,16 @@ fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
         primary_failure: None,
         failure_reason: None,
     }
+}
+
+fn startup_env_for_parent_session(
+    session_dir: &Path,
+    session_id: &str,
+) -> crate::startup_env::StartupSubtreeEnv {
+    crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (CSA_SESSION_DIR_ENV_KEY, session_dir.display().to_string()),
+        (CSA_SESSION_ID_ENV_KEY, session_id.to_string()),
+    ]))
 }
 
 #[test]
@@ -522,6 +533,7 @@ fn all_killed_reviewers_persist_unavailable_decision_on_disk() {
         &outcomes,
         final_verdict,
         all_reviewers_unavailable,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");

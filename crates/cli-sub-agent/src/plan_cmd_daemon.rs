@@ -273,7 +273,7 @@ pub(crate) fn spawn_and_exit(
 /// genealogy parent to the plan session, run the workflow inline, then
 /// persist `result.toml` and retire the session.
 pub(crate) async fn handle_plan_run_daemon_child(
-    args: PlanRunArgs,
+    mut args: PlanRunArgs,
     session_id: &str,
 ) -> Result<i32> {
     // SAFETY: the daemon child sets process-scoped env BEFORE async worker
@@ -286,6 +286,7 @@ pub(crate) async fn handle_plan_run_daemon_child(
     unsafe { std::env::set_var("CSA_SESSION_ID", session_id) };
 
     let project_root = determine_project_root(args.cd.as_deref())?;
+    inject_plan_daemon_session_into_startup_env(&mut args, session_id, &project_root)?;
     let started_at = Utc::now();
     let workflow_label = describe_plan_run(&args);
 
@@ -356,6 +357,19 @@ pub(crate) async fn handle_plan_run_daemon_child(
         Ok(()) => Ok(0),
         Err(err) => Err(err),
     }
+}
+
+fn inject_plan_daemon_session_into_startup_env(
+    args: &mut PlanRunArgs,
+    session_id: &str,
+    project_root: &Path,
+) -> Result<()> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+    args.startup_env = args
+        .startup_env
+        .clone()
+        .with_current_session(session_id, session_dir.display().to_string());
+    Ok(())
 }
 
 fn describe_plan_run(args: &PlanRunArgs) -> String {

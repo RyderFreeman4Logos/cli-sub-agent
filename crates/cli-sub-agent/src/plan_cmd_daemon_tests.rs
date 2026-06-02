@@ -51,6 +51,25 @@ fn describe_unknown_when_no_source_provided() {
 }
 
 #[test]
+fn daemon_child_injects_preassigned_session_into_startup_env() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let session_id = "01PARENTSESSION000000000000";
+    let mut args = make_args();
+
+    inject_plan_daemon_session_into_startup_env(&mut args, session_id, temp.path())
+        .expect("startup env should accept daemon session context");
+
+    let expected_session_dir =
+        csa_session::get_session_dir(temp.path(), session_id).expect("session dir should resolve");
+    let expected_session_dir = expected_session_dir.to_string_lossy().to_string();
+    assert_eq!(args.startup_env.session_id(), Some(session_id));
+    assert_eq!(
+        args.startup_env.session_dir(),
+        Some(expected_session_dir.as_str())
+    );
+}
+
+#[test]
 fn forwarded_args_strip_through_plan_run() {
     let argv = vec![
         "csa".to_string(),

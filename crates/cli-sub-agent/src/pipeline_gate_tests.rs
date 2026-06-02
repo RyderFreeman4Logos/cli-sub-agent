@@ -377,7 +377,7 @@ async fn test_pipeline_skipped_when_csa_depth_set() {
         level: 1,
     }];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 1)
         .await
         .unwrap();
 

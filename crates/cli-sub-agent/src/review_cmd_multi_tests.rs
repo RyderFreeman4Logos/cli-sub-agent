@@ -43,6 +43,29 @@ fn outcome_with_tool(
 }
 
 #[test]
+fn parent_startup_env_for_multi_review_uses_daemon_session_context() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let session_id = "01PARENTSESSION000000000000";
+
+    let startup_env = parent_startup_env_for_multi_review(
+        true,
+        Some(session_id),
+        &crate::startup_env::StartupSubtreeEnv::default(),
+        temp.path(),
+    )
+    .expect("startup env should accept daemon session context");
+
+    let expected_session_dir =
+        csa_session::get_session_dir(temp.path(), session_id).expect("session dir should resolve");
+    let expected_session_dir = expected_session_dir.to_string_lossy().to_string();
+    assert_eq!(startup_env.session_id(), Some(session_id));
+    assert_eq!(
+        startup_env.session_dir(),
+        Some(expected_session_dir.as_str())
+    );
+}
+
+#[test]
 fn unavailable_outcomes_do_not_vote_against_clean_consensus() {
     let outcomes = [outcome(0, UNAVAILABLE), outcome(1, CLEAN)];
     let responses: Vec<AgentResponse> = outcomes
