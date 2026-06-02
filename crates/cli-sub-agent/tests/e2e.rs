@@ -113,6 +113,41 @@ fn write_project_config_with_tier(project_root: &Path) {
     .expect("write config");
 }
 
+fn session_root_for_state_home(state_home: &Path, project_root: &Path) -> std::path::PathBuf {
+    let project_key = std::fs::canonicalize(project_root)
+        .unwrap_or_else(|_| project_root.to_path_buf())
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace('/', std::path::MAIN_SEPARATOR_STR);
+    state_home.join("cli-sub-agent").join(project_key)
+}
+
+fn write_tiered_session(state_home: &Path, project_root: &Path) {
+    let session_root = session_root_for_state_home(state_home, project_root);
+    let now = chrono::Utc::now();
+    let session = csa_session::MetaSessionState {
+        meta_session_id: csa_session::new_session_id(),
+        description: Some("Tiered session".to_string()),
+        project_path: std::fs::canonicalize(project_root)
+            .unwrap_or_else(|_| project_root.to_path_buf())
+            .to_string_lossy()
+            .to_string(),
+        branch: Some("feature/tier-column".to_string()),
+        created_at: now,
+        last_accessed: now,
+        phase: csa_session::SessionPhase::Available,
+        task_context: csa_session::TaskContext {
+            tier_name: Some("tier-4-critical".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let session_dir = session_root.join("sessions").join(&session.meta_session_id);
+    std::fs::create_dir_all(session_dir.join("input")).expect("create session input dir");
+    std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    csa_session::save_session_in(&session_root, &session).expect("save tiered session");
+}
+
 #[test]
 fn cli_help_displays_correctly() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -685,6 +720,44 @@ fn session_list_exits_zero() {
     assert!(
         combined.contains("No sessions found"),
         "empty state should report no sessions"
+    );
+}
+
+#[test]
+fn session_list_text_shows_tier_column_next_to_tools() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let state_home = tmp.path().join(".local/state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).expect("create project");
+    write_tiered_session(&state_home, &project);
+
+    let output = csa_cmd(tmp.path())
+        .args(["session", "list", "--cd"])
+        .arg(&project)
+        .output()
+        .expect("failed to run csa session list");
+
+    assert!(
+        output.status.success(),
+        "csa session list should exit 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let header = stdout.lines().next().unwrap_or_default();
+    let tools_idx = header.find("TOOLS").expect("TOOLS header");
+    let tier_idx = header.find("TIER").expect("TIER header");
+    let branch_idx = header.find("BRANCH").expect("BRANCH header");
+    assert!(
+        tools_idx < tier_idx && tier_idx < branch_idx,
+        "TIER column should be between TOOLS and BRANCH, header: {header}",
+    );
+    assert!(
+        stdout.contains("tier-4-critical"),
+        "tier name should appear in session list output: {stdout}",
     );
 }
 

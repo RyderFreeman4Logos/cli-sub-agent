@@ -167,7 +167,7 @@ pub(crate) fn handle_session_list(
                 // Print table header
                 if all_projects && filters.show_version {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {:<12}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {:<12}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
@@ -175,14 +175,15 @@ pub(crate) fn handle_session_list(
                         "STATUS",
                         "DESCRIPTION",
                         "TOOLS",
+                        "TIER",
                         "BRANCH",
                         "PROJECT",
                         "VERSION"
                     );
-                    println!("{}", "-".repeat(206));
+                    println!("{}", "-".repeat(226));
                 } else if all_projects {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
@@ -190,13 +191,14 @@ pub(crate) fn handle_session_list(
                         "STATUS",
                         "DESCRIPTION",
                         "TOOLS",
+                        "TIER",
                         "BRANCH",
                         "PROJECT"
                     );
-                    println!("{}", "-".repeat(192));
+                    println!("{}", "-".repeat(212));
                 } else if filters.show_version {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<12}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<12}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
@@ -204,13 +206,14 @@ pub(crate) fn handle_session_list(
                         "STATUS",
                         "DESCRIPTION",
                         "TOOLS",
+                        "TIER",
                         "BRANCH",
                         "VERSION"
                     );
-                    println!("{}", "-".repeat(176));
+                    println!("{}", "-".repeat(196));
                 } else {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
@@ -218,9 +221,10 @@ pub(crate) fn handle_session_list(
                         "STATUS",
                         "DESCRIPTION",
                         "TOOLS",
+                        "TIER",
                         "BRANCH"
                     );
-                    println!("{}", "-".repeat(162));
+                    println!("{}", "-".repeat(182));
                 }
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
@@ -246,6 +250,7 @@ pub(crate) fn handle_session_list(
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
+                    let tier_str = session.task_context.tier_name.as_deref().unwrap_or("-");
                     let branch_str = session.branch.as_deref().unwrap_or("-");
                     let csa_version_str = session.csa_version.as_deref().unwrap_or("-");
 
@@ -291,7 +296,7 @@ pub(crate) fn handle_session_list(
                     if all_projects && filters.show_version {
                         let project_display = truncate_with_ellipsis(&session.project_path, 30);
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {:<12}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {:<12}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -302,6 +307,7 @@ pub(crate) fn handle_session_list(
                             status_str,
                             desc_display,
                             tools_str,
+                            tier_str,
                             branch_str,
                             project_display,
                             csa_version_str,
@@ -312,7 +318,7 @@ pub(crate) fn handle_session_list(
                     } else if all_projects {
                         let project_display = truncate_with_ellipsis(&session.project_path, 30);
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -323,6 +329,7 @@ pub(crate) fn handle_session_list(
                             status_str,
                             desc_display,
                             tools_str,
+                            tier_str,
                             branch_str,
                             project_display,
                             tokens_str,
@@ -331,7 +338,7 @@ pub(crate) fn handle_session_list(
                         );
                     } else if filters.show_version {
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<12}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<12}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -342,6 +349,7 @@ pub(crate) fn handle_session_list(
                             status_str,
                             desc_display,
                             tools_str,
+                            tier_str,
                             branch_str,
                             csa_version_str,
                             tokens_str,
@@ -350,7 +358,7 @@ pub(crate) fn handle_session_list(
                         );
                     } else {
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -361,6 +369,7 @@ pub(crate) fn handle_session_list(
                             status_str,
                             desc_display,
                             tools_str,
+                            tier_str,
                             branch_str,
                             tokens_str,
                             fork_suffix,
