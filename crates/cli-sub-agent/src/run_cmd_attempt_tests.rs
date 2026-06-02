@@ -4,15 +4,20 @@ use crate::run_cmd::attempt_support::{
     allow_cross_tool_failover, build_failover_context_addendum,
     persist_fork_timeout_result_if_missing, resolve_attempt_initial_response_timeout_seconds,
 };
+use crate::run_cmd_model_pin::resolve_subtree_model_pin;
 use crate::run_cmd_post::{RateLimitAction, evaluate_error_rate_limit_failover};
+use crate::run_cmd_tool_selection::resolve_tool_by_strategy;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use anyhow::anyhow;
 use chrono::Utc;
-use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
+use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
+use csa_core::env::CSA_MODEL_SPEC_ENV_KEY;
 use csa_core::types::{ToolName, ToolSelectionStrategy};
 use csa_process::ExecutionResult;
 use csa_session::{create_session, load_result};
 use std::{collections::HashMap, path::Path};
+
+use super::resolve_attempt_subtree_model_pin_spec;
 
 fn make_failover_config(models: &[&str]) -> ProjectConfig {
     make_named_failover_config("tier3", models)
@@ -85,6 +90,49 @@ fn assert_no_rate_limit(action: RateLimitAction) {
             panic!("expected no failover, got exhausted failovers")
         }
     }
+}
+
+#[test]
+fn retry_subtree_pin_tracks_failover_attempt_model_spec() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let config = make_failover_config(&[
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        "codex/openai/gpt-5.5/xhigh",
+    ]);
+    let global_config = GlobalConfig::default();
+    let initial_pin = Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh");
+    let failover_attempt_spec = Some("codex/openai/gpt-5.5/xhigh");
+
+    let attempt_pin_spec =
+        resolve_attempt_subtree_model_pin_spec(initial_pin, failover_attempt_spec);
+    assert_eq!(attempt_pin_spec, failover_attempt_spec);
+
+    let pin = resolve_subtree_model_pin(attempt_pin_spec, true, false)
+        .expect("failover attempt should emit subtree pin");
+    let entries: HashMap<&str, String> = pin.pin_env_entries().into_iter().collect();
+    assert_eq!(
+        entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        failover_attempt_spec
+    );
+
+    let child_finalizer = resolve_tool_by_strategy(
+        &ToolSelectionStrategy::AnyAvailable,
+        entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        None,
+        None,
+        Some(&config),
+        &global_config,
+        td.path(),
+        false,
+        false,
+        false,
+        None,
+        true,
+    )
+    .expect("resolve child finalizer from failover attempt pin");
+
+    assert_eq!(child_finalizer.tool, ToolName::Codex);
+    assert_eq!(child_finalizer.model_spec.as_deref(), failover_attempt_spec);
 }
 
 #[test]

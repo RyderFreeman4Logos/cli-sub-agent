@@ -314,9 +314,10 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         // their own resolved spec; batch/plan/claude-sub-agent (which do NOT
         // consume the pin) cascade an inherited pin via
         // `inherited_subtree_model_pin`. Self-gated on the pin.
-        let subtree_model_pin_spec = request
-            .subtree_model_pin_spec
-            .or(current_model_spec.as_deref());
+        let subtree_model_pin_spec = resolve_attempt_subtree_model_pin_spec(
+            request.subtree_model_pin_spec,
+            current_model_spec.as_deref(),
+        );
         let subtree_pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
             subtree_model_pin_spec,
             request.subtree_model_pin_force_ignore_tier_setting,
@@ -794,6 +795,13 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         fork_resolution,
         fallback_chain,
     })))
+}
+
+fn resolve_attempt_subtree_model_pin_spec<'a>(
+    run_resolved_pin_spec: Option<&'a str>,
+    current_attempt_model_spec: Option<&'a str>,
+) -> Option<&'a str> {
+    current_attempt_model_spec.or(run_resolved_pin_spec)
 }
 
 #[cfg(test)]
