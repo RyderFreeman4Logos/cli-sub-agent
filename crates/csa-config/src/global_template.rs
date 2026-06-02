@@ -122,6 +122,8 @@ long_poll_seconds = 240
 # Post-exec quality gate for successful `csa run` employee sessions.
 # The merged project view inherits this section unless `.csa/config.toml`
 # overrides it.
+# [run]
+# writer_must_commit = false
 # [run.post_exec_gate]
 # enabled = true
 # command = "just pre-commit"

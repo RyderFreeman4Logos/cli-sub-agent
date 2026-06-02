@@ -86,6 +86,10 @@ pub(crate) fn render_wait_result_summary(
         lines.push(format!("Failover: {failover}"));
     }
 
+    if let Some(changes) = result.uncommitted_changes.as_ref() {
+        lines.push(crate::run_cmd::format_uncommitted_warning(changes));
+    }
+
     for warning in &result.warnings {
         lines.push(format!("Warning: {warning}"));
     }
@@ -457,6 +461,7 @@ mod wait_output_tests {
         gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 
@@ -497,12 +502,51 @@ mod wait_output_tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 
         let summary = render_wait_result_summary(temp.path(), "01TESTWAITARTPASS", &result);
 
         assert!(summary.contains("Review verdict: PASS"));
+    }
+
+    #[test]
+    fn compact_summary_includes_writer_uncommitted_warning() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let now = Utc::now();
+        let result = csa_session::SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "done".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now + chrono::TimeDelta::seconds(65),
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            uncommitted_changes: Some(csa_session::UncommittedChanges {
+                file_count: 7,
+                insertions: 240,
+                deletions: 12,
+                files: vec!["src/lib.rs".to_string()],
+                truncated: 6,
+            }),
+            manager_fields: Default::default(),
+        };
+
+        let summary = render_wait_result_summary(temp.path(), "01TESTWAITDIRTY", &result);
+
+        assert!(summary.contains(
+            "⚠ writer session ended with 7 uncommitted files (+240/-12) — work NOT committed"
+        ));
     }
 
     #[test]
@@ -533,6 +577,7 @@ mod wait_output_tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 
@@ -595,6 +640,7 @@ mod wait_output_tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 

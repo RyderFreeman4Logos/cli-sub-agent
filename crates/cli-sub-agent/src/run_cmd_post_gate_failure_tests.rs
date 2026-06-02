@@ -22,6 +22,7 @@ fn write_success_result_for(project_root: &Path, session_id: &str) {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     save_result(project_root, session_id, &result).unwrap();

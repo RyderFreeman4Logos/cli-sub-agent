@@ -105,6 +105,17 @@ fn run_cli_parses_allow_fallback_flag() {
 }
 
 #[test]
+fn run_cli_parses_require_commit_flag() {
+    let cli = try_parse_cli(&["csa", "run", "--require-commit", "--sa-mode", "false", "x"])
+        .expect("--require-commit should parse");
+
+    match cli.command {
+        crate::cli::Commands::Run { require_commit, .. } => assert!(require_commit),
+        _ => panic!("expected run command"),
+    }
+}
+
+#[test]
 fn run_rejects_unknown_tool_at_clap_parse() {
     let result = try_parse_cli(&["csa", "run", "--model-spec", "unknown-tool/x/y/medium", "x"]);
     let err = match result {

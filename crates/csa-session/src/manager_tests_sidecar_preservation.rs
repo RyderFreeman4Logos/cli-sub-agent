@@ -25,6 +25,7 @@ fn test_save_result_preserves_existing_contract_result_artifact_when_output_resu
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     save_result_in(
@@ -79,6 +80,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -110,6 +112,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -167,6 +170,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -196,6 +200,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
         ..populated_result
     };
@@ -241,6 +246,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -266,6 +272,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
         ..populated_result
     };

@@ -76,6 +76,10 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
 fn is_false(value: &bool) -> bool {
     !value
 }
@@ -152,6 +156,22 @@ impl SessionManagerFields {
     }
 }
 
+/// Summary of dirty worktree state left by a writer session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UncommittedChanges {
+    /// Number of paths reported by `git status --porcelain`.
+    pub file_count: usize,
+    /// Best-effort inserted line count from `git diff --numstat HEAD`.
+    pub insertions: u64,
+    /// Best-effort deleted line count from `git diff --numstat HEAD`.
+    pub deletions: u64,
+    /// First changed paths, capped to keep `result.toml` compact.
+    pub files: Vec<String>,
+    /// Number of paths omitted from `files` due to the cap.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub truncated: usize,
+}
+
 /// Structured result of a session execution.
 /// Written to `sessions/{id}/result.toml` after each tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +231,10 @@ pub struct SessionResult {
     /// status, so existing clean envelopes are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_process_exit_code: Option<i32>,
+    /// Dirty worktree state observed when a non-SA writer session ended without
+    /// committing. Omitted for clean sessions and read-only session kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncommitted_changes: Option<UncommittedChanges>,
     /// Manager-facing data loaded from `output/result.toml` sidecars at read time.
     /// This is intentionally read-only metadata and is never serialized back into
     /// the runtime `result.toml` envelope.
@@ -256,6 +280,7 @@ mod tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 
@@ -291,6 +316,7 @@ mod tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 
@@ -303,10 +329,58 @@ mod tests {
             !toml_str.contains("events_count"),
             "Zero events_count should be omitted from serialization"
         );
+        assert!(
+            !toml_str.contains("uncommitted_changes"),
+            "Clean sessions should omit uncommitted_changes"
+        );
 
         let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
         assert!(loaded.artifacts.is_empty());
         assert_eq!(loaded.events_count, 0);
+        assert!(loaded.uncommitted_changes.is_none());
+    }
+
+    #[test]
+    fn test_session_result_uncommitted_changes_roundtrip() {
+        let now = Utc::now();
+        let result = SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "Done".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: vec![],
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            uncommitted_changes: Some(UncommittedChanges {
+                file_count: 7,
+                insertions: 240,
+                deletions: 12,
+                files: vec!["src/lib.rs".to_string()],
+                truncated: 6,
+            }),
+            manager_fields: Default::default(),
+        };
+
+        let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
+        assert!(toml_str.contains("[uncommitted_changes]"));
+
+        let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
+        let changes = loaded
+            .uncommitted_changes
+            .expect("uncommitted_changes should roundtrip");
+        assert_eq!(changes.file_count, 7);
+        assert_eq!(changes.insertions, 240);
+        assert_eq!(changes.deletions, 12);
+        assert_eq!(changes.truncated, 6);
     }
 
     #[test]
@@ -380,6 +454,7 @@ artifacts = ["output/a.txt", "output/b.txt"]
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
 

@@ -29,6 +29,7 @@ fn test_soft_fork_full_parent_session() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     let result_toml = toml::to_string_pretty(&result).unwrap();
@@ -80,6 +81,7 @@ fn test_soft_fork_truncation_on_large_summary() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     std::fs::write(
@@ -145,6 +147,7 @@ fn test_soft_fork_result_only_no_output() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     std::fs::write(

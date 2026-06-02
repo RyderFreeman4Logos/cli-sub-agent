@@ -98,6 +98,7 @@ pub(crate) fn write_pre_exec_error_result(
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     if let Err(e) = save_result_with_options(

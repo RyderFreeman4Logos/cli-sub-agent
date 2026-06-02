@@ -55,6 +55,7 @@ pub(crate) fn create_debate_dry_run_session(
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     csa_session::save_result(project_root, &session.meta_session_id, &result)?;

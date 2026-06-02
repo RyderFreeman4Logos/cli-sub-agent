@@ -94,6 +94,7 @@ pub(crate) async fn handle_skill_run(
         no_fs_sandbox: false,
         no_error_marker_scan: false,
         no_post_exec_gate: false,
+        require_commit: false,
         extra_writable: vec![],
         extra_readable: vec![],
     })

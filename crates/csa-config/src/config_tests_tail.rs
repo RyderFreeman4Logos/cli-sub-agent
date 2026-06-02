@@ -456,6 +456,30 @@ fn test_session_config_is_default_reflects_require_commit_on_mutation() {
 }
 
 #[test]
+fn test_run_config_default_does_not_require_writer_commit() {
+    let cfg = RunConfig::default();
+    assert!(!cfg.writer_must_commit);
+}
+
+#[test]
+fn test_run_config_deserializes_writer_must_commit() {
+    let toml_str = r#"
+writer_must_commit = true
+"#;
+    let cfg: RunConfig = toml::from_str(toml_str).unwrap();
+    assert!(cfg.writer_must_commit);
+}
+
+#[test]
+fn test_run_config_is_default_reflects_writer_must_commit() {
+    let cfg = RunConfig {
+        writer_must_commit: true,
+        ..Default::default()
+    };
+    assert!(!cfg.is_default());
+}
+
+#[test]
 fn test_session_config_deserializes_spool_settings() {
     let toml_str = r#"
 spool_max_mb = 64

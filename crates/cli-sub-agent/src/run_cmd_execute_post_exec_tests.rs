@@ -38,6 +38,7 @@ fn project_config_with_gate(gate: PostExecGateConfig) -> ProjectConfig {
         hooks: Default::default(),
         run: RunConfig {
             allow_base_branch_working: false,
+            writer_must_commit: false,
             post_exec_gate: gate,
         },
         execution: Default::default(),
@@ -108,6 +109,7 @@ fn write_success_result_for(project_root: &Path, session_id: &str) {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     save_result(project_root, session_id, &result).expect("write success result");

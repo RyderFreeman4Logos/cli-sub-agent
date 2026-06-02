@@ -220,6 +220,10 @@ pub enum Commands {
         #[arg(long)]
         no_post_exec_gate: bool,
 
+        /// Fail if a non-SA writer run ends with uncommitted worktree changes.
+        #[arg(long)]
+        require_commit: bool,
+
         /// Path to agent-spec file (.spec or .toml) for contract-based verification
         #[arg(long, value_name = "PATH", value_parser = parse_spec_path_arg)]
         spec: Option<String>,

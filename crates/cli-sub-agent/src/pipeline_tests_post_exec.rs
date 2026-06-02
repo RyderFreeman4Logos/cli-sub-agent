@@ -75,6 +75,7 @@ fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     save_result(project_root, &session.meta_session_id, &existing).expect("write existing result");
@@ -387,6 +388,7 @@ fn codex_exec_initial_stall_summary_forces_failure_status_in_result_toml() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
 

@@ -335,6 +335,7 @@ mod tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: crate::result::SessionManagerFields {
                 report: Some(
                     toml::toml! {
@@ -360,6 +361,7 @@ mod tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
             ..turn_1_result
         };
@@ -482,6 +484,7 @@ mod tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         };
         save_result_in_with_threshold(
