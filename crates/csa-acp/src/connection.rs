@@ -9,7 +9,10 @@ use agent_client_protocol::{
     Agent, ClientSideConnection, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PromptRequest, ProtocolVersion, SessionId, StopReason,
 };
-use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator};
+use csa_process::{
+    DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, ProcessTreeActivity, ProcessTreeStatus,
+    SpoolRotator,
+};
 use tokio::{process::Child, task::LocalSet};
 
 #[path = "connection_env.rs"]
@@ -329,6 +332,10 @@ impl AcpConnection {
             open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
         let mut metadata = StreamingMetadata::default();
         let (mut stdout_line_buf, mut thought_line_buf) = (String::new(), String::new());
+        let mut process_activity = self.child_pid().map(ProcessTreeActivity::new);
+        if let Some(activity) = process_activity.as_mut() {
+            let _ = activity.observe();
+        }
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
         enum PromptOutcome<T> {
@@ -366,6 +373,11 @@ impl AcpConnection {
                             );
                             if saw_progress_this_poll {
                                 saw_initial_response_event = true;
+                            }
+                            if process_tree_made_cpu_progress(process_activity.as_mut()) {
+                                let now = Instant::now();
+                                // CPU progress is a liveness signal, not an initial-response signal.
+                                *self.last_activity.borrow_mut() = now;
                             }
                             let (effective_timeout, timeout_phase, last_relevant_activity) =
                                 if !saw_initial_response_event {
@@ -533,6 +545,12 @@ impl AcpConnection {
     pub(crate) fn format_stderr(stderr: &str) -> String {
         format_stderr(stderr)
     }
+}
+
+fn process_tree_made_cpu_progress(process_activity: Option<&mut ProcessTreeActivity>) -> bool {
+    process_activity.is_some_and(|activity| {
+        matches!(activity.observe(), ProcessTreeStatus::AliveWithCpuProgress)
+    })
 }
 
 /// 64 KiB buffer for spool writes to reduce syscall overhead vs per-chunk flush.
