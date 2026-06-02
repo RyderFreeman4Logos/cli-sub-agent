@@ -325,15 +325,33 @@ mod env_probe {
     #[serial]
     fn nested_env_clean_returns_false() {
         let _guard = EnvGuard::capture_and_clear();
-        assert!(!nested_session_env_present());
+        assert!(!nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
     #[serial]
-    fn nested_env_with_csa_session_id_returns_true() {
+    fn nested_env_with_startup_csa_session_id_returns_true() {
+        let _guard = EnvGuard::capture_and_clear();
+        let startup_env =
+            crate::startup_env::StartupSubtreeEnv::from_values(std::collections::HashMap::from([
+                (
+                    csa_core::env::CSA_SESSION_ID_ENV_KEY,
+                    "01TESTFAKE000000000000000".to_string(),
+                ),
+            ]));
+        assert!(nested_session_env_present(&startup_env));
+    }
+
+    #[test]
+    #[serial]
+    fn nested_env_ignores_live_csa_session_id_after_startup_scrub() {
         let _guard = EnvGuard::capture_and_clear();
         set_marker("CSA_SESSION_ID", "01TESTFAKE000000000000000");
-        assert!(nested_session_env_present());
+        assert!(!nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
@@ -341,7 +359,9 @@ mod env_probe {
     fn nested_env_with_csa_daemon_session_id_returns_true() {
         let _guard = EnvGuard::capture_and_clear();
         set_marker("CSA_DAEMON_SESSION_ID", "01TESTFAKE000000000000000");
-        assert!(nested_session_env_present());
+        assert!(nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
@@ -349,7 +369,9 @@ mod env_probe {
     fn nested_env_with_csa_parent_session_id_returns_true() {
         let _guard = EnvGuard::capture_and_clear();
         set_marker("CSA_PARENT_SESSION_ID", "01TESTFAKE000000000000000");
-        assert!(nested_session_env_present());
+        assert!(nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
@@ -358,7 +380,9 @@ mod env_probe {
         // Edge case: empty string is treated as "not set" so callers that
         // accidentally exported an empty value don't trigger the gate.
         let _guard = EnvGuard::capture_and_clear();
-        set_marker("CSA_SESSION_ID", "");
-        assert!(!nested_session_env_present());
+        set_marker("CSA_DAEMON_SESSION_ID", "");
+        assert!(!nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 }

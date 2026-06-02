@@ -202,7 +202,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let prompt_caching_enabled =
         global_config.is_some_and(|cfg| cfg.experimental.enable_prompt_caching);
     let mut prompt_assembly = PromptAssembly::new(raw_prompt.clone(), prompt_caching_enabled);
-    if let Err(err) = crate::preflight_state_dir::enforce_state_dir_cap(global_config) {
+    let current_session_id = startup_env.session_id();
+    if let Err(err) =
+        crate::preflight_state_dir::enforce_state_dir_cap(global_config, current_session_id)
+    {
         return Err(persist_pipeline_pre_exec_failure(
             project_root,
             &mut session,
@@ -213,7 +216,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         ));
     }
     if (session_arg.is_none() || fresh_spawn_preflight_override)
-        && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)
+        && let Some(w) =
+            crate::preflight_state_dir::run_state_dir_preflight(global_config, current_session_id)
     {
         prompt_assembly.prepend_dynamic(&w);
     }

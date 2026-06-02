@@ -168,7 +168,7 @@ pub(crate) async fn dispatch_plan_run(
         chunked: plan_args.chunked,
         has_resume: plan_args.resume.is_some(),
         current_depth,
-        nested_env: nested_session_env_present(),
+        nested_env: nested_session_env_present(&plan_args.startup_env),
     });
 
     if !needs_foreground {
@@ -496,16 +496,16 @@ pub(crate) fn decide_needs_foreground(input: ForegroundDecisionInput) -> bool {
 /// depend on.
 ///
 /// Checks several markers, any of which indicates "we are inside CSA":
-/// - `CSA_SESSION_ID` — set by `handle_plan_run_daemon_child` and the
-///   ACP transport for genealogy attribution
+/// - startup `CSA_SESSION_ID` — frozen before startup scrub, set by
+///   `handle_plan_run_daemon_child` and the ACP transport for genealogy
+///   attribution
 /// - `CSA_DAEMON_SESSION_ID` — set by every daemon-child path
 /// - `CSA_PARENT_SESSION_ID` — set when an executor spawns a sub-csa
-fn nested_session_env_present() -> bool {
-    const MARKERS: &[&str] = &[
-        "CSA_SESSION_ID",
-        "CSA_DAEMON_SESSION_ID",
-        "CSA_PARENT_SESSION_ID",
-    ];
+fn nested_session_env_present(startup_env: &StartupSubtreeEnv) -> bool {
+    if startup_env.session_id().is_some() {
+        return true;
+    }
+    const MARKERS: &[&str] = &["CSA_DAEMON_SESSION_ID", "CSA_PARENT_SESSION_ID"];
     MARKERS.iter().any(|key| {
         std::env::var(key)
             .map(|v| !v.trim().is_empty())
