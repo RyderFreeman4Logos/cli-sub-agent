@@ -2,14 +2,61 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::ToolLiveness;
+use crate::tool_liveness::ProviderErrorKind;
 
 const LIVENESS_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const FATAL_ERROR_PROGRESS_GRACE: Duration = Duration::from_secs(30);
+const TRANSIENT_PROVIDER_ERROR_RETRY_BUDGET: u8 = 1;
+const TRANSIENT_PROVIDER_ERROR_BACKOFF: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IdleTerminationReason {
     Idle,
     FatalError,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProviderErrorBackoff {
+    retries_used: u8,
+    retry_after: Option<Instant>,
+}
+
+impl ProviderErrorBackoff {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn transient_retry_deadline(&mut self, now: Instant) -> Option<Instant> {
+        if let Some(retry_after) = self.retry_after
+            && now < retry_after
+        {
+            return Some(retry_after);
+        }
+
+        if self.retries_used < TRANSIENT_PROVIDER_ERROR_RETRY_BUDGET {
+            self.retries_used += 1;
+            let retry_after = now + TRANSIENT_PROVIDER_ERROR_BACKOFF;
+            self.retry_after = Some(retry_after);
+            return Some(retry_after);
+        }
+
+        None
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IdleWatchdogState {
+    pub(crate) liveness_dead_since: Option<Instant>,
+    pub(crate) next_liveness_poll_at: Option<Instant>,
+    pub(crate) provider_error_backoff: ProviderErrorBackoff,
+}
+
+impl IdleWatchdogState {
+    pub(crate) fn reset_on_activity(&mut self) {
+        self.liveness_dead_since = None;
+        self.next_liveness_poll_at = None;
+        self.provider_error_backoff.reset();
+    }
 }
 
 pub(crate) fn idle_timeout_note(
@@ -57,6 +104,7 @@ pub(crate) fn idle_timeout_note(
 /// backend errors commonly arrive on stderr.  Detect those after the same short
 /// fatal-error grace used by the normal idle watchdog instead of waiting for the
 /// full configured initial-response timeout.
+#[cfg(test)]
 pub(crate) fn should_terminate_for_initial_response(
     last_stdout_activity: Instant,
     initial_response_timeout: Duration,
@@ -64,10 +112,32 @@ pub(crate) fn should_terminate_for_initial_response(
     next_liveness_poll_at: &mut Option<Instant>,
     error_marker_scan_enabled: bool,
 ) -> Option<IdleTerminationReason> {
+    let mut state = IdleWatchdogState {
+        next_liveness_poll_at: *next_liveness_poll_at,
+        ..IdleWatchdogState::default()
+    };
+    let termination = should_terminate_for_initial_response_with_state(
+        last_stdout_activity,
+        initial_response_timeout,
+        session_dir,
+        &mut state,
+        error_marker_scan_enabled,
+    );
+    *next_liveness_poll_at = state.next_liveness_poll_at;
+    termination
+}
+
+pub(crate) fn should_terminate_for_initial_response_with_state(
+    last_stdout_activity: Instant,
+    initial_response_timeout: Duration,
+    session_dir: Option<&Path>,
+    state: &mut IdleWatchdogState,
+    error_marker_scan_enabled: bool,
+) -> Option<IdleTerminationReason> {
     let stdout_idle_for = last_stdout_activity.elapsed();
 
     if stdout_idle_for < FATAL_ERROR_PROGRESS_GRACE {
-        *next_liveness_poll_at = None;
+        state.reset_on_activity();
         return (stdout_idle_for >= initial_response_timeout)
             .then_some(IdleTerminationReason::Idle);
     }
@@ -75,15 +145,24 @@ pub(crate) fn should_terminate_for_initial_response(
     // #1745 stopgap opt-out; proper fix = scope marker scan to backend-transport stream only (#182)
     if error_marker_scan_enabled && let Some(dir) = session_dir {
         let now = Instant::now();
-        let should_poll = next_liveness_poll_at
+        let should_poll = state
+            .next_liveness_poll_at
             .as_ref()
             .is_none_or(|next_poll| now >= *next_poll);
         if should_poll {
-            *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
-            if ToolLiveness::probe(dir).fatal_error {
-                return Some(IdleTerminationReason::FatalError);
+            state.next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
+            let signals = ToolLiveness::probe(dir);
+            if let Some(reason) = provider_error_termination(
+                signals.provider_error,
+                now,
+                &mut state.next_liveness_poll_at,
+                &mut state.provider_error_backoff,
+            ) {
+                return Some(reason);
             }
         }
+    } else {
+        state.provider_error_backoff.reset();
     }
 
     (stdout_idle_for >= initial_response_timeout).then_some(IdleTerminationReason::Idle)
@@ -97,6 +176,7 @@ pub(crate) fn should_terminate_for_initial_response(
 /// Pure "process exists" signals (live PID only) no longer
 /// grant unlimited extensions; in that case, termination happens once
 /// `liveness_dead_timeout` elapses.
+#[cfg(test)]
 pub(crate) fn should_terminate_for_idle(
     last_activity: &mut Instant,
     idle_timeout: Duration,
@@ -106,21 +186,48 @@ pub(crate) fn should_terminate_for_idle(
     next_liveness_poll_at: &mut Option<Instant>,
     error_marker_scan_enabled: bool,
 ) -> Option<IdleTerminationReason> {
+    let mut state = IdleWatchdogState {
+        liveness_dead_since: *liveness_dead_since,
+        next_liveness_poll_at: *next_liveness_poll_at,
+        ..IdleWatchdogState::default()
+    };
+    let termination = should_terminate_for_idle_with_state(
+        last_activity,
+        idle_timeout,
+        liveness_dead_timeout,
+        session_dir,
+        &mut state,
+        error_marker_scan_enabled,
+    );
+    *liveness_dead_since = state.liveness_dead_since;
+    *next_liveness_poll_at = state.next_liveness_poll_at;
+    termination
+}
+
+pub(crate) fn should_terminate_for_idle_with_state(
+    last_activity: &mut Instant,
+    idle_timeout: Duration,
+    liveness_dead_timeout: Duration,
+    session_dir: Option<&Path>,
+    state: &mut IdleWatchdogState,
+    error_marker_scan_enabled: bool,
+) -> Option<IdleTerminationReason> {
     let idle_for = last_activity.elapsed();
     if idle_for < idle_timeout && idle_for < FATAL_ERROR_PROGRESS_GRACE {
-        *liveness_dead_since = None;
-        *next_liveness_poll_at = None;
+        state.reset_on_activity();
         return None;
     }
 
     // Legacy execute_in path has no spool/session directory context.
     // Preserve original behavior: idle-timeout means immediate termination.
     let Some(dir) = session_dir else {
+        state.provider_error_backoff.reset();
         return (idle_for >= idle_timeout).then_some(IdleTerminationReason::Idle);
     };
 
     let now = Instant::now();
-    let should_poll = next_liveness_poll_at
+    let should_poll = state
+        .next_liveness_poll_at
         .as_ref()
         .is_none_or(|next_poll| now >= *next_poll);
     if !should_poll {
@@ -131,31 +238,68 @@ pub(crate) fn should_terminate_for_idle(
     if signals.has_progress_signal() {
         // Real progress observed: reset idle/death timers and give a fresh window.
         *last_activity = now;
-        *liveness_dead_since = None;
-        *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
+        state.liveness_dead_since = None;
+        state.next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
+        state.provider_error_backoff.reset();
         return None;
     }
 
     // #1745 stopgap opt-out; proper fix = scope marker scan to backend-transport stream only (#182)
-    if error_marker_scan_enabled && signals.fatal_error && idle_for >= FATAL_ERROR_PROGRESS_GRACE {
-        return Some(IdleTerminationReason::FatalError);
+    if error_marker_scan_enabled && idle_for >= FATAL_ERROR_PROGRESS_GRACE {
+        if let Some(reason) = provider_error_termination(
+            signals.provider_error,
+            now,
+            &mut state.next_liveness_poll_at,
+            &mut state.provider_error_backoff,
+        ) {
+            return Some(reason);
+        }
+    } else {
+        state.provider_error_backoff.reset();
     }
 
     if idle_for < idle_timeout {
-        *liveness_dead_since = None;
-        *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
+        state.liveness_dead_since = None;
+        state.next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
         return None;
     }
 
-    let dead_since = liveness_dead_since.get_or_insert(now);
+    let dead_since = state.liveness_dead_since.get_or_insert(now);
     if dead_since.elapsed() >= liveness_dead_timeout {
         return Some(IdleTerminationReason::Idle);
     }
 
     let liveness_dead_deadline = *dead_since + liveness_dead_timeout;
-    *next_liveness_poll_at = Some((now + LIVENESS_POLL_INTERVAL).min(liveness_dead_deadline));
+    state.next_liveness_poll_at = Some((now + LIVENESS_POLL_INTERVAL).min(liveness_dead_deadline));
     None
 }
+
+fn provider_error_termination(
+    provider_error: Option<ProviderErrorKind>,
+    now: Instant,
+    next_liveness_poll_at: &mut Option<Instant>,
+    provider_error_backoff: &mut ProviderErrorBackoff,
+) -> Option<IdleTerminationReason> {
+    match provider_error {
+        Some(ProviderErrorKind::Permanent) => Some(IdleTerminationReason::FatalError),
+        Some(ProviderErrorKind::Transient) => {
+            if let Some(retry_after) = provider_error_backoff.transient_retry_deadline(now) {
+                *next_liveness_poll_at = Some(retry_after);
+                None
+            } else {
+                Some(IdleTerminationReason::FatalError)
+            }
+        }
+        None => {
+            provider_error_backoff.reset();
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "idle_watchdog_provider_error_tests.rs"]
+mod provider_error_tests;
 
 #[cfg(test)]
 mod tests {
@@ -409,11 +553,7 @@ mod tests {
     #[test]
     fn fatal_error_marker_fast_fails_before_promoted_idle_timeout() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("stderr.log"),
-            "provider failed: HTTP 429 Too Many Requests\n",
-        )
-        .expect("write stderr");
+        std::fs::write(tmp.path().join("stderr.log"), "invalid_api_key\n").expect("write stderr");
 
         let mut dead_since = None;
         let mut next_poll = None;

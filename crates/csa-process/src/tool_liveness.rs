@@ -7,7 +7,7 @@ use crate::process_tree_cpu_ticks;
 
 #[path = "tool_liveness_fatal_error.rs"]
 mod fatal_error;
-use fatal_error::has_fatal_error_signal;
+use fatal_error::provider_error_signal;
 #[cfg(test)]
 use fatal_error::{build_fatal_error_regex, has_fatal_error_signal_in_channels};
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
@@ -44,6 +44,7 @@ pub(crate) struct LivenessSignals {
     pub output_growth: bool,
     pub session_write: bool,
     pub stderr_activity: bool,
+    pub provider_error: Option<ProviderErrorKind>,
     pub fatal_error: bool,
 }
 
@@ -58,6 +59,12 @@ impl LivenessSignals {
     pub(crate) fn has_any_signal(self) -> bool {
         self.pid_alive || self.session_write || self.has_progress_signal()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderErrorKind {
+    Transient,
+    Permanent,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -84,13 +91,15 @@ impl ToolLiveness {
         let mut snapshot = load_snapshot(session_dir);
         let daemon_pid_alive = Self::daemon_pid_is_alive(session_dir);
 
+        let provider_error = provider_error_signal(session_dir);
         let signals = LivenessSignals {
             pid_alive: has_live_pid_signal(session_dir) || daemon_pid_alive,
             cpu_progress: has_process_cpu_progress_signal(session_dir, &mut snapshot),
             output_growth: has_output_growth_signal(session_dir, &mut snapshot),
             session_write: has_recent_session_write_signal(session_dir, now),
             stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
-            fatal_error: has_fatal_error_signal(session_dir),
+            provider_error,
+            fatal_error: provider_error.is_some(),
         };
 
         save_snapshot(session_dir, &snapshot);

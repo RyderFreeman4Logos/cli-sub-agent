@@ -8,17 +8,37 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use super::ProviderErrorKind;
 use super::{FATAL_ERROR_MARKERS_FILE, OUTPUT_LOG_FILE, STDERR_LOG_FILE};
 
 const FATAL_ERROR_TAIL_BYTES: u64 = 4096;
 
 #[derive(Clone)]
 struct FatalErrorRegexes {
+    permanent: FatalErrorChannelRegexes,
+    transient: FatalErrorChannelRegexes,
+}
+
+#[derive(Clone)]
+struct FatalErrorChannelRegexes {
     all_channel: Option<Regex>,
     stderr_only: Option<Regex>,
 }
 
 impl FatalErrorRegexes {
+    fn from_markers(markers: &[String]) -> Self {
+        let (transient, permanent): (Vec<_>, Vec<_>) = markers
+            .iter()
+            .cloned()
+            .partition(|marker| is_transient_provider_marker(marker));
+        Self {
+            permanent: FatalErrorChannelRegexes::from_markers(&permanent),
+            transient: FatalErrorChannelRegexes::from_markers(&transient),
+        }
+    }
+}
+
+impl FatalErrorChannelRegexes {
     fn from_markers(markers: &[String]) -> Self {
         let (stderr_only, all_channel): (Vec<_>, Vec<_>) = markers
             .iter()
@@ -40,18 +60,37 @@ impl FatalErrorRegexes {
 /// still matched EXACTLY (by the caller via `build_fatal_error_regex`), so the specific
 /// status code is preserved — this is purely a channel classifier, not a pattern source.
 fn is_broad_http_marker(marker: &str) -> bool {
-    let mut words = marker.split_whitespace();
-    let (Some(first), Some(second)) = (words.next(), words.next()) else {
-        return false;
-    };
-    if first.eq_ignore_ascii_case("http") || first.eq_ignore_ascii_case("status") {
-        return is_three_digit_status_code(second);
-    }
-    is_three_digit_status_code(first) && second.chars().next().is_some_and(char::is_alphabetic)
+    marker_http_status_code(marker).is_some()
 }
 
-fn is_three_digit_status_code(value: &str) -> bool {
-    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_digit())
+fn marker_http_status_code(marker: &str) -> Option<u16> {
+    let mut words = marker.split_whitespace();
+    let (Some(first), Some(second)) = (words.next(), words.next()) else {
+        return None;
+    };
+    if first.eq_ignore_ascii_case("http") || first.eq_ignore_ascii_case("status") {
+        return parse_three_digit_status_code(second);
+    }
+    if second.chars().next().is_some_and(char::is_alphabetic) {
+        return parse_three_digit_status_code(first);
+    }
+    None
+}
+
+fn parse_three_digit_status_code(value: &str) -> Option<u16> {
+    if value.len() != 3 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn is_transient_provider_marker(marker: &str) -> bool {
+    let normalized = marker.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "rate_limit_exceeded" | "rate limit exceeded" | "overloaded_error"
+    ) || marker_http_status_code(marker)
+        .is_some_and(|status| matches!(status, 408 | 429 | 500 | 502 | 503 | 504))
 }
 
 fn default_tier1_fatal_error_markers() -> Vec<String> {
@@ -110,26 +149,54 @@ fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(super) fn has_fatal_error_signal(session_dir: &Path) -> bool {
+pub(super) fn provider_error_signal(session_dir: &Path) -> Option<ProviderErrorKind> {
     let tmux_pane = capture_tmux_pane(session_dir);
-    has_fatal_error_signal_in_channels(session_dir, tmux_pane.as_deref())
+    provider_error_signal_in_channels(session_dir, tmux_pane.as_deref())
 }
 
+#[cfg(test)]
 pub(super) fn has_fatal_error_signal_in_channels(
     session_dir: &Path,
     tmux_pane: Option<&str>,
 ) -> bool {
-    let regexes = fatal_error_regexes_for_session(session_dir);
+    provider_error_signal_in_channels(session_dir, tmux_pane).is_some()
+}
 
-    read_file_tail(&session_dir.join(STDERR_LOG_FILE))
-        .ok()
-        .is_some_and(|tail| {
-            matches_fatal_error(&regexes.all_channel, &tail)
-                || matches_fatal_error(&regexes.stderr_only, &tail)
-        })
-        || read_file_tail(&session_dir.join(OUTPUT_LOG_FILE))
-            .ok()
-            .is_some_and(|tail| matches_fatal_error(&regexes.all_channel, &tail))
+fn provider_error_signal_in_channels(
+    session_dir: &Path,
+    tmux_pane: Option<&str>,
+) -> Option<ProviderErrorKind> {
+    let regexes = fatal_error_regexes_for_session(session_dir);
+    let stderr_tail = read_file_tail(&session_dir.join(STDERR_LOG_FILE)).ok();
+    let output_tail = read_file_tail(&session_dir.join(OUTPUT_LOG_FILE)).ok();
+
+    if matches_provider_error(
+        &regexes.permanent,
+        stderr_tail.as_deref(),
+        output_tail.as_deref(),
+        tmux_pane,
+    ) {
+        return Some(ProviderErrorKind::Permanent);
+    }
+    matches_provider_error(
+        &regexes.transient,
+        stderr_tail.as_deref(),
+        output_tail.as_deref(),
+        tmux_pane,
+    )
+    .then_some(ProviderErrorKind::Transient)
+}
+
+fn matches_provider_error(
+    regexes: &FatalErrorChannelRegexes,
+    stderr_tail: Option<&str>,
+    output_tail: Option<&str>,
+    tmux_pane: Option<&str>,
+) -> bool {
+    stderr_tail.is_some_and(|tail| {
+        matches_fatal_error(&regexes.all_channel, tail)
+            || matches_fatal_error(&regexes.stderr_only, tail)
+    }) || output_tail.is_some_and(|tail| matches_fatal_error(&regexes.all_channel, tail))
         || tmux_pane.is_some_and(|pane| matches_fatal_error(&regexes.all_channel, pane))
 }
 

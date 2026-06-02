@@ -11,8 +11,11 @@ use tracing::warn;
 mod execution_result;
 pub use execution_result::{ExecutionResult, model_completed_from_terminal_reason};
 mod idle_watchdog;
+#[cfg(test)]
+use idle_watchdog::should_terminate_for_idle;
 use idle_watchdog::{
-    idle_timeout_note, should_terminate_for_idle, should_terminate_for_initial_response,
+    IdleWatchdogState, idle_timeout_note, should_terminate_for_idle_with_state,
+    should_terminate_for_initial_response_with_state,
 };
 mod persistent_rate_limit;
 use persistent_rate_limit::PersistentRateLimitTracker;
