@@ -1364,25 +1364,25 @@ Parse the structured debate result from Step 8.
 ```bash
 set -euo pipefail
 DEBATE_OUTPUT="${STEP_12_OUTPUT}"
-VERDICT_COUNT="$(
-  printf '%s\n' "${DEBATE_OUTPUT}" \
-    | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
-    || true
-)"
-if [ "${VERDICT_COUNT}" != "1" ]; then
-  echo "ERROR: Debate output must contain exactly one VERDICT marker." >&2
-  exit 1
-fi
 VERDICT_MARKER="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
-    | grep -E '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
-    | tail -n 1 \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | sed -n -E 's/^[[:space:]]*VERDICT:[[:space:]]*([^[:space:]]+)[[:space:]]*$/VERDICT: \1/p' \
+    | sort -u \
     || true
 )"
+VERDICT_COUNT="$(
+  printf '%s\n' "${VERDICT_MARKER}" \
+    | sed '/^$/d' \
+    | wc -l \
+    | tr -d '[:space:]'
+)"
 
-if [ -z "${VERDICT_MARKER}" ]; then
+if [ "${VERDICT_COUNT}" = "0" ]; then
   echo "ERROR: Debate output missing VERDICT marker." >&2
+  exit 1
+fi
+if [ "${VERDICT_COUNT}" != "1" ]; then
+  echo "ERROR: Debate output contains conflicting VERDICT markers." >&2
   exit 1
 fi
 
