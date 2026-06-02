@@ -14,6 +14,7 @@ use tracing_subscriber::fmt::MakeWriter;
 #[test]
 fn should_audit_repo_tracked_writes_for_explicit_readonly_run() {
     assert!(should_audit_repo_tracked_writes(
+        true,
         Some("run"),
         false,
         "Read-only: inspect src/main.rs and summarize what it does"
@@ -23,6 +24,7 @@ fn should_audit_repo_tracked_writes_for_explicit_readonly_run() {
 #[test]
 fn should_audit_repo_tracked_writes_for_recon_style_run() {
     assert!(should_audit_repo_tracked_writes(
+        true,
         Some("run"),
         false,
         "Analyze the main module and summarize the control flow"
@@ -32,6 +34,7 @@ fn should_audit_repo_tracked_writes_for_recon_style_run() {
 #[test]
 fn should_not_audit_repo_tracked_writes_for_mutating_run() {
     assert!(!should_audit_repo_tracked_writes(
+        false,
         Some("run"),
         false,
         "Implement the fix in src/main.rs and update tests"
@@ -41,6 +44,7 @@ fn should_not_audit_repo_tracked_writes_for_mutating_run() {
 #[test]
 fn should_audit_repo_tracked_writes_for_plan_task_type() {
     assert!(should_audit_repo_tracked_writes(
+        false,
         Some("plan"),
         false,
         "Analyze the workflow and summarize where files are written"
@@ -50,6 +54,7 @@ fn should_audit_repo_tracked_writes_for_plan_task_type() {
 #[test]
 fn should_audit_repo_tracked_writes_for_plan_step_task_type() {
     assert!(should_audit_repo_tracked_writes(
+        false,
         Some("plan-step"),
         false,
         "Read-only: inspect the task step and summarize the result"
@@ -59,11 +64,13 @@ fn should_audit_repo_tracked_writes_for_plan_step_task_type() {
 #[test]
 fn should_not_audit_repo_tracked_writes_for_review_or_debate() {
     assert!(!should_audit_repo_tracked_writes(
+        false,
         Some("review"),
         true,
         "Analyze the diff and summarize findings"
     ));
     assert!(!should_audit_repo_tracked_writes(
+        false,
         Some("debate"),
         true,
         "Analyze the proposal and summarize tradeoffs"
@@ -73,9 +80,26 @@ fn should_not_audit_repo_tracked_writes_for_review_or_debate() {
 #[test]
 fn should_not_audit_repo_tracked_writes_for_unknown_task_type() {
     assert!(!should_audit_repo_tracked_writes(
+        false,
         None,
         true,
         "Analyze the module and summarize the control flow"
+    ));
+}
+
+#[test]
+fn should_not_audit_repo_tracked_writes_for_sa_mode_false_writer_run() {
+    assert!(!should_audit_repo_tracked_writes(
+        false,
+        Some("run"),
+        false,
+        "Analyze the failing test, fix the implementation, and commit the result"
+    ));
+    assert!(!should_audit_repo_tracked_writes(
+        false,
+        Some("run"),
+        true,
+        "Read-only words in the prompt must not override a writer session kind"
     ));
 }
 
@@ -372,7 +396,7 @@ fn audit_failure_does_not_fail_execution() {
         has_tool_calls: false,
         turn_count: 0,
         output_tokens: None,
-        sa_mode: false,
+        sa_mode: true,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTAUDITFAILURE000000000".to_string(),
@@ -500,7 +524,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         has_tool_calls: false,
         turn_count: 0,
         output_tokens: None,
-        sa_mode: false,
+        sa_mode: true,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTREUSEDSESSIONAUDIT000".to_string(),
@@ -564,6 +588,114 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
 }
 
 #[test]
+fn writer_run_does_not_emit_repo_write_audit_artifact() {
+    let repo = tempfile::tempdir().unwrap();
+    run_git(repo.path(), &["init"]);
+    run_git(repo.path(), &["config", "user.email", "test@example.com"]);
+    run_git(repo.path(), &["config", "user.name", "Test User"]);
+    std::fs::write(repo.path().join("tracked.txt"), "before\n").unwrap();
+    run_git(repo.path(), &["add", "tracked.txt"]);
+    run_git(repo.path(), &["commit", "-m", "init"]);
+
+    let pre_head = detect_git_head(repo.path()).unwrap();
+    let pre_porcelain = git_status_porcelain(repo.path());
+    std::fs::write(repo.path().join("tracked.txt"), "after\n").unwrap();
+
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::current(),
+    };
+    let global_config = GlobalConfig::default();
+    let session_dir = repo.path().join("session-dir");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let ctx = PostExecContext {
+        executor: &executor,
+        prompt: "Analyze the failing path, fix tracked.txt, and commit the result",
+        effective_prompt: "Analyze the failing path, fix tracked.txt, and commit the result",
+        task_type: Some("run"),
+        readonly_project_root: true,
+        project_root: repo.path(),
+        config: None,
+        global_config: Some(&global_config),
+        session_dir: session_dir.clone(),
+        sessions_root: "test-root".to_string(),
+        execution_start_time: chrono::Utc::now(),
+        hooks_config: &csa_hooks::HooksConfig::default(),
+        memory_project_key: None,
+        provider_session_id: None,
+        events_count: 0,
+        transcript_artifacts: vec![],
+        changed_paths: vec![],
+        pre_exec_snapshot: None,
+        has_tool_calls: false,
+        turn_count: 0,
+        output_tokens: None,
+        sa_mode: false,
+    };
+    let session = MetaSessionState {
+        meta_session_id: "01TESTWRITERRUNAUDIT00000000".to_string(),
+        description: None,
+        project_path: repo.path().display().to_string(),
+        branch: None,
+        created_at: chrono::Utc::now(),
+        last_accessed: chrono::Utc::now(),
+        csa_version: None,
+        genealogy: Default::default(),
+        tools: Default::default(),
+        context_status: Default::default(),
+        total_token_usage: None,
+        phase: Default::default(),
+        task_context: Default::default(),
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+        termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: Some(pre_head),
+        pre_session_porcelain: Some(pre_porcelain),
+        last_return_packet: None,
+        change_id: None,
+        spec_id: None,
+        vcs_identity: None,
+        identity_version: 2,
+        fork_call_timestamps: Vec::new(),
+    };
+    let mut session_result = SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "ok".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: chrono::Utc::now(),
+        completed_at: chrono::Utc::now(),
+        events_count: 0,
+        artifacts: vec![],
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    maybe_record_repo_write_audit(&ctx, &session, &mut session_result);
+
+    assert!(
+        session_result
+            .manager_fields
+            .artifacts
+            .as_ref()
+            .and_then(|value| value.get("repo_write_audit"))
+            .is_none()
+    );
+    assert!(!session_dir.join("output/audit-warnings.md").exists());
+}
+
+#[test]
 fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture_failed() {
     let repo = tempfile::tempdir().unwrap();
     run_git(repo.path(), &["init"]);
@@ -607,7 +739,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         has_tool_calls: false,
         turn_count: 0,
         output_tokens: None,
-        sa_mode: false,
+        sa_mode: true,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTAUDITFALLBACK000000000".to_string(),
