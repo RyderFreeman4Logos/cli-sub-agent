@@ -48,6 +48,39 @@ pub(super) fn resolve_run_tier_context(
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RunSubtreePinSelection {
+    pub(super) model_spec: Option<String>,
+    pub(super) force_ignore_tier_setting: bool,
+}
+
+pub(super) fn resolve_run_subtree_pin_selection(
+    existing_pin_active: bool,
+    existing_pin_model_spec: Option<&str>,
+    user_explicit_tool: bool,
+    active_tier: bool,
+    resolved_worker_model_spec: Option<&str>,
+) -> RunSubtreePinSelection {
+    if existing_pin_active {
+        return RunSubtreePinSelection {
+            model_spec: existing_pin_model_spec.map(str::to_string),
+            force_ignore_tier_setting: true,
+        };
+    }
+
+    if user_explicit_tool && active_tier {
+        return RunSubtreePinSelection {
+            model_spec: resolved_worker_model_spec.map(str::to_string),
+            force_ignore_tier_setting: resolved_worker_model_spec.is_some(),
+        };
+    }
+
+    RunSubtreePinSelection {
+        model_spec: None,
+        force_ignore_tier_setting: false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct RunModelSelectionFlags {
     pub(super) tool: bool,

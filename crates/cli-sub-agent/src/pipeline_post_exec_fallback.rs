@@ -7,8 +7,8 @@ use std::path::Path;
 use tracing::warn;
 
 use csa_session::{
-    MetaSessionState, SessionArtifact, SessionResult, get_session_dir, load_result, load_session,
-    save_result, save_session,
+    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, get_session_dir,
+    load_result, load_session, save_result, save_session,
 };
 
 const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
@@ -81,7 +81,10 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
     error: &anyhow::Error,
 ) {
     match load_result(project_root, &session.meta_session_id) {
-        Ok(Some(_)) => return,
+        Ok(Some(_)) => {
+            retire_post_exec_fallback_session(session, chrono::Utc::now(), None);
+            return;
+        }
         Ok(None) => {}
         Err(load_err) => {
             warn!(
@@ -140,8 +143,28 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         completed_at,
     );
 
-    session.termination_reason = Some("post_exec_error".to_string());
+    retire_post_exec_fallback_session(session, completed_at, Some("post_exec_error"));
+}
+
+fn retire_post_exec_fallback_session(
+    session: &mut MetaSessionState,
+    completed_at: chrono::DateTime<chrono::Utc>,
+    termination_reason: Option<&str>,
+) {
+    if let Some(reason) = termination_reason {
+        session.termination_reason = Some(reason.to_string());
+    }
     session.last_accessed = completed_at;
+    if session.phase != SessionPhase::Retired
+        && let Err(phase_err) = session.apply_phase_event(PhaseEvent::Retired)
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %phase_err,
+            "Failed to transition post-exec fallback session to Retired; forcing terminal phase"
+        );
+        session.phase = SessionPhase::Retired;
+    }
     if let Err(save_err) = save_session(session) {
         warn!(
             session = %session.meta_session_id,

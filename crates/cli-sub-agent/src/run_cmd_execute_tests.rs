@@ -1,12 +1,18 @@
 use super::{
     RunModelSelectionFlags, enforce_run_tier_bypass_gate, finalize_prompt_text,
-    resolve_primary_writer_spec_for_run, resolve_run_no_failover, resolve_run_tier_context,
+    resolve_primary_writer_spec_for_run, resolve_run_no_failover,
+    resolve_run_subtree_pin_selection, resolve_run_tier_context,
 };
+use crate::run_cmd_model_pin::{InheritedModelPin, RunModelPinInput, apply_inherited_model_pin};
 use crate::run_cmd_tool_selection::{resolve_skill_and_prompt, resolve_tool_by_strategy};
+use crate::test_env_lock::ScopedTestEnvVar;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use chrono::Utc;
 use csa_config::global::PreferencesConfig;
-use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
+use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, TierConfig, TierStrategy, ToolConfig};
+use csa_core::env::{
+    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY,
+};
 use csa_core::types::{ToolName, ToolSelectionStrategy};
 use std::collections::HashMap;
 use std::fs;
@@ -64,6 +70,35 @@ fn make_config_with_primary_writer_spec(spec: &str) -> ProjectConfig {
         primary_writer_spec: Some(spec.to_string()),
         ..Default::default()
     });
+    config
+}
+
+fn make_config_with_tier_models(tier_name: &str, models: &[&str]) -> ProjectConfig {
+    let mut config = make_test_config();
+    config.tools = csa_config::global::all_known_tools()
+        .iter()
+        .map(|tool| {
+            let name = tool.as_str();
+            (
+                name.to_string(),
+                ToolConfig {
+                    enabled: matches!(name, "codex" | "gemini-cli"),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    config.tiers = HashMap::from([(
+        tier_name.to_string(),
+        TierConfig {
+            description: "test tier".to_string(),
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    )]);
+    config.tier_mapping = HashMap::from([("default".to_string(), tier_name.to_string())]);
     config
 }
 
@@ -520,6 +555,156 @@ fn resolve_run_tier_context_drops_tier_for_explicit_model_spec() {
     assert!(!tier_auto_select);
     assert!(!failover_on_crash_enabled);
     assert!(resolved_tier_name.is_none());
+}
+
+#[test]
+fn resolved_explicit_tool_tier_pin_makes_child_finalizer_select_codex() {
+    let _availability =
+        ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let tmp = TempDir::new().expect("tempdir");
+    let config = make_config_with_tier_models(
+        "tier-4-critical",
+        &[
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "codex/openai/gpt-5.5/xhigh",
+        ],
+    );
+    let global_config = GlobalConfig::default();
+
+    let parent_worker = resolve_tool_by_strategy(
+        &ToolSelectionStrategy::Explicit(ToolName::Codex),
+        None,
+        None,
+        None,
+        Some(&config),
+        &global_config,
+        tmp.path(),
+        false,
+        false,
+        true,
+        Some("tier-4-critical"),
+        false,
+    )
+    .expect("resolve explicit codex inside tier");
+    assert_eq!(parent_worker.tool, ToolName::Codex);
+    assert_eq!(
+        parent_worker.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+
+    let pin_selection = resolve_run_subtree_pin_selection(
+        false,
+        None,
+        true,
+        true,
+        parent_worker.model_spec.as_deref(),
+    );
+    assert_eq!(
+        pin_selection.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+    assert!(pin_selection.force_ignore_tier_setting);
+
+    let child_pin = apply_inherited_model_pin(
+        RunModelPinInput {
+            model_spec: None,
+            tier: Some("tier-4-critical".to_string()),
+            auto_route: None,
+            force_ignore_tier_setting: false,
+            no_failover: false,
+        },
+        Some(InheritedModelPin {
+            model_spec: pin_selection.model_spec.expect("pin model spec"),
+            force_ignore_tier_setting: pin_selection.force_ignore_tier_setting,
+            no_failover: true,
+        }),
+    );
+    let child_finalizer = resolve_tool_by_strategy(
+        &ToolSelectionStrategy::AnyAvailable,
+        child_pin.model_spec.as_deref(),
+        None,
+        None,
+        Some(&config),
+        &global_config,
+        tmp.path(),
+        false,
+        false,
+        false,
+        child_pin.tier.as_deref(),
+        child_pin.force_ignore_tier_setting,
+    )
+    .expect("resolve inherited child finalizer pin");
+
+    assert_eq!(child_finalizer.tool, ToolName::Codex);
+    assert_eq!(
+        child_finalizer.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+    assert!(child_finalizer.resolved_tier_name.is_none());
+}
+
+#[test]
+fn resolved_explicit_tool_tier_pin_carries_no_failover_to_child_env() {
+    let pin_selection = resolve_run_subtree_pin_selection(
+        false,
+        None,
+        true,
+        true,
+        Some("codex/openai/gpt-5.5/xhigh"),
+    );
+    let pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
+        pin_selection.model_spec.as_deref(),
+        pin_selection.force_ignore_tier_setting,
+        true,
+    )
+    .expect("resolved worker pin should be emitted");
+    let entries: HashMap<&str, String> = pin.pin_env_entries().into_iter().collect();
+
+    assert_eq!(
+        entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+    assert_eq!(
+        entries
+            .get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+            .map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        entries.get(CSA_NO_FAILOVER_ENV_KEY).map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
+fn resolved_subtree_pin_preserves_existing_model_spec_pin() {
+    let pin_selection = resolve_run_subtree_pin_selection(
+        true,
+        Some("codex/openai/gpt-5.5/xhigh"),
+        true,
+        true,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    );
+
+    assert_eq!(
+        pin_selection.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+    assert!(pin_selection.force_ignore_tier_setting);
+}
+
+#[test]
+fn auto_tier_routing_does_not_create_resolved_worker_subtree_pin() {
+    let pin_selection = resolve_run_subtree_pin_selection(
+        false,
+        None,
+        false,
+        true,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    );
+
+    assert!(pin_selection.model_spec.is_none());
+    assert!(!pin_selection.force_ignore_tier_setting);
 }
 
 #[test]

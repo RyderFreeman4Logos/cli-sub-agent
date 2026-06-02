@@ -47,6 +47,7 @@ fn ensure_terminal_result_on_post_exec_error_writes_missing_result() {
         reloaded.termination_reason.as_deref(),
         Some("post_exec_error")
     );
+    assert_eq!(reloaded.phase, SessionPhase::Retired);
 }
 
 #[test]
@@ -87,6 +88,14 @@ fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
     assert_eq!(persisted.status, "success");
     assert_eq!(persisted.exit_code, 0);
     assert_eq!(persisted.summary, "already persisted");
+
+    let reloaded = load_session(project_root, &session.meta_session_id)
+        .expect("reload session after fallback");
+    assert_eq!(reloaded.phase, SessionPhase::Retired);
+    assert!(
+        reloaded.termination_reason.is_none(),
+        "finalizer fallback must not mark a worker-success session as a failure"
+    );
 }
 
 #[test]
@@ -149,6 +158,7 @@ fn ensure_terminal_result_for_session_on_post_exec_error_persists_output_tail_fo
         reloaded.termination_reason.as_deref(),
         Some("post_exec_error")
     );
+    assert_eq!(reloaded.phase, SessionPhase::Retired);
 }
 
 fn run_command(repo: &Path, program: &str, args: &[&str]) {

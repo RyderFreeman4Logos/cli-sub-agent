@@ -135,11 +135,8 @@ fn subtree_env_requires_force_ignore_pin() {
     // With it, a typed pin is produced whose env entries carry the spec, the
     // paired force-ignore marker, and (here) the no-failover flag.
     let pin = resolve_subtree_model_pin(Some(PINNED_SPEC), true, true).expect("pin");
-    let entries: std::collections::HashMap<&str, String> = pin
-        .pin_env_entries()
-        .into_iter()
-        .map(|(k, v)| (k, v))
-        .collect();
+    let entries: std::collections::HashMap<&str, String> =
+        pin.pin_env_entries().into_iter().collect();
     assert_eq!(
         entries.get(CSA_MODEL_SPEC_ENV_KEY).map(String::as_str),
         Some(PINNED_SPEC)
