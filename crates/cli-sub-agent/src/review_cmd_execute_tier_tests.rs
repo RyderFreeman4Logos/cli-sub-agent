@@ -90,6 +90,37 @@ fn build_failover_chain_uses_preference_order_before_winner() {
     );
 }
 
+#[test]
+fn issue_1718_no_failover_limits_review_candidates_to_primary() {
+    let _available_guard =
+        ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let config = config_with_review_tier(
+        &["codex", "gemini-cli"],
+        &[
+            "codex/openai/gpt-5.4/medium",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        ],
+    );
+    let global = GlobalConfig::default();
+    let primary_spec = "codex/openai/gpt-5.4/medium";
+
+    let candidates = review_ordered_tier_candidates(ReviewTierCandidateRequest {
+        initial_tool: ToolName::Codex,
+        initial_model_spec: Some(primary_spec),
+        tier_name: Some("quality"),
+        project_config: Some(&config),
+        global_config: Some(&global),
+        tier_fallback_enabled: true,
+        no_failover: true,
+        tier_preference_order: &[],
+    });
+
+    assert_eq!(
+        candidates,
+        vec![(ToolName::Codex, Some(primary_spec.to_string()))]
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metadata() {

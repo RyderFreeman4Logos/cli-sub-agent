@@ -31,6 +31,7 @@ enum TransportErrorFailoverKind {
     RateLimit,
     AcpCrashRetryExhausted,
     GeminiRetryChainExhausted,
+    GeminiLegacyInitialStall,
 }
 
 struct TransportErrorFailoverSignal {
@@ -146,6 +147,16 @@ fn detect_transport_error_failover_signal(
                 error_message,
             )
             .is_some(),
+            requires_init_failure_window: false,
+        });
+    }
+
+    if tool_name_str == "gemini-cli" && error_lower.contains("gemini_legacy_initial_stall") {
+        return Some(TransportErrorFailoverSignal {
+            kind: TransportErrorFailoverKind::GeminiLegacyInitialStall,
+            matched_pattern: "gemini_legacy_initial_stall".to_string(),
+            reason: "gemini_legacy_initial_stall".to_string(),
+            quota_exhausted: false,
             requires_init_failure_window: false,
         });
     }
@@ -485,6 +496,18 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 attempt = attempts,
                 max = max_failover_attempts,
                 "[csa-failover] Gemini retry chain exhaustion detected in transport error; attempting tier failover"
+            );
+        }
+        TransportErrorFailoverKind::GeminiLegacyInitialStall => {
+            if !failover_on_crash_enabled {
+                return Ok(RateLimitAction::NoRateLimit);
+            }
+            warn!(
+                tool = %tool_name_str,
+                pattern = %failover_signal.matched_pattern,
+                attempt = attempts,
+                max = max_failover_attempts,
+                "[csa-failover] Gemini legacy initial stall detected in transport error; attempting tier failover"
             );
         }
     }

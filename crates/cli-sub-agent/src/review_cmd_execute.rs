@@ -101,6 +101,31 @@ fn warn_if_fast_mode_has_no_codex_review_candidate(
     }
 }
 
+struct ReviewTierCandidateRequest<'a> {
+    initial_tool: ToolName,
+    initial_model_spec: Option<&'a str>,
+    tier_name: Option<&'a str>,
+    project_config: Option<&'a ProjectConfig>,
+    global_config: Option<&'a GlobalConfig>,
+    tier_fallback_enabled: bool,
+    no_failover: bool,
+    tier_preference_order: &'a [String],
+}
+
+fn review_ordered_tier_candidates(
+    request: ReviewTierCandidateRequest<'_>,
+) -> Vec<(ToolName, Option<String>)> {
+    ordered_tier_candidates(
+        request.initial_tool,
+        request.initial_model_spec,
+        request.tier_name,
+        request.project_config,
+        request.global_config,
+        request.tier_fallback_enabled && !request.no_failover,
+        request.tier_preference_order,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) async fn execute_review(
@@ -218,15 +243,16 @@ pub(crate) async fn execute_review_with_tier_filter(
             .get("codex")
             .and_then(|t| t.fast_mode)
             .unwrap_or(false);
-    let candidates = ordered_tier_candidates(
-        tool,
-        tier_model_spec.as_deref(),
-        tier_name.as_deref(),
+    let candidates = review_ordered_tier_candidates(ReviewTierCandidateRequest {
+        initial_tool: tool,
+        initial_model_spec: tier_model_spec.as_deref(),
+        tier_name: tier_name.as_deref(),
         project_config,
-        Some(global_config),
+        global_config: Some(global_config),
         tier_fallback_enabled,
-        &tier_preference_order,
-    );
+        no_failover,
+        tier_preference_order: &tier_preference_order,
+    });
     warn_if_fast_mode_has_no_codex_review_candidate(
         effective_fast_mode,
         warn_no_codex_fast_mode,

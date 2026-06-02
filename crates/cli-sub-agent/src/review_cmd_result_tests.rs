@@ -141,6 +141,18 @@ fn reviewer_unavailable_error_reason_maps_api_key_invalid_error() {
 }
 
 #[test]
+fn reviewer_unavailable_error_reason_maps_backend_400_error() {
+    let err = anyhow::anyhow!(
+        "claude-code failed: status: 400 Bad Request: thinking blocks must be preserved"
+    );
+
+    let reason = reviewer_unavailable_error_reason(&err, ToolName::ClaudeCode).expect("400 reason");
+
+    assert!(reason.contains("claude-code tool failure"));
+    assert!(reason.contains("400 Bad Request"));
+}
+
+#[test]
 fn resolve_single_review_result_maps_api_key_failure_to_unavailable() {
     let mut result = outcome("", 1);
     result.executed_tool = ToolName::GeminiCli;
