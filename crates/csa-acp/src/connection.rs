@@ -376,8 +376,8 @@ impl AcpConnection {
                             }
                             if process_tree_made_cpu_progress(process_activity.as_mut()) {
                                 let now = Instant::now();
+                                // CPU progress is a liveness signal, not an initial-response signal.
                                 *self.last_activity.borrow_mut() = now;
-                                *self.last_meaningful_activity.borrow_mut() = now;
                             }
                             let (effective_timeout, timeout_phase, last_relevant_activity) =
                                 if !saw_initial_response_event {

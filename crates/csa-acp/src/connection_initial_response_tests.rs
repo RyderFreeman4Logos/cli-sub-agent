@@ -207,7 +207,10 @@ async fn build_test_connection(
         last_meaningful_activity,
         stderr_buf,
         std::env::current_dir().expect("cwd"),
-        AcpConnectionOptions::default(),
+        AcpConnectionOptions {
+            termination_grace_period: Duration::ZERO,
+            ..AcpConnectionOptions::default()
+        },
     )
 }
 
@@ -382,6 +385,48 @@ async fn idle_timeout_stays_alive_while_child_process_tree_consumes_cpu() {
     assert!(!result.timed_out, "busy child process tree must not be killed");
     assert_eq!(result.exit_reason.as_deref(), Some("end_turn"));
     connection.kill().await.expect("kill test child");
+}
+
+#[tokio::test]
+async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() {
+    let connection = build_test_connection(
+        spawn_test_child(
+            "python3 -c 'import time\nend=time.monotonic()+2\nwhile time.monotonic()<end:\n pass'",
+        ),
+        Duration::from_secs(5),
+        PromptBehavior::Silent,
+    )
+    .await;
+
+    connection.initialize().await.expect("initialize");
+    let cwd = std::env::current_dir().expect("cwd");
+    let session_id = connection
+        .new_session(None, Some(cwd.as_path()), None)
+        .await
+        .expect("new session");
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(700),
+        connection.prompt_with_io(
+            &session_id,
+            "ping",
+            Duration::from_secs(5),
+            Some(Duration::from_millis(150)),
+            PromptIoOptions::default(),
+        ),
+    )
+    .await
+    .expect("CPU progress must not extend the initial-response watchdog")
+    .expect("prompt result");
+
+    assert!(
+        result.timed_out,
+        "CPU-only child process activity must trip the initial-response watchdog"
+    );
+    assert_eq!(
+        result.exit_reason.as_deref(),
+        Some("initial_response_timeout")
+    );
 }
 
 #[tokio::test]
