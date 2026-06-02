@@ -145,10 +145,11 @@ impl ClaudeCodeCliTransport {
         }
         csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
         if let Some(env) = extra_env {
-            for (key, value) in env {
+            let mut env = env.clone();
+            csa_core::env::scrub_subtree_contract_env_map(&mut env);
+            for (key, value) in &env {
                 if !CLI_TRANSPORT_CSA_OWNED_ENV_VARS.contains(&key.as_str())
                     && !CLI_TRANSPORT_STRIPPED_ENV_VARS.contains(&key.as_str())
-                    && !csa_core::env::is_startup_subtree_env_key(key)
                 {
                     cmd.env(key, value);
                 }

@@ -275,6 +275,39 @@ fn build_command_rebuilds_session_env_for_cli_transport() {
     );
 }
 
+#[test]
+fn build_command_scrubs_startup_subtree_keys_from_generic_extra_env() {
+    let transport = ClaudeCodeCliTransport::new(make_executor());
+    let mut extra_env = StdHashMap::from([("SAFE_ENV".to_string(), "ok".to_string())]);
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        extra_env.insert((*key).to_string(), format!("spoofed-{key}"));
+    }
+
+    let cmd = transport.build_command(
+        "hello",
+        std::path::Path::new("/tmp/test-project"),
+        None,
+        None,
+        Some(&extra_env),
+        None,
+    );
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: StdHashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        envs.into_iter().collect();
+
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "CLI generic extra_env must not inject startup-subtree key {key}"
+        );
+    }
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
+        Some(&Some(std::ffi::OsStr::new("ok")))
+    );
+}
+
 // ---- Resume-id propagation ----
 
 #[test]

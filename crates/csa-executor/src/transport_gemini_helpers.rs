@@ -466,11 +466,9 @@ pub(super) fn apply_gemini_sandbox_runtime_env_overrides(
     isolation_plan: &mut IsolationPlan,
     env_overrides: &HashMap<String, String>,
 ) {
-    isolation_plan.env_overrides.extend(
-        env_overrides
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
-    );
+    let mut env_overrides = env_overrides.clone();
+    csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+    isolation_plan.env_overrides.extend(env_overrides);
 }
 
 pub(super) fn apply_gemini_sandbox_runtime_contract(

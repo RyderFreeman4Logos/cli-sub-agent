@@ -83,11 +83,9 @@ impl AcpConnection {
     ) -> HashMap<String, String> {
         let mut merged_env = base_env.clone();
         if let Some(overrides) = sandbox_env_overrides {
-            merged_env.extend(
-                overrides
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            );
+            let mut env_overrides = overrides.clone();
+            csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+            merged_env.extend(env_overrides);
         }
         merged_env
     }

@@ -21,6 +21,144 @@ fn has_setenv(args: &[String], key: &str, value: &str) -> bool {
         .any(|window| window[0] == "--setenv" && window[1] == key && window[2] == value)
 }
 
+fn command_env_map(cmd: &Command) -> HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> {
+    cmd.as_std().get_envs().collect()
+}
+
+#[test]
+fn merge_sandbox_env_scrubs_subtree_contract_from_env_overrides() {
+    let request_env = HashMap::from([("PATH".to_string(), "/usr/bin".to_string())]);
+    let mut sandbox_env_overrides = HashMap::from([(
+        "HOME".to_string(),
+        "/tmp/cli-sub-agent-gemini/01TEST".to_string(),
+    )]);
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        sandbox_env_overrides.insert((*key).to_string(), format!("spoofed-{key}"));
+    }
+
+    let effective_env =
+        AcpConnection::merge_sandbox_env(&request_env, Some(&sandbox_env_overrides));
+
+    assert_eq!(
+        effective_env.get("HOME"),
+        Some(&"/tmp/cli-sub-agent-gemini/01TEST".to_string()),
+        "non-contract runtime override must survive the sandbox env merge"
+    );
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert!(
+            !effective_env.contains_key(*key),
+            "generic sandbox env_overrides must not populate startup-subtree key {key}"
+        );
+    }
+
+    let cmd = AcpConnection::build_cmd_base("acp-tool", &[], Path::new("/tmp"), &effective_env);
+    let env_map = command_env_map(&cmd);
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "build_cmd_base must not receive startup-subtree key {key} from sandbox env_overrides"
+        );
+    }
+
+    let cgroup_config = csa_resource::cgroup::SandboxConfig {
+        memory_max_mb: 4096,
+        memory_swap_max_mb: None,
+        pids_max: Some(512),
+    };
+    let scope_cmd = csa_resource::cgroup::create_scope_command_with_env(
+        "gemini-cli",
+        "01TEST",
+        &cgroup_config,
+        &effective_env,
+    );
+    let mut cmd = Command::from(scope_cmd);
+    csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
+    for (key, value) in &effective_env {
+        cmd.env(key, value);
+    }
+    let env_map = command_env_map(&cmd);
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "cgroup command env must not receive startup-subtree key {key} from sandbox env_overrides"
+        );
+    }
+}
+
+#[test]
+fn merge_sandbox_env_preserves_trusted_base_subtree_contract_values() {
+    let request_env = HashMap::from([
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
+            "2".to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "1".to_string(),
+        ),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY.to_string(),
+            "codex/openai/gpt-5.5/xhigh".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+            "1".to_string(),
+        ),
+    ]);
+    let sandbox_env_overrides = HashMap::from([
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
+            "99".to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "0".to_string(),
+        ),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY.to_string(),
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+            "0".to_string(),
+        ),
+    ]);
+
+    let effective_env =
+        AcpConnection::merge_sandbox_env(&request_env, Some(&sandbox_env_overrides));
+
+    assert_eq!(
+        effective_env
+            .get(csa_core::env::CSA_DEPTH_ENV_KEY)
+            .map(String::as_str),
+        Some("2"),
+        "trusted typed CSA_DEPTH must not be replaced by sandbox env_overrides"
+    );
+    assert_eq!(
+        effective_env
+            .get(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY)
+            .map(String::as_str),
+        Some("1"),
+        "trusted typed CSA_INTERNAL_INVOCATION must survive the generic override scrub"
+    );
+    assert_eq!(
+        effective_env
+            .get(csa_core::env::CSA_MODEL_SPEC_ENV_KEY)
+            .map(String::as_str),
+        Some("codex/openai/gpt-5.5/xhigh"),
+        "trusted typed subtree pin must survive the generic override scrub"
+    );
+    assert_eq!(
+        effective_env
+            .get(csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
+            .map(String::as_str),
+        Some("1"),
+        "trusted typed force-ignore marker must survive the generic override scrub"
+    );
+}
+
 #[test]
 fn prepare_sandbox_command_merges_runtime_env_overrides_into_bwrap_invocation() {
     let request_env = HashMap::from([
@@ -128,8 +266,20 @@ fn prepare_sandbox_command_scrubs_subtree_contract_from_bwrap_env_overrides() {
             "codex/openai/gpt-5.5/xhigh".to_string(),
         ),
         (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY.to_string(),
+            "01SPOOFED".to_string(),
+        ),
+        (
             csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
             "99".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+            "1".to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "0".to_string(),
         ),
     ]);
     let isolation_plan = IsolationPlan {
@@ -167,6 +317,12 @@ fn prepare_sandbox_command_scrubs_subtree_contract_from_bwrap_env_overrides() {
 
     let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
 
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert!(
+            !prepared.effective_env.contains_key(*key),
+            "ACP effective_env must not include subtree-contract key {key} from env_overrides"
+        );
+    }
     assert!(
         has_setenv(
             &prepared.effective_args,

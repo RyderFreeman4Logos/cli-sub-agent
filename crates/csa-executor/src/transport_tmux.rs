@@ -421,6 +421,8 @@ impl TmuxTransport {
         csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
 
         if let Some(env) = extra_env {
+            // execute_session passes a trusted merged child env: generic input
+            // was scrubbed before fresh CSA session/pin values were inserted.
             for (k, v) in env {
                 cmd.env(k, v);
             }

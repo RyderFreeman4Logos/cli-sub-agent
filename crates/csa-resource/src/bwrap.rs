@@ -237,10 +237,9 @@ pub fn from_isolation_plan(
         builder.with_readable_path(path);
     }
 
-    for (key, value) in &plan.env_overrides {
-        if csa_core::env::is_startup_subtree_env_key(key) {
-            continue;
-        }
+    let mut env_overrides = plan.env_overrides.clone();
+    csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+    for (key, value) in &env_overrides {
         builder.with_env(key, value);
     }
 

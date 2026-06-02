@@ -14,11 +14,10 @@ impl Executor {
     /// values and the authoritative subtree pin are applied separately, AFTER
     /// this merge, through typed channels.
     pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
-        for (key, value) in env_vars {
-            if !Self::STRIPPED_ENV_VARS.contains(&key.as_str())
-                && !csa_core::env::SUBTREE_PIN_ENV_KEYS.contains(&key.as_str())
-                && !csa_core::env::is_startup_subtree_env_key(key.as_str())
-            {
+        let mut env_vars = env_vars.clone();
+        csa_core::env::scrub_subtree_contract_env_map(&mut env_vars);
+        for (key, value) in &env_vars {
+            if !Self::STRIPPED_ENV_VARS.contains(&key.as_str()) {
                 cmd.env(key, value);
             }
         }
