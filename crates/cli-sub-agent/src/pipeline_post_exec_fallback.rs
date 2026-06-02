@@ -126,6 +126,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
 

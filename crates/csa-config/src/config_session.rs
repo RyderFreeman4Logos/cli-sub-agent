@@ -57,13 +57,18 @@ pub struct RunConfig {
     /// flag; project-local config cannot disable the run branch guard.
     #[serde(default, alias = "allow_base_branch_commit")]
     pub allow_base_branch_working: bool,
+    /// Fail writer `csa run` sessions that end with a dirty worktree.
+    #[serde(default)]
+    pub writer_must_commit: bool,
     #[serde(default)]
     pub post_exec_gate: PostExecGateConfig,
 }
 
 impl RunConfig {
     pub fn is_default(&self) -> bool {
-        !self.allow_base_branch_working && self.post_exec_gate.is_default()
+        !self.allow_base_branch_working
+            && !self.writer_must_commit
+            && self.post_exec_gate.is_default()
     }
 }
 

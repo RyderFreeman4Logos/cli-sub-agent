@@ -98,6 +98,7 @@ fn apply_repo_write_audit_to_result_populates_manager_sidecar_sections() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     let audit = RepoWriteAudit {
@@ -418,6 +419,7 @@ fn audit_failure_does_not_fail_execution() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
 
@@ -545,6 +547,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
 
@@ -651,6 +654,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
 

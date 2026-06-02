@@ -85,6 +85,7 @@ fn setup_unrelated_debate_session(
         gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )
@@ -134,6 +135,7 @@ fn seed_debate_result(
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )
@@ -506,6 +508,7 @@ fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
         gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )
@@ -588,6 +591,7 @@ fn debate_finalize_persists_categorized_fallback_chain_for_multi_skip() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )
@@ -696,6 +700,7 @@ fn debate_finalize_persists_build_time_exclusions_without_runtime_failures() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )
@@ -786,6 +791,7 @@ fn debate_finalize_non_success_omits_after_final_disabled_tier_spec() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )

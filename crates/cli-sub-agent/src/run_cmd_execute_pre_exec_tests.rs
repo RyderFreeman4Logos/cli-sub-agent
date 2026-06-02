@@ -129,6 +129,7 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
         false,
         false, // no_error_marker_scan (#1745)
         false,
+        false,
         Vec::new(),
         Vec::new(),
     )
@@ -209,6 +210,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         false,
         false,
         false, // no_error_marker_scan (#1745)
+        false,
         false,
         Vec::new(),
         Vec::new(),

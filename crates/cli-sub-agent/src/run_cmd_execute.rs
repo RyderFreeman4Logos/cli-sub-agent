@@ -98,6 +98,7 @@ pub(crate) async fn handle_run(
     no_fs_sandbox: bool,
     no_error_marker_scan: bool,
     no_post_exec_gate: bool,
+    require_commit: bool,
     extra_writable: Vec<PathBuf>,
     extra_readable: Vec<PathBuf>,
 ) -> Result<i32> {
@@ -589,11 +590,18 @@ pub(crate) async fn handle_run(
         RunLoopCompletion::Exit(exit_code) => return Ok(exit_code),
         RunLoopCompletion::Completed(loop_outcome) => *loop_outcome,
     };
-    let result = loop_outcome.result;
+    let mut result = loop_outcome.result;
     let current_tool = loop_outcome.current_tool;
     let executed_session_id = loop_outcome.executed_session_id;
     let changed_paths = loop_outcome.changed_paths;
     let fork_resolution = loop_outcome.fork_resolution;
+    super::uncommitted::record_run_dirty(
+        &project_root,
+        executed_session_id.as_deref(),
+        &mut result,
+        require_commit,
+        config.as_ref(),
+    );
 
     if result.exit_code == 0 {
         apply_post_exec_gate_after_success_with_runner(

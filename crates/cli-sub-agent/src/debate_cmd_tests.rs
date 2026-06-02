@@ -610,6 +610,7 @@ fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )

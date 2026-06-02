@@ -177,6 +177,7 @@ pub(crate) async fn process_execution_result(
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(

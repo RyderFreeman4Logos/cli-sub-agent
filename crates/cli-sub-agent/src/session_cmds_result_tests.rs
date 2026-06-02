@@ -342,6 +342,7 @@ fn build_result_json_payload_includes_review_iterations() {
         gate_timeout: false,
         warnings: Vec::new(),
         raw_process_exit_code: None,
+        uncommitted_changes: None,
         manager_fields: Default::default(),
     };
     let review_meta = ReviewSessionMeta {
@@ -400,6 +401,7 @@ fn build_result_json_payload_includes_result_sidecars() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
         manager_sidecar: Some(
@@ -447,6 +449,7 @@ fn build_result_json_payload_redacts_result_sidecars() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
         manager_sidecar: Some(

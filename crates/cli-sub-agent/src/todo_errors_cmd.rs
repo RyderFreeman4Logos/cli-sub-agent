@@ -240,6 +240,7 @@ mod tests {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         }
     }

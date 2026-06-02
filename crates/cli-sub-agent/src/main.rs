@@ -288,6 +288,7 @@ async fn run() -> Result<()> {
             no_stream_stdout,
             no_error_marker_scan,
             no_post_exec_gate,
+            require_commit,
             spec: _spec,
             tier,
             force_ignore_tier_setting,
@@ -379,6 +380,7 @@ async fn run() -> Result<()> {
                 no_fs_sandbox,
                 no_error_marker_scan,
                 no_post_exec_gate,
+                require_commit,
                 extra_writable,
                 extra_readable,
             })

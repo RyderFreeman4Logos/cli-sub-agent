@@ -81,6 +81,7 @@ fn debate_tier_all_fail_does_not_overwrite_unrelated_latest_session() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )
@@ -217,6 +218,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             gate_timeout: false,
             warnings: Vec::new(),
             raw_process_exit_code: None,
+            uncommitted_changes: None,
             manager_fields: Default::default(),
         },
     )

@@ -21,6 +21,8 @@ mod policy;
 mod resume;
 #[path = "run_cmd_shell.rs"]
 mod shell;
+#[path = "run_cmd_uncommitted.rs"]
+mod uncommitted;
 
 pub(crate) use execute::handle_run;
 pub(crate) use git::{
@@ -32,6 +34,7 @@ pub(crate) use policy::{
     apply_unverifiable_commit_policy, execute_tool_calls_observed, extract_executed_shell_commands,
 };
 pub(crate) use shell::detect_no_verify_commit_commands;
+pub(crate) use uncommitted::format_uncommitted_warning;
 
 #[cfg(test)]
 pub(crate) use crate::pipeline::promote_idle_timeout_for_explicit_wall_timeout;
@@ -144,6 +147,7 @@ impl SubagentRunConfig {
             false,
             false,
             false, // no_error_marker_scan: programmatic run wrapper; defer to config (#1745)
+            false,
             false,
             Vec::new(),
             Vec::new(),

@@ -664,6 +664,8 @@ transcript_enabled = false
 transcript_redaction = true
 # result_report_spill_threshold_bytes = 10240
 # require_commit_on_mutation = true
+[run]
+# writer_must_commit = false
 [resources]
 min_free_memory_mb = 4096
 idle_timeout_seconds = 250
