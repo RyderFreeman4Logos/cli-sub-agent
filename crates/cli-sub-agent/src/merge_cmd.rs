@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result};
@@ -8,24 +9,26 @@ const DEFAULT_BRANCH_FALLBACK: &str = "main";
 
 pub(crate) fn handle_merge(args: MergeArgs) -> Result<()> {
     let pr_number = args.pr_number;
-    let base_branch = args
-        .base
-        .unwrap_or_else(|| detect_pr_base_branch(pr_number).unwrap_or_else(warn_base_fallback));
+    let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
+    let base_branch = args.base.unwrap_or_else(|| {
+        detect_pr_base_branch(&project_root, pr_number).unwrap_or_else(warn_base_fallback)
+    });
 
     let pr_number_arg = pr_number.to_string();
     run_checked(
+        &project_root,
         "gh",
         &["pr", "merge", "--merge", &pr_number_arg],
         "merge pull request",
     )?;
 
-    sync_base_branch_best_effort(&base_branch);
+    sync_base_branch_best_effort(&project_root, &base_branch);
 
     println!("Merged PR #{pr_number}; synced base branch `{base_branch}` if possible.");
     Ok(())
 }
 
-fn detect_pr_base_branch(pr_number: u64) -> Option<String> {
+fn detect_pr_base_branch(project_root: &Path, pr_number: u64) -> Option<String> {
     let pr_number_arg = pr_number.to_string();
     let output = Command::new("gh")
         .args([
@@ -37,6 +40,7 @@ fn detect_pr_base_branch(pr_number: u64) -> Option<String> {
             "-q",
             ".baseRefName",
         ])
+        .current_dir(project_root)
         .output();
 
     match output {
@@ -69,20 +73,31 @@ fn warn_base_fallback() -> String {
     DEFAULT_BRANCH_FALLBACK.to_string()
 }
 
-fn sync_base_branch_best_effort(base_branch: &str) {
-    if let Err(err) = run_checked("git", &["checkout", base_branch], "checkout base branch") {
+fn sync_base_branch_best_effort(project_root: &Path, base_branch: &str) {
+    if let Err(err) = run_checked(
+        project_root,
+        "git",
+        &["checkout", base_branch],
+        "checkout base branch",
+    ) {
         eprintln!("WARNING: merge succeeded, but post-merge checkout failed:\n{err:#}");
         return;
     }
 
-    if let Err(err) = run_checked("git", &["pull", "origin", base_branch], "pull base branch") {
+    if let Err(err) = run_checked(
+        project_root,
+        "git",
+        &["pull", "origin", base_branch],
+        "pull base branch",
+    ) {
         eprintln!("WARNING: merge succeeded, but post-merge pull failed:\n{err:#}");
     }
 }
 
-fn run_checked(program: &str, args: &[&str], action: &str) -> Result<()> {
+fn run_checked(project_root: &Path, program: &str, args: &[&str], action: &str) -> Result<()> {
     let output = Command::new(program)
         .args(args)
+        .current_dir(project_root)
         .output()
         .with_context(|| format!("failed to run `{}`", shell_command(program, args)))?;
 
@@ -135,6 +150,7 @@ mod tests {
             Commands::Merge(args) => {
                 assert_eq!(args.pr_number, 1626);
                 assert_eq!(args.base, None);
+                assert_eq!(args.cd, None);
             }
             _ => panic!("expected merge command"),
         }
@@ -148,6 +164,20 @@ mod tests {
             Commands::Merge(args) => {
                 assert_eq!(args.pr_number, 1626);
                 assert_eq!(args.base.as_deref(), Some("dev"));
+                assert_eq!(args.cd, None);
+            }
+            _ => panic!("expected merge command"),
+        }
+    }
+
+    #[test]
+    fn parses_merge_args_with_cd() {
+        let cli = Cli::parse_from(["csa", "merge", "1626", "--cd", "/tmp/repo"]);
+
+        match cli.command {
+            Commands::Merge(args) => {
+                assert_eq!(args.pr_number, 1626);
+                assert_eq!(args.cd.as_deref(), Some("/tmp/repo"));
             }
             _ => panic!("expected merge command"),
         }
