@@ -118,9 +118,15 @@ repo_from_origin() {
 }
 
 REPO="$(repo_from_origin)"
+# PUSH_TIME is the push commit's author/commit time as epoch seconds (UTC,
+# offset-independent). GitHub API timestamps (.submitted_at / .created_at) are
+# UTC ISO8601 with a `Z` suffix; comparing them as raw strings against a
+# local-offset ISO8601 string mis-orders mixed-offset instants and can mask a
+# genuinely-new finding (#1692). Normalizing both sides to epoch seconds makes
+# the comparison numeric and timezone-safe.
 PUSH_TIME=""
 if [ -n "${PUSH_SHA}" ]; then
-  PUSH_TIME="$(git show -s --format=%cI "${PUSH_SHA}")"
+  PUSH_TIME="$(git show -s --format=%ct "${PUSH_SHA}")"
 fi
 
 if [ -z "${BOT_NAME}" ]; then
@@ -147,7 +153,7 @@ review_filter() {
     jq -c --arg login "${BOT_LOGIN}" --arg push_time "${PUSH_TIME}" --arg push_sha "${PUSH_SHA}" --arg window_start "${WINDOW_START}" '
       [ .[] | .[]
         | select((.user.login // "") == $login)
-        | select($push_time == "" or (.submitted_at // "") > $push_time)
+        | select($push_time == "" or ((.submitted_at // "" | fromdateiso8601? // 0) > ($push_time | tonumber)))
         | select(
             $push_sha == ""
             or (.commit_id // "") == $push_sha
@@ -161,7 +167,7 @@ review_filter() {
     jq -c --arg push_time "${PUSH_TIME}" --arg push_sha "${PUSH_SHA}" --arg window_start "${WINDOW_START}" '
       [ .[] | .[]
         | select((.user.type // "") == "Bot" or ((.user.login // "") | test("\\[bot\\]$")))
-        | select($push_time == "" or (.submitted_at // "") > $push_time)
+        | select($push_time == "" or ((.submitted_at // "" | fromdateiso8601? // 0) > ($push_time | tonumber)))
         | select(
             $push_sha == ""
             or (.commit_id // "") == $push_sha
@@ -197,7 +203,7 @@ while [ "${elapsed}" -le "${TIMEOUT_SEC}" ]; do
       printf '%s\n' "${comments_json}" | jq -c --arg login "${BOT_LOGIN}" --arg push_time "${PUSH_TIME}" '
         [ .[] | .[]
           | select((.user.login // "") == $login)
-          | select($push_time == "" or (.created_at // "") > $push_time)
+          | select($push_time == "" or ((.created_at // "" | fromdateiso8601? // 0) > ($push_time | tonumber)))
         ]
         | sort_by(.created_at)
         | last // empty
@@ -206,7 +212,7 @@ while [ "${elapsed}" -le "${TIMEOUT_SEC}" ]; do
       printf '%s\n' "${comments_json}" | jq -c --arg push_time "${PUSH_TIME}" '
         [ .[] | .[]
           | select((.user.type // "") == "Bot" or ((.user.login // "") | test("\\[bot\\]$")))
-          | select($push_time == "" or (.created_at // "") > $push_time)
+          | select($push_time == "" or ((.created_at // "" | fromdateiso8601? // 0) > ($push_time | tonumber)))
         ]
         | sort_by(.created_at)
         | last // empty
