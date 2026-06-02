@@ -222,6 +222,7 @@ pub(crate) fn spawn_and_exit(
         PLAN_PIPELINE_SOURCE_ENV.to_string(),
         args.pipeline_source.as_str().to_string(),
     );
+    args.startup_env.apply_to_child_env(&mut daemon_env);
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: session_id.clone(),

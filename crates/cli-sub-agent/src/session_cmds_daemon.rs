@@ -22,6 +22,7 @@ use attach::{resolve_attach_terminal_exit, wait_for_attach_live_output_path};
 mod wait;
 
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
+use crate::startup_env::StartupSubtreeEnv;
 
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
@@ -207,8 +208,9 @@ pub(crate) fn handle_session_attach(
     session: String,
     show_stderr: bool,
     cd: Option<String>,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<i32> {
-    handle_session_attach_with_prompt(session, show_stderr, cd, None, None, None)
+    handle_session_attach_with_prompt(session, show_stderr, cd, None, None, None, startup_env)
 }
 
 pub(crate) fn handle_session_attach_with_prompt(
@@ -218,6 +220,7 @@ pub(crate) fn handle_session_attach_with_prompt(
     prompt: Option<String>,
     prompt_flag: Option<String>,
     prompt_file: Option<PathBuf>,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<i32> {
     let caller_project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_global_fallback(&caller_project_root, &session)?;
@@ -229,7 +232,13 @@ pub(crate) fn handle_session_attach_with_prompt(
 
     let prompt = resolve_attach_prompt(prompt, prompt_flag, prompt_file.as_deref())?;
     if let Some(prompt) = prompt {
-        reactivate_session_with_prompt(&project_root, &session_dir, &resolved.session_id, &prompt)?;
+        reactivate_session_with_prompt(
+            &project_root,
+            &session_dir,
+            &resolved.session_id,
+            &prompt,
+            startup_env,
+        )?;
     }
 
     let stdout_path = session_dir.join("stdout.log");
@@ -380,6 +389,7 @@ fn reactivate_session_with_prompt(
     session_dir: &Path,
     session_id: &str,
     prompt: &str,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let metadata = csa_session::load_metadata(project_root, session_id)?
         .ok_or_else(|| anyhow::anyhow!("session {session_id} is missing metadata.toml"))?;
@@ -423,6 +433,7 @@ fn reactivate_session_with_prompt(
         &metadata.tool,
         &prompt_path,
         use_native_resume,
+        startup_env,
     )
 }
 
@@ -499,9 +510,10 @@ fn spawn_attach_resume_daemon(
     tool: &str,
     prompt_path: &Path,
     use_native_resume: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("csa"));
-    let env = std::collections::HashMap::from([
+    let mut env = std::collections::HashMap::from([
         ("CSA_DAEMON_SESSION_ID".to_string(), session_id.to_string()),
         (
             "CSA_DAEMON_SESSION_DIR".to_string(),
@@ -512,6 +524,7 @@ fn spawn_attach_resume_daemon(
             project_root.display().to_string(),
         ),
     ]);
+    startup_env.apply_to_child_env(&mut env);
     let args = build_attach_resume_args(
         session_id,
         project_root,

@@ -19,6 +19,16 @@ pub(crate) struct StartupSubtreeEnv {
     model_spec: Option<String>,
     force_ignore_tier_setting: bool,
     no_failover: bool,
+    raw_session_id: Option<String>,
+    raw_depth: Option<String>,
+    raw_project_root: Option<String>,
+    raw_session_dir: Option<String>,
+    raw_parent_session: Option<String>,
+    raw_parent_session_dir: Option<String>,
+    raw_internal_invocation: Option<String>,
+    raw_model_spec: Option<String>,
+    raw_force_ignore_tier_setting: Option<String>,
+    raw_no_failover: Option<String>,
 }
 
 #[cfg(test)]
@@ -33,6 +43,16 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
     model_spec: None,
     force_ignore_tier_setting: false,
     no_failover: false,
+    raw_session_id: None,
+    raw_depth: None,
+    raw_project_root: None,
+    raw_session_dir: None,
+    raw_parent_session: None,
+    raw_parent_session_dir: None,
+    raw_internal_invocation: None,
+    raw_model_spec: None,
+    raw_force_ignore_tier_setting: None,
+    raw_no_failover: None,
 };
 
 impl StartupSubtreeEnv {
@@ -50,27 +70,53 @@ impl StartupSubtreeEnv {
     }
 
     pub(crate) fn from_values(values: HashMap<&'static str, String>) -> Self {
-        let depth = values
-            .get(CSA_DEPTH_ENV_KEY)
+        let raw_session_id = values.get(CSA_SESSION_ID_ENV_KEY).cloned();
+        let raw_depth = values.get(CSA_DEPTH_ENV_KEY).cloned();
+        let raw_project_root = values.get(CSA_PROJECT_ROOT_ENV_KEY).cloned();
+        let raw_session_dir = values.get(CSA_SESSION_DIR_ENV_KEY).cloned();
+        let raw_parent_session = values.get(CSA_PARENT_SESSION_ENV_KEY).cloned();
+        let raw_parent_session_dir = values.get(CSA_PARENT_SESSION_DIR_ENV_KEY).cloned();
+        let raw_internal_invocation = values.get(CSA_INTERNAL_INVOCATION_ENV_KEY).cloned();
+        let raw_model_spec = values.get(CSA_MODEL_SPEC_ENV_KEY).cloned();
+        let raw_force_ignore_tier_setting =
+            values.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY).cloned();
+        let raw_no_failover = values.get(CSA_NO_FAILOVER_ENV_KEY).cloned();
+
+        let depth = raw_depth
+            .as_ref()
             .and_then(|raw| raw.parse::<u32>().ok())
             .unwrap_or(0);
+        let internal_invocation = raw_internal_invocation
+            .as_ref()
+            .is_some_and(|value| is_truthy_env_value(value));
+        let force_ignore_tier_setting = raw_force_ignore_tier_setting
+            .as_ref()
+            .is_some_and(|value| is_truthy_env_value(value));
+        let no_failover = raw_no_failover
+            .as_ref()
+            .is_some_and(|value| is_truthy_env_value(value));
+
         Self {
-            session_id: non_empty(values.get(CSA_SESSION_ID_ENV_KEY)),
+            session_id: non_empty(raw_session_id.as_ref()),
             depth,
-            project_root: non_empty(values.get(CSA_PROJECT_ROOT_ENV_KEY)),
-            session_dir: non_empty(values.get(CSA_SESSION_DIR_ENV_KEY)),
-            parent_session: non_empty(values.get(CSA_PARENT_SESSION_ENV_KEY)),
-            parent_session_dir: non_empty(values.get(CSA_PARENT_SESSION_DIR_ENV_KEY)),
-            internal_invocation: values
-                .get(CSA_INTERNAL_INVOCATION_ENV_KEY)
-                .is_some_and(|value| is_truthy_env_value(value)),
-            model_spec: non_empty(values.get(CSA_MODEL_SPEC_ENV_KEY)),
-            force_ignore_tier_setting: values
-                .get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY)
-                .is_some_and(|value| is_truthy_env_value(value)),
-            no_failover: values
-                .get(CSA_NO_FAILOVER_ENV_KEY)
-                .is_some_and(|value| is_truthy_env_value(value)),
+            project_root: non_empty(raw_project_root.as_ref()),
+            session_dir: non_empty(raw_session_dir.as_ref()),
+            parent_session: non_empty(raw_parent_session.as_ref()),
+            parent_session_dir: non_empty(raw_parent_session_dir.as_ref()),
+            internal_invocation,
+            model_spec: non_empty(raw_model_spec.as_ref()),
+            force_ignore_tier_setting,
+            no_failover,
+            raw_session_id,
+            raw_depth,
+            raw_project_root,
+            raw_session_dir,
+            raw_parent_session,
+            raw_parent_session_dir,
+            raw_internal_invocation,
+            raw_model_spec,
+            raw_force_ignore_tier_setting,
+            raw_no_failover,
         }
     }
 
@@ -92,8 +138,58 @@ impl StartupSubtreeEnv {
         session_dir: impl AsRef<str>,
     ) -> Self {
         self.session_id = non_empty_str(session_id.as_ref());
+        self.raw_session_id = self.session_id.clone();
         self.session_dir = non_empty_str(session_dir.as_ref());
+        self.raw_session_dir = self.session_dir.clone();
         self
+    }
+
+    pub(crate) fn apply_to_child_env(&self, env: &mut HashMap<String, String>) {
+        for (key, value) in self.to_child_env_vars() {
+            env.insert(key, value);
+        }
+    }
+
+    pub(crate) fn to_child_env_vars(&self) -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+        self.push_child_env_var(&mut vars, CSA_SESSION_ID_ENV_KEY, &self.raw_session_id);
+        self.push_child_env_var(&mut vars, CSA_DEPTH_ENV_KEY, &self.raw_depth);
+        self.push_child_env_var(&mut vars, CSA_PROJECT_ROOT_ENV_KEY, &self.raw_project_root);
+        self.push_child_env_var(&mut vars, CSA_SESSION_DIR_ENV_KEY, &self.raw_session_dir);
+        self.push_child_env_var(
+            &mut vars,
+            CSA_PARENT_SESSION_ENV_KEY,
+            &self.raw_parent_session,
+        );
+        self.push_child_env_var(
+            &mut vars,
+            CSA_PARENT_SESSION_DIR_ENV_KEY,
+            &self.raw_parent_session_dir,
+        );
+        self.push_child_env_var(
+            &mut vars,
+            CSA_INTERNAL_INVOCATION_ENV_KEY,
+            &self.raw_internal_invocation,
+        );
+        self.push_child_env_var(&mut vars, CSA_MODEL_SPEC_ENV_KEY, &self.raw_model_spec);
+        self.push_child_env_var(
+            &mut vars,
+            CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            &self.raw_force_ignore_tier_setting,
+        );
+        self.push_child_env_var(&mut vars, CSA_NO_FAILOVER_ENV_KEY, &self.raw_no_failover);
+        vars
+    }
+
+    fn push_child_env_var(
+        &self,
+        vars: &mut Vec<(String, String)>,
+        key: &'static str,
+        value: &Option<String>,
+    ) {
+        if let Some(value) = value {
+            vars.push((key.to_string(), value.clone()));
+        }
     }
 
     pub(crate) fn project_root(&self) -> Option<&str> {
@@ -205,6 +301,65 @@ mod tests {
         assert_eq!(startup.model_spec(), Some("codex/openai/gpt-5.5/xhigh"));
         assert!(startup.force_ignore_tier_setting());
         assert!(startup.no_failover());
+    }
+
+    #[test]
+    fn startup_subtree_env_reemits_only_captured_keys() {
+        let values = HashMap::from([
+            (CSA_DEPTH_ENV_KEY, "0".to_string()),
+            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "false".to_string()),
+            (CSA_NO_FAILOVER_ENV_KEY, "0".to_string()),
+        ]);
+
+        let startup = StartupSubtreeEnv::from_values(values);
+        let child_env = startup.to_child_env_vars();
+
+        assert_eq!(
+            child_env,
+            vec![
+                (CSA_DEPTH_ENV_KEY.to_string(), "0".to_string()),
+                (
+                    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+                    "false".to_string(),
+                ),
+                (CSA_NO_FAILOVER_ENV_KEY.to_string(), "0".to_string()),
+            ]
+        );
+        assert!(!startup.force_ignore_tier_setting());
+        assert!(!startup.no_failover());
+    }
+
+    #[test]
+    fn startup_subtree_env_with_current_session_updates_child_env() {
+        let values = HashMap::from([
+            (CSA_SESSION_ID_ENV_KEY, "01KPARENT".to_string()),
+            (CSA_SESSION_DIR_ENV_KEY, "/repo/parent".to_string()),
+            (
+                CSA_MODEL_SPEC_ENV_KEY,
+                "codex/openai/gpt-5.5/xhigh".to_string(),
+            ),
+        ]);
+
+        let startup =
+            StartupSubtreeEnv::from_values(values).with_current_session("01KCHILD", "/repo/child");
+        let child_env = startup.to_child_env_vars();
+
+        assert_eq!(startup.session_id(), Some("01KCHILD"));
+        assert_eq!(startup.session_dir(), Some("/repo/child"));
+        assert_eq!(
+            child_env,
+            vec![
+                (CSA_SESSION_ID_ENV_KEY.to_string(), "01KCHILD".to_string()),
+                (
+                    CSA_SESSION_DIR_ENV_KEY.to_string(),
+                    "/repo/child".to_string()
+                ),
+                (
+                    CSA_MODEL_SPEC_ENV_KEY.to_string(),
+                    "codex/openai/gpt-5.5/xhigh".to_string(),
+                ),
+            ]
+        );
     }
 
     #[test]

@@ -384,6 +384,7 @@ fn handle_session_attach_with_prompt_accepts_non_claude_sessions_via_soft_fork()
             Some("resume".to_string()),
             None,
             None,
+            &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
         )
         .unwrap_or_else(|err| panic!("{tool} attach resume should use soft fork: {err:#}"));
 
@@ -607,8 +608,13 @@ fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packe
     let attach_session = session_id.clone();
     let attach_project = project.to_string_lossy().into_owned();
     let handle = std::thread::spawn(move || {
-        let result = handle_session_attach(attach_session, false, Some(attach_project))
-            .map_err(|err| err.to_string());
+        let result = handle_session_attach(
+            attach_session,
+            false,
+            Some(attach_project),
+            &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+        )
+        .map_err(|err| err.to_string());
         let _ = tx.send(result);
     });
 
@@ -670,8 +676,13 @@ fn handle_session_attach_treats_stale_daemon_pid_as_dead() {
     let attach_session = session_id.clone();
     let attach_project = project.to_string_lossy().into_owned();
     let handle = std::thread::spawn(move || {
-        let result = handle_session_attach(attach_session, false, Some(attach_project))
-            .map_err(|err| err.to_string());
+        let result = handle_session_attach(
+            attach_session,
+            false,
+            Some(attach_project),
+            &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+        )
+        .map_err(|err| err.to_string());
         let _ = tx.send(result);
     });
 

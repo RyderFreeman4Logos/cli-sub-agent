@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::io::{BufRead, Write};
 use tracing::{debug, error, info};
 
+use crate::startup_env::StartupSubtreeEnv;
 #[cfg(test)]
 use csa_core::types::ToolName;
 #[cfg(test)]
@@ -19,9 +20,12 @@ use run_tool::{direct_entry_resolved_timeout, parse_tool_name};
 /// MCP server implementation
 ///
 /// Exposes CSA session management as MCP tools over JSON-RPC 2.0 stdio protocol.
-pub(crate) async fn run_mcp_server() -> Result<()> {
+pub(crate) async fn run_mcp_server(startup_env: &StartupSubtreeEnv) -> Result<()> {
     info!("Starting MCP server on stdio");
 
+    let state = McpServerState {
+        startup_env: startup_env.clone(),
+    };
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
 
@@ -57,7 +61,7 @@ pub(crate) async fn run_mcp_server() -> Result<()> {
         };
 
         // Handle request
-        let response = handle_request(request).await;
+        let response = handle_request(request, &state).await;
 
         // Write response
         write_response(&stdout, &response)?;
@@ -65,6 +69,11 @@ pub(crate) async fn run_mcp_server() -> Result<()> {
 
     info!("MCP server shutting down");
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct McpServerState {
+    startup_env: StartupSubtreeEnv,
 }
 
 /// JSON-RPC 2.0 Request
@@ -200,7 +209,7 @@ fn get_tools() -> Vec<McpToolDef> {
 }
 
 /// Handle JSON-RPC request
-async fn handle_request(request: JsonRpcRequest) -> JsonRpcResponse {
+async fn handle_request(request: JsonRpcRequest, state: &McpServerState) -> JsonRpcResponse {
     let id = request.id.clone();
 
     match request.method.as_str() {
@@ -246,7 +255,7 @@ async fn handle_request(request: JsonRpcRequest) -> JsonRpcResponse {
         }
         "tools/call" => {
             debug!("Handling tools/call");
-            match handle_tool_call(request.params).await {
+            match handle_tool_call(request.params, state).await {
                 Ok(result) => JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: Some(result),
@@ -286,7 +295,7 @@ async fn handle_request(request: JsonRpcRequest) -> JsonRpcResponse {
 }
 
 /// Handle tool call
-async fn handle_tool_call(params: Option<Value>) -> Result<Value> {
+async fn handle_tool_call(params: Option<Value>, state: &McpServerState) -> Result<Value> {
     let params = params.context("Missing params for tools/call")?;
     let name = params
         .get("name")
@@ -300,7 +309,7 @@ async fn handle_tool_call(params: Option<Value>) -> Result<Value> {
         "csa_session_list" => handle_session_list_tool(arguments).await,
         "csa_session_delete" => handle_session_delete_tool(arguments).await,
         "csa_gc" => handle_gc_tool(arguments).await,
-        "csa_run" => handle_run_tool(arguments).await,
+        "csa_run" => handle_run_tool(arguments, &state.startup_env).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }

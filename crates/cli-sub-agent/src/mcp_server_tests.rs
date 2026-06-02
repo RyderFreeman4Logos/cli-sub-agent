@@ -178,16 +178,61 @@ models = ["codex/openai/gpt-5/high"]
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
     let _cwd_guard = CurrentDirGuard::set(project.path());
 
-    let err = handle_run_tool(serde_json::json!({
-        "prompt": "hello",
-        "model_spec": "codex/openai/gpt-5/high"
-    }))
+    let err = handle_run_tool(
+        serde_json::json!({
+            "prompt": "hello",
+            "model_spec": "codex/openai/gpt-5/high"
+        }),
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
     .await
     .expect_err("MCP exact model bypass should be rejected before execution");
     let message = err.to_string();
     assert!(message.contains("Tier bypass is disabled"));
     assert!(message.contains("--model-spec"));
     assert!(message.contains("[tier_policy].allow_force_bypass"));
+}
+
+#[tokio::test]
+async fn mcp_run_uses_server_startup_depth_for_recursion_guard() {
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let project = tempdir().expect("project tempdir");
+    let config_dir = project.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create project config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+schema_version = 1
+
+[project]
+max_recursion_depth = 1
+"#,
+    )
+    .expect("write project config");
+
+    let xdg = tempdir().expect("xdg tempdir");
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
+    let _cwd_guard = CurrentDirGuard::set(project.path());
+    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(
+        std::collections::HashMap::from([(csa_core::env::CSA_DEPTH_ENV_KEY, "2".to_string())]),
+    );
+
+    let response = handle_run_tool(
+        serde_json::json!({
+            "prompt": "hello"
+        }),
+        &startup_env,
+    )
+    .await
+    .expect("recursion guard returns an MCP content response");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("Max recursion depth (1) exceeded. Current: 2"));
 }
 
 #[test]

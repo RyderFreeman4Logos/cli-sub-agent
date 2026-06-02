@@ -296,6 +296,7 @@ async fn run() -> Result<()> {
                 daemon_child,
                 &session_id,
                 cd.as_deref(),
+                &startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::for_run(
                     skill.as_deref(),
                     prompt.as_deref(),
@@ -408,7 +409,7 @@ async fn run() -> Result<()> {
                 mktsk_cmd::handle_mktsk_args(args, current_depth, output_format).await?;
             exit_current_process(exit_code);
         }
-        Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format)?,
+        Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format, &startup_env)?,
         Commands::Push(args) => push_cmd::handle_push(args)?,
         Commands::Merge(args) => merge_cmd::handle_merge(args)?,
         Commands::Audit { command } => {
@@ -484,6 +485,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
+                &startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::default(),
             )?;
             let result = review_cmd::handle_review(args, current_depth, &startup_env).await;
@@ -503,6 +505,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
+                &startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::for_prompt_file(args.prompt_file.as_deref()),
             )?;
             let result =
@@ -544,7 +547,7 @@ async fn run() -> Result<()> {
             );
         }
         Commands::McpServer => {
-            mcp_server::run_mcp_server().await?;
+            mcp_server::run_mcp_server(&startup_env).await?;
         }
         Commands::McpHub { cmd } => match cmd {
             McpHubCommands::Serve {

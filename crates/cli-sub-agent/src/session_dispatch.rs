@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
+use crate::startup_env::StartupSubtreeEnv;
 use csa_config::{GlobalConfig, KvCacheValueSource, ProjectConfig};
 use csa_core::types::OutputFormat;
 
@@ -18,7 +19,11 @@ fn resolve_session_id(positional: Option<String>, flag: Option<String>) -> Resul
         .ok_or_else(|| anyhow::anyhow!("session ID is required (positional or --session)"))
 }
 
-pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
+pub(crate) fn dispatch(
+    cmd: SessionCommands,
+    output_format: OutputFormat,
+    startup_env: &StartupSubtreeEnv,
+) -> Result<()> {
     match cmd {
         SessionCommands::List {
             cd,
@@ -194,7 +199,7 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         } => {
             let sid = resolve_session_id(session_id, session)?;
             let exit_code = if prompt.is_none() && prompt_flag.is_none() && prompt_file.is_none() {
-                session_cmds::handle_session_attach(sid, stderr, cd)?
+                session_cmds::handle_session_attach(sid, stderr, cd, startup_env)?
             } else {
                 session_cmds::handle_session_attach_with_prompt(
                     sid,
@@ -203,6 +208,7 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
                     prompt,
                     prompt_flag,
                     prompt_file,
+                    startup_env,
                 )?
             };
             let _ = std::io::stdout().flush();

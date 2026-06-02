@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::startup_env::StartupSubtreeEnv;
+
 const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -103,13 +105,14 @@ pub(crate) fn check_daemon_flags(
     daemon_child: bool,
     session_id: &Option<String>,
     cd: Option<&str>,
+    startup_env: &StartupSubtreeEnv,
     spawn_options: DaemonSpawnOptions,
 ) -> Result<DaemonChildGuard> {
     if !no_daemon && !daemon_child {
         if session_id.is_some() {
             anyhow::bail!("--session-id is an internal flag and must not be used directly");
         }
-        spawn_and_exit(subcommand, cd, spawn_options)?;
+        spawn_and_exit(subcommand, cd, startup_env, spawn_options)?;
     }
     let mut stderr_rotation = None;
     if let Some(sid) = session_id {
@@ -240,6 +243,7 @@ fn resolve_stderr_spool_config(project_root: &std::path::Path) -> (u64, bool, st
 pub(crate) fn spawn_and_exit(
     subcommand: &str,
     cd: Option<&str>,
+    startup_env: &StartupSubtreeEnv,
     spawn_options: DaemonSpawnOptions,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd)?;
@@ -276,6 +280,7 @@ pub(crate) fn spawn_and_exit(
         "CSA_DAEMON_PROJECT_ROOT".to_string(),
         project_root.display().to_string(),
     );
+    startup_env.apply_to_child_env(&mut daemon_env);
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: sid.clone(),
