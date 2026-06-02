@@ -66,8 +66,11 @@ fn test_gemini_quota_exceeded() {
         1,
         None,
     );
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().matched_pattern, "quota exceeded");
+    let detected = result.expect("quota exceeded should classify");
+    assert_eq!(detected.matched_pattern, "rate-limit-429");
+    assert_eq!(detected.reason, "HTTP 429");
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
 }
 
 #[test]
@@ -82,16 +85,42 @@ fn test_gemini_oauth_browser_prompt_is_auth_unavailable_failover() {
 
     let detected = result.expect("OAuth browser prompt should classify");
     assert_eq!(detected.reason, "auth_unavailable");
-    assert_eq!(
-        detected.matched_pattern,
-        "opening authentication page in your browser"
-    );
+    assert_eq!(detected.matched_pattern, "auth_unavailable");
     assert!(detected.advance_to_next_model);
     assert!(!detected.quota_exhausted);
     assert_eq!(
         detected.model_spec.as_deref(),
         Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
     );
+}
+
+#[test]
+fn issue_1719_quota_and_auth_failover_are_transient_and_sanitized() {
+    let cases = [
+        ("reason: QUOTA_EXHAUSTED", "rate-limit-429", "HTTP 429"),
+        (
+            r#"Error when talking to Gemini API: _ApiError: {"error":{"message":"API Key not found","code":400,"status":"INVALID_ARGUMENT"}}"#,
+            "auth_unavailable",
+            "auth_unavailable",
+        ),
+    ];
+
+    for (stderr, expected_marker, expected_reason) in cases {
+        let detected = detect_rate_limit(
+            "gemini-cli",
+            stderr,
+            "",
+            1,
+            Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        )
+        .unwrap_or_else(|| panic!("expected transient failover classification for {stderr}"));
+
+        assert_eq!(detected.matched_pattern, expected_marker);
+        assert_eq!(detected.reason, expected_reason);
+        assert!(detected.advance_to_next_model);
+        assert!(!detected.quota_exhausted);
+        assert!(!requires_init_failure_window(&detected));
+    }
 }
 
 #[test]
@@ -281,9 +310,10 @@ fn test_gemini_quota_exhausted_case_insensitive() {
     let result = detect_rate_limit("gemini-cli", "reason: 'QUOTA_EXHAUSTED'", "", 1, None);
     assert!(result.is_some());
     let detected = result.unwrap();
-    assert_eq!(detected.matched_pattern, "quota_exhausted");
-    assert_eq!(detected.reason, "QUOTA_EXHAUSTED");
+    assert_eq!(detected.matched_pattern, "rate-limit-429");
+    assert_eq!(detected.reason, "HTTP 429");
     assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
 }
 
 #[test]
@@ -296,7 +326,7 @@ fn test_persistent_429_quota_exhausted_advances_to_next_model() {
         Some("codex/openai/gpt-5.4/high"),
     )
     .expect("persistent 429 summary should classify");
-    assert_eq!(detected.matched_pattern, "429_quota_exhausted");
+    assert_eq!(detected.matched_pattern, "rate-limit-429");
     assert_eq!(detected.reason, "HTTP 429");
     assert!(detected.advance_to_next_model);
     assert!(
@@ -353,8 +383,10 @@ fn test_gemini_invalid_api_key_advances_to_next_model() {
         None,
     )
     .expect("invalid api key should classify");
-    assert_eq!(detected.reason, "Invalid API key");
+    assert_eq!(detected.matched_pattern, "auth_unavailable");
+    assert_eq!(detected.reason, "auth_unavailable");
     assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
 }
 
 #[test]
@@ -367,7 +399,8 @@ fn test_gemini_api_key_not_found_json_400_advances_to_next_model() {
         Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
     )
     .expect("Gemini API key-not-found 400 should classify");
-    assert_eq!(detected.reason, "API key not found");
+    assert_eq!(detected.matched_pattern, "auth_unavailable");
+    assert_eq!(detected.reason, "auth_unavailable");
     assert!(detected.advance_to_next_model);
     assert!(!detected.quota_exhausted);
     assert_eq!(
@@ -477,10 +510,8 @@ fn test_gemini_retry_chain_exhausted_triggers_tier_failover() {
 #[test]
 fn test_quota_exhausted_true_for_permanent_quota_patterns() {
     let quota_patterns = [
-        ("gemini-cli", "quota_exhausted flag is set"),
         ("gemini-cli", "daily quota limit reached"),
         ("gemini-cli", "monthly spending cap reached"),
-        ("gemini-cli", "quota exceeded for account"),
         ("codex", "usage_limit_exceeded for this period"),
         ("codex", "Error: usage limit exceeded"),
         ("codex", "daily quota exhausted"),
@@ -499,6 +530,11 @@ fn test_quota_exhausted_true_for_permanent_quota_patterns() {
 fn test_quota_exhausted_false_for_transient_rate_limits() {
     let transient_patterns = [
         ("gemini-cli", "HTTP 429 Too Many Requests"),
+        ("gemini-cli", "reason: QUOTA_EXHAUSTED"),
+        ("gemini-cli", "quota_exhausted flag is set"),
+        ("gemini-cli", "quota exceeded for account"),
+        ("gemini-cli", "api key not found"),
+        ("gemini-cli", "invalid api key"),
         ("gemini-cli", "resource exhausted: no more capacity"),
         ("gemini-cli", "capacity_exhausted for model"),
         ("gemini-cli", "HTTP 401 Unauthorized"),
@@ -507,7 +543,9 @@ fn test_quota_exhausted_false_for_transient_rate_limits() {
         ("codex", "RateLimitError: please wait"),
         ("codex", "HTTP 429"),
         ("codex", "429_quota_exhausted: repeated transient 429"),
+        ("opencode", "429_quota_exhausted: repeated transient 429"),
         ("claude-code", "rate limit hit, retry in 60s"),
+        ("claude-code", "429_quota_exhausted: repeated transient 429"),
         ("claude-code", "HTTP 529 Service Overloaded"),
         ("claude-code", "API overloaded, please retry"),
     ];

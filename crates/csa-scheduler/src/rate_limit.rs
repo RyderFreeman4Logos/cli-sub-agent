@@ -99,7 +99,7 @@ pub fn detect_rate_limit(
             let confirmed_quota = pattern.quota_exhausted && stderr_lower.contains(pattern.pattern);
             return Some(RateLimitDetected {
                 tool: tool_name.to_string(),
-                matched_pattern: pattern.pattern.to_string(),
+                matched_pattern: public_failover_marker(pattern, confirmed_quota),
                 reason: pattern.reason.to_string(),
                 advance_to_next_model: pattern.advance_to_next_model,
                 quota_exhausted: confirmed_quota,
@@ -208,21 +208,21 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
             FailoverPattern {
                 pattern: "429_quota_exhausted",
-                reason: "429_quota_exhausted",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "quota_exhausted",
-                reason: "QUOTA_EXHAUSTED",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "quota exhausted",
-                reason: "QUOTA_EXHAUSTED",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "monthly spending cap",
@@ -250,9 +250,9 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
             FailoverPattern {
                 pattern: "quota exceeded",
-                reason: "QUOTA_EXHAUSTED",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "429",
@@ -304,19 +304,19 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
             FailoverPattern {
                 pattern: "api key not found",
-                reason: "API key not found",
+                reason: "auth_unavailable",
                 advance_to_next_model: true,
                 quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "_apierror: {\"error\":\"invalid api key\"}",
-                reason: "Invalid API key",
+                reason: "auth_unavailable",
                 advance_to_next_model: true,
                 quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "invalid api key",
-                reason: "Invalid API key",
+                reason: "auth_unavailable",
                 advance_to_next_model: true,
                 quota_exhausted: false,
             },
@@ -336,9 +336,9 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         "opencode" => &[
             FailoverPattern {
                 pattern: "429_quota_exhausted",
-                reason: "429_quota_exhausted",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "rate limit",
@@ -494,7 +494,7 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
             FailoverPattern {
                 pattern: "invalid api key",
-                reason: "Invalid API key",
+                reason: "auth_unavailable",
                 advance_to_next_model: true,
                 quota_exhausted: false,
             },
@@ -508,9 +508,9 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         "claude-code" => &[
             FailoverPattern {
                 pattern: "429_quota_exhausted",
-                reason: "429_quota_exhausted",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "rate limit",
@@ -552,9 +552,9 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
         _ => &[
             FailoverPattern {
                 pattern: "429_quota_exhausted",
-                reason: "429_quota_exhausted",
+                reason: "HTTP 429",
                 advance_to_next_model: true,
-                quota_exhausted: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "429",
@@ -582,6 +582,23 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
             },
         ],
     }
+}
+
+fn public_failover_marker(pattern: &FailoverPattern, confirmed_quota: bool) -> String {
+    if pattern.reason == "auth_unavailable" {
+        return "auth_unavailable".to_string();
+    }
+    if !confirmed_quota && is_transient_quota_pattern(pattern.pattern) {
+        return "rate-limit-429".to_string();
+    }
+    pattern.pattern.to_string()
+}
+
+fn is_transient_quota_pattern(pattern: &str) -> bool {
+    matches!(
+        pattern,
+        "429_quota_exhausted" | "quota_exhausted" | "quota exhausted" | "quota exceeded"
+    )
 }
 
 #[cfg(test)]
