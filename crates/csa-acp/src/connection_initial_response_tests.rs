@@ -355,6 +355,7 @@ async fn initial_response_timeout_fires_when_stderr_also_silent() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn idle_timeout_stays_alive_while_child_process_tree_consumes_cpu() {
     let connection = build_test_connection(
@@ -387,6 +388,7 @@ async fn idle_timeout_stays_alive_while_child_process_tree_consumes_cpu() {
     connection.kill().await.expect("kill test child");
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() {
     let connection = build_test_connection(

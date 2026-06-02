@@ -322,7 +322,7 @@ async fn test_idle_timeout_with_live_pid_but_no_progress_kills_after_dead_timeou
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_idle_timeout_with_busy_process_tree_does_not_kill_for_silence() {
     let tmp = tempfile::tempdir().expect("tempdir");
