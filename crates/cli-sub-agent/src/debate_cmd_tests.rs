@@ -433,6 +433,27 @@ Confidence: high
 }
 
 #[test]
+fn extract_explicit_verdict_prefers_reject_token_after_label_over_incidental_approve() {
+    let output = "Verdict: REJECT - do not approve this patch";
+
+    assert_eq!(extract_explicit_verdict(output), Some("REJECT"));
+}
+
+#[test]
+fn extract_explicit_verdict_prefers_revise_token_after_label_over_incidental_approved() {
+    let output = "Verdict: REVISE - not approved as-is";
+
+    assert_eq!(extract_explicit_verdict(output), Some("REVISE"));
+}
+
+#[test]
+fn extract_explicit_verdict_still_accepts_approve_token_after_label() {
+    let output = "Verdict: APPROVE";
+
+    assert_eq!(extract_explicit_verdict(output), Some("APPROVE"));
+}
+
+#[test]
 fn extract_verdict_defaults_to_revise_when_missing() {
     let output = "No explicit verdict included.";
     assert_eq!(extract_verdict(output), "REVISE");
@@ -707,6 +728,22 @@ fn debate_cli_parses_both_timeouts() {
     ]);
     assert_eq!(args.timeout, Some(250));
     assert_eq!(args.idle_timeout, Some(30));
+}
+
+#[test]
+fn debate_cli_parses_fail_on_verdict_flags_with_tier() {
+    let args = parse_debate_args(&[
+        "csa",
+        "debate",
+        "--tier",
+        "quality",
+        "--fail-on-revise",
+        "--fail-on-reject",
+        "question",
+    ]);
+    assert_eq!(args.tier.as_deref(), Some("quality"));
+    assert!(args.fail_on_revise);
+    assert!(args.fail_on_reject);
 }
 
 #[test]

@@ -449,6 +449,14 @@ pub struct DebateArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Exit non-zero when a completed debate emits a REVISE verdict.
+    #[arg(long)]
+    pub fail_on_revise: bool,
+
+    /// Exit non-zero when a completed debate emits a REJECT verdict.
+    #[arg(long)]
+    pub fail_on_reject: bool,
+
     /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: Option<u64>,

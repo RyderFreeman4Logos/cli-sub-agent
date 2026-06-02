@@ -262,6 +262,8 @@ fn debate_pre_session_all_fail_yields_unavailable() {
             fallback_reason: None,
             selected_model_spec: None,
             tier_preference_order: &[],
+            fail_on_revise: false,
+            fail_on_reject: false,
         },
     )
     .expect("pre-session all-fail should synthesize unavailable");

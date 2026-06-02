@@ -43,32 +43,50 @@ pub(crate) struct DebateSummary {
     pub(crate) mode: DebateMode,
 }
 
+pub(crate) struct DebateSummaryExtraction {
+    pub(crate) summary: DebateSummary,
+    pub(crate) had_explicit_verdict: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DebateOutputHeader {
     pub(crate) prompt_bytes: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn extract_debate_summary(
     tool_output: &str,
     fallback_summary: &str,
     mode: DebateMode,
 ) -> DebateSummary {
+    extract_debate_summary_with_metadata(tool_output, fallback_summary, mode).summary
+}
+
+pub(crate) fn extract_debate_summary_with_metadata(
+    tool_output: &str,
+    fallback_summary: &str,
+    mode: DebateMode,
+) -> DebateSummaryExtraction {
     // Prefer the final assistant message(s): when the tool emitted a codex-style
     // JSON event transcript, summary/verdict must come from the assistant text,
     // not from protocol JSON / hook events / tool_result noise (#161). Fall back
     // to the raw output only when no assistant text could be extracted.
     let assistant_text = extract_final_assistant_text(tool_output);
     let source = assistant_text.as_deref().unwrap_or(tool_output);
+    let explicit_verdict = extract_explicit_verdict(source);
     let summary = extract_one_line_summary(source, fallback_summary);
     let key_points = extract_key_points(source, summary.as_str());
-    DebateSummary {
-        verdict: extract_verdict(source).to_string(),
-        decision: None,
-        confidence: extract_confidence(source).to_string(),
-        summary,
-        key_points,
-        failure_reason: None,
-        mode,
+    DebateSummaryExtraction {
+        summary: DebateSummary {
+            verdict: explicit_verdict.unwrap_or("REVISE").to_string(),
+            decision: None,
+            confidence: extract_confidence(source).to_string(),
+            summary,
+            key_points,
+            failure_reason: None,
+            mode,
+        },
+        had_explicit_verdict: explicit_verdict.is_some(),
     }
 }
 
@@ -258,7 +276,7 @@ pub(crate) fn render_debate_output(
     output
 }
 
-pub(crate) fn extract_verdict(output: &str) -> &'static str {
+pub(crate) fn extract_explicit_verdict(output: &str) -> Option<&'static str> {
     let mut matched = None;
     for line in output.lines() {
         let normalized = line.trim().to_ascii_uppercase();
@@ -266,32 +284,9 @@ pub(crate) fn extract_verdict(output: &str) -> &'static str {
             continue;
         }
 
-        // `CSA_VERDICT: CONFIRMED` is the structured success marker emitted by
-        // debate participants; treat it as a success verdict (#161). It carries
-        // through to `exit_code_from_debate_verdict`, where `CONFIRMED` maps to 0.
-        if normalized.contains("CSA_VERDICT") && normalized.contains("CONFIRMED") {
-            matched = Some("CONFIRMED");
+        if let Some(verdict) = explicit_verdict_token_after_label(&normalized) {
+            matched = Some(verdict);
             continue;
-        }
-
-        let has_verdict_hint = normalized.contains("VERDICT")
-            || normalized.contains("FINAL DECISION")
-            || normalized.contains("DECISION")
-            || normalized.contains("CONCLUSION");
-
-        if has_verdict_hint {
-            if normalized.contains("APPROVE") {
-                matched = Some("APPROVE");
-            } else if normalized.contains("CONFIRMED") {
-                matched = Some("CONFIRMED");
-            } else if normalized.contains("REJECT") {
-                matched = Some("REJECT");
-            } else if normalized.contains("REVISE") {
-                matched = Some("REVISE");
-            }
-            if matched.is_some() {
-                continue;
-            }
         }
 
         match normalized.as_str() {
@@ -303,7 +298,47 @@ pub(crate) fn extract_verdict(output: &str) -> &'static str {
         }
     }
 
-    matched.unwrap_or("REVISE")
+    matched
+}
+
+fn explicit_verdict_token_after_label(normalized_line: &str) -> Option<&'static str> {
+    const LABELS: &[&str] = &[
+        "CSA_VERDICT",
+        "FINAL VERDICT",
+        "VERDICT",
+        "FINAL DECISION",
+        "DECISION",
+        "CONCLUSION",
+    ];
+
+    for label in LABELS {
+        let Some(label_index) = normalized_line.find(label) else {
+            continue;
+        };
+        let after_label = &normalized_line[label_index + label.len()..];
+        let token = after_label
+            .trim_start_matches(|ch: char| !ch.is_ascii_alphanumeric())
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .next()
+            .unwrap_or_default();
+
+        if let Some(verdict) = match token {
+            "APPROVE" => Some("APPROVE"),
+            "CONFIRMED" => Some("CONFIRMED"),
+            "REJECT" => Some("REJECT"),
+            "REVISE" => Some("REVISE"),
+            _ => None,
+        } {
+            return Some(verdict);
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+pub(crate) fn extract_verdict(output: &str) -> &'static str {
+    extract_explicit_verdict(output).unwrap_or("REVISE")
 }
 
 pub(crate) fn extract_confidence(output: &str) -> &'static str {
@@ -334,6 +369,17 @@ pub(crate) fn extract_confidence(output: &str) -> &'static str {
 }
 
 pub(crate) fn extract_one_line_summary(output: &str, fallback_summary: &str) -> String {
+    if let Some(summary) = extract_synthesis_summary(output) {
+        return summary;
+    }
+    extract_first_prose_summary(output, fallback_summary)
+}
+
+fn extract_synthesis_summary(output: &str) -> Option<String> {
+    extract_labeled_block_summary(output).or_else(|| extract_labeled_line_summary(output))
+}
+
+fn extract_labeled_line_summary(output: &str) -> Option<String> {
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -348,11 +394,72 @@ pub(crate) fn extract_one_line_summary(output: &str, fallback_summary: &str) -> 
                 .unwrap_or(trimmed);
             let cleaned = normalize_whitespace(value);
             if !cleaned.is_empty() {
-                return truncate_chars(cleaned.as_str(), 200);
+                return Some(truncate_chars(cleaned.as_str(), 200));
             }
         }
     }
 
+    None
+}
+
+fn extract_labeled_block_summary(output: &str) -> Option<String> {
+    let mut capture = false;
+    let mut lines = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if !capture {
+            let Some(rest) = strip_synthesis_label(trimmed) else {
+                continue;
+            };
+            let inline = normalize_whitespace(rest);
+            if !inline.is_empty() {
+                return Some(truncate_chars(inline.as_str(), 200));
+            }
+            capture = true;
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            if lines.is_empty() {
+                continue;
+            }
+            break;
+        }
+        if is_labeled_block_boundary(trimmed) {
+            break;
+        }
+        if is_non_summary_line(trimmed) {
+            continue;
+        }
+        lines.push(trimmed);
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        let cleaned = normalize_whitespace(&lines.join(" "));
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(truncate_chars(cleaned.as_str(), 200))
+        }
+    }
+}
+
+fn extract_fallback_summary(fallback_summary: &str) -> Option<String> {
+    let fallback = normalize_whitespace(fallback_summary);
+    if fallback.is_empty()
+        || is_non_summary_line(fallback.as_str())
+        || crate::session_summary_text::is_json_event_envelope(fallback.as_str())
+    {
+        None
+    } else {
+        Some(truncate_chars(fallback.as_str(), 200))
+    }
+}
+
+fn extract_first_prose_summary(output: &str, fallback_summary: &str) -> String {
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || is_non_summary_line(trimmed) {
@@ -365,12 +472,31 @@ pub(crate) fn extract_one_line_summary(output: &str, fallback_summary: &str) -> 
         }
     }
 
-    let fallback = normalize_whitespace(fallback_summary);
-    if fallback.is_empty() {
-        "No summary provided.".to_string()
-    } else {
-        truncate_chars(fallback.as_str(), 200)
+    extract_fallback_summary(fallback_summary).unwrap_or_else(|| "No summary provided.".to_string())
+}
+
+fn strip_synthesis_label(line: &str) -> Option<&str> {
+    let (label, rest) = line.split_once(':')?;
+    match label.trim().to_ascii_lowercase().as_str() {
+        "overall_assessment" | "overall assessment" | "final synthesis" | "synthesis" => {
+            Some(rest.trim())
+        }
+        _ => None,
     }
+}
+
+fn is_labeled_block_boundary(line: &str) -> bool {
+    if line.starts_with("<!-- CSA:SECTION:") {
+        return true;
+    }
+    let Some((label, _)) = line.split_once(':') else {
+        return false;
+    };
+    let normalized = label.trim();
+    !normalized.is_empty()
+        && normalized
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == '_' || ch == ' ')
 }
 
 pub(crate) fn extract_key_points(output: &str, fallback_summary: &str) -> Vec<String> {

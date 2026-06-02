@@ -78,7 +78,7 @@ Determine who authored the staged code:
 Tool: bash
 
 ```bash
-SID=$(csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch.")
+SID=$(csa debate --fail-on-revise --fail-on-reject "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch.")
 bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
