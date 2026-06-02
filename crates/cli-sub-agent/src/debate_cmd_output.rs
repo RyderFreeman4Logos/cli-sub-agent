@@ -266,32 +266,9 @@ pub(crate) fn extract_explicit_verdict(output: &str) -> Option<&'static str> {
             continue;
         }
 
-        // `CSA_VERDICT: CONFIRMED` is the structured success marker emitted by
-        // debate participants; treat it as a success verdict (#161). It carries
-        // through to `exit_code_from_debate_verdict`, where `CONFIRMED` maps to 0.
-        if normalized.contains("CSA_VERDICT") && normalized.contains("CONFIRMED") {
-            matched = Some("CONFIRMED");
+        if let Some(verdict) = explicit_verdict_token_after_label(&normalized) {
+            matched = Some(verdict);
             continue;
-        }
-
-        let has_verdict_hint = normalized.contains("VERDICT")
-            || normalized.contains("FINAL DECISION")
-            || normalized.contains("DECISION")
-            || normalized.contains("CONCLUSION");
-
-        if has_verdict_hint {
-            if normalized.contains("APPROVE") {
-                matched = Some("APPROVE");
-            } else if normalized.contains("CONFIRMED") {
-                matched = Some("CONFIRMED");
-            } else if normalized.contains("REJECT") {
-                matched = Some("REJECT");
-            } else if normalized.contains("REVISE") {
-                matched = Some("REVISE");
-            }
-            if matched.is_some() {
-                continue;
-            }
         }
 
         match normalized.as_str() {
@@ -304,6 +281,41 @@ pub(crate) fn extract_explicit_verdict(output: &str) -> Option<&'static str> {
     }
 
     matched
+}
+
+fn explicit_verdict_token_after_label(normalized_line: &str) -> Option<&'static str> {
+    const LABELS: &[&str] = &[
+        "CSA_VERDICT",
+        "FINAL VERDICT",
+        "VERDICT",
+        "FINAL DECISION",
+        "DECISION",
+        "CONCLUSION",
+    ];
+
+    for label in LABELS {
+        let Some(label_index) = normalized_line.find(label) else {
+            continue;
+        };
+        let after_label = &normalized_line[label_index + label.len()..];
+        let token = after_label
+            .trim_start_matches(|ch: char| !ch.is_ascii_alphanumeric())
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .next()
+            .unwrap_or_default();
+
+        if let Some(verdict) = match token {
+            "APPROVE" => Some("APPROVE"),
+            "CONFIRMED" => Some("CONFIRMED"),
+            "REJECT" => Some("REJECT"),
+            "REVISE" => Some("REVISE"),
+            _ => None,
+        } {
+            return Some(verdict);
+        }
+    }
+
+    None
 }
 
 pub(crate) fn extract_verdict(output: &str) -> &'static str {

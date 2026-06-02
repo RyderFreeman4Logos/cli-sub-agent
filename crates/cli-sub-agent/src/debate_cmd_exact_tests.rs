@@ -843,7 +843,7 @@ fn debate_fail_on_reject_exits_failure() {
 
     let project_root = temp.path();
     let session = seed_debate_result(project_root, "codex", "failure", 1, "tool exited non-zero");
-    let output = "Verdict: REJECT\nSummary: reject this contract in a pipeline gate.\n";
+    let output = "Verdict: REJECT - do not approve this contract in a pipeline gate.\n";
     let exit_code = finalize_seeded_debate(
         project_root,
         &session.meta_session_id,
