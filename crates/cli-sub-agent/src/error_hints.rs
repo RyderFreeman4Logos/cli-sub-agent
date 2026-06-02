@@ -113,7 +113,7 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
 
 pub(crate) fn sandbox_fs_denial_hint(
     stderr: &str,
-    stdout: &str,
+    _stdout: &str,
     fs_sandbox_active: bool,
     session_id: &str,
 ) -> Option<String> {
@@ -121,28 +121,16 @@ pub(crate) fn sandbox_fs_denial_hint(
         return None;
     }
 
-    let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
-    if !SANDBOX_FS_DENIAL_MARKERS
-        .iter()
-        .any(|marker| combined_lower.contains(marker))
-    {
-        return None;
-    }
-
-    let path_hint = extract_denied_path(stderr)
-        .or_else(|| extract_denied_path(stdout))
-        .map(|path| {
-            let suggested = Path::new(&path)
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .map(|parent| parent.display().to_string())
-                .unwrap_or(path);
-            format!("--extra-writable {suggested}")
-        })
-        .unwrap_or_else(|| "--extra-writable /path/to/needed/dir".to_string());
+    let denied_path = extract_denied_path(stderr)?;
+    let suggested = Path::new(&denied_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| parent.display().to_string())
+        .unwrap_or_else(|| denied_path.clone());
+    let path_hint = format!("--extra-writable {suggested}");
 
     Some(format!(
-        "hint: sandbox filesystem write denied. To continue from this session's partial work rather than re-running from scratch, run:\n  csa run --fork-from {session_id} {path_hint} --prompt-file <continuation prompt>"
+        "hint: sandbox filesystem write denied for {denied_path}. To continue from this session's partial work rather than re-running from scratch, run:\n  csa run --fork-from {session_id} {path_hint} --prompt-file <continuation prompt>"
     ))
 }
 
@@ -171,7 +159,6 @@ fn extract_denied_path(text: &str) -> Option<String> {
         let lower = line.to_ascii_lowercase();
         if !SANDBOX_FS_DENIAL_MARKERS
             .iter()
-            .take(3)
             .any(|marker| lower.contains(marker))
         {
             continue;
@@ -183,6 +170,9 @@ fn extract_denied_path(text: &str) -> Option<String> {
         if let Some(path) = extract_quoted_path(line, ": \"", '"') {
             return Some(path);
         }
+        if let Some(path) = extract_unquoted_absolute_path(line) {
+            return Some(path);
+        }
     }
     None
 }
@@ -192,6 +182,22 @@ fn extract_quoted_path(line: &str, marker: &str, quote: char) -> Option<String> 
     let rest = &line[start + marker.len()..];
     let end = rest.find(quote)?;
     Some(rest[..end].to_string())
+}
+
+fn extract_unquoted_absolute_path(line: &str) -> Option<String> {
+    let start = line.find('/')?;
+    let rest = &line[start..];
+    let end = rest
+        .find(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | ',' | ';' | ')' | ']' | '"' | '\'')
+        })
+        .unwrap_or(rest.len());
+    let path = rest[..end].trim_end_matches('.');
+    if path.is_empty() || path == "/" {
+        None
+    } else {
+        Some(path.to_string())
+    }
 }
 
 fn tool_install_hint(tool_name: &str) -> Option<&'static str> {
@@ -301,6 +307,10 @@ mod tests {
         let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
         assert!(hint.contains("--fork-from 01KTEST123"), "got: {hint}");
         assert!(
+            hint.contains("denied for /home/obj/.claude-mem/settings.json.tmp.1234"),
+            "got: {hint}"
+        );
+        assert!(
             hint.contains("--extra-writable /home/obj/.claude-mem"),
             "got: {hint}"
         );
@@ -311,7 +321,23 @@ mod tests {
     fn sandbox_fs_denial_hint_fires_on_permission_denied() {
         let stderr = "PermissionError: [Errno 13] Permission denied: '/etc/foo'";
         let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
+        assert!(hint.contains("denied for /etc/foo"), "got: {hint}");
         assert!(hint.contains("--extra-writable /etc"), "got: {hint}");
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_fires_on_unquoted_bwrap_path() {
+        let stderr =
+            "bwrap: Can't mkdir parents for /home/obj/.cache/tool/state: Read-only file system";
+        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
+        assert!(
+            hint.contains("denied for /home/obj/.cache/tool/state"),
+            "got: {hint}"
+        );
+        assert!(
+            hint.contains("--extra-writable /home/obj/.cache/tool"),
+            "got: {hint}"
+        );
     }
 
     #[test]
@@ -329,12 +355,22 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_fs_denial_hint_generic_path_fallback_when_no_parse() {
+    fn sandbox_fs_denial_hint_suppressed_without_denied_path() {
         let stderr = "bash: cannot create file: Read-only file system";
-        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123").unwrap();
-        assert!(
-            hint.contains("--extra-writable /path/to/needed/dir"),
-            "got: {hint}"
-        );
+        let hint = sandbox_fs_denial_hint(stderr, "", true, "01KTEST123");
+        assert!(hint.is_none(), "got: {hint:?}");
+    }
+
+    #[test]
+    fn sandbox_fs_denial_hint_ignores_source_text_in_stdout() {
+        let stdout = r#"
+            const SANDBOX_FS_DENIAL_MARKERS: [&str; 3] = [
+                "permission denied",
+                "bwrap",
+                "landlock",
+            ];
+        "#;
+        let hint = sandbox_fs_denial_hint("tool exited with status 1", stdout, true, "01KTEST123");
+        assert!(hint.is_none(), "got: {hint:?}");
     }
 }
