@@ -3,7 +3,7 @@
 //! Extracted verbatim from `debate_cmd::handle_debate` to keep that module
 //! under the monolith gate. Resolves the debate question from
 //! `--prompt-file` / positional / `--topic` / stdin, strips difficulty
-//! frontmatter, and prepends `--context` and `--file` content.
+//! frontmatter, and prepends `--context` and repeated `--file` content.
 
 use anyhow::{Context, Result};
 
@@ -29,22 +29,27 @@ pub(super) fn build_debate_question(args: &mut DebateArgs) -> Result<(String, Op
     if let Some(ctx) = &args.context {
         question = format!("<debate-context>\n{ctx}\n</debate-context>\n\n{question}");
     }
-    if let Some(file_path) = &args.file {
+    let mut attached_files = String::new();
+    for file_path in &args.file {
+        let file_display = file_path.display();
         let metadata = std::fs::metadata(file_path)
-            .with_context(|| format!("Failed to stat --file: {file_path}"))?;
+            .with_context(|| format!("Failed to stat --file: {file_display}"))?;
         if metadata.len() > MAX_FILE_SIZE {
             anyhow::bail!(
                 "--file '{}' is too large ({} bytes, max {} bytes)",
-                file_path,
+                file_display,
                 metadata.len(),
                 MAX_FILE_SIZE
             );
         }
         let file_content = std::fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read --file: {file_path}"))?;
-        question = format!(
-            "<attached-file path=\"{file_path}\">\n{file_content}\n</attached-file>\n\n{question}"
-        );
+            .with_context(|| format!("Failed to read --file: {file_display}"))?;
+        attached_files.push_str(&format!(
+            "<attached-file path=\"{file_display}\">\n{file_content}\n</attached-file>\n\n"
+        ));
+    }
+    if !attached_files.is_empty() {
+        question = format!("{attached_files}{question}");
     }
     Ok((question, frontmatter_difficulty))
 }

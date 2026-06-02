@@ -498,8 +498,8 @@ pub struct DebateArgs {
     pub context: Option<String>,
 
     /// Attach a file as context for the debate (content prepended to prompt)
-    #[arg(long)]
-    pub file: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub file: Vec<PathBuf>,
 
     /// Disable filesystem sandbox isolation (bwrap/landlock)
     #[arg(long)]
