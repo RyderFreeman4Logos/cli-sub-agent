@@ -427,30 +427,7 @@ async fn run() -> Result<()> {
         } => {
             config_cmds::handle_init(non_interactive, full, template)?;
         }
-        Commands::Gc(gc::GcArgs {
-            dry_run,
-            max_age_days,
-            reap_runtime,
-            global,
-        }) => {
-            if global {
-                gc::handle_gc_global(
-                    dry_run,
-                    max_age_days,
-                    reap_runtime,
-                    output_format,
-                    startup_env.session_id(),
-                )?;
-            } else {
-                gc::handle_gc(
-                    dry_run,
-                    max_age_days,
-                    reap_runtime,
-                    output_format,
-                    startup_env.session_id(),
-                )?;
-            }
-        }
+        Commands::Gc(args) => gc::handle_gc_args(args, output_format, startup_env.session_id())?,
         Commands::Config { cmd } => match cmd {
             ConfigCommands::Show { cd } => {
                 config_cmds::handle_config_show(cd, output_format)?;

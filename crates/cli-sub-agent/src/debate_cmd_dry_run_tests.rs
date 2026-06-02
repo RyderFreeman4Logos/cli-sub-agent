@@ -1,6 +1,6 @@
 use super::*;
 use crate::debate_cmd_output::{DebateOutputHeader, DebateSummary, format_debate_stdout_text};
-use csa_core::types::ToolName;
+use csa_core::types::{ToolArg, ToolName};
 
 #[test]
 fn format_debate_stdout_text_includes_prompt_bytes_header() {
@@ -29,6 +29,15 @@ fn debate_cli_parses_dry_run_flag() {
 #[test]
 fn debate_explicit_tool_keeps_failover_enabled_by_default() {
     let args = parse_debate_args(&["csa", "debate", "--tool", "gemini-cli", "question"]);
-    assert_eq!(args.tool, Some(ToolName::GeminiCli));
+    assert!(matches!(
+        args.tool,
+        Some(ToolArg::Specific(ToolName::GeminiCli))
+    ));
     assert!(!args.no_failover);
+}
+
+#[test]
+fn debate_cli_parses_tool_auto_as_auto_selection() {
+    let args = parse_debate_args(&["csa", "debate", "--tool", "auto", "question"]);
+    assert!(matches!(args.tool, Some(ToolArg::Auto)));
 }

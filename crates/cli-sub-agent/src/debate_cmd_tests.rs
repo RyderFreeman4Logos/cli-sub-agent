@@ -689,6 +689,42 @@ fn parse_debate_args(argv: &[&str]) -> crate::cli::DebateArgs {
 }
 
 #[test]
+fn debate_cli_repeats_file_and_attaches_all_context_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("a.md");
+    let second = temp.path().join("b.md");
+    std::fs::write(&first, "first context").unwrap();
+    std::fs::write(&second, "second context").unwrap();
+    let first_arg = first.display().to_string();
+    let second_arg = second.display().to_string();
+
+    let mut args = parse_debate_args(&[
+        "csa",
+        "debate",
+        "--file",
+        &first_arg,
+        "--file",
+        &second_arg,
+        "question",
+    ]);
+
+    assert_eq!(args.file, vec![first.clone(), second.clone()]);
+
+    let (question, difficulty) =
+        super::question::build_debate_question(&mut args).expect("question should build");
+    assert_eq!(difficulty, None);
+    assert!(question.contains("first context"));
+    assert!(question.contains("second context"));
+    let first_index = question.find("first context").unwrap();
+    let second_index = question.find("second context").unwrap();
+    let prompt_index = question.find("question").unwrap();
+    assert!(
+        first_index < second_index && second_index < prompt_index,
+        "attached files must preserve CLI order before the prompt: {question}"
+    );
+}
+
+#[test]
 fn debate_cli_parses_global_json_format() {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
@@ -801,6 +837,12 @@ fn debate_cli_parses_no_stream_stdout_flag() {
 }
 
 #[test]
+fn debate_cli_parses_no_error_marker_scan_flag() {
+    let args = parse_debate_args(&["csa", "debate", "--no-error-marker-scan", "question"]);
+    assert!(args.no_error_marker_scan);
+}
+
+#[test]
 fn debate_cli_defaults_no_timeout() {
     let args = parse_debate_args(&["csa", "debate", "question"]);
     assert_eq!(args.timeout, None);
@@ -808,6 +850,7 @@ fn debate_cli_defaults_no_timeout() {
     assert_eq!(args.thinking, None);
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
+    assert!(!args.no_error_marker_scan);
     assert!(!args.dry_run);
 }
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{ArgGroup, ValueEnum};
-use csa_core::types::ToolName;
+use csa_core::types::{ToolArg, ToolName};
 
 use super::{Commands, parse_model_spec_arg, parse_spec_path_arg};
 
@@ -404,7 +404,7 @@ pub struct DebateArgs {
     /// Combine with --tier to use that tier's model/thinking for the selected tool.
     /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
     #[arg(long)]
-    pub tool: Option<ToolName>,
+    pub tool: Option<ToolArg>,
 
     /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
     #[arg(long)]
@@ -479,6 +479,12 @@ pub struct DebateArgs {
     #[arg(long)]
     pub no_stream_stdout: bool,
 
+    /// Disable the fatal-error-marker silent-hang scan for this session. Use
+    /// when debate prose legitimately contains provider error markers. The
+    /// idle-timeout and wall-clock timeout still apply. Default: scan enabled.
+    #[arg(long)]
+    pub no_error_marker_scan: bool,
+
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,
@@ -498,8 +504,8 @@ pub struct DebateArgs {
     pub context: Option<String>,
 
     /// Attach a file as context for the debate (content prepended to prompt)
-    #[arg(long)]
-    pub file: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub file: Vec<PathBuf>,
 
     /// Disable filesystem sandbox isolation (bwrap/landlock)
     #[arg(long)]

@@ -158,7 +158,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 request.readonly_project_root,
                 &request.args.extra_writable,
                 &request.args.extra_readable,
-                false, // #1745: no debate flag; config decides (shared monitor).
+                request.args.no_error_marker_scan,
                 request.startup_env,
             );
 

@@ -17,4 +17,8 @@ pub struct GcArgs {
     /// Scan all projects under ~/.local/state/cli-sub-agent/ (not just current project)
     #[arg(long)]
     pub global: bool,
+
+    /// Working directory (defaults to CWD)
+    #[arg(long)]
+    pub cd: Option<String>,
 }
