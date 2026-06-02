@@ -37,7 +37,8 @@ use post_exec_gate::{
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
     RunModelSelectionFlags, enforce_run_tier_bypass_gate, resolve_primary_writer_spec_for_run,
-    resolve_run_effective_tier, resolve_run_no_failover, resolve_run_tier_context,
+    resolve_run_effective_tier, resolve_run_no_failover, resolve_run_subtree_pin_selection,
+    resolve_run_tier_context,
 };
 use run_cli_flags::{
     resolve_return_target, warn_deprecated_session_flags,
@@ -280,10 +281,6 @@ pub(crate) async fn handle_run(
     let primary_writer_spec =
         resolve_primary_writer_spec_for_run(model_selection_flags, config.as_ref(), &global_config);
     let model_spec = model_spec.or(primary_writer_spec);
-    let subtree_model_pin_spec = model_pin_resolution
-        .subtree_model_pin_active
-        .then(|| model_spec.clone())
-        .flatten();
 
     let mut merged_aliases = global_config.tool_aliases.clone();
     if let Some(c) = config.as_ref() {
@@ -421,6 +418,13 @@ pub(crate) async fn handle_run(
     let resolved_model = strategy_result.model;
     let strategy_resolved_tier_name = strategy_result.resolved_tier_name;
     let resolved_tool = strategy_result.tool;
+    let subtree_model_pin_selection = resolve_run_subtree_pin_selection(
+        model_pin_resolution.subtree_model_pin_active,
+        model_spec.as_deref(),
+        user_explicit_tool,
+        effective_tier.is_some(),
+        resolved_model_spec.as_deref(),
+    );
     warn_if_fast_mode_has_no_codex_run_candidate(
         fast_but_more_cost,
         resolved_tool,
@@ -531,7 +535,9 @@ pub(crate) async fn handle_run(
         initial_tool: resolved_tool,
         initial_model_spec: resolved_model_spec,
         user_model_spec_explicit: false,
-        subtree_model_pin_spec: subtree_model_pin_spec.as_deref(),
+        subtree_model_pin_spec: subtree_model_pin_selection.model_spec.as_deref(),
+        subtree_model_pin_force_ignore_tier_setting: subtree_model_pin_selection
+            .force_ignore_tier_setting,
         initial_model: resolved_model,
         runtime_fallback_candidates: heterogeneous_runtime_fallback_candidates,
         project_root: &project_root,
