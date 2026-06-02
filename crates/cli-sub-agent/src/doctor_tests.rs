@@ -50,6 +50,16 @@ fn project_config_with_claude_code_transport(transport: TransportKind) -> Projec
     project_config_with_tool_transport("claude-code", transport)
 }
 
+fn project_config_with_disabled_tool(tool_name: &str, transport: TransportKind) -> ProjectConfig {
+    let mut config = project_config_with_tool_transport(tool_name, transport);
+    config
+        .tools
+        .get_mut(tool_name)
+        .expect("tool config should exist")
+        .enabled = false;
+    config
+}
+
 fn write_project_config(project_root: &Path, contents: &str) {
     let config_dir = project_root.join(".csa");
     std::fs::create_dir_all(&config_dir).expect("create config dir");
@@ -137,6 +147,8 @@ fn test_check_tool_status_nonexistent() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let status = check_tool_status("nonexistent-tool", None);
     assert!(!status.is_ready());
+    assert!(status.config_enabled);
+    assert!(!status.binary_available());
     assert!(status.version.is_none());
 }
 
@@ -156,7 +168,44 @@ fn default_build_doctor_accepts_codex_cli_runtime() {
             "doctor should accept the default codex CLI transport"
         );
         assert_eq!(status.binary_name, "codex");
+        assert!(status.config_enabled);
+        assert!(status.binary_available());
         assert!(status.hint.is_none());
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_status_uses_runtime_gate_when_tool_is_disabled_but_binary_exists() {
+    with_stubbed_codex_on_path(|| {
+        let config = project_config_with_disabled_tool("codex", TransportKind::Cli);
+        let status = check_tool_status("codex", Some(&config));
+        let rendered = render_tool_status_lines(&status).join("\n");
+        let json = tool_status_json(&status);
+
+        assert!(
+            !status.is_ready(),
+            "doctor readiness must reject tools disabled in runtime config"
+        );
+        assert!(!status.config_enabled);
+        assert!(status.binary_available());
+        assert_eq!(status.availability, ToolAvailabilityState::Installed);
+        assert!(
+            rendered.contains("Enabled: no"),
+            "overall doctor Enabled line must match runtime gate: {rendered}"
+        );
+        assert!(
+            rendered.contains("Config enabled: no"),
+            "doctor text should show the config condition: {rendered}"
+        );
+        assert!(
+            rendered.contains("Binary available: yes"),
+            "doctor text should show the binary condition: {rendered}"
+        );
+        assert_eq!(json["enabled"], Value::Bool(false));
+        assert_eq!(json["config_enabled"], Value::Bool(false));
+        assert_eq!(json["binary_available"], Value::Bool(true));
+        assert_eq!(json["installed"], Value::Bool(true));
     });
 }
 
