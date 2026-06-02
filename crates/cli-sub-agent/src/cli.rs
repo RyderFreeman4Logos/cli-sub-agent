@@ -500,6 +500,10 @@ pub struct MergeArgs {
     #[arg(value_name = "PR_NUMBER", value_parser = clap::value_parser!(u64).range(1..))]
     pub pr_number: u64,
 
+    /// Working directory (defaults to CWD)
+    #[arg(long)]
+    pub cd: Option<String>,
+
     /// Base branch to check out and pull after merge (defaults to PR base or main)
     #[arg(long, value_name = "BRANCH")]
     pub base: Option<String>,
