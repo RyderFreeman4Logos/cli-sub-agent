@@ -83,11 +83,12 @@ canonical repository.
 Tool: bash
 
 Ensure all changes committed. Set `WORKFLOW_BRANCH`, `REMOTE_NAME`, `REPO_SLUG`, and `DEFAULT_BRANCH` once
-(both persist through clean branch switches in Step 11).
+(both persist through clean branch switches in Step 11). Declare `PR_WAS_EXISTING`
+so the Step 3 PR lookup result persists into cloud-bot trigger selection.
 
 ```bash
 # Force weave to pick up workflow variables used across steps.
-: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${REPO_SLUG}" "${DEFAULT_BRANCH}"
+: "${WORKFLOW_BRANCH}" "${REVIEW_COMPLETED}" "${REMOTE_NAME}" "${REPO_SLUG}" "${DEFAULT_BRANCH}" "${PR_WAS_EXISTING}"
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 WORKFLOW_BRANCH="$(git branch --show-current)"
@@ -1320,10 +1321,6 @@ Fetch the review comment body yourself:
 MUST use independent model arbitration. NEVER dismiss bot comments using only
 your own reasoning.
 
-## INCLUDE debate
-
-MUST use independent model for arbitration.
-NEVER dismiss bot comments using own reasoning alone.
 Emit structured output for the caller:
 - `VERDICT: DISMISSED|CONFIRMED`
 - `RATIONALE: ...`
@@ -1335,6 +1332,12 @@ Emit structured output for the caller:
 
 Emit each marker exactly once, in the order shown, and do not repeat the
 format description in the answer.
+
+If the finding is valid, emit `VERDICT: CONFIRMED`. If it is not a real issue,
+emit `VERDICT: DISMISSED` and include the full explanatory PR comment between
+the PR comment markers.
+
+## INCLUDE debate
 
 The workflow posts the audit trail to PR in a dedicated `gh pr comment` step
 and aborts if comment creation fails.
@@ -1364,25 +1367,25 @@ Parse the structured debate result from Step 8.
 ```bash
 set -euo pipefail
 DEBATE_OUTPUT="${STEP_12_OUTPUT}"
-VERDICT_COUNT="$(
-  printf '%s\n' "${DEBATE_OUTPUT}" \
-    | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
-    || true
-)"
-if [ "${VERDICT_COUNT}" != "1" ]; then
-  echo "ERROR: Debate output must contain exactly one VERDICT marker." >&2
-  exit 1
-fi
 VERDICT_MARKER="$(
   printf '%s\n' "${DEBATE_OUTPUT}" \
-    | grep -E '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
-    | tail -n 1 \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | sed -n -E 's/^[[:space:]]*VERDICT:[[:space:]]*([^[:space:]]+)[[:space:]]*$/VERDICT: \1/p' \
+    | sort -u \
     || true
 )"
+VERDICT_COUNT="$(
+  printf '%s\n' "${VERDICT_MARKER}" \
+    | sed '/^$/d' \
+    | wc -l \
+    | tr -d '[:space:]'
+)"
 
-if [ -z "${VERDICT_MARKER}" ]; then
+if [ "${VERDICT_COUNT}" = "0" ]; then
   echo "ERROR: Debate output missing VERDICT marker." >&2
+  exit 1
+fi
+if [ "${VERDICT_COUNT}" != "1" ]; then
+  echo "ERROR: Debate output contains conflicting VERDICT markers." >&2
   exit 1
 fi
 
@@ -1611,7 +1614,7 @@ it waits for a new current-window review before proceeding. This distinguishes
 The gate:
 1. Records push timestamp before checking
 2. Checks for an already-posted exact current-HEAD review before retriggering; otherwise polls for a new review event from `${CLOUD_BOT_LOGIN}` on the current HEAD
-3. If review event found AND has P0/P1/P2 inline comments → **abort** (user must re-run pr-bot)
+3. If review event found AND has P0/P1/HIGH/CRITICAL inline comments → **abort** (user must re-run pr-bot)
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range ${DEFAULT_BRANCH}...HEAD`
 
@@ -1742,6 +1745,95 @@ if [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
   fi
 fi
 
+# --- Setup message check (runs before any fallback to catch config issues) ---
+# NOTE: Similar to _check_setup_message_step5 in Step 5, but with different
+# semantics: Step 5 soft-detects (sets BOT_NEEDS_SETUP, returns 0/1);
+# this version hard-fails (exit 1) because post-fix is too late to recover.
+_check_setup_message() {
+  set +e
+  local setup_body
+  setup_body="$(
+    gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+      | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
+      2>/dev/null
+  )"
+  set -e
+  if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+    echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
+    echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
+    echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
+    exit 1
+  fi
+}
+
+_local_review_failure_is_degraded() {
+  local review_output
+  review_output="$(cat)"
+  if printf '%s\n' "${review_output}" | grep -Eiq 'Review verdict:[[:space:]]*(FAIL|HAS_ISSUES)|"decision"[[:space:]]*:[[:space:]]*"fail"|(^|[^A-Za-z])HAS_ISSUES([^A-Za-z]|$)'; then
+    return 1
+  fi
+  printf '%s\n' "${review_output}" | grep -Eiq 'Review verdict:[[:space:]]*UNAVAILABLE|"decision"[[:space:]]*:[[:space:]]*"unavailable"|Review unavailable:|(^|[^A-Za-z])UNAVAILABLE([^A-Za-z]|$)|tool[^[:cntrl:]]*unavailable|OAuth prompt|authentication required|MCP init degraded'
+}
+
+_allow_degraded_local_review_merge() {
+  local reason="$1"
+  echo "WARN: ${reason}" >&2
+  echo "WARN: Cloud bot produced no blocking findings; routing to merge rationale because local fallback review is unavailable/degraded." >&2
+  BOT_UNAVAILABLE=true
+  FALLBACK_REVIEW_HAS_ISSUES=false
+  BOT_HAS_ISSUES=false
+  MERGE_WITHOUT_BOT_REASON_KIND="local_review_degraded_no_blocking_findings"
+}
+
+_run_local_fallback_review() {
+  local allow_degraded_merge="${1:-false}"
+  local launch_output
+  local launch_rc
+  local sid
+  local review_result
+  local review_rc
+
+  set +e
+  launch_output="$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD" 2>&1)"
+  launch_rc=$?
+  set -e
+  if [ "${launch_rc}" -ne 0 ]; then
+    if [ "${allow_degraded_merge}" = "true" ] && printf '%s\n' "${launch_output}" | _local_review_failure_is_degraded; then
+      _allow_degraded_local_review_merge "Local fallback review launch failed with an unavailable/degraded reviewer (rc=${launch_rc})."
+      return 0
+    fi
+    echo "ERROR: Failed to launch local fallback review after fix (rc=${launch_rc}). Cannot merge." >&2
+    printf '%s\n' "${launch_output}" >&2
+    exit 1
+  fi
+
+  sid="$(printf '%s\n' "${launch_output}" | grep -Eo '[0-9A-HJKMNP-TV-Z]{26}' | tail -n 1 || true)"
+  if [ -z "${sid}" ]; then
+    if [ "${allow_degraded_merge}" = "true" ] && printf '%s\n' "${launch_output}" | _local_review_failure_is_degraded; then
+      _allow_degraded_local_review_merge "Local fallback review did not return a session id because the reviewer is unavailable/degraded."
+      return 0
+    fi
+    echo "ERROR: Local fallback review did not return a session id. Cannot merge." >&2
+    printf '%s\n' "${launch_output}" >&2
+    exit 1
+  fi
+
+  LOCAL_REVIEW_SESSION_ID="${sid}"
+  set +e
+  review_result="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${sid}" 2>&1)"
+  review_rc=$?
+  set -e
+  printf '%s\n' "${review_result}"
+  if [ "${review_rc}" -ne 0 ]; then
+    if [ "${allow_degraded_merge}" = "true" ] && printf '%s\n' "${review_result}" | _local_review_failure_is_degraded; then
+      _allow_degraded_local_review_merge "Local fallback review session ${sid} ended unavailable/degraded (rc=${review_rc})."
+      return 0
+    fi
+    echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+    exit 1
+  fi
+}
+
 if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
   BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
   sleep "${BOT_SETTLE_SECS}"
@@ -1760,45 +1852,24 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     set -e
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
   fi
-  # --- Setup message check (runs before any fallback to catch config issues) ---
-  # NOTE: Similar to _check_setup_message_step5 in Step 5, but with different
-  # semantics: Step 5 soft-detects (sets BOT_NEEDS_SETUP, returns 0/1);
-  # this version hard-fails (exit 1) because post-fix is too late to recover.
-  _check_setup_message() {
-    set +e
-    local setup_body
-    setup_body="$(
-      gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-        | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'")] | .[0].body // ""' \
-        2>/dev/null
-    )"
-    set -e
-    if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
-      echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
-      echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
-      echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
-      exit 1
-    fi
-  }
-
   if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
     echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
     _check_setup_message
     REVIEW_API_FAILED=true
   fi
-  # --- Check inline comments for actionable findings ---
+  # --- Check inline comments for blocking findings ---
   if [ "${BOT_CLEAN}" != "true" ]; then
     set +e
     if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "true" ]; then
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${POST_FIX_REUSED_REVIEW_ID}/comments?per_page=100" \
-          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
+          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|critical|high)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     else
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|critical|high)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     fi
@@ -1810,33 +1881,38 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     fi
     case "${ACTIONABLE_COUNT:-}" in
       ''|*[!0-9]*)
-        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
+        echo "ERROR: Invalid blocking comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
         exit 1
         ;;
     esac
     if [ "${ACTIONABLE_COUNT}" -gt 0 ]; then
-      echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
+      echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new blocking finding(s). Cannot merge." >&2
       echo "Re-run pr-bot to start a new fix cycle."
       exit 1
     elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ] || [ "${REVIEW_API_FAILED:-false}" = "true" ]; then
       echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} since ${POST_FIX_REVIEW_WINDOW_START}." >&2
       _check_setup_message
-      echo "Falling back to local review." >&2
-      SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
-      if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
-        echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
-        exit 1
+      allow_degraded_merge=false
+      set +e
+      nonblocking_comment_count="$(
+        gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P2|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
+          2>/dev/null
+      )"
+      nonblocking_count_rc=$?
+      set -e
+      if [ "${nonblocking_count_rc}" -eq 0 ] && [ "${nonblocking_comment_count:-0}" -gt 0 ] 2>/dev/null; then
+        allow_degraded_merge=true
+        echo "Detected ${nonblocking_comment_count} non-blocking MEDIUM/P2 bot comment(s); local fallback degradation may use merge-rationale path." >&2
       fi
+      echo "Falling back to local review." >&2
+      _run_local_fallback_review "${allow_degraded_merge}"
     fi
   fi
   BOT_CLEAN=true
 else
   echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
-  SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
-  if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
-    echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
-    exit 1
-  fi
+  _run_local_fallback_review false
   BOT_CLEAN=true
 fi
 
@@ -1849,6 +1925,10 @@ fi
 BOT_HAS_ISSUES=false
 echo "CSA_VAR:POST_FIX_REUSED_REVIEW_ID=${POST_FIX_REUSED_REVIEW_ID}"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
+echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
+echo "CSA_VAR:LOCAL_REVIEW_SESSION_ID=${LOCAL_REVIEW_SESSION_ID:-}"
+echo "CSA_VAR:MERGE_WITHOUT_BOT_REASON_KIND=${MERGE_WITHOUT_BOT_REASON_KIND:-}"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```
 
@@ -1918,9 +1998,10 @@ Note: this Step 6a path now also covers the latest-comment quota fallback once
 the workflow records the quota window.
 
 **MANDATORY**: Before merging, leave a PR comment explaining the merge rationale.
-This step has two audit-trail cases:
+This step has three audit-trail cases:
 - `cloud_bot=false`: "cloud_bot=false (disabled in config); merging on local review clean"
 - `MERGE_WITHOUT_BOT_REASON_KIND=cloud_bot_quota_exhausted`: explain the cached quota window and cite the local review session ID
+- `MERGE_WITHOUT_BOT_REASON_KIND=local_review_degraded_no_blocking_findings`: explain that the cloud bot produced no blocking findings and the local fallback review was unavailable/degraded
 When `MERGE_WITHOUT_BOT_REASON_KIND=cloud_bot_quota_exhausted`, the audit trail
 must explain the cached quota window and cite the local review session ID.
 
@@ -1961,6 +2042,23 @@ elif [ "${MERGE_WITHOUT_BOT_REASON_KIND:-}" = "cloud_bot_quota_exhausted" ]; the
       "Configured cloud bot \`${CLOUD_BOT_NAME}\` is quota-exhausted (detected at \`${CLOUD_BOT_QUOTA_EXHAUSTED_AT:-unknown}\`, expected reset \`${CLOUD_BOT_QUOTA_EXPECTED_RESET_AT:-unknown}\`). Per pr-bot quota fallback, routing to the bot-unavailable + local-review-clean merge path." \
       '' \
       "**Local pre-merge review verdict**: CLEAN (session \`${LOCAL_REVIEW_SESSION_ID:-unknown}\`)" \
+      '' \
+      '**Diff scope**:' \
+      '\`\`\`' \
+      "${DIFF_SUMMARY}" \
+      '\`\`\`'
+  )"
+elif [ "${MERGE_WITHOUT_BOT_REASON_KIND:-}" = "local_review_degraded_no_blocking_findings" ]; then
+  MERGE_REASON="cloud bot reported no blocking findings; local fallback review unavailable/degraded"
+  COMMENT_BODY="$(
+    printf '%s\n' \
+      '## Merge audit trail — local fallback review degraded' \
+      '' \
+      "Configured cloud bot \`${CLOUD_BOT_NAME}\` produced no HIGH/CRITICAL/P1 blocking findings. MEDIUM/P2 comments are non-blocking follow-up by policy." \
+      '' \
+      "Local fallback review could not complete with an available reviewer, so pr-bot is proceeding through the explicit degraded-local-review rationale path instead of aborting on a non-blocking cloud review." \
+      '' \
+      "**Local fallback review session**: \`${LOCAL_REVIEW_SESSION_ID:-unavailable}\`" \
       '' \
       '**Diff scope**:' \
       '\`\`\`' \

@@ -423,6 +423,57 @@ async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
 }
 
 #[tokio::test]
+async fn execute_step_bash_dedupes_identical_verdict_markers() {
+    let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
+    let tmp = tempfile::tempdir().unwrap();
+    let capture_path = install_fake_gh(tmp.path());
+    let duplicate_verdict_output = r#"VERDICT: DISMISSED
+RATIONALE: The first marker is duplicated by a later identical marker.
+VERDICT: DISMISSED
+PR_COMMENT_START
+**Local arbitration result: DISMISSED.**
+
+## Participants
+- **Author**: codex/openai/gpt-5/xhigh
+- **Arbiter**: gemini-cli/google/default/xhigh
+
+## Bot Concern
+Identical verdict markers are noisy but not ambiguous.
+
+## Debate Summary
+### Round 1
+- **Proposer** (`codex/openai/gpt-5/xhigh`): Duplicate identical verdicts should collapse.
+- **Critic** (`gemini-cli/google/default/xhigh`): Conflicting verdicts must still fail closed.
+
+## Conclusion
+The repeated identical verdict is treated as one DISMISSED verdict.
+
+CSA session ID: 01TESTDEBATESESSIONID
+PR_COMMENT_END
+"#;
+    let vars = step_15_env(tmp.path(), &capture_path, duplicate_verdict_output);
+
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
+
+    assert_eq!(
+        result.exit_code, 0,
+        "error={:?} output={:?}",
+        result.error, result.output
+    );
+    assert!(
+        result
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("CSA_VAR:AUDIT_TRAIL_POSTED=true")
+    );
+
+    let comment = std::fs::read_to_string(&capture_path).unwrap();
+    assert!(comment.contains("Identical verdict markers are noisy but not ambiguous."));
+    assert!(comment.contains("CSA session ID: 01TESTDEBATESESSIONID"));
+}
+
+#[tokio::test]
 async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() {
     let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
     let tmp = tempfile::tempdir().unwrap();
@@ -495,7 +546,7 @@ CSA session ID: 01TESTDEBATESESSIONID
 }
 
 #[tokio::test]
-async fn execute_step_bash_fails_closed_on_duplicate_verdict_markers() {
+async fn execute_step_bash_fails_closed_on_conflicting_verdict_markers() {
     let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
