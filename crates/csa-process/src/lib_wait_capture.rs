@@ -75,8 +75,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     let last_stdout_activity = last_activity;
     let mut last_heartbeat = execution_start;
     let heartbeat_interval = resolve_heartbeat_interval();
-    let mut liveness_dead_since: Option<Instant> = None;
-    let mut next_liveness_poll_at: Option<Instant> = None;
+    let mut idle_watchdog_state = IdleWatchdogState::default();
     let mut received_first_output = false;
     let mut idle_timed_out = false;
     let mut workspace_boundary_timed_out = false;
@@ -131,8 +130,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             received_first_output = true;
                             last_activity = Instant::now();
                             last_heartbeat = last_activity;
-                            liveness_dead_since = None;
-                            next_liveness_poll_at = None;
+                            idle_watchdog_state.reset_on_activity();
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
                             if let (Some(dir), Some(spool)) = (session_dir, spool_file.as_ref()) {
@@ -179,8 +177,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             // the initial_response_timeout.
                             last_activity = Instant::now();
                             last_heartbeat = last_activity;
-                            liveness_dead_since = None;
-                            next_liveness_poll_at = None;
+                            idle_watchdog_state.reset_on_activity();
                             let chunk = String::from_utf8_lossy(&stderr_buf[..n]);
                             spool_chunk(&mut stderr_spool_file, &stderr_buf[..n]);
                             let previous_stderr_len = stderr_output.len();
@@ -224,21 +221,20 @@ pub async fn wait_and_capture_with_idle_timeout(
                         effective_idle,
                     );
                     let idle_termination = if !received_first_output && initial_response_timeout.is_some() {
-                        should_terminate_for_initial_response(
+                        should_terminate_for_initial_response_with_state(
                             last_stdout_activity,
                             effective_idle,
                             session_dir,
-                            &mut next_liveness_poll_at,
+                            &mut idle_watchdog_state,
                             spawn_options.error_marker_scan_enabled,
                         )
                     } else {
-                        should_terminate_for_idle(
+                        should_terminate_for_idle_with_state(
                             &mut last_activity,
                             effective_idle,
                             liveness_dead_timeout,
                             session_dir,
-                            &mut liveness_dead_since,
-                            &mut next_liveness_poll_at,
+                            &mut idle_watchdog_state,
                             spawn_options.error_marker_scan_enabled,
                         )
                     };
@@ -295,8 +291,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             received_first_output = true;
                             last_activity = Instant::now();
                             last_heartbeat = last_activity;
-                            liveness_dead_since = None;
-                            next_liveness_poll_at = None;
+                            idle_watchdog_state.reset_on_activity();
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
                             if let (Some(dir), Some(spool)) = (session_dir, spool_file.as_ref()) {
@@ -339,21 +334,20 @@ pub async fn wait_and_capture_with_idle_timeout(
                         effective_idle,
                     );
                     let idle_termination = if !received_first_output && initial_response_timeout.is_some() {
-                        should_terminate_for_initial_response(
+                        should_terminate_for_initial_response_with_state(
                             last_stdout_activity,
                             effective_idle,
                             session_dir,
-                            &mut next_liveness_poll_at,
+                            &mut idle_watchdog_state,
                             spawn_options.error_marker_scan_enabled,
                         )
                     } else {
-                        should_terminate_for_idle(
+                        should_terminate_for_idle_with_state(
                             &mut last_activity,
                             effective_idle,
                             liveness_dead_timeout,
                             session_dir,
-                            &mut liveness_dead_since,
-                            &mut next_liveness_poll_at,
+                            &mut idle_watchdog_state,
                             spawn_options.error_marker_scan_enabled,
                         )
                     };
