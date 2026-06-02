@@ -143,15 +143,11 @@ async fn spawn_bash(
         .env("CSA_WORKFLOW_DIR", workflow_dir)
         .env("CSA_DEPTH", startup_env.next_depth_string())
         .env("CSA_INTERNAL_INVOCATION", "1");
-    // #1741: this bash step is marked as a nested CSA invocation (CSA_DEPTH set
-    // above), and `bash` inherits the parent's ambient environment. Any ambient
-    // SUBTREE_PIN_ENV_KEYS would otherwise be read by a nested `csa run` inside
-    // the step as a valid inherited subtree pin, letting a user-controlled
-    // ambient env spoof a pin and silently drop tier routing. Reserve the keys
-    // (env_remove) BEFORE re-applying CSA's own legitimately-inherited pin via
-    // the trusted typed channel — so the keys reach the child IFF CSA decided to
-    // pin, never from ambient/user env. (csa-core/src/env.rs reservation.)
-    apply_sanitized_subtree_pin(&mut cmd, startup_env);
+    // This bash step is a CSA-child boundary because it may run nested `csa`
+    // commands. Reserve the protected contract keys before re-applying CSA's
+    // trusted startup snapshot, so workflow/user env cannot spoof session
+    // genealogy or subtree pins.
+    apply_startup_child_contract_env(&mut cmd, startup_env);
     cmd.current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -159,29 +155,15 @@ async fn spawn_bash(
         .await
 }
 
-/// Reserve the subtree-pin env keys on a child `Command` (which inherits the
-/// parent env), then re-apply CSA's own legitimately-inherited pin via the
-/// trusted typed channel (#1741).
-///
-/// Used by non-executor spawn paths that mark their child as a nested CSA
-/// invocation (set/propagate `CSA_DEPTH`) AND inherit the parent environment.
-/// Without the reservation, an ambient/user-controlled `CSA_MODEL_SPEC` +
-/// `CSA_FORCE_IGNORE_TIER_SETTING` pair would be honored as a subtree pin by a
-/// nested `csa run`. The typed [`SubtreeModelPin`] re-applied here is the sole
-/// writer of the pin keys (and only when this process genuinely inherited a
-/// pin), so a legitimately-propagated pin still cascades unbroken.
-fn apply_sanitized_subtree_pin(cmd: &mut tokio::process::Command, startup_env: &StartupSubtreeEnv) {
-    for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
+fn apply_startup_child_contract_env(
+    cmd: &mut tokio::process::Command,
+    startup_env: &StartupSubtreeEnv,
+) {
+    for key in StartupSubtreeEnv::csa_child_contract_env_keys() {
         cmd.env_remove(key);
     }
-    let inherited_model_pin =
-        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
-    if let Some(pin) =
-        crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref())
-    {
-        for (key, value) in pin.pin_env_entries() {
-            cmd.env(key, value);
-        }
+    for (key, value) in startup_env.to_csa_child_contract_env_vars() {
+        cmd.env(key, value);
     }
 }
 

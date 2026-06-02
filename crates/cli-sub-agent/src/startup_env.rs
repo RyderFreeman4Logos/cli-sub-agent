@@ -7,6 +7,16 @@ use csa_core::env::{
     CSA_SESSION_ID_ENV_KEY, STARTUP_SUBTREE_ENV_KEYS,
 };
 
+const CSA_CHILD_CONTRACT_ENV_KEYS: &[&str] = &[
+    CSA_SESSION_ID_ENV_KEY,
+    CSA_SESSION_DIR_ENV_KEY,
+    CSA_PARENT_SESSION_ENV_KEY,
+    CSA_PARENT_SESSION_DIR_ENV_KEY,
+    CSA_MODEL_SPEC_ENV_KEY,
+    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+    CSA_NO_FAILOVER_ENV_KEY,
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct StartupSubtreeEnv {
     session_id: Option<String>,
@@ -145,16 +155,33 @@ impl StartupSubtreeEnv {
     }
 
     pub(crate) fn apply_to_child_env(&self, env: &mut HashMap<String, String>) {
+        for key in CSA_CHILD_CONTRACT_ENV_KEYS {
+            env.remove(*key);
+        }
         for (key, value) in self.to_child_env_vars() {
             env.insert(key, value);
         }
     }
 
     pub(crate) fn to_child_env_vars(&self) -> Vec<(String, String)> {
-        let mut vars = Vec::new();
-        self.push_child_env_var(&mut vars, CSA_SESSION_ID_ENV_KEY, &self.raw_session_id);
+        let mut vars = self.to_csa_child_contract_env_vars();
         self.push_child_env_var(&mut vars, CSA_DEPTH_ENV_KEY, &self.raw_depth);
         self.push_child_env_var(&mut vars, CSA_PROJECT_ROOT_ENV_KEY, &self.raw_project_root);
+        self.push_child_env_var(
+            &mut vars,
+            CSA_INTERNAL_INVOCATION_ENV_KEY,
+            &self.raw_internal_invocation,
+        );
+        vars
+    }
+
+    pub(crate) fn csa_child_contract_env_keys() -> &'static [&'static str] {
+        CSA_CHILD_CONTRACT_ENV_KEYS
+    }
+
+    pub(crate) fn to_csa_child_contract_env_vars(&self) -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+        self.push_child_env_var(&mut vars, CSA_SESSION_ID_ENV_KEY, &self.raw_session_id);
         self.push_child_env_var(&mut vars, CSA_SESSION_DIR_ENV_KEY, &self.raw_session_dir);
         self.push_child_env_var(
             &mut vars,
@@ -166,18 +193,14 @@ impl StartupSubtreeEnv {
             CSA_PARENT_SESSION_DIR_ENV_KEY,
             &self.raw_parent_session_dir,
         );
-        self.push_child_env_var(
-            &mut vars,
-            CSA_INTERNAL_INVOCATION_ENV_KEY,
-            &self.raw_internal_invocation,
-        );
-        self.push_child_env_var(&mut vars, CSA_MODEL_SPEC_ENV_KEY, &self.raw_model_spec);
-        self.push_child_env_var(
-            &mut vars,
-            CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-            &self.raw_force_ignore_tier_setting,
-        );
-        self.push_child_env_var(&mut vars, CSA_NO_FAILOVER_ENV_KEY, &self.raw_no_failover);
+        let inherited_model_pin = crate::run_cmd_model_pin::inherited_model_pin_from_startup(self);
+        if let Some(pin) =
+            crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref())
+        {
+            for (key, value) in pin.pin_env_entries() {
+                vars.push((key.to_string(), value));
+            }
+        }
         vars
     }
 
@@ -307,6 +330,8 @@ mod tests {
     fn startup_subtree_env_reemits_only_captured_keys() {
         let values = HashMap::from([
             (CSA_DEPTH_ENV_KEY, "0".to_string()),
+            (CSA_PROJECT_ROOT_ENV_KEY, "/repo".to_string()),
+            (CSA_INTERNAL_INVOCATION_ENV_KEY, "1".to_string()),
             (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "false".to_string()),
             (CSA_NO_FAILOVER_ENV_KEY, "0".to_string()),
         ]);
@@ -318,15 +343,78 @@ mod tests {
             child_env,
             vec![
                 (CSA_DEPTH_ENV_KEY.to_string(), "0".to_string()),
-                (
-                    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
-                    "false".to_string(),
-                ),
-                (CSA_NO_FAILOVER_ENV_KEY.to_string(), "0".to_string()),
+                (CSA_PROJECT_ROOT_ENV_KEY.to_string(), "/repo".to_string()),
+                (CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(), "1".to_string()),
             ]
         );
         assert!(!startup.force_ignore_tier_setting());
         assert!(!startup.no_failover());
+    }
+
+    #[test]
+    fn startup_subtree_env_child_contract_env_reemits_identity_parent_and_trusted_pin() {
+        let values = HashMap::from([
+            (CSA_SESSION_ID_ENV_KEY, "01KSESSION".to_string()),
+            (CSA_SESSION_DIR_ENV_KEY, "/repo/session".to_string()),
+            (CSA_PARENT_SESSION_ENV_KEY, "01KPARENT".to_string()),
+            (CSA_PARENT_SESSION_DIR_ENV_KEY, "/repo/parent".to_string()),
+            (CSA_DEPTH_ENV_KEY, "2".to_string()),
+            (
+                CSA_MODEL_SPEC_ENV_KEY,
+                "codex/openai/gpt-5.5/xhigh".to_string(),
+            ),
+            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1".to_string()),
+            (CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+        ]);
+
+        let startup = StartupSubtreeEnv::from_values(values);
+        let child_contract_env = startup.to_csa_child_contract_env_vars();
+
+        assert_eq!(
+            child_contract_env,
+            vec![
+                (CSA_SESSION_ID_ENV_KEY.to_string(), "01KSESSION".to_string()),
+                (
+                    CSA_SESSION_DIR_ENV_KEY.to_string(),
+                    "/repo/session".to_string()
+                ),
+                (
+                    CSA_PARENT_SESSION_ENV_KEY.to_string(),
+                    "01KPARENT".to_string()
+                ),
+                (
+                    CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
+                    "/repo/parent".to_string()
+                ),
+                (
+                    CSA_MODEL_SPEC_ENV_KEY.to_string(),
+                    "codex/openai/gpt-5.5/xhigh".to_string(),
+                ),
+                (
+                    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+                    "1".to_string(),
+                ),
+                (CSA_NO_FAILOVER_ENV_KEY.to_string(), "1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn startup_subtree_env_child_contract_env_does_not_emit_root_pin() {
+        let values = HashMap::from([
+            (CSA_DEPTH_ENV_KEY, "0".to_string()),
+            (
+                CSA_MODEL_SPEC_ENV_KEY,
+                "codex/openai/gpt-5.5/xhigh".to_string(),
+            ),
+            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1".to_string()),
+            (CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+        ]);
+
+        let startup = StartupSubtreeEnv::from_values(values);
+        let child_contract_env = startup.to_csa_child_contract_env_vars();
+
+        assert!(child_contract_env.is_empty());
     }
 
     #[test]
@@ -353,10 +441,6 @@ mod tests {
                 (
                     CSA_SESSION_DIR_ENV_KEY.to_string(),
                     "/repo/child".to_string()
-                ),
-                (
-                    CSA_MODEL_SPEC_ENV_KEY.to_string(),
-                    "codex/openai/gpt-5.5/xhigh".to_string(),
                 ),
             ]
         );
