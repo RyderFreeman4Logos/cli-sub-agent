@@ -43,32 +43,50 @@ pub(crate) struct DebateSummary {
     pub(crate) mode: DebateMode,
 }
 
+pub(crate) struct DebateSummaryExtraction {
+    pub(crate) summary: DebateSummary,
+    pub(crate) had_explicit_verdict: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DebateOutputHeader {
     pub(crate) prompt_bytes: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn extract_debate_summary(
     tool_output: &str,
     fallback_summary: &str,
     mode: DebateMode,
 ) -> DebateSummary {
+    extract_debate_summary_with_metadata(tool_output, fallback_summary, mode).summary
+}
+
+pub(crate) fn extract_debate_summary_with_metadata(
+    tool_output: &str,
+    fallback_summary: &str,
+    mode: DebateMode,
+) -> DebateSummaryExtraction {
     // Prefer the final assistant message(s): when the tool emitted a codex-style
     // JSON event transcript, summary/verdict must come from the assistant text,
     // not from protocol JSON / hook events / tool_result noise (#161). Fall back
     // to the raw output only when no assistant text could be extracted.
     let assistant_text = extract_final_assistant_text(tool_output);
     let source = assistant_text.as_deref().unwrap_or(tool_output);
+    let explicit_verdict = extract_explicit_verdict(source);
     let summary = extract_one_line_summary(source, fallback_summary);
     let key_points = extract_key_points(source, summary.as_str());
-    DebateSummary {
-        verdict: extract_verdict(source).to_string(),
-        decision: None,
-        confidence: extract_confidence(source).to_string(),
-        summary,
-        key_points,
-        failure_reason: None,
-        mode,
+    DebateSummaryExtraction {
+        summary: DebateSummary {
+            verdict: explicit_verdict.unwrap_or("REVISE").to_string(),
+            decision: None,
+            confidence: extract_confidence(source).to_string(),
+            summary,
+            key_points,
+            failure_reason: None,
+            mode,
+        },
+        had_explicit_verdict: explicit_verdict.is_some(),
     }
 }
 
@@ -318,6 +336,7 @@ fn explicit_verdict_token_after_label(normalized_line: &str) -> Option<&'static 
     None
 }
 
+#[cfg(test)]
 pub(crate) fn extract_verdict(output: &str) -> &'static str {
     extract_explicit_verdict(output).unwrap_or("REVISE")
 }

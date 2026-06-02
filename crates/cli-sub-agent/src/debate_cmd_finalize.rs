@@ -8,8 +8,7 @@ use tracing::warn;
 use super::{DebateMode, render_debate_cli_output};
 use crate::debate_cmd_output::{
     DebateOutputHeader, DebateSummary, DebateVerdict, append_debate_artifacts_to_result,
-    extract_debate_summary, extract_explicit_verdict, persist_debate_output_artifacts,
-    render_debate_output,
+    extract_debate_summary_with_metadata, persist_debate_output_artifacts, render_debate_output,
 };
 use crate::tier_model_fallback::{
     TierAttemptFailure, format_all_models_failed_reason, persist_fallback_chain,
@@ -129,18 +128,18 @@ pub(crate) fn finalize_debate_outcome(
                     .unwrap_or(execution.meta_session_id.as_str()),
                 execution.provider_session_id.as_deref(),
             );
-            let debate_summary = extract_debate_summary(
+            let debate_extraction = extract_debate_summary_with_metadata(
                 &output,
                 execution.execution.summary.as_str(),
                 context.debate_mode,
             );
-            let completed_debate_with_verdict = extract_explicit_verdict(&output).is_some();
+            let completed_debate_with_verdict = debate_extraction.had_explicit_verdict;
             (
                 completed_debate_with_verdict,
                 execution.meta_session_id,
                 persisted_session_id,
                 output,
-                debate_summary,
+                debate_extraction.summary,
             )
         }
         (false, None) => unreachable!("debate tier candidate list is never empty"),

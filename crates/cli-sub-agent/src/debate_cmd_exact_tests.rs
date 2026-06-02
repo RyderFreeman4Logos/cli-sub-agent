@@ -353,6 +353,100 @@ fn debate_extractor_uses_final_assistant_message_over_protocol_and_hook_noise() 
 }
 
 #[test]
+fn debate_completion_ignores_codex_tool_result_verdict_noise() {
+    let transcript = [
+        r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+        r#"{"type":"item.completed","item":{"id":"i1","type":"tool_result","text":"diff output\nVerdict: APPROVE\n"}}"#,
+        r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Summary: assistant summarized the debate.\nConfidence: high"}}"#,
+    ]
+    .join("\n");
+
+    let extraction = crate::debate_cmd_output::extract_debate_summary_with_metadata(
+        &transcript,
+        "fallback summary",
+        debate_cmd::DebateMode::Heterogeneous,
+    );
+    assert!(!extraction.had_explicit_verdict);
+    assert_eq!(extraction.summary.verdict, "REVISE");
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let _env_lock = test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let state_home = temp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = DebateExactEnvVarGuard::set("HOME", temp.path());
+    let _state_guard = DebateExactEnvVarGuard::set("XDG_STATE_HOME", &state_home);
+
+    let project_root = temp.path();
+    let session = seed_debate_result(project_root, "codex", "failure", 1, "tool exited non-zero");
+    let exit_code = finalize_seeded_debate(
+        project_root,
+        &session.meta_session_id,
+        &transcript,
+        "fallback summary",
+        false,
+        false,
+    );
+
+    assert_eq!(exit_code, 1);
+    let saved = csa_session::load_result(project_root, &session.meta_session_id)
+        .unwrap()
+        .expect("saved result");
+    assert_eq!(saved.status, "failure");
+    assert_eq!(saved.exit_code, 1);
+
+    let verdict_path = csa_session::get_session_dir(project_root, &session.meta_session_id)
+        .unwrap()
+        .join("output")
+        .join("debate-verdict.json");
+    let verdict_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(verdict_path).unwrap()).unwrap();
+    assert_eq!(verdict_json["verdict"], "REVISE");
+}
+
+#[test]
+fn debate_completion_counts_codex_assistant_verdict() {
+    let transcript = [
+        r#"{"type":"thread.started","thread_id":"thread_1"}"#,
+        r#"{"type":"item.completed","item":{"id":"i1","type":"tool_result","text":"diff output without a decision"}}"#,
+        r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Summary: assistant approved the change.\nVerdict: APPROVE\nConfidence: high"}}"#,
+    ]
+    .join("\n");
+
+    let extraction = crate::debate_cmd_output::extract_debate_summary_with_metadata(
+        &transcript,
+        "fallback summary",
+        debate_cmd::DebateMode::Heterogeneous,
+    );
+    assert!(extraction.had_explicit_verdict);
+    assert_eq!(extraction.summary.verdict, "APPROVE");
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let _env_lock = test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let state_home = temp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = DebateExactEnvVarGuard::set("HOME", temp.path());
+    let _state_guard = DebateExactEnvVarGuard::set("XDG_STATE_HOME", &state_home);
+
+    let project_root = temp.path();
+    let session = seed_debate_result(project_root, "codex", "failure", 1, "tool exited non-zero");
+    let exit_code = finalize_seeded_debate(
+        project_root,
+        &session.meta_session_id,
+        &transcript,
+        "fallback summary",
+        false,
+        false,
+    );
+
+    assert_eq!(exit_code, 0);
+    let saved = csa_session::load_result(project_root, &session.meta_session_id)
+        .unwrap()
+        .expect("saved result");
+    assert_eq!(saved.status, "success");
+    assert_eq!(saved.exit_code, 0);
+}
+
+#[test]
 fn debate_extractor_rejects_bare_protocol_envelope_in_prose_output() {
     // Companion to spec test #3: when the output is NOT a codex transcript
     // (first line is plain prose), the raw-prose summary scan must still skip a
