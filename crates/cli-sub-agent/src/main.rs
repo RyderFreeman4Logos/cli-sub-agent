@@ -155,7 +155,7 @@ async fn main() {
 async fn run() -> Result<()> {
     link_bug_class_pipeline();
 
-    let startup_env = startup_env::StartupSubtreeEnv::capture_from_process_env();
+    let mut startup_env = startup_env::StartupSubtreeEnv::capture_from_process_env();
     let current_depth = startup_env.current_depth();
 
     // Initialize tracing (output to stderr, initialize only once)
@@ -296,7 +296,7 @@ async fn run() -> Result<()> {
                 daemon_child,
                 &session_id,
                 cd.as_deref(),
-                &startup_env,
+                &mut startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::for_run(
                     skill.as_deref(),
                     prompt.as_deref(),
@@ -490,7 +490,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
-                &startup_env,
+                &mut startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::default(),
             )?;
             let result = review_cmd::handle_review(args, current_depth, &startup_env).await;
@@ -510,7 +510,7 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
-                &startup_env,
+                &mut startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::for_prompt_file(args.prompt_file.as_deref()),
             )?;
             let result =
