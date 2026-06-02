@@ -446,6 +446,7 @@ async fn handle_gc_tool(args: Value, startup_env: &StartupSubtreeEnv) -> Result<
         reap_runtime,
         crate::OutputFormat::Text,
         startup_env.session_id(),
+        None,
     )?;
 
     let msg = if dry_run {

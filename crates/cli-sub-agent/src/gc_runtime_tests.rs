@@ -450,7 +450,7 @@ fn test_handle_gc_reaps_runtime_after_retiring_stale_session() {
     );
     let _cwd = CurrentDirGuard::enter(&project_root);
 
-    handle_gc(false, None, false, OutputFormat::Text, None).unwrap();
+    handle_gc(false, None, false, OutputFormat::Text, None, None).unwrap();
 
     let sessions = list_sessions(&project_root, None).unwrap();
     let session = sessions
@@ -461,6 +461,53 @@ fn test_handle_gc_reaps_runtime_after_retiring_stale_session() {
     assert!(
         !runtime_dir.exists(),
         "default csa gc must reap runtime/ once a stale session is retired"
+    );
+}
+
+#[test]
+fn test_handle_gc_honors_cd_project_root() {
+    use clap::Parser;
+
+    const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let _cwd_lock = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+    let cwd_project = tmp.path().join("cwd-project");
+    let cd_project = tmp.path().join("cd-project");
+    let (_, _, cwd_runtime_dir) = seed_runtime_session(
+        &cwd_project,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let (_, _, cd_runtime_dir) = seed_runtime_session(
+        &cd_project,
+        SessionPhase::Retired,
+        chrono::Utc::now() - chrono::Duration::days(40),
+        TWO_MIB,
+        false,
+    );
+    let cd = cd_project.display().to_string();
+    let cli =
+        crate::cli::Cli::try_parse_from(["csa", "gc", "--cd", &cd]).expect("gc --cd should parse");
+    match cli.command {
+        crate::cli::Commands::Gc(args) => assert_eq!(args.cd.as_deref(), Some(cd.as_str())),
+        _ => panic!("expected gc command"),
+    }
+
+    let _cwd = CurrentDirGuard::enter(&cwd_project);
+
+    handle_gc(false, None, false, OutputFormat::Text, None, Some(&cd)).unwrap();
+
+    assert!(
+        cwd_runtime_dir.exists(),
+        "csa gc --cd must not use the process cwd project root"
+    );
+    assert!(
+        !cd_runtime_dir.exists(),
+        "csa gc --cd must reap runtime/ under the explicit project root"
     );
 }
 
@@ -488,7 +535,7 @@ fn test_handle_gc_respects_reap_runtime_dirs_false() {
     );
     let _cwd = CurrentDirGuard::enter(&project_root);
 
-    handle_gc(false, None, false, OutputFormat::Text, None).unwrap();
+    handle_gc(false, None, false, OutputFormat::Text, None, None).unwrap();
 
     assert!(
         runtime_dir.exists(),

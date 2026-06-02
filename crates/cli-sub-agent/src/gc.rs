@@ -40,14 +40,40 @@ const ORPHAN_SLOT_GRACE_SECS: i64 = 30;
 
 pub(crate) type RuntimeReapStats = reaper::RuntimeReapStats;
 
+pub(crate) fn handle_gc_args(
+    args: GcArgs,
+    format: OutputFormat,
+    current_session_id: Option<&str>,
+) -> Result<()> {
+    if args.global {
+        handle_gc_global(
+            args.dry_run,
+            args.max_age_days,
+            args.reap_runtime,
+            format,
+            current_session_id,
+        )
+    } else {
+        handle_gc(
+            args.dry_run,
+            args.max_age_days,
+            args.reap_runtime,
+            format,
+            current_session_id,
+            args.cd.as_deref(),
+        )
+    }
+}
+
 pub(crate) fn handle_gc(
     dry_run: bool,
     max_age_days: Option<u64>,
     reap_runtime: bool,
     format: OutputFormat,
     current_session_id: Option<&str>,
+    cd: Option<&str>,
 ) -> Result<()> {
-    let project_root = crate::pipeline::determine_project_root(None)?;
+    let project_root = crate::pipeline::determine_project_root(cd)?;
     let session_root = get_session_root(&project_root)?;
     let sessions = list_sessions(&project_root, None)?;
     let gc_config = GcConfig::load_for_project(&project_root)?;
