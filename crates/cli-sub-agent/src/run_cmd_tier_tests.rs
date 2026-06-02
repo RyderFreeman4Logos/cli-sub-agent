@@ -158,6 +158,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         false,
         Vec::new(),
         Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
     )
     .await
     .expect_err("direct --tool tier rejection must return an error");

@@ -38,6 +38,50 @@ fn test_inject_env_empty_map_is_noop() {
     assert!(envs.is_empty(), "Empty env map should add no variables");
 }
 
+#[test]
+fn test_inject_env_scrubs_startup_subtree_contract_keys_from_extra_env() {
+    let mut cmd = Command::new("echo");
+    let env_vars = HashMap::from([
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY.to_string(),
+            "spoofed-session".to_string(),
+        ),
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
+            "99".to_string(),
+        ),
+        (
+            csa_core::env::CSA_PROJECT_ROOT_ENV_KEY.to_string(),
+            "/spoofed/root".to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "0".to_string(),
+        ),
+        ("SAFE_ENV".to_string(), "ok".to_string()),
+    ]);
+
+    Executor::inject_env(&mut cmd, &env_vars);
+
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+    for key in [
+        csa_core::env::CSA_SESSION_ID_ENV_KEY,
+        csa_core::env::CSA_DEPTH_ENV_KEY,
+        csa_core::env::CSA_PROJECT_ROOT_ENV_KEY,
+        csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY,
+    ] {
+        assert!(
+            !env_map.contains_key(std::ffi::OsStr::new(key)),
+            "generic extra_env must not inject startup-subtree key {key}"
+        );
+    }
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
+        Some(&Some(std::ffi::OsStr::new("ok")))
+    );
+}
+
 // ── codex_effort mapping for all ThinkingBudget variants ────────
 
 #[test]
@@ -260,15 +304,74 @@ fn test_stripped_env_vars_contains_lefthook() {
 }
 
 #[test]
-fn test_stripped_env_vars_reserves_subtree_pin() {
-    // #1741: ambient subtree model-pin vars must be reserved so an ambient
-    // value can never silently pin an otherwise-unpinned nested worker.
-    for var in csa_core::env::SUBTREE_PIN_ENV_KEYS {
-        assert!(
-            Executor::STRIPPED_ENV_VARS.contains(var),
-            "STRIPPED_ENV_VARS must reserve subtree-pin var {var} from the ambient environment"
+fn test_build_execute_in_command_scrubs_startup_subtree_contract_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+
+    let (cmd, _stdin) = exec.build_execute_in_command("test", work_dir, None, None);
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "leaf command must env_remove startup subtree-contract key {key}"
         );
     }
+}
+
+#[test]
+fn test_build_execute_in_command_scrubs_startup_subtree_keys_from_extra_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let extra_env = HashMap::from([
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY.to_string(),
+            "spoofed-session".to_string(),
+        ),
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
+            "99".to_string(),
+        ),
+        (
+            csa_core::env::CSA_PROJECT_ROOT_ENV_KEY.to_string(),
+            "/spoofed/root".to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "0".to_string(),
+        ),
+        ("SAFE_ENV".to_string(), "ok".to_string()),
+    ]);
+
+    let (cmd, _stdin) = exec.build_execute_in_command("test", work_dir, Some(&extra_env), None);
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+
+    for key in [
+        csa_core::env::CSA_SESSION_ID_ENV_KEY,
+        csa_core::env::CSA_DEPTH_ENV_KEY,
+        csa_core::env::CSA_PROJECT_ROOT_ENV_KEY,
+        csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY,
+    ] {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(key)),
+            Some(&None),
+            "build_execute_in_command must env_remove startup-subtree key {key} \
+             instead of accepting generic extra_env"
+        );
+    }
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
+        Some(&Some(std::ffi::OsStr::new("ok")))
+    );
 }
 
 /// #1741 round-5 spoof rejection: pin keys placed in the GENERIC `extra_env`

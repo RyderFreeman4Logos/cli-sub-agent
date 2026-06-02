@@ -14,6 +14,7 @@ use csa_executor::{Executor, ResolvedTimeout};
 
 use crate::pipeline;
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
+use crate::startup_env::StartupSubtreeEnv;
 
 pub(super) enum AttemptExecution {
     Finished {
@@ -130,6 +131,7 @@ pub(super) async fn run_persistent_with_timeout(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
     match tokio::time::timeout(
         timeout_duration,
@@ -163,6 +165,7 @@ pub(super) async fn run_persistent_with_timeout(
             extra_writable,
             extra_readable,
             no_error_marker_scan,
+            startup_env,
         ),
     )
     .await
@@ -202,6 +205,7 @@ pub(super) async fn run_persistent_without_timeout(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
     execute_persistent(
         executor,
@@ -233,6 +237,7 @@ pub(super) async fn run_persistent_without_timeout(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        startup_env,
     )
     .await
 }
@@ -268,6 +273,7 @@ async fn execute_persistent(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
     let effective_description = if let Some(fork_res) = fork_resolution {
         description.clone().or_else(|| {
@@ -316,6 +322,7 @@ async fn execute_persistent(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        startup_env,
     )
     .await
     {

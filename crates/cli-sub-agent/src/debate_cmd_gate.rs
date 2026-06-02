@@ -8,6 +8,7 @@ pub(super) async fn run_pre_debate_quality_gate(
     project_root: &Path,
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    current_depth: u32,
 ) -> Result<()> {
     let gate_steps = global_config.review.effective_gate_steps();
     let gate_timeout = config
@@ -25,6 +26,7 @@ pub(super) async fn run_pre_debate_quality_gate(
             gate_command,
             gate_timeout,
             gate_mode,
+            current_depth,
         )
         .await?;
 
@@ -68,6 +70,7 @@ pub(super) async fn run_pre_debate_quality_gate(
         &gate_steps,
         gate_timeout,
         gate_mode,
+        current_depth,
     )
     .await?;
 

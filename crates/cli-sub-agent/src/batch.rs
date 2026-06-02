@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::pipeline::{determine_project_root, execute_with_session};
 use crate::run_helpers::build_executor;
+use crate::startup_env::StartupSubtreeEnv;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
@@ -70,6 +71,7 @@ pub(crate) async fn handle_batch(
     cd: Option<String>,
     dry_run: bool,
     current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     // 1. Determine project root
     let project_root = determine_project_root(cd.as_deref())?;
@@ -130,6 +132,7 @@ pub(crate) async fn handle_batch(
         &batch_config.tasks,
         &project_root,
         config.as_ref(),
+        startup_env,
     )
     .await?;
 
@@ -294,6 +297,7 @@ async fn execute_batch(
     tasks: &[BatchTask],
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<Vec<TaskResult>> {
     let mut results = Vec::new();
     let task_map: HashMap<&str, &BatchTask> = tasks.iter().map(|t| (t.name.as_str(), t)).collect();
@@ -346,8 +350,8 @@ async fn execute_batch(
                 &parallel_tasks,
                 project_root,
                 config,
+                startup_env,
                 level_idx + 1,
-                tasks.len(),
             )
             .await?;
             results.extend(parallel_results);
@@ -362,7 +366,7 @@ async fn execute_batch(
                 &mut resource_guard,
                 level_idx + 1,
                 seq_idx + 1,
-                tasks.len(),
+                startup_env,
             )
             .await;
             results.push(result);
@@ -399,16 +403,18 @@ async fn execute_parallel_tasks(
     tasks: &[BatchTask],
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    startup_env: &StartupSubtreeEnv,
     level: usize,
-    total_tasks: usize,
 ) -> Result<Vec<TaskResult>> {
     let mut join_set = JoinSet::new();
     let project_root = project_root.to_path_buf();
+    let startup_env = startup_env.clone();
 
     for task in tasks {
         let task = task.clone();
         let project_root = project_root.clone();
         let config = config.cloned();
+        let startup_env = startup_env.clone();
 
         join_set.spawn(async move {
             execute_task(
@@ -418,7 +424,7 @@ async fn execute_parallel_tasks(
                 &mut None, // No resource guard in parallel (to avoid contention)
                 level,
                 0,
-                total_tasks,
+                &startup_env,
             )
             .await
         });
@@ -446,7 +452,7 @@ async fn execute_task(
     resource_guard: &mut Option<ResourceGuard>,
     level: usize,
     seq: usize,
-    _total: usize,
+    startup_env: &StartupSubtreeEnv,
 ) -> TaskResult {
     let start = Instant::now();
     let task_label = if seq > 0 {
@@ -568,7 +574,10 @@ async fn execute_task(
     // the way down. The pin is carried out-of-band as a typed value (None unless
     // this process is a pinned child) and applied by the executor's trusted
     // channel — never via the env map.
-    let subtree_pin = crate::run_cmd_model_pin::inherited_subtree_model_pin();
+    let inherited_model_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    let subtree_pin =
+        crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref());
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
     let initial_response_timeout_seconds =
@@ -632,10 +641,10 @@ async fn execute_task(
         &executor,
         &tool_name,
         &task.prompt,
-        None,                                  // session_arg: None (ephemeral)
-        false,                                 // fresh_spawn_preflight_override
-        Some(format!("batch: {}", task.name)), // description
-        std::env::var("CSA_SESSION_ID").ok(),  // parent
+        None,                                            // session_arg: None (ephemeral)
+        false,                                           // fresh_spawn_preflight_override
+        Some(format!("batch: {}", task.name)),           // description
+        startup_env.session_id().map(ToOwned::to_owned), // parent
         project_root,
         config,
         extra_env_ref,
@@ -655,6 +664,7 @@ async fn execute_task(
         &[],   // extra_writable
         &[],   // extra_readable
         false, // cli_no_error_marker_scan: batch has no CLI flag; defer to config (#1745)
+        startup_env,
     )
     .await;
 

@@ -13,6 +13,7 @@ use super::execute_with_session_and_meta_with_parent_source;
 use crate::pipeline::{
     MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
 };
+use crate::startup_env::StartupSubtreeEnv;
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
@@ -43,6 +44,7 @@ pub(crate) async fn execute_with_session(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     cli_no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -72,6 +74,7 @@ pub(crate) async fn execute_with_session(
         extra_writable,
         extra_readable,
         cli_no_error_marker_scan,
+        startup_env,
     )
     .await?;
     Ok(execution.execution)
@@ -107,6 +110,7 @@ pub(crate) async fn execute_with_session_and_meta(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     cli_no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
         executor,
@@ -138,6 +142,7 @@ pub(crate) async fn execute_with_session_and_meta(
         extra_writable,
         extra_readable,
         cli_no_error_marker_scan,
+        startup_env,
     )
     .await
 }

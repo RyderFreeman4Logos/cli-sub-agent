@@ -39,12 +39,13 @@ pub(crate) enum StateDirCheckResult {
 /// Returns `Err` when `on_exceed = "error"` and size exceeds cap. Returns `Ok(())` otherwise.
 pub(crate) fn enforce_state_dir_cap(
     global_config: Option<&csa_config::GlobalConfig>,
+    current_session_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let config = match global_config {
         Some(gc) if gc.state_dir.max_size_mb > 0 => &gc.state_dir,
         _ => return Ok(()),
     };
-    match check_state_dir_size(config) {
+    match check_state_dir_size(config, current_session_id) {
         StateDirCheckResult::Error(err) => Err(err),
         _ => Ok(()),
     }
@@ -55,12 +56,13 @@ pub(crate) fn enforce_state_dir_cap(
 /// Does NOT enforce the hard block — call `enforce_state_dir_cap()` separately.
 pub(crate) fn run_state_dir_preflight(
     global_config: Option<&csa_config::GlobalConfig>,
+    current_session_id: Option<&str>,
 ) -> Option<String> {
     let config = match global_config {
         Some(gc) if gc.state_dir.max_size_mb > 0 => &gc.state_dir,
         _ => return None,
     };
-    match check_state_dir_size(config) {
+    match check_state_dir_size(config, current_session_id) {
         StateDirCheckResult::Warn(preamble) => Some(preamble),
         _ => None,
     }
@@ -70,7 +72,10 @@ pub(crate) fn run_state_dir_preflight(
 ///
 /// Returns a `StateDirCheckResult` indicating whether the session should
 /// proceed (with optional warning injection) or be blocked.
-fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
+fn check_state_dir_size(
+    config: &StateDirConfig,
+    current_session_id: Option<&str>,
+) -> StateDirCheckResult {
     if config.max_size_mb == 0 {
         return StateDirCheckResult::Ok;
     }
@@ -93,6 +98,7 @@ fn check_state_dir_size(config: &StateDirConfig) -> StateDirCheckResult {
             match crate::gc::reap_runtime_payloads_global(
                 false,
                 crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS,
+                current_session_id,
             ) {
                 Ok(stats) => {
                     crate::gc::invalidate_state_dir_size_cache();
@@ -396,7 +402,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            check_state_dir_size(&config),
+            check_state_dir_size(&config, None),
             StateDirCheckResult::Ok
         ));
     }
@@ -467,7 +473,7 @@ mod tests {
             file.set_len(ONE_MIB).unwrap();
 
             assert!(matches!(
-                check_state_dir_size(&config),
+                check_state_dir_size(&config, None),
                 StateDirCheckResult::Ok
             ));
         }
@@ -483,7 +489,7 @@ mod tests {
             file.set_len(ONE_MIB + 1).unwrap();
 
             assert!(matches!(
-                check_state_dir_size(&config),
+                check_state_dir_size(&config, None),
                 StateDirCheckResult::Error(_)
             ));
         }
@@ -509,11 +515,14 @@ mod tests {
             file.set_len(legacy_bytes).unwrap();
         }
 
-        check_state_dir_size(&StateDirConfig {
-            max_size_mb: 1,
-            scan_interval_seconds: 0,
-            on_exceed: StateDirOnExceed::Error,
-        })
+        check_state_dir_size(
+            &StateDirConfig {
+                max_size_mb: 1,
+                scan_interval_seconds: 0,
+                on_exceed: StateDirOnExceed::Error,
+            },
+            None,
+        )
     }
 
     fn assert_cap_error_size(result: StateDirCheckResult, actual_mb: u64) {
@@ -606,7 +615,7 @@ mod tests {
         // Exercise the public API path (uses real state_dir()).
         // Result depends on actual state dir size — we can't control it here,
         // but this proves enforce_state_dir_cap routes through check_state_dir_size.
-        let _result = enforce_state_dir_cap(Some(&gc));
+        let _result = enforce_state_dir_cap(Some(&gc), None);
 
         // Core enum-routing test: verify that when size > cap AND on_exceed=error,
         // check_state_dir_size returns the Error variant (not Warn/Ok).
@@ -618,7 +627,7 @@ mod tests {
         // check_state_dir_size reads paths::state_dir(); if real dir > 1 MB → Error,
         // if ≤ 1 MB or missing → Ok. Both are valid; the key invariant is it never
         // returns Warn for on_exceed=error.
-        let result = check_state_dir_size(&config);
+        let result = check_state_dir_size(&config, None);
         assert!(
             !matches!(result, StateDirCheckResult::Warn(_)),
             "on_exceed=error must never produce Warn variant"
@@ -635,7 +644,7 @@ mod tests {
         };
         // For warn mode, check_state_dir_size returns Warn (if over) or Ok (if under).
         // Either way it must NOT return Error.
-        let result = check_state_dir_size(&config);
+        let result = check_state_dir_size(&config, None);
         assert!(
             !matches!(result, StateDirCheckResult::Error(_)),
             "Warn mode must never produce Error variant"
@@ -658,7 +667,7 @@ mod tests {
         .unwrap();
 
         // enforce_state_dir_cap should Ok even if state dir is over cap in warn mode
-        let result = enforce_state_dir_cap(Some(&gc));
+        let result = enforce_state_dir_cap(Some(&gc), None);
         assert!(
             result.is_ok(),
             "Warn mode must not return Err from enforce_state_dir_cap"
@@ -669,11 +678,12 @@ mod tests {
         project_root: &std::path::Path,
         last_accessed: chrono::DateTime<chrono::Utc>,
         runtime_bytes: u64,
-    ) -> std::path::PathBuf {
+    ) -> (String, std::path::PathBuf) {
         std::fs::create_dir_all(project_root).unwrap();
 
         let mut session = create_session(project_root, Some("auto-gc"), None, Some("codex"))
             .expect("create session");
+        let session_id = session.meta_session_id.clone();
         session.phase = SessionPhase::Retired;
         session.last_accessed = last_accessed;
         save_session(&session).expect("persist retired session");
@@ -719,7 +729,7 @@ mod tests {
         std::fs::write(session_dir.join("stderr.log"), "stderr").unwrap();
         std::fs::write(session_dir.join("output/summary.md"), "summary").unwrap();
 
-        session_dir.join("runtime")
+        (session_id, session_dir.join("runtime"))
     }
 
     #[test]
@@ -734,7 +744,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let project_root = temp.path().join("project");
-        let runtime_dir = seed_retired_session_with_runtime(
+        let (_session_id, runtime_dir) = seed_retired_session_with_runtime(
             &project_root,
             chrono::Utc::now()
                 - chrono::Duration::days(crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS as i64 + 10),
@@ -748,7 +758,7 @@ mod tests {
         };
 
         assert!(
-            matches!(check_state_dir_size(&config), StateDirCheckResult::Ok),
+            matches!(check_state_dir_size(&config, None), StateDirCheckResult::Ok),
             "auto-gc should reap old runtime payloads until the cap check passes"
         );
         assert!(
@@ -756,8 +766,41 @@ mod tests {
             "runtime/ should be removed by auto-gc when the session is old enough"
         );
         assert!(
-            matches!(check_state_dir_size(&config), StateDirCheckResult::Ok),
+            matches!(check_state_dir_size(&config, None), StateDirCheckResult::Ok),
             "subsequent checks should stay within the cap after auto-gc"
+        );
+    }
+
+    #[test]
+    fn auto_gc_preserves_current_session_runtime_payload() {
+        const TWO_MIB: u64 = 2 * 1024 * 1024;
+
+        let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
+        let project_root = temp.path().join("project");
+        let (session_id, runtime_dir) = seed_retired_session_with_runtime(
+            &project_root,
+            chrono::Utc::now()
+                - chrono::Duration::days(crate::gc::AUTO_GC_REAP_RUNTIME_MAX_AGE_DAYS as i64 + 10),
+            TWO_MIB,
+        );
+
+        let config = StateDirConfig {
+            max_size_mb: 1,
+            scan_interval_seconds: 0,
+            on_exceed: StateDirOnExceed::AutoGc,
+        };
+
+        assert!(
+            matches!(
+                check_state_dir_size(&config, Some(&session_id)),
+                StateDirCheckResult::Warn(_)
+            ),
+            "auto-gc should not reclaim the active session, so the cap should remain exceeded"
+        );
+        assert!(
+            runtime_dir.exists(),
+            "runtime/ for the active session must be preserved by preflight auto-gc"
         );
     }
 }

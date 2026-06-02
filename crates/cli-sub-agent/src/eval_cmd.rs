@@ -10,7 +10,7 @@ pub fn handle_eval(project: Option<String>, days: u32, json: bool) -> Result<()>
         Some(key) => key,
         None => {
             let cwd = std::env::current_dir()?;
-            crate::pipeline_project_key::resolve_memory_project_key(&cwd)
+            crate::pipeline_project_key::resolve_memory_project_key(&cwd, None)
                 .ok_or_else(|| anyhow::anyhow!("cannot determine project key from CWD"))?
         }
     };

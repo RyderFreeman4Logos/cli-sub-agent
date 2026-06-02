@@ -137,14 +137,17 @@ impl ClaudeCodeCliTransport {
         cmd.current_dir(work_dir);
         // Mirror the env-stripping rule used by both the legacy CLI path and
         // the ACP path so a CSA-spawned `claude` does not trip its own
-        // recursion guard or inherit lefthook bypass markers. The subtree-pin
-        // keys are in CLI_TRANSPORT_STRIPPED_ENV_VARS, so a generic env map can
-        // never set them — only the trusted pin below may (#1741).
+        // recursion guard or inherit lefthook bypass markers. The startup
+        // subtree contract is scrubbed through csa_core so a generic env map
+        // can never set it; only the fresh session env and trusted pin below may.
         for var in CLI_TRANSPORT_STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
         if let Some(env) = extra_env {
-            for (key, value) in env {
+            let mut env = env.clone();
+            csa_core::env::scrub_subtree_contract_env_map(&mut env);
+            for (key, value) in &env {
                 if !CLI_TRANSPORT_CSA_OWNED_ENV_VARS.contains(&key.as_str())
                     && !CLI_TRANSPORT_STRIPPED_ENV_VARS.contains(&key.as_str())
                 {
@@ -409,31 +412,21 @@ fn claude_model_args(executor: &Executor) -> Vec<String> {
     out
 }
 
-/// Environment variable allowlist for the CLI transport.
+/// Environment variable strip list for the CLI transport.
 ///
 /// Identical to `Executor::STRIPPED_ENV_VARS`; replicated here because that
 /// constant is `pub(crate)` to `csa-executor::executor` and we don't want a
 /// cross-module dependency for two strings.  Out of scope for Phase 3 but
-/// flagged for Phase 5: consolidate into a single workspace-level list.
+/// flagged for Phase 5: consolidate into a single workspace-level list. The
+/// startup subtree contract is scrubbed through `csa_core::env` so the key list
+/// has one source of truth (#1750).
 const CLI_TRANSPORT_STRIPPED_ENV_VARS: &[&str] = &[
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
     "LEFTHOOK",
     "LEFTHOOK_SKIP",
-    "CSA_SESSION_ID",
-    "CSA_SESSION_DIR",
-    "CSA_PARENT_SESSION",
-    "CSA_PARENT_SESSION_DIR",
     "CSA_DAEMON_SESSION_DIR",
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
-    // Subtree model-pin context vars are reserved from EVERY generic env source
-    // (ambient + the `extra_env` map): `build_command` env-removes them and also
-    // skips them in the `extra_env` inject loop, so a generic env map can never
-    // set them. CSA's authoritative pin reaches the child only via the trusted
-    // typed `SubtreeModelPin` channel, applied after the generic merge (#1741).
-    csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
-    csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-    csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
 ];
 
 const CLI_TRANSPORT_CSA_OWNED_ENV_VARS: &[&str] = &[

@@ -54,47 +54,28 @@ pub(crate) fn build_mktsk_prompt(description: &str, todo: Option<&str>) -> Strin
     format!("{MKTSK_PROMPT_PREFIX}\n\n{plan_source}\n\nTASK DECOMPOSITION REQUEST:\n{description}")
 }
 
-pub(crate) async fn handle_mktsk(
-    description: String,
-    todo: Option<String>,
-    tool: Option<String>,
-    timeout: u64,
-    allow_base_branch_working: bool,
+pub(crate) async fn handle_mktsk_args(
+    args: crate::cli::MktskArgs,
     current_depth: u32,
     output_format: OutputFormat,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
 ) -> Result<i32> {
-    let tool = tool
+    let tool = args
+        .tool
         .map(|raw| {
             raw.parse::<ToolArg>()
                 .map_err(|err| anyhow!("invalid mktsk tool `{raw}`: {err}"))
         })
         .transpose()?;
-    let prompt = build_mktsk_prompt(&description, todo.as_deref());
+    let prompt = build_mktsk_prompt(&args.description, args.todo.as_deref());
 
-    crate::run_cmd::SubagentRunConfig::new(prompt, output_format)
+    crate::run_cmd::SubagentRunConfig::new(prompt, output_format, startup_env)
         .tool(tool)
-        .timeout(timeout)
-        .allow_base_branch_working(allow_base_branch_working)
+        .timeout(args.timeout)
+        .allow_base_branch_working(args.allow_base_branch_working)
         .current_depth(current_depth)
         .run()
         .await
-}
-
-pub(crate) async fn handle_mktsk_args(
-    args: crate::cli::MktskArgs,
-    current_depth: u32,
-    output_format: OutputFormat,
-) -> Result<i32> {
-    handle_mktsk(
-        args.description,
-        args.todo,
-        args.tool,
-        args.timeout,
-        args.allow_base_branch_working,
-        current_depth,
-        output_format,
-    )
-    .await
 }
 
 #[cfg(test)]

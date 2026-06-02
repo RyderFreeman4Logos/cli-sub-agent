@@ -483,7 +483,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
 #[test]
 fn build_merged_env_injects_node_options_when_heap_limit_configured() {
     let cfg = test_config_with_node_heap_limit(Some(2048));
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code");
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code", 0);
     assert_eq!(
         merged.get("NODE_OPTIONS"),
         Some(&"--max-old-space-size=2048".to_string())
@@ -499,7 +499,7 @@ fn build_merged_env_injects_node_options_when_heap_limit_configured() {
 fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
     let cfg = test_config_with_node_heap_limit(None);
     // Use a lightweight tool (opencode); heavyweight tools default node_heap_limit_mb to Some(2048).
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode");
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode", 0);
 
     assert!(
         !merged.contains_key("NODE_OPTIONS"),
@@ -514,7 +514,7 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
         return;
     };
 
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode");
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode", 0);
 
     assert_eq!(
         merged.get("PATH"),
@@ -526,7 +526,7 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
 fn build_merged_env_disables_gemini_direct_launch_in_tests() {
     let cfg = test_config_with_node_heap_limit(None);
 
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "gemini-cli");
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "gemini-cli", 0);
 
     assert_eq!(
         merged.get("CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH"),
@@ -541,12 +541,74 @@ fn build_merged_env_appends_node_options_when_existing_value_present() {
     extra_env.insert("NODE_OPTIONS".to_string(), "--trace-warnings".to_string());
 
     let merged =
-        crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), None, "claude-code");
+        crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), None, "claude-code", 0);
 
     assert_eq!(
         merged.get("NODE_OPTIONS"),
         Some(&"--trace-warnings --max-old-space-size=2048".to_string())
     );
+}
+
+#[test]
+fn build_merged_env_scrubs_stale_contract_then_sets_fresh_invocation_env() {
+    let cfg = test_config_with_node_heap_limit(None);
+    let extra_env = HashMap::from([
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY.to_string(),
+            "stale-session".to_string(),
+        ),
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
+            "99".to_string(),
+        ),
+        (
+            csa_core::env::CSA_PROJECT_ROOT_ENV_KEY.to_string(),
+            "/stale/root".to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "0".to_string(),
+        ),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY.to_string(),
+            "codex/openai/gpt-5.5/xhigh".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
+            "1".to_string(),
+        ),
+        ("KEEP_ME".to_string(), "value".to_string()),
+    ]);
+
+    let merged =
+        crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), None, "opencode", 4);
+
+    assert_eq!(
+        merged
+            .get(csa_core::env::CSA_DEPTH_ENV_KEY)
+            .map(String::as_str),
+        Some("5"),
+        "fresh CSA_DEPTH must be current_depth + 1"
+    );
+    assert_eq!(
+        merged
+            .get(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY)
+            .map(String::as_str),
+        Some("1"),
+        "fresh CSA_INTERNAL_INVOCATION must be re-applied after scrub"
+    );
+    assert_eq!(merged.get("KEEP_ME").map(String::as_str), Some("value"));
+    for key in [
+        csa_core::env::CSA_SESSION_ID_ENV_KEY,
+        csa_core::env::CSA_PROJECT_ROOT_ENV_KEY,
+        csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+        csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+    ] {
+        assert!(
+            !merged.contains_key(key),
+            "stale subtree-contract key {key} must not survive build_merged_env"
+        );
+    }
 }
 
 // --- enforce_tier regression tests ---

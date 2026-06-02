@@ -5,6 +5,18 @@
 use super::*;
 use crate::test_env_lock::TEST_ENV_LOCK;
 
+fn startup_env_with_pin(depth: u32) -> crate::startup_env::StartupSubtreeEnv {
+    crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (csa_core::env::CSA_DEPTH_ENV_KEY, depth.to_string()),
+        (csa_core::env::CSA_MODEL_SPEC_ENV_KEY, PIN_SPEC.to_string()),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+        (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+    ]))
+}
+
 #[test]
 fn is_step_runtime_var_only_matches_step_output_and_session() {
     assert!(is_step_runtime_var("STEP_1_OUTPUT"));
@@ -141,28 +153,11 @@ fn clean_step_output_extracts_mixed_json_stream_and_ignores_trailing_prose() {
 
 #[test]
 fn next_csa_depth_increments_or_defaults() {
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let original_depth = std::env::var("CSA_DEPTH").ok();
-
-    // SAFETY: test-scoped env mutation.
-    unsafe {
-        std::env::remove_var("CSA_DEPTH");
-    }
-    assert_eq!(next_csa_depth(), "1");
-
-    // SAFETY: test-scoped env mutation.
-    unsafe {
-        std::env::set_var("CSA_DEPTH", "2");
-    }
-    assert_eq!(next_csa_depth(), "3");
-
-    // SAFETY: restore original env value.
-    unsafe {
-        match original_depth {
-            Some(value) => std::env::set_var("CSA_DEPTH", value),
-            None => std::env::remove_var("CSA_DEPTH"),
-        }
-    }
+    assert_eq!(
+        crate::startup_env::StartupSubtreeEnv::default().next_depth_string(),
+        "1"
+    );
+    assert_eq!(startup_env_with_pin(2).next_depth_string(), "3");
 }
 
 const PIN_SPEC: &str = "codex/openai/gpt-5.5/xhigh";
@@ -211,8 +206,12 @@ fn spawn_bash_env_strips_ambient_subtree_pin_when_not_legitimately_inherited() {
         std::env::set_var(csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1");
     }
 
+    let startup_env = startup_env_with_pin(0);
     let mut cmd = tokio::process::Command::new("bash");
-    apply_sanitized_subtree_pin(&mut cmd);
+    for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
+        cmd.env(key, "spoofed");
+    }
+    apply_startup_child_contract_env(&mut cmd, &startup_env);
     let env = recorded_env(&cmd);
 
     for key in csa_core::env::SUBTREE_PIN_ENV_KEYS {
@@ -263,8 +262,9 @@ fn spawn_bash_env_reapplies_legitimately_inherited_subtree_pin() {
         std::env::set_var(csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1");
     }
 
+    let startup_env = startup_env_with_pin(2);
     let mut cmd = tokio::process::Command::new("bash");
-    apply_sanitized_subtree_pin(&mut cmd);
+    apply_startup_child_contract_env(&mut cmd, &startup_env);
     let env = recorded_env(&cmd);
 
     assert_eq!(
@@ -291,5 +291,86 @@ fn spawn_bash_env_reapplies_legitimately_inherited_subtree_pin() {
                 None => std::env::remove_var(key),
             }
         }
+    }
+}
+
+/// #1750 round-4: foreground nested plan bash steps are CSA-child boundaries.
+/// They must carry the startup-captured session identity and parent identity
+/// into nested `csa run` / `csa review` / `csa plan run` invocations.
+#[test]
+fn spawn_bash_env_reapplies_session_identity_and_parent_contract() {
+    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            "01KSESSION".to_string(),
+        ),
+        (
+            csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+            "/repo/session".to_string(),
+        ),
+        (
+            csa_core::env::CSA_PARENT_SESSION_ENV_KEY,
+            "01KPARENT".to_string(),
+        ),
+        (
+            csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY,
+            "/repo/parent".to_string(),
+        ),
+    ]));
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.env(csa_core::env::CSA_SESSION_ID_ENV_KEY, "spoofed-session");
+    cmd.env(csa_core::env::CSA_PARENT_SESSION_ENV_KEY, "spoofed-parent");
+    cmd.env(
+        csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY,
+        "spoofed-parent-dir",
+    );
+
+    apply_startup_child_contract_env(&mut cmd, &startup_env);
+
+    let env = recorded_env(&cmd);
+    assert_eq!(
+        env.get(csa_core::env::CSA_SESSION_ID_ENV_KEY),
+        Some(&Some("01KSESSION".to_string()))
+    );
+    assert_eq!(
+        env.get(csa_core::env::CSA_SESSION_DIR_ENV_KEY),
+        Some(&Some("/repo/session".to_string()))
+    );
+    assert_eq!(
+        env.get(csa_core::env::CSA_PARENT_SESSION_ENV_KEY),
+        Some(&Some("01KPARENT".to_string()))
+    );
+    assert_eq!(
+        env.get(csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY),
+        Some(&Some("/repo/parent".to_string()))
+    );
+}
+
+#[test]
+fn spawn_bash_env_removes_absent_session_identity_contract_keys() {
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.env(csa_core::env::CSA_SESSION_ID_ENV_KEY, "spoofed-session");
+    cmd.env(csa_core::env::CSA_SESSION_DIR_ENV_KEY, "spoofed-dir");
+    cmd.env(csa_core::env::CSA_PARENT_SESSION_ENV_KEY, "spoofed-parent");
+    cmd.env(
+        csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY,
+        "spoofed-parent-dir",
+    );
+
+    apply_startup_child_contract_env(&mut cmd, &startup_env);
+
+    let env = recorded_env(&cmd);
+    for key in [
+        csa_core::env::CSA_SESSION_ID_ENV_KEY,
+        csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+        csa_core::env::CSA_PARENT_SESSION_ENV_KEY,
+        csa_core::env::CSA_PARENT_SESSION_DIR_ENV_KEY,
+    ] {
+        assert_eq!(
+            env.get(key),
+            Some(&None),
+            "absent startup contract key {key} must not be fabricated"
+        );
     }
 }

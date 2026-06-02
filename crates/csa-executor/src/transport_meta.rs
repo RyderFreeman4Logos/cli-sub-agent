@@ -160,14 +160,13 @@ impl AcpTransport {
             env.extend(
                 extra
                     .iter()
-                    .filter(|(k, _)| !is_csa_owned_env_key(k))
+                    .filter(|(k, _)| {
+                        !is_csa_owned_env_key(k) && !csa_core::env::is_startup_subtree_env_key(k)
+                    })
                     .map(|(k, v)| (k.clone(), v.clone())),
             );
         }
-        // #1741: a generic env map may NEVER carry the subtree-pin keys; strip
-        // them unconditionally so request/config env cannot spoof a pin. CSA's
-        // authoritative pin is applied below via the trusted typed channel.
-        csa_core::env::strip_reserved_pin_keys(&mut env);
+        csa_core::env::scrub_subtree_contract_env_map(&mut env);
         self.insert_csa_owned_env(&mut env, session);
         // Apply the trusted subtree pin LAST (after every generic merge/strip) —
         // the only writer of the pin keys in the ACP env.

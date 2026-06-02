@@ -106,6 +106,7 @@ printf 'ok\n'
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
     .unwrap();

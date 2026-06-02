@@ -5,6 +5,8 @@
 use anyhow::Result;
 use csa_core::types::{OutputFormat, ToolArg};
 
+use crate::startup_env::StartupSubtreeEnv;
+
 #[path = "run_cmd_attempt.rs"]
 mod attempt;
 #[path = "run_cmd_attempt_exec.rs"]
@@ -63,10 +65,15 @@ pub(crate) struct SubagentRunConfig {
     current_depth: u32,
     output_format: OutputFormat,
     stream_mode: csa_process::StreamMode,
+    startup_env: StartupSubtreeEnv,
 }
 
 impl SubagentRunConfig {
-    pub(crate) fn new(prompt: String, output_format: OutputFormat) -> Self {
+    pub(crate) fn new(
+        prompt: String,
+        output_format: OutputFormat,
+        startup_env: &StartupSubtreeEnv,
+    ) -> Self {
         let stream_mode = match output_format {
             OutputFormat::Text => csa_process::StreamMode::TeeToStderr,
             OutputFormat::Json => csa_process::StreamMode::BufferOnly,
@@ -80,6 +87,7 @@ impl SubagentRunConfig {
             current_depth: 0,
             output_format,
             stream_mode,
+            startup_env: startup_env.clone(),
         }
     }
 
@@ -151,6 +159,7 @@ impl SubagentRunConfig {
             false,
             Vec::new(),
             Vec::new(),
+            self.startup_env,
         )
         .await
     }

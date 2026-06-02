@@ -35,6 +35,7 @@ fn test_build_review_instruction_no_diff_content_default() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: false,
         },
     );
@@ -66,6 +67,7 @@ fn test_build_review_instruction_full_consistency() {
         resolve::ReviewProjectPromptOptions {
             project_config: None,
             prior_rounds_section: None,
+            current_session_id: None,
             full_consistency: true,
         },
     );

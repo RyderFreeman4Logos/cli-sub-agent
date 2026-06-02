@@ -7,13 +7,15 @@ use super::{
 };
 use crate::review_consensus::UNAVAILABLE;
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
-use csa_core::env::CSA_SESSION_DIR_ENV_KEY;
+use csa_core::env::{CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY};
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::review_artifact::{
     Finding, FindingsFile, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary,
 };
 use proptest::prelude::*;
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 #[derive(Clone, Copy, Debug)]
@@ -82,6 +84,16 @@ fn write_parent_reviewer_artifact(
     .expect("review artifact should be written");
 }
 
+fn startup_env_for_parent_session(
+    session_dir: &Path,
+    session_id: &str,
+) -> crate::startup_env::StartupSubtreeEnv {
+    crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (CSA_SESSION_DIR_ENV_KEY, session_dir.display().to_string()),
+        (CSA_SESSION_ID_ENV_KEY, session_id.to_string()),
+    ]))
+}
+
 fn reviewer_outcome(
     reviewer_index: usize,
     tool: ToolName,
@@ -123,6 +135,7 @@ fn parent_verdict_for_outcomes(
         outcomes,
         final_verdict,
         all_reviewers_unavailable,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -405,6 +418,7 @@ fn write_multi_reviewer_parent_artifacts_writes_output_sidecars() {
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -488,6 +502,7 @@ fn write_multi_reviewer_parent_artifacts_preserves_blocking_findings_on_clean_co
         &outcomes,
         crate::review_consensus::CLEAN,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -559,6 +574,7 @@ fn write_multi_reviewer_parent_artifacts_accepts_reviewer_contract_artifact() {
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -637,6 +653,7 @@ fn write_multi_reviewer_parent_artifacts_reads_child_session_reviewer_artifacts(
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(&parent_dir, "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -697,8 +714,11 @@ fn consensus_artifacts_copy_child_only_findings_into_parent_session_outputs() {
         diff_fingerprint: Some("sha256:test".to_string()),
     };
 
-    write_multi_reviewer_consensus_artifacts(ctx)
-        .expect("parent consensus artifacts should be produced");
+    write_multi_reviewer_consensus_artifacts(
+        ctx,
+        &startup_env_for_parent_session(&parent_dir, "01PARENTSESSION000000000000"),
+    )
+    .expect("parent consensus artifacts should be produced");
 
     let parent_findings: FindingsFile = toml::from_str(
         &fs::read_to_string(parent_dir.join("output").join("findings.toml"))
@@ -786,6 +806,7 @@ fn write_multi_reviewer_parent_artifacts_promotes_empty_findings_to_pass() {
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         Some(&parent_meta),
     )
     .expect("parent artifacts should be produced");
@@ -923,6 +944,7 @@ fn write_multi_reviewer_parent_artifacts_fails_closed_without_persisted_reviewer
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -999,6 +1021,7 @@ fn write_multi_reviewer_parent_artifacts_fails_closed_when_empty_artifact_masks_
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -1053,7 +1076,11 @@ fn clear_multi_reviewer_artifact_dirs_removes_stale_empty_artifact_so_dissenter_
     fs::create_dir_all(&out_of_scope_reviewer_dir)
         .expect("out-of-scope reviewer dir should be created");
 
-    clear_multi_reviewer_artifact_dirs(2).expect("stale reviewer dirs should be cleared");
+    clear_multi_reviewer_artifact_dirs(
+        2,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
+    )
+    .expect("stale reviewer dirs should be cleared");
 
     assert!(
         !temp.path().join("reviewer-1").exists(),
@@ -1100,6 +1127,7 @@ fn clear_multi_reviewer_artifact_dirs_removes_stale_empty_artifact_so_dissenter_
         &outcomes,
         crate::review_consensus::HAS_ISSUES,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         None,
     )
     .expect("parent artifacts should be produced");
@@ -1162,6 +1190,7 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
         &outcomes,
         UNAVAILABLE,
         true,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         Some(&parent_meta),
     )
     .expect("parent artifacts should be produced");
@@ -1258,8 +1287,11 @@ fn write_multi_reviewer_consensus_artifacts_preserves_blocking_findings_on_clean
         diff_fingerprint: Some("sha256:test".to_string()),
     };
 
-    write_multi_reviewer_consensus_artifacts(ctx)
-        .expect("parent consensus artifacts should be produced");
+    write_multi_reviewer_consensus_artifacts(
+        ctx,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
+    )
+    .expect("parent consensus artifacts should be produced");
 
     let written_meta: csa_session::state::ReviewSessionMeta =
         serde_json::from_str(&fs::read_to_string(temp.path().join("review_meta.json")).unwrap())
@@ -1647,6 +1679,7 @@ fn write_multi_reviewer_parent_artifacts_writes_daemon_review_meta() {
         &outcomes,
         crate::review_consensus::CLEAN,
         false,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
         Some(&parent_meta),
     )
     .expect("parent artifacts should be produced");
@@ -1660,7 +1693,7 @@ fn write_multi_reviewer_parent_artifacts_writes_daemon_review_meta() {
 }
 
 #[test]
-fn parent_consensus_review_meta_falls_back_to_session_env() {
+fn parent_consensus_review_meta_reads_startup_env() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
     let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
@@ -1675,8 +1708,12 @@ fn parent_consensus_review_meta_falls_back_to_session_env() {
         crate::review_consensus::CLEAN,
         2,
         Some("sha256:test".to_string()),
+        &startup_env_for_parent_session(
+            Path::new("/tmp/parent-session"),
+            "01PARENTSESSION000000000000",
+        ),
     )
-    .expect("session env should synthesize parent review meta");
+    .expect("startup env should synthesize parent review meta");
 
     assert_eq!(meta.session_id, "01PARENTSESSION000000000000");
     assert_eq!(meta.tool, "consensus");

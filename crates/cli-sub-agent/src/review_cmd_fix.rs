@@ -54,6 +54,8 @@ pub(crate) struct FixLoopContext<'a> {
     pub max_rounds: u8,
     pub initial_session_id: String,
     pub review_iterations: u32,
+    pub current_depth: u32,
+    pub startup_env: &'a crate::startup_env::StartupSubtreeEnv,
 }
 
 /// Run fix rounds, returning the final exit code.
@@ -111,6 +113,8 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.extra_writable,
             ctx.extra_readable,
             ctx.no_error_marker_scan,
+            ctx.current_depth,
+            ctx.startup_env,
         );
 
         let fix_result = if let Some(timeout_secs) = ctx.timeout {
@@ -164,6 +168,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 gate_command,
                 fix_gate_timeout,
                 fix_gate_mode,
+                ctx.current_depth,
             )
             .await?;
 
@@ -183,6 +188,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 &fix_gate_steps,
                 fix_gate_timeout,
                 fix_gate_mode,
+                ctx.current_depth,
             )
             .await?;
 

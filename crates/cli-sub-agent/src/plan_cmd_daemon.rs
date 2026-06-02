@@ -22,6 +22,7 @@ use crate::pipeline::determine_project_root;
 use crate::plan_cmd::{
     self, FEATURE_INPUT_VAR, PlanRunArgs, PlanRunPipelineSource, handle_plan_run,
 };
+use crate::startup_env::StartupSubtreeEnv;
 use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
@@ -46,6 +47,7 @@ pub(crate) async fn dispatch(
     current_depth: u32,
     sa_mode_active: bool,
     text_output: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let PlanCommands::Run {
         file,
@@ -112,6 +114,7 @@ pub(crate) async fn dispatch(
         no_fs_sandbox,
         current_depth,
         pipeline_source,
+        startup_env: startup_env.clone(),
     };
     dispatch_plan_run(
         plan_args,
@@ -165,7 +168,7 @@ pub(crate) async fn dispatch_plan_run(
         chunked: plan_args.chunked,
         has_resume: plan_args.resume.is_some(),
         current_depth,
-        nested_env: nested_session_env_present(),
+        nested_env: nested_session_env_present(&plan_args.startup_env),
     });
 
     if !needs_foreground {
@@ -219,6 +222,7 @@ pub(crate) fn spawn_and_exit(
         PLAN_PIPELINE_SOURCE_ENV.to_string(),
         args.pipeline_source.as_str().to_string(),
     );
+    args.startup_env.apply_to_child_env(&mut daemon_env);
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: session_id.clone(),
@@ -270,7 +274,7 @@ pub(crate) fn spawn_and_exit(
 /// genealogy parent to the plan session, run the workflow inline, then
 /// persist `result.toml` and retire the session.
 pub(crate) async fn handle_plan_run_daemon_child(
-    args: PlanRunArgs,
+    mut args: PlanRunArgs,
     session_id: &str,
 ) -> Result<i32> {
     // SAFETY: the daemon child sets process-scoped env BEFORE async worker
@@ -283,6 +287,7 @@ pub(crate) async fn handle_plan_run_daemon_child(
     unsafe { std::env::set_var("CSA_SESSION_ID", session_id) };
 
     let project_root = determine_project_root(args.cd.as_deref())?;
+    inject_plan_daemon_session_into_startup_env(&mut args, session_id, &project_root)?;
     let started_at = Utc::now();
     let workflow_label = describe_plan_run(&args);
 
@@ -353,6 +358,19 @@ pub(crate) async fn handle_plan_run_daemon_child(
         Ok(()) => Ok(0),
         Err(err) => Err(err),
     }
+}
+
+fn inject_plan_daemon_session_into_startup_env(
+    args: &mut PlanRunArgs,
+    session_id: &str,
+    project_root: &Path,
+) -> Result<()> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+    args.startup_env = args
+        .startup_env
+        .clone()
+        .with_current_session(session_id, session_dir.display().to_string());
+    Ok(())
 }
 
 fn describe_plan_run(args: &PlanRunArgs) -> String {
@@ -478,16 +496,16 @@ pub(crate) fn decide_needs_foreground(input: ForegroundDecisionInput) -> bool {
 /// depend on.
 ///
 /// Checks several markers, any of which indicates "we are inside CSA":
-/// - `CSA_SESSION_ID` — set by `handle_plan_run_daemon_child` and the
-///   ACP transport for genealogy attribution
+/// - startup `CSA_SESSION_ID` — frozen before startup scrub, set by
+///   `handle_plan_run_daemon_child` and the ACP transport for genealogy
+///   attribution
 /// - `CSA_DAEMON_SESSION_ID` — set by every daemon-child path
 /// - `CSA_PARENT_SESSION_ID` — set when an executor spawns a sub-csa
-fn nested_session_env_present() -> bool {
-    const MARKERS: &[&str] = &[
-        "CSA_SESSION_ID",
-        "CSA_DAEMON_SESSION_ID",
-        "CSA_PARENT_SESSION_ID",
-    ];
+fn nested_session_env_present(startup_env: &StartupSubtreeEnv) -> bool {
+    if startup_env.session_id().is_some() {
+        return true;
+    }
+    const MARKERS: &[&str] = &["CSA_DAEMON_SESSION_ID", "CSA_PARENT_SESSION_ID"];
     MARKERS.iter().any(|key| {
         std::env::var(key)
             .map(|v| !v.trim().is_empty())

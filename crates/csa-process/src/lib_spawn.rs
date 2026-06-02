@@ -174,34 +174,7 @@ pub async fn spawn_tool_sandboxed(
     let mut landlock_paths: Option<Vec<std::path::PathBuf>> = None;
 
     let cmd = match plan.filesystem {
-        FilesystemCapability::Bwrap => {
-            let tool_binary = cmd.as_std().get_program().to_string_lossy().to_string();
-            let tool_args: Vec<String> = cmd
-                .as_std()
-                .get_args()
-                .map(|a| a.to_string_lossy().to_string())
-                .collect();
-
-            if let Some(bwrap_cmd) =
-                csa_resource::bwrap::from_isolation_plan(plan, &tool_binary, &tool_args)
-            {
-                let mut wrapped = Command::from(bwrap_cmd);
-                // Propagate environment from original command.
-                for (key, val) in cmd.as_std().get_envs() {
-                    if let Some(v) = val {
-                        wrapped.env(key, v);
-                    }
-                }
-                if let Some(dir) = cmd.as_std().get_current_dir() {
-                    wrapped.current_dir(dir);
-                }
-                debug!("wrapped tool command with bwrap filesystem sandbox");
-                wrapped
-            } else {
-                warn!("bwrap requested but from_isolation_plan returned None; proceeding without");
-                cmd
-            }
-        }
+        FilesystemCapability::Bwrap => wrap_command_with_bwrap(cmd, plan),
         FilesystemCapability::Landlock => {
             debug!("Landlock filesystem isolation will be applied in pre_exec");
             // Filter out project_root when readonly_project_root is set,
@@ -287,6 +260,47 @@ pub async fn spawn_tool_sandboxed(
     }
 }
 
+fn explicit_envs(cmd: &Command) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    cmd.as_std()
+        .get_envs()
+        .filter_map(|(key, value)| value.map(|val| (key.to_owned(), val.to_owned())))
+        .collect()
+}
+
+fn propagate_explicit_envs(
+    target: &mut Command,
+    envs: &[(std::ffi::OsString, std::ffi::OsString)],
+) {
+    for (key, val) in envs {
+        target.env(key, val);
+    }
+}
+
+fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
+    let tool_binary = cmd.as_std().get_program().to_string_lossy().to_string();
+    let tool_args: Vec<String> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    if let Some(bwrap_cmd) =
+        csa_resource::bwrap::from_isolation_plan(plan, &tool_binary, &tool_args)
+    {
+        let mut wrapped = Command::from(bwrap_cmd);
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut wrapped);
+        propagate_explicit_envs(&mut wrapped, &explicit_envs(&cmd));
+        if let Some(dir) = cmd.as_std().get_current_dir() {
+            wrapped.current_dir(dir);
+        }
+        debug!("wrapped tool command with bwrap filesystem sandbox");
+        wrapped
+    } else {
+        warn!("bwrap requested but from_isolation_plan returned None; proceeding without");
+        cmd
+    }
+}
+
 /// Filesystem isolation parameters for cgroup spawn.
 struct FsSandboxParams {
     _has_bwrap: bool,
@@ -315,11 +329,30 @@ async fn spawn_with_cgroup(
         pids_max: plan.pids_max.or(Some(512)),
     };
 
-    let envs: Vec<_> = original_cmd
-        .as_std()
-        .get_envs()
-        .filter_map(|(k, v)| v.map(|val| (k.to_owned(), val.to_owned())))
-        .collect();
+    let mut tokio_cmd =
+        build_cgroup_scope_command(&original_cmd, tool_name, session_id, &cgroup_config);
+    tokio_cmd.kill_on_drop(true);
+
+    let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
+    let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id, &cgroup_config);
+
+    debug!(
+        scope = %guard.scope_name(),
+        pid = child.id(),
+        "spawned tool inside cgroup scope"
+    );
+
+    // Cgroup guard needs to live for cleanup regardless of filesystem isolation.
+    Ok((child, SandboxHandle::Cgroup(guard)))
+}
+
+fn build_cgroup_scope_command(
+    original_cmd: &Command,
+    tool_name: &str,
+    session_id: &str,
+    cgroup_config: &csa_resource::cgroup::SandboxConfig,
+) -> Command {
+    let envs = explicit_envs(original_cmd);
     let scope_env: std::collections::HashMap<String, String> = envs
         .iter()
         .map(|(key, val)| {
@@ -333,32 +366,112 @@ async fn spawn_with_cgroup(
     let scope_cmd = csa_resource::cgroup::create_scope_command_with_env(
         tool_name,
         session_id,
-        &cgroup_config,
+        cgroup_config,
         &scope_env,
     );
 
     let mut tokio_cmd = Command::from(scope_cmd);
+    csa_core::env::scrub_subtree_contract_env_tokio(&mut tokio_cmd);
     tokio_cmd.arg(original_cmd.as_std().get_program());
     tokio_cmd.args(original_cmd.as_std().get_args());
 
-    for (key, val) in &envs {
-        tokio_cmd.env(key, val);
-    }
-    tokio_cmd.kill_on_drop(true);
+    propagate_explicit_envs(&mut tokio_cmd, &envs);
 
     if let Some(dir) = original_cmd.as_std().get_current_dir() {
         tokio_cmd.current_dir(dir);
     }
 
-    let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
-    let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id, &cgroup_config);
+    tokio_cmd
+}
 
-    debug!(
-        scope = %guard.scope_name(),
-        pid = child.id(),
-        "spawned tool inside cgroup scope"
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use csa_resource::sandbox::ResourceCapability;
+    use std::collections::HashMap;
 
-    // Cgroup guard needs to live for cleanup regardless of filesystem isolation.
-    Ok((child, SandboxHandle::Cgroup(guard)))
+    fn recorded_env(cmd: &Command) -> HashMap<String, Option<String>> {
+        cmd.as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    }
+
+    fn bwrap_plan() -> IsolationPlan {
+        IsolationPlan {
+            resource: ResourceCapability::None,
+            filesystem: FilesystemCapability::Bwrap,
+            writable_paths: vec![std::path::PathBuf::from("/tmp")],
+            readable_paths: Vec::new(),
+            env_overrides: HashMap::new(),
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
+        }
+    }
+
+    #[test]
+    fn bwrap_wrapper_scrubs_ambient_subtree_contract_env() {
+        let original = Command::new("/usr/bin/tool");
+        let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+        let env = recorded_env(&wrapped);
+
+        for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+            assert_eq!(
+                env.get(*key),
+                Some(&None),
+                "bwrap wrapper must env_remove ambient subtree-contract key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn cgroup_wrapper_scrubs_ambient_then_preserves_explicit_fresh_env() {
+        let mut original = Command::new("/usr/bin/tool");
+        original
+            .env(csa_core::env::CSA_DEPTH_ENV_KEY, "3")
+            .env(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY, "1");
+        let config = csa_resource::cgroup::SandboxConfig {
+            memory_max_mb: 1024,
+            memory_swap_max_mb: None,
+            pids_max: Some(64),
+        };
+
+        let wrapped = build_cgroup_scope_command(&original, "codex", "01KTEST", &config);
+        let env = recorded_env(&wrapped);
+
+        assert_eq!(
+            env.get(csa_core::env::CSA_DEPTH_ENV_KEY),
+            Some(&Some("3".to_string())),
+            "fresh explicit CSA_DEPTH must be preserved after wrapper scrub"
+        );
+        assert_eq!(
+            env.get(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY),
+            Some(&Some("1".to_string())),
+            "fresh explicit CSA_INTERNAL_INVOCATION must be preserved"
+        );
+        for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS
+            .iter()
+            .filter(|key| {
+                **key != csa_core::env::CSA_DEPTH_ENV_KEY
+                    && **key != csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY
+            })
+        {
+            assert_eq!(
+                env.get(*key),
+                Some(&None),
+                "cgroup wrapper must env_remove ambient subtree-contract key {key}"
+            );
+        }
+    }
 }

@@ -94,8 +94,8 @@ pub(super) fn thread_belongs_to_project(
     }
 }
 
-pub(crate) fn spawn_recall_record_if_needed(project_root: &Path) {
-    if !recall_allowed_at_depth(crate::pipeline_env::current_csa_depth()) {
+pub(crate) fn spawn_recall_record_if_needed(project_root: &Path, current_depth: u32) {
+    if !recall_allowed_at_depth(current_depth) {
         return;
     }
 

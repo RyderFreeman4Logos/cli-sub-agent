@@ -10,6 +10,21 @@ pub const CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY: &str = "CSA_FORCE_IGNORE_TIER_S
 /// Whether nested CSA invocations should disable failover for the inherited model spec.
 pub const CSA_NO_FAILOVER_ENV_KEY: &str = "CSA_NO_FAILOVER";
 
+/// Current CSA session ULID inherited by a nested CSA process.
+pub const CSA_SESSION_ID_ENV_KEY: &str = "CSA_SESSION_ID";
+
+/// Current CSA recursion depth inherited by a nested CSA process.
+pub const CSA_DEPTH_ENV_KEY: &str = "CSA_DEPTH";
+
+/// Project root inherited by a nested CSA process.
+pub const CSA_PROJECT_ROOT_ENV_KEY: &str = "CSA_PROJECT_ROOT";
+
+/// Parent session ULID inherited by a nested CSA process.
+pub const CSA_PARENT_SESSION_ENV_KEY: &str = "CSA_PARENT_SESSION";
+
+/// Marker that a nested execution command was spawned by CSA itself.
+pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
+
 /// Subtree model-pin env vars that propagate a pinned SA subtree to nested
 /// workers.
 ///
@@ -128,6 +143,51 @@ pub const CSA_SESSION_DIR_ENV_KEY: &str = "CSA_SESSION_DIR";
 /// Absolute path to the parent session directory when this process is a child session.
 pub const CSA_PARENT_SESSION_DIR_ENV_KEY: &str = "CSA_PARENT_SESSION_DIR";
 
+/// CSA-owned subtree context env keys captured at CLI startup.
+///
+/// These keys describe the caller/session subtree and the trusted model-pin
+/// reservation. A child process may receive them from its CSA parent. The CLI
+/// freezes them into its startup snapshot, and leaf tool subprocess builders
+/// scrub ambient copies before applying fresh per-session values.
+pub const STARTUP_SUBTREE_ENV_KEYS: &[&str] = &[
+    CSA_SESSION_ID_ENV_KEY,
+    CSA_DEPTH_ENV_KEY,
+    CSA_PROJECT_ROOT_ENV_KEY,
+    CSA_SESSION_DIR_ENV_KEY,
+    CSA_PARENT_SESSION_ENV_KEY,
+    CSA_PARENT_SESSION_DIR_ENV_KEY,
+    CSA_INTERNAL_INVOCATION_ENV_KEY,
+    CSA_MODEL_SPEC_ENV_KEY,
+    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+    CSA_NO_FAILOVER_ENV_KEY,
+];
+
+/// Return true when `key` belongs to the startup subtree contract.
+pub fn is_startup_subtree_env_key(key: &str) -> bool {
+    STARTUP_SUBTREE_ENV_KEYS.contains(&key)
+}
+
+/// Remove every startup subtree-contract key from a std process command.
+pub fn scrub_subtree_contract_env(cmd: &mut std::process::Command) {
+    for key in STARTUP_SUBTREE_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+}
+
+/// Remove every startup subtree-contract key from a Tokio process command.
+pub fn scrub_subtree_contract_env_tokio(cmd: &mut tokio::process::Command) {
+    for key in STARTUP_SUBTREE_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+}
+
+/// Remove every startup subtree-contract key from a generic env map.
+pub fn scrub_subtree_contract_env_map(env: &mut std::collections::HashMap<String, String>) {
+    for key in STARTUP_SUBTREE_ENV_KEYS {
+        env.remove(*key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +214,31 @@ mod tests {
             assert!(
                 !env.contains_key(*key),
                 "reserved key {key} must be stripped"
+            );
+        }
+        assert_eq!(env.get("KEEP_ME").map(String::as_str), Some("value"));
+    }
+
+    #[test]
+    fn scrub_subtree_contract_env_map_removes_full_startup_contract() {
+        let mut env = HashMap::from([
+            (CSA_SESSION_ID_ENV_KEY.to_string(), "01KSESSION".to_string()),
+            (CSA_DEPTH_ENV_KEY.to_string(), "7".to_string()),
+            (CSA_PROJECT_ROOT_ENV_KEY.to_string(), "/repo".to_string()),
+            (CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(), "1".to_string()),
+            (
+                CSA_MODEL_SPEC_ENV_KEY.to_string(),
+                "codex/openai/gpt-5.5/xhigh".to_string(),
+            ),
+            ("KEEP_ME".to_string(), "value".to_string()),
+        ]);
+
+        scrub_subtree_contract_env_map(&mut env);
+
+        for key in STARTUP_SUBTREE_ENV_KEYS {
+            assert!(
+                !env.contains_key(*key),
+                "startup subtree-contract key {key} must be scrubbed"
             );
         }
         assert_eq!(env.get("KEEP_ME").map(String::as_str), Some("value"));

@@ -52,6 +52,9 @@ pub(super) struct MultiReviewerReviewContext<'a> {
     pub idle_timeout_seconds: u64,
     pub readonly_project_root: bool,
     pub prior_rounds_section: Option<&'a str>,
+    pub current_session_id: Option<&'a str>,
+    pub current_depth: u32,
+    pub startup_env: &'a crate::startup_env::StartupSubtreeEnv,
 }
 
 pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_>) -> Result<i32> {
@@ -74,12 +77,21 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
     let reviewer_tools = reviewer_pool.reviewer_tools;
     let reviewer_tool_plan = reviewer_tools.clone();
     let tier_reviewer_specs = reviewer_pool.tier_reviewer_specs;
+    let parent_startup_env = parent_startup_env_for_multi_review(
+        ctx.args.daemon_child,
+        ctx.args.session_id.as_deref(),
+        ctx.startup_env,
+        ctx.project_root,
+    )?;
     warn_if_fast_mode_has_no_codex_reviewer(
         ctx.args.fast_but_more_cost,
         &reviewer_tool_plan,
         &tier_reviewer_specs,
     );
-    super::parent_artifacts::clear_multi_reviewer_artifact_dirs(ctx.reviewers)?;
+    super::parent_artifacts::clear_multi_reviewer_artifact_dirs(
+        ctx.reviewers,
+        &parent_startup_env,
+    )?;
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
@@ -89,6 +101,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
             reviewer_tool,
             ctx.project_root,
             ctx.prior_rounds_section,
+            parent_startup_env.session_id().or(ctx.current_session_id),
         );
         let reviewer_model = ctx.review_model.clone();
         let reviewer_project_root = ctx.project_root.to_path_buf();
@@ -137,6 +150,8 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let stream_mode = ctx.stream_mode;
         let idle_timeout_seconds = ctx.idle_timeout_seconds;
         let readonly_project_root = ctx.readonly_project_root;
+        let current_depth = ctx.current_depth;
+        let startup_env = parent_startup_env.clone();
         join_set.spawn(async move {
             let session_result = match execute_review_with_tier_filter(
                 reviewer_tool,
@@ -167,6 +182,8 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 &reviewer_extra_writable,
                 &reviewer_extra_readable,
                 reviewer_no_error_marker_scan,
+                current_depth,
+                &startup_env,
             )
             .await
             {
@@ -246,9 +263,10 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         review_iterations,
         diff_fingerprint: diff_fingerprint.clone(),
     };
-    if let Err(err) =
-        super::parent_artifacts::write_multi_reviewer_consensus_artifacts(consensus_artifacts)
-    {
+    if let Err(err) = super::parent_artifacts::write_multi_reviewer_consensus_artifacts(
+        consensus_artifacts,
+        &parent_startup_env,
+    ) {
         warn!(
             error = %err,
             "Failed to write multi-reviewer consensus artifacts (continuing)"
@@ -287,6 +305,22 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         .collect::<Vec<_>>();
     maybe_extract_recurring_bug_class_skills(ctx.project_root, &review_session_ids);
     Ok(multi_reviewer_exit_code(final_verdict))
+}
+
+fn parent_startup_env_for_multi_review(
+    daemon_child: bool,
+    session_id: Option<&str>,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
+    project_root: &Path,
+) -> Result<crate::startup_env::StartupSubtreeEnv> {
+    if daemon_child && let Some(session_id) = session_id {
+        let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+        return Ok(startup_env
+            .clone()
+            .with_current_session(session_id, session_dir.display().to_string()));
+    }
+
+    Ok(startup_env.clone())
 }
 
 pub(super) fn warn_if_fast_mode_has_no_codex_reviewer(

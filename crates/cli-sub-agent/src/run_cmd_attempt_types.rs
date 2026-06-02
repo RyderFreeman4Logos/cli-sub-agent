@@ -11,6 +11,7 @@ use std::time::Instant;
 use crate::pipeline::MemoryInjectionOptions;
 use crate::run_cmd_fork::ForkResolution;
 use crate::run_helpers_branch_guard::BranchGuardRuntime;
+use crate::startup_env::StartupSubtreeEnv;
 
 pub(crate) struct RunLoopRequest<'a> {
     pub(crate) strategy: ToolSelectionStrategy,
@@ -70,6 +71,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) extra_writable: Vec<PathBuf>,
     pub(crate) extra_readable: Vec<PathBuf>,
     pub(crate) branch_guard: BranchGuardRuntime,
+    pub(crate) startup_env: &'a StartupSubtreeEnv,
 }
 
 pub(crate) enum RunLoopCompletion {

@@ -8,6 +8,7 @@ use crate::debate_cmd_resolve::{
     resolve_debate_selection, resolve_debate_tier_name,
     validate_debate_direct_tool_tier_restriction,
 };
+use crate::startup_env::StartupSubtreeEnv;
 use csa_core::types::OutputFormat;
 
 #[cfg(test)]
@@ -72,6 +73,7 @@ pub(crate) async fn handle_debate(
     mut args: DebateArgs,
     current_depth: u32,
     output_format: OutputFormat,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
@@ -84,7 +86,9 @@ pub(crate) async fn handle_debate(
     };
     // #1741: honor a pinned SA subtree's inherited model spec for `csa debate`
     // (see debate_cmd_subtree_pin::apply_subtree_pin).
-    let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, current_depth);
+    let inherited_model_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
@@ -108,7 +112,13 @@ pub(crate) async fn handle_debate(
     // shared pre-execution quality check (lint/test) that applies equally to
     // both review and debate workflows.
     if !args.dry_run {
-        run_pre_debate_quality_gate(&project_root, config.as_ref(), &global_config).await?;
+        run_pre_debate_quality_gate(
+            &project_root,
+            config.as_ref(),
+            &global_config,
+            current_depth,
+        )
+        .await?;
     }
 
     // 3. Read question (--prompt-file / positional / --topic / stdin), strip
@@ -118,7 +128,9 @@ pub(crate) async fn handle_debate(
 
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
     let mut prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
-    if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(config.as_ref()) {
+    if let Some(guard) =
+        crate::pipeline::prompt_guard::anti_recursion_guard(config.as_ref(), current_depth)
+    {
         prompt = format!("{guard}\n\n{prompt}");
     }
     let debate_description = format!(
@@ -270,6 +282,7 @@ pub(crate) async fn handle_debate(
         idle_timeout_seconds,
         initial_response_timeout_seconds,
         readonly_project_root,
+        startup_env,
     })
     .await
 }

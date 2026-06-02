@@ -5,8 +5,20 @@ use csa_executor::ResolvedTimeout;
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct McpModelPinResolution {
+    pub(super) model_spec: Option<String>,
+    pub(super) tier: Option<String>,
+    pub(super) force_ignore_tier_setting: bool,
+    pub(super) no_failover: bool,
+    pub(super) inherited_trusted_pin: bool,
+}
+
 /// Handle csa_run tool.
-pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
+pub(super) async fn handle_run_tool(
+    args: Value,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
+) -> Result<Value> {
     // Extract arguments
     let tool_str = args.get("tool").and_then(|v| v.as_str());
     let prompt = args
@@ -29,7 +41,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
         .unwrap_or(false);
 
     // Parse tool if provided
-    let tool = if let Some(tool_str) = tool_str {
+    let mut tool = if let Some(tool_str) = tool_str {
         Some(parse_tool_name(tool_str)?)
     } else {
         None
@@ -42,11 +54,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
     let config = ProjectConfig::load(&project_root)?;
     let global_config = csa_config::GlobalConfig::load()?;
 
-    // Check recursion depth
-    let current_depth: u32 = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let current_depth = startup_env.current_depth();
     let max_depth = config
         .as_ref()
         .map(|c| c.project.max_recursion_depth)
@@ -66,38 +74,48 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
         }));
     }
 
+    let mut model_pin_resolution =
+        resolve_mcp_model_pin(model_spec, tier_arg, force_ignore_tier, startup_env);
+    if model_pin_resolution.inherited_trusted_pin {
+        tool = None;
+    }
+    let tier_bypass_allowed = crate::run_helpers::tier_bypass_allowed(
+        config.as_ref(),
+        &global_config,
+        model_pin_resolution.inherited_trusted_pin,
+    );
+
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
         flags: crate::run_helpers::TierBypassGateFlags {
-            model_spec: model_spec.is_some(),
+            model_spec: model_pin_resolution.model_spec.is_some(),
             force: false,
-            force_ignore_tier_setting: force_ignore_tier,
+            force_ignore_tier_setting: model_pin_resolution.force_ignore_tier_setting,
             model: false,
             thinking: false,
         },
-        inherited_trusted_pin: false,
+        inherited_trusted_pin: model_pin_resolution.inherited_trusted_pin,
     })?;
+    if model_pin_resolution.model_spec.is_some() && tier_bypass_allowed {
+        model_pin_resolution.force_ignore_tier_setting = true;
+    }
 
     // Resolve tool and model
     let (resolved_tool, resolved_model_spec, resolved_model) =
         crate::run_helpers::resolve_tool_and_model(crate::run_helpers::RoutingRequest {
             tool,
-            model_spec,
+            model_spec: model_pin_resolution.model_spec.as_deref(),
             model: None,
             thinking: None, // MCP server does not support --thinking
             config: config.as_ref(),
             project_root: &project_root,
             force: false,                      // MCP server does not support --force
             force_override_user_config: false, // MCP server does not support --force-override-user-config
-            needs_edit: false,                 // MCP tool dispatch always uses explicit tool
-            tier: tier_arg,                    // --tier from MCP arguments
-            force_ignore_tier_setting: force_ignore_tier, // --force-ignore-tier-setting from MCP arguments
-            tier_bypass_allowed: crate::run_helpers::tier_bypass_allowed(
-                config.as_ref(),
-                &global_config,
-                false,
-            ),
+            needs_edit: false,                 // MCP csa_run does not infer edit requirements
+            tier: model_pin_resolution.tier.as_deref(), // request tier unless inherited pin consumed it
+            force_ignore_tier_setting: model_pin_resolution.force_ignore_tier_setting,
+            tier_bypass_allowed,
             tool_is_auto_resolved: false, // user-explicit tool from MCP args
         })?;
 
@@ -158,9 +176,14 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
         );
     let extra_env = global_config.build_execution_env(
         executor.tool_name(),
-        csa_config::ExecutionEnvOptions::default(),
+        csa_config::ExecutionEnvOptions::from_no_failover(model_pin_resolution.no_failover),
     );
     let extra_env_ref = extra_env.as_ref();
+    let subtree_pin = crate::run_cmd_model_pin::resolve_subtree_model_pin(
+        resolved_model_spec.as_deref(),
+        model_pin_resolution.force_ignore_tier_setting,
+        model_pin_resolution.no_failover,
+    );
 
     // Acquire global slot to enforce concurrency limit
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
@@ -202,10 +225,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
                 prompt,
                 temp_dir.path(),
                 extra_env_ref,
-                // The MCP hub spawn path resolves no subtree pin (tier-routed
-                // tool selection only); pin keys are stripped at
-                // build_execution_env, so it never sets a pin (#1741).
-                None,
+                subtree_pin.as_ref(),
                 csa_process::StreamMode::BufferOnly,
                 idle_timeout_seconds,
                 direct_entry_resolved_timeout(initial_response_timeout_seconds),
@@ -224,7 +244,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
             &project_root,
             config.as_ref(),
             extra_env_ref,
-            None, // MCP hub resolves no subtree pin (#1741)
+            subtree_pin.as_ref(),
             Some("run"),
             None, // MCP server does not use tier-based selection
             None, // MCP server does not override context loading options
@@ -240,6 +260,7 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
             &[],   // extra_writable
             &[],   // extra_readable
             false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
+            startup_env,
         )
         .await?
     };
@@ -277,6 +298,32 @@ pub(super) async fn handle_run_tool(args: Value) -> Result<Value> {
             }
         ]
     }))
+}
+
+pub(super) fn resolve_mcp_model_pin(
+    model_spec: Option<&str>,
+    tier: Option<&str>,
+    force_ignore_tier_setting: bool,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
+) -> McpModelPinResolution {
+    let inherited_pin = crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    let resolution = crate::run_cmd_model_pin::apply_inherited_model_pin(
+        crate::run_cmd_model_pin::RunModelPinInput {
+            model_spec: model_spec.map(ToOwned::to_owned),
+            tier: tier.map(ToOwned::to_owned),
+            auto_route: None,
+            force_ignore_tier_setting,
+            no_failover: false,
+        },
+        inherited_pin,
+    );
+    McpModelPinResolution {
+        model_spec: resolution.model_spec,
+        tier: resolution.tier,
+        force_ignore_tier_setting: resolution.force_ignore_tier_setting,
+        no_failover: resolution.no_failover,
+        inherited_trusted_pin: resolution.inherited_pin.is_some(),
+    }
 }
 
 /// Parse tool name from string.

@@ -17,6 +17,7 @@ fn make_args() -> PlanRunArgs {
         no_fs_sandbox: false,
         current_depth: 0,
         pipeline_source: crate::plan_cmd::PlanRunPipelineSource::DirectPlanRun,
+        startup_env: crate::startup_env::StartupSubtreeEnv::default(),
     }
 }
 
@@ -47,6 +48,25 @@ fn describe_unknown_when_no_source_provided() {
     let mut args = make_args();
     args.file = None;
     assert_eq!(describe_plan_run(&args), "plan: (unknown workflow)");
+}
+
+#[test]
+fn daemon_child_injects_preassigned_session_into_startup_env() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let session_id = "01PARENTSESSION000000000000";
+    let mut args = make_args();
+
+    inject_plan_daemon_session_into_startup_env(&mut args, session_id, temp.path())
+        .expect("startup env should accept daemon session context");
+
+    let expected_session_dir =
+        csa_session::get_session_dir(temp.path(), session_id).expect("session dir should resolve");
+    let expected_session_dir = expected_session_dir.to_string_lossy().to_string();
+    assert_eq!(args.startup_env.session_id(), Some(session_id));
+    assert_eq!(
+        args.startup_env.session_dir(),
+        Some(expected_session_dir.as_str())
+    );
 }
 
 #[test]
@@ -305,15 +325,33 @@ mod env_probe {
     #[serial]
     fn nested_env_clean_returns_false() {
         let _guard = EnvGuard::capture_and_clear();
-        assert!(!nested_session_env_present());
+        assert!(!nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
     #[serial]
-    fn nested_env_with_csa_session_id_returns_true() {
+    fn nested_env_with_startup_csa_session_id_returns_true() {
+        let _guard = EnvGuard::capture_and_clear();
+        let startup_env =
+            crate::startup_env::StartupSubtreeEnv::from_values(std::collections::HashMap::from([
+                (
+                    csa_core::env::CSA_SESSION_ID_ENV_KEY,
+                    "01TESTFAKE000000000000000".to_string(),
+                ),
+            ]));
+        assert!(nested_session_env_present(&startup_env));
+    }
+
+    #[test]
+    #[serial]
+    fn nested_env_ignores_live_csa_session_id_after_startup_scrub() {
         let _guard = EnvGuard::capture_and_clear();
         set_marker("CSA_SESSION_ID", "01TESTFAKE000000000000000");
-        assert!(nested_session_env_present());
+        assert!(!nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
@@ -321,7 +359,9 @@ mod env_probe {
     fn nested_env_with_csa_daemon_session_id_returns_true() {
         let _guard = EnvGuard::capture_and_clear();
         set_marker("CSA_DAEMON_SESSION_ID", "01TESTFAKE000000000000000");
-        assert!(nested_session_env_present());
+        assert!(nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
@@ -329,7 +369,9 @@ mod env_probe {
     fn nested_env_with_csa_parent_session_id_returns_true() {
         let _guard = EnvGuard::capture_and_clear();
         set_marker("CSA_PARENT_SESSION_ID", "01TESTFAKE000000000000000");
-        assert!(nested_session_env_present());
+        assert!(nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 
     #[test]
@@ -338,7 +380,9 @@ mod env_probe {
         // Edge case: empty string is treated as "not set" so callers that
         // accidentally exported an empty value don't trigger the gate.
         let _guard = EnvGuard::capture_and_clear();
-        set_marker("CSA_SESSION_ID", "");
-        assert!(!nested_session_env_present());
+        set_marker("CSA_DAEMON_SESSION_ID", "");
+        assert!(!nested_session_env_present(
+            &crate::startup_env::StartupSubtreeEnv::default()
+        ));
     }
 }

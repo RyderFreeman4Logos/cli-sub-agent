@@ -10,6 +10,7 @@ use super::{
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
 use crate::session_guard::SessionCleanupGuard;
+use crate::startup_env::StartupSubtreeEnv;
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
@@ -40,6 +41,8 @@ mod session_exec_prompt_guard;
 mod session_exec_tool_state;
 #[path = "pipeline_session_exec_write_guard.rs"]
 mod session_exec_write_guard;
+#[path = "pipeline_session_exec_state_preflight.rs"]
+mod state_preflight;
 use self::session_exec_pre_exec::{
     check_resources_before_spawn, persist_pipeline_pre_exec_failure,
     write_fatal_error_marker_sidecar,
@@ -62,10 +65,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     project_root: &Path,
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
-    // CSA-decided subtree model pin (#1741), carried out-of-band from
-    // `extra_env`. Applied to the child by the executor's trusted typed channel
-    // after every generic env merge (which strips the pin keys). `None` when CSA
-    // did not pin. NEVER sourced from `extra_env`/request/config env.
+    // Trusted CSA-decided subtree model pin (#1741), carried outside generic
+    // `extra_env`. The executor applies it after env merges strip pin keys.
+    // `None` means CSA did not pin; never source this from request/config env.
     subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     task_type: Option<&str>,
     tier_name: Option<&str>,
@@ -87,8 +89,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     // this session, overriding config; `false` defers to `[resources].error_marker_scan`
     // (default-true). The idle/wall-clock timeouts always remain active (#1745).
     cli_no_error_marker_scan: bool,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
-    let memory_project_key = resolve_memory_project_key(project_root);
+    let memory_project_key = resolve_memory_project_key(project_root, startup_env.project_root());
     let session_exec_bootstrap::SessionBootstrap {
         mut session,
         resolved_provider_session_id,
@@ -106,6 +109,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         tier_name,
         parent_session_source,
         session_creation_mode,
+        startup_env,
     )
     .await?;
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
@@ -199,19 +203,25 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let prompt_caching_enabled =
         global_config.is_some_and(|cfg| cfg.experimental.enable_prompt_caching);
     let mut prompt_assembly = PromptAssembly::new(raw_prompt.clone(), prompt_caching_enabled);
-    if let Err(err) = crate::preflight_state_dir::enforce_state_dir_cap(global_config) {
-        return Err(persist_pipeline_pre_exec_failure(
-            project_root,
-            &mut session,
-            executor.tool_name(),
-            err,
-            &mut cleanup_guard,
-            None,
-        ));
-    }
-    if (session_arg.is_none() || fresh_spawn_preflight_override)
-        && let Some(w) = crate::preflight_state_dir::run_state_dir_preflight(global_config)
-    {
+    let state_dir_warning = match state_preflight::run(
+        global_config,
+        &session.meta_session_id,
+        startup_env.session_id(),
+        session_arg.is_none() || fresh_spawn_preflight_override,
+    ) {
+        Ok(warning) => warning,
+        Err(err) => {
+            return Err(persist_pipeline_pre_exec_failure(
+                project_root,
+                &mut session,
+                executor.tool_name(),
+                err,
+                &mut cleanup_guard,
+                None,
+            ));
+        }
+    };
+    if let Some(w) = state_dir_warning {
         prompt_assembly.prepend_dynamic(&w);
     }
     let is_first_turn = session
@@ -293,6 +303,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         config,
         global_config,
         executor.tool_name(),
+        startup_env.current_depth(),
     );
     crate::pipeline_env::apply_task_target_dir_guards(
         task_type,
@@ -343,6 +354,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         executor,
         session_arg.is_some(),
         &mut prompt_assembly,
+        startup_env.current_depth(),
     );
     // Inject structured output section markers when enabled in config.
     let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);

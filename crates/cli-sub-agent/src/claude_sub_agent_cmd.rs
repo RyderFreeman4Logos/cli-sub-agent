@@ -3,12 +3,14 @@ use std::path::Path;
 use tracing::info;
 
 use crate::cli::ClaudeSubAgentArgs;
+use crate::startup_env::StartupSubtreeEnv;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{ToolArg, ToolName};
 
 pub(crate) async fn handle_claude_sub_agent(
     args: ClaudeSubAgentArgs,
     current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
@@ -21,7 +23,7 @@ pub(crate) async fn handle_claude_sub_agent(
     let inherited_trusted_pin = claude_sub_agent_inherited_trusted_pin(
         args.model_spec.as_deref(),
         args.model.as_deref(),
-        current_depth,
+        startup_env,
     );
     enforce_claude_sub_agent_tier_bypass_gate(
         args.model_spec.as_deref(),
@@ -75,7 +77,10 @@ pub(crate) async fn handle_claude_sub_agent(
     // unless this process is a pinned child) and applied by the executor's
     // trusted channel — never via the env map. The explicit --model-spec governs
     // only this spawn, not the pin.
-    let subtree_pin = crate::run_cmd_model_pin::inherited_subtree_model_pin();
+    let inherited_model_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    let subtree_pin =
+        crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref());
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
     let initial_response_timeout_seconds =
@@ -115,6 +120,7 @@ pub(crate) async fn handle_claude_sub_agent(
         &[],   // extra_writable
         &[],   // extra_readable
         false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
+        startup_env,
     )
     .await?;
 
@@ -192,7 +198,7 @@ fn resolve_claude_sub_agent_tool_and_model(
 fn claude_sub_agent_inherited_trusted_pin(
     model_spec: Option<&str>,
     model: Option<&str>,
-    current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
 ) -> bool {
     let Some(model_spec) = model_spec else {
         return false;
@@ -200,7 +206,7 @@ fn claude_sub_agent_inherited_trusted_pin(
     if model.is_some() {
         return false;
     }
-    crate::run_cmd_model_pin::inherited_model_pin_from_env(current_depth)
+    crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env)
         .is_some_and(|pin| pin.force_ignore_tier_setting && pin.model_spec == model_spec)
 }
 

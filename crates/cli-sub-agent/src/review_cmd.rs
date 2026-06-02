@@ -12,6 +12,7 @@ use crate::review_context::resolve_review_context;
 use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
+use crate::startup_env::StartupSubtreeEnv;
 use anyhow::Result;
 #[cfg(test)]
 use csa_config::GlobalConfig;
@@ -99,7 +100,11 @@ use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count };
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 
-pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> Result<i32> {
+pub(crate) async fn handle_review(
+    mut args: ReviewArgs,
+    current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
+) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     if args.check_verdict {
         return check_verdict::handle_check_verdict(&project_root, &args);
@@ -110,9 +115,9 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
     else {
         return Ok(1);
     };
-    // #1741: honor a pinned SA subtree's inherited model spec for `csa review`
-    // (see subtree_pin::apply_subtree_pin).
-    let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, current_depth);
+    let inherited_model_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
     let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
@@ -140,8 +145,13 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
     }
-    let gate_summary =
-        gate::run_pre_review_quality_gate(&project_root, config.as_ref(), &global_config).await?;
+    let gate_summary = gate::run_pre_review_quality_gate(
+        &project_root,
+        config.as_ref(),
+        &global_config,
+        current_depth,
+    )
+    .await?;
 
     let scope = derive_scope_for_project(&args, &project_root);
     let mode = if args.fix {
@@ -189,6 +199,7 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
         ReviewProjectPromptOptions {
             project_config: config.as_ref(),
             prior_rounds_section: prior_rounds_section.as_deref(),
+            current_session_id: startup_env.session_id(),
             full_consistency: args.full_consistency,
         },
     );
@@ -331,6 +342,8 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
             &args.extra_writable,
             &args.extra_readable,
             args.no_error_marker_scan,
+            current_depth,
+            startup_env,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -523,6 +536,8 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
             max_rounds: args.max_rounds,
             initial_session_id: result.execution.meta_session_id.clone(),
             review_iterations,
+            current_depth,
+            startup_env,
         })
         .await;
 
@@ -576,6 +591,9 @@ pub(crate) async fn handle_review(mut args: ReviewArgs, current_depth: u32) -> R
         idle_timeout_seconds,
         readonly_project_root,
         prior_rounds_section: prior_rounds_section.as_deref(),
+        current_session_id: startup_env.session_id(),
+        current_depth,
+        startup_env,
     })
     .await
 }

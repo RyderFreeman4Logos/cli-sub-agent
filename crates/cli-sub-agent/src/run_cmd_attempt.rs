@@ -354,7 +354,10 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         {
             effective_prompt.push_str(instructions);
         }
-        if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(request.config) {
+        if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(
+            request.config,
+            request.startup_env.current_depth(),
+        ) {
             effective_prompt = format!("{guard}\n\n{effective_prompt}");
         }
         let remaining_run_timeout =
@@ -434,6 +437,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     &request.extra_writable,
                     &request.extra_readable,
                     request.no_error_marker_scan,
+                    request.startup_env,
                 )
                 .await
             }
@@ -479,6 +483,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 &request.extra_writable,
                 &request.extra_readable,
                 request.no_error_marker_scan,
+                request.startup_env,
             )
             .await
         }?;

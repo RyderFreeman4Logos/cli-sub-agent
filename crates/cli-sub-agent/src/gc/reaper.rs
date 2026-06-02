@@ -43,13 +43,13 @@ pub(super) fn require_runtime_reap_max_age(max_age_days: Option<u64>) -> Result<
 pub(crate) fn reap_runtime_payloads_global(
     dry_run: bool,
     max_age_days: u64,
+    current_session_id: Option<&str>,
 ) -> Result<RuntimeReapStats> {
     let state_bases = csa_config::paths::state_dir_all_roots();
     if state_bases.is_empty() {
         return Ok(RuntimeReapStats::default());
     }
 
-    let current_session_id = std::env::var("CSA_SESSION_ID").ok();
     let mut total = RuntimeReapStats::default();
     let mut project_roots = Vec::new();
     for state_base in &state_bases {
@@ -77,7 +77,7 @@ pub(crate) fn reap_runtime_payloads_global(
             &sessions,
             dry_run,
             max_age_days,
-            current_session_id.as_deref(),
+            current_session_id,
         ) {
             Ok(stats) => stats,
             Err(err) => {

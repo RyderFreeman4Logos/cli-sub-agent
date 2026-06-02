@@ -449,6 +449,7 @@ impl Executor {
         for var in Self::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
 
         self.inject_csa_owned_env(&mut cmd, session);
 
@@ -459,6 +460,7 @@ impl Executor {
         cmd.env("CSA_SESSION_ID", &session.meta_session_id);
         cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
         cmd.env("CSA_PROJECT_ROOT", &session.project_path);
+        cmd.env(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY, "1");
         Self::inject_session_path_env(cmd, session);
 
         cmd.env("CSA_TOOL", self.tool_name());

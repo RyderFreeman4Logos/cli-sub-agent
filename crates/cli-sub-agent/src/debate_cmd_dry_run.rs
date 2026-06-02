@@ -23,12 +23,12 @@ pub(crate) fn create_debate_dry_run_session(
     description: &str,
     tool: &str,
     tier_name: Option<&str>,
+    startup_session_id: Option<&str>,
 ) -> Result<String> {
-    let parent_id = std::env::var("CSA_SESSION_ID").ok();
     let mut session = csa_session::create_session(
         project_root,
         Some(description),
-        parent_id.as_deref(),
+        startup_session_id,
         Some(tool),
     )?;
     session.task_context = csa_session::TaskContext {

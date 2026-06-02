@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use csa_core::types::{OutputFormat, ToolArg};
 
+use crate::startup_env::StartupSubtreeEnv;
+
 pub(crate) struct GoalLoop {
     goal_criteria: String,
     max_loops: u32,
@@ -111,6 +113,7 @@ pub(crate) struct GoalRunRequest {
     pub(crate) require_commit: bool,
     pub(crate) extra_writable: Vec<PathBuf>,
     pub(crate) extra_readable: Vec<PathBuf>,
+    pub(crate) startup_env: StartupSubtreeEnv,
 }
 
 struct FailureContext {
@@ -179,6 +182,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         request.require_commit,
         request.extra_writable,
         request.extra_readable,
+        request.startup_env,
     )
     .await
 }
@@ -339,6 +343,7 @@ async fn run_goal_iteration(
         request.require_commit,
         request.extra_writable.clone(),
         request.extra_readable.clone(),
+        request.startup_env.clone(),
     )
     .await?;
 

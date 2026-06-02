@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use anyhow::Result;
 use clap::Parser;
 mod arch_cmd;
@@ -57,6 +55,7 @@ mod plan_condition;
 mod plan_display;
 mod preflight_state_dir;
 mod preflight_symlink;
+mod process_exit;
 mod process_tree;
 mod push_cmd;
 mod recall_cmd;
@@ -96,6 +95,7 @@ mod skill_dispatch;
 mod skill_repo;
 mod skill_resolver;
 mod skill_run_cmd;
+mod startup_env;
 mod stdout_write;
 #[cfg(any(feature = "parallel-tasks", test))]
 pub mod task_lock;
@@ -130,6 +130,8 @@ use main_bootstrap::should_attempt_auto_weave_upgrade;
 use main_bootstrap::{
     link_bug_class_pipeline, maybe_auto_weave_upgrade, resolve_effective_min_timeout,
 };
+pub(crate) use process_exit::exit_current_process;
+use process_exit::report_daemon_error_or_exit_code;
 use sa_mode::apply_sa_mode_prompt_guard;
 
 mod migrate_cmd;
@@ -137,32 +139,6 @@ mod sa_mode;
 
 #[cfg(test)]
 pub(crate) use sa_mode::validate_sa_mode;
-
-/// Report daemon errors before dropping the stderr guard (issue #574).
-fn report_daemon_error_or_exit_code(
-    result: Result<i32>,
-    daemon_guard: &mut run_cmd_daemon::DaemonChildGuard,
-) -> i32 {
-    match result {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("{}", error_report::render_user_facing_error(&err));
-            if let Some(hint) = error_hints::suggest_fix(&err) {
-                eprintln!();
-                eprintln!("{hint}");
-            }
-            daemon_guard.finalize();
-            exit_current_process(1);
-        }
-    }
-}
-
-fn exit_current_process(exit_code: i32) -> ! {
-    let _ = std::io::stdout().flush();
-    let _ = std::io::stderr().flush();
-    crate::session_cmds_daemon::persist_daemon_completion_from_env(exit_code);
-    std::process::exit(exit_code);
-}
 
 #[tokio::main]
 async fn main() {
@@ -179,10 +155,8 @@ async fn main() {
 async fn run() -> Result<()> {
     link_bug_class_pipeline();
 
-    let current_depth: u32 = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let mut startup_env = startup_env::StartupSubtreeEnv::capture_from_process_env();
+    let current_depth = startup_env.current_depth();
 
     // Initialize tracing (output to stderr, initialize only once)
     tracing_subscriber::fmt()
@@ -203,7 +177,12 @@ async fn run() -> Result<()> {
     }
     executor_csa_guard::enforce(&command)?;
 
-    let sa_mode_active = apply_sa_mode_prompt_guard(&command, current_depth, output_format)?;
+    let sa_mode_active = apply_sa_mode_prompt_guard(
+        &command,
+        current_depth,
+        startup_env.internal_invocation(),
+        output_format,
+    )?;
 
     // Check weave.lock version alignment (non-fatal, read-only).
     if let Ok(cwd) = std::env::current_dir() {
@@ -317,6 +296,7 @@ async fn run() -> Result<()> {
                 daemon_child,
                 &session_id,
                 cd.as_deref(),
+                &mut startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::for_run(
                     skill.as_deref(),
                     prompt.as_deref(),
@@ -383,6 +363,7 @@ async fn run() -> Result<()> {
                 require_commit,
                 extra_writable,
                 extra_readable,
+                startup_env: startup_env.clone(),
             })
             .await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
@@ -403,12 +384,15 @@ async fn run() -> Result<()> {
                 args.allow_base_branch_working,
                 current_depth,
                 output_format,
+                &startup_env,
             )
             .await?;
             exit_current_process(exit_code);
         }
         Commands::Arch(args) => {
-            let exit_code = arch_cmd::handle_arch_args(args, current_depth, output_format).await?;
+            let exit_code =
+                arch_cmd::handle_arch_args(args, current_depth, output_format, &startup_env)
+                    .await?;
             exit_current_process(exit_code);
         }
         Commands::Triage(args) => {
@@ -419,16 +403,18 @@ async fn run() -> Result<()> {
                 args.allow_base_branch_working,
                 current_depth,
                 output_format,
+                &startup_env,
             )
             .await?;
             exit_current_process(exit_code);
         }
         Commands::Mktsk(args) => {
             let exit_code =
-                mktsk_cmd::handle_mktsk_args(args, current_depth, output_format).await?;
+                mktsk_cmd::handle_mktsk_args(args, current_depth, output_format, &startup_env)
+                    .await?;
             exit_current_process(exit_code);
         }
-        Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format)?,
+        Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format, &startup_env)?,
         Commands::Push(args) => push_cmd::handle_push(args)?,
         Commands::Merge(args) => merge_cmd::handle_merge(args)?,
         Commands::Audit { command } => {
@@ -448,9 +434,21 @@ async fn run() -> Result<()> {
             global,
         }) => {
             if global {
-                gc::handle_gc_global(dry_run, max_age_days, reap_runtime, output_format)?;
+                gc::handle_gc_global(
+                    dry_run,
+                    max_age_days,
+                    reap_runtime,
+                    output_format,
+                    startup_env.session_id(),
+                )?;
             } else {
-                gc::handle_gc(dry_run, max_age_days, reap_runtime, output_format)?;
+                gc::handle_gc(
+                    dry_run,
+                    max_age_days,
+                    reap_runtime,
+                    output_format,
+                    startup_env.session_id(),
+                )?;
             }
         }
         Commands::Config { cmd } => match cmd {
@@ -492,9 +490,10 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
+                &mut startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::default(),
             )?;
-            let result = review_cmd::handle_review(args, current_depth).await;
+            let result = review_cmd::handle_review(args, current_depth, &startup_env).await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
@@ -511,9 +510,11 @@ async fn run() -> Result<()> {
                 args.daemon_child,
                 &args.session_id,
                 args.cd.as_deref(),
+                &mut startup_env,
                 run_cmd_daemon::DaemonSpawnOptions::for_prompt_file(args.prompt_file.as_deref()),
             )?;
-            let result = debate_cmd::handle_debate(args, current_depth, output_format).await;
+            let result =
+                debate_cmd::handle_debate(args, current_depth, output_format, &startup_env).await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
@@ -543,7 +544,7 @@ async fn run() -> Result<()> {
             cd,
             dry_run,
         } => {
-            batch::handle_batch(file, cd, dry_run, current_depth).await?;
+            batch::handle_batch(file, cd, dry_run, current_depth, &startup_env).await?;
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
@@ -551,7 +552,7 @@ async fn run() -> Result<()> {
             );
         }
         Commands::McpServer => {
-            mcp_server::run_mcp_server().await?;
+            mcp_server::run_mcp_server(&startup_env).await?;
         }
         Commands::McpHub { cmd } => match cmd {
             McpHubCommands::Serve {
@@ -583,7 +584,8 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Skill { cmd } => {
-            let code = skill_dispatch::dispatch(cmd, current_depth, output_format).await?;
+            let code =
+                skill_dispatch::dispatch(cmd, current_depth, output_format, &startup_env).await?;
             if code != 0 {
                 exit_current_process(code);
             }
@@ -722,13 +724,21 @@ async fn run() -> Result<()> {
         },
         Commands::Checklist { command } => checklist_cmd::handle_checklist_command(command)?,
         Commands::Plan { cmd } => {
-            plan_cmd_daemon::dispatch(cmd, current_depth, sa_mode_active, text_output).await?;
+            plan_cmd_daemon::dispatch(
+                cmd,
+                current_depth,
+                sa_mode_active,
+                text_output,
+                &startup_env,
+            )
+            .await?;
         }
         Commands::Migrate { dry_run, status } => migrate_cmd::handle_migrate(dry_run, status)?,
         Commands::SelfUpdate { check } => self_update::handle_self_update(check)?,
         Commands::ClaudeSubAgent(args) => {
             let exit_code =
-                claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth).await?;
+                claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth, &startup_env)
+                    .await?;
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,

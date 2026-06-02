@@ -4,18 +4,6 @@ use std::path::Path;
 use csa_config::ProjectConfig;
 use tracing::info;
 
-/// Read the current CSA recursion depth from the environment.
-pub(crate) fn current_csa_depth() -> u32 {
-    std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(0)
-}
-
-fn next_depth_value() -> String {
-    current_csa_depth().saturating_add(1).to_string()
-}
-
 /// Resolve effective cooldown seconds from config or default.
 pub(crate) fn resolve_cooldown_seconds(config: Option<&ProjectConfig>) -> u64 {
     config
@@ -28,12 +16,14 @@ pub(crate) fn build_merged_env(
     config: Option<&ProjectConfig>,
     global_config: Option<&csa_config::GlobalConfig>,
     tool_name: &str,
+    current_depth: u32,
 ) -> HashMap<String, String> {
     let suppress = config
         .map(|c| c.should_suppress_notify(tool_name))
         .unwrap_or(true);
 
     let mut merged_env = extra_env.cloned().unwrap_or_default();
+    csa_core::env::scrub_subtree_contract_env_map(&mut merged_env);
     if !merged_env.contains_key("PATH")
         && let Some(path) = std::env::var_os("PATH")
     {
@@ -71,8 +61,14 @@ pub(crate) fn build_merged_env(
         );
     }
 
-    merged_env.insert("CSA_DEPTH".to_string(), next_depth_value());
-    merged_env.insert("CSA_INTERNAL_INVOCATION".to_string(), "1".to_string());
+    merged_env.insert(
+        csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
+        current_depth.saturating_add(1).to_string(),
+    );
+    merged_env.insert(
+        csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+        "1".to_string(),
+    );
 
     merged_env
 }

@@ -3,8 +3,6 @@ use csa_core::types::OutputFormat;
 
 const SA_MODE_REQUIRED_ERROR_PREFIX: &str = "--sa-mode true|false is required for root callers on execution commands.\n\
      Hint: add --sa-mode false for interactive use, or --sa-mode true for autonomous workflows";
-const CSA_INTERNAL_INVOCATION_ENV: &str = "CSA_INTERNAL_INVOCATION";
-
 fn command_name_for_sa_mode(command: &Commands) -> Option<&'static str> {
     match command {
         Commands::Run { .. } => Some("run"),
@@ -34,26 +32,16 @@ pub(crate) fn command_sa_mode_arg(command: &Commands) -> Option<Option<bool>> {
     }
 }
 
-fn is_internal_sa_invocation(current_depth: u32) -> bool {
-    if current_depth == 0 {
-        return false;
-    }
-
-    std::env::var(CSA_INTERNAL_INVOCATION_ENV)
-        .ok()
-        .map(|raw| {
-            let normalized = raw.trim().to_ascii_lowercase();
-            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false)
-}
-
-pub(crate) fn validate_sa_mode(command: &Commands, current_depth: u32) -> anyhow::Result<bool> {
+pub(crate) fn validate_sa_mode(
+    command: &Commands,
+    current_depth: u32,
+    internal_invocation: bool,
+) -> anyhow::Result<bool> {
     let Some(sa_mode_arg) = command_sa_mode_arg(command) else {
         return Ok(false);
     };
 
-    if sa_mode_arg.is_none() && !is_internal_sa_invocation(current_depth) {
+    if sa_mode_arg.is_none() && !(current_depth > 0 && internal_invocation) {
         let command_name = command_name_for_sa_mode(command).unwrap_or("execution command");
         anyhow::bail!("{SA_MODE_REQUIRED_ERROR_PREFIX}: command `{command_name}`");
     }
@@ -69,13 +57,14 @@ pub(crate) fn validate_sa_mode(command: &Commands, current_depth: u32) -> anyhow
 pub(crate) fn apply_sa_mode_prompt_guard(
     command: &Commands,
     current_depth: u32,
+    internal_invocation: bool,
     output_format: OutputFormat,
 ) -> anyhow::Result<bool> {
     if command_sa_mode_arg(command).is_none() {
         return Ok(false);
     }
 
-    let sa_mode_enabled = validate_sa_mode(command, current_depth)?;
+    let sa_mode_enabled = validate_sa_mode(command, current_depth, internal_invocation)?;
     let value = if sa_mode_enabled { "true" } else { "false" };
 
     // SAFETY: process-level env updated once during startup before async work begins.

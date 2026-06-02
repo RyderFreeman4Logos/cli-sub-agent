@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::startup_env::StartupSubtreeEnv;
+
 const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -103,19 +105,27 @@ pub(crate) fn check_daemon_flags(
     daemon_child: bool,
     session_id: &Option<String>,
     cd: Option<&str>,
+    startup_env: &mut StartupSubtreeEnv,
     spawn_options: DaemonSpawnOptions,
 ) -> Result<DaemonChildGuard> {
     if !no_daemon && !daemon_child {
         if session_id.is_some() {
             anyhow::bail!("--session-id is an internal flag and must not be used directly");
         }
-        spawn_and_exit(subcommand, cd, spawn_options)?;
+        spawn_and_exit(subcommand, cd, startup_env, spawn_options)?;
     }
     let mut stderr_rotation = None;
     if let Some(sid) = session_id {
         // SAFETY: Runs in the daemon child before tokio spawns worker threads.
-        unsafe { std::env::set_var("CSA_DAEMON_SESSION_ID", sid) };
+        unsafe {
+            std::env::set_var("CSA_DAEMON_SESSION_ID", sid);
+            std::env::set_var(csa_core::env::CSA_SESSION_ID_ENV_KEY, sid);
+        }
         crate::session_cmds_daemon::seed_daemon_session_env(sid, cd);
+        // Keep ordinary run/review/debate daemon children in sync with the plan-daemon
+        // invariant established by `inject_plan_daemon_session_into_startup_env`: after
+        // daemon bootstrap, StartupSubtreeEnv::session_id() names the executing session.
+        *startup_env = daemon_child_startup_env(startup_env, sid, cd)?;
 
         // Install stderr rotation so daemon stderr.log is bounded.
         stderr_rotation = install_daemon_stderr_rotation(sid, cd);
@@ -130,6 +140,18 @@ pub(crate) fn check_daemon_flags(
     Ok(DaemonChildGuard {
         _stderr_rotation: stderr_rotation,
     })
+}
+
+fn daemon_child_startup_env(
+    startup_env: &StartupSubtreeEnv,
+    session_id: &str,
+    cd: Option<&str>,
+) -> Result<StartupSubtreeEnv> {
+    let project_root = crate::pipeline::determine_project_root(cd)?;
+    let session_dir = csa_session::get_session_dir(&project_root, session_id)?;
+    Ok(startup_env
+        .clone()
+        .with_current_session(session_id, session_dir.display().to_string()))
 }
 
 /// Install a custom panic hook that writes `daemon-completion.toml` before
@@ -240,6 +262,7 @@ fn resolve_stderr_spool_config(project_root: &std::path::Path) -> (u64, bool, st
 pub(crate) fn spawn_and_exit(
     subcommand: &str,
     cd: Option<&str>,
+    startup_env: &StartupSubtreeEnv,
     spawn_options: DaemonSpawnOptions,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd)?;
@@ -276,6 +299,7 @@ pub(crate) fn spawn_and_exit(
         "CSA_DAEMON_PROJECT_ROOT".to_string(),
         project_root.display().to_string(),
     );
+    startup_env.apply_to_child_env(&mut daemon_env);
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: sid.clone(),
@@ -475,219 +499,5 @@ fn remove_prompt_file_sentinel_arg(args: &mut Vec<String>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn run_daemon_options_detect_omitted_stdin_prompt_without_skill() {
-        let options = DaemonSpawnOptions::for_run(None, None, None, None, false, &[]);
-        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::Omitted);
-    }
-
-    #[test]
-    fn run_daemon_options_do_not_capture_stdin_for_skill_only_run() {
-        let options = DaemonSpawnOptions::for_run(Some("demo"), None, None, None, false, &[]);
-        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::None);
-    }
-
-    #[test]
-    fn run_daemon_options_detect_positional_stdin_sentinel() {
-        let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None, false, &[]);
-        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PositionalSentinel);
-    }
-
-    #[test]
-    fn run_daemon_options_detect_prompt_file_stdin_sentinel() {
-        let options =
-            DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")), false, &[]);
-        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
-    }
-
-    #[test]
-    fn prompt_file_daemon_options_detect_dev_stdin() {
-        let options = DaemonSpawnOptions::for_prompt_file(Some(Path::new("/dev/stdin")));
-        assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
-    }
-
-    #[test]
-    fn forwarded_args_append_prompt_file_for_omitted_stdin_prompt() {
-        let all_args = vec![
-            "csa".to_string(),
-            "run".to_string(),
-            "--sa-mode".to_string(),
-            "true".to_string(),
-        ];
-        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
-
-        let forwarded = build_forwarded_args(
-            &all_args,
-            "run",
-            &DaemonSpawnOptions {
-                run_stdin_prompt: RunStdinPrompt::Omitted,
-                ..Default::default()
-            },
-            Some(prompt_file),
-        );
-
-        assert_eq!(
-            forwarded,
-            vec![
-                "--sa-mode",
-                "true",
-                "--prompt-file",
-                "/state/session/input/stdin-prompt.txt"
-            ]
-        );
-    }
-
-    #[test]
-    fn forwarded_args_replace_positional_stdin_sentinel_with_prompt_file() {
-        let all_args = vec![
-            "csa".to_string(),
-            "run".to_string(),
-            "--sa-mode".to_string(),
-            "true".to_string(),
-            "-".to_string(),
-        ];
-        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
-
-        let forwarded = build_forwarded_args(
-            &all_args,
-            "run",
-            &DaemonSpawnOptions {
-                run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
-                ..Default::default()
-            },
-            Some(prompt_file),
-        );
-
-        assert_eq!(
-            forwarded,
-            vec![
-                "--sa-mode",
-                "true",
-                "--prompt-file",
-                "/state/session/input/stdin-prompt.txt"
-            ]
-        );
-    }
-
-    #[test]
-    fn forwarded_args_replace_prompt_file_stdin_sentinel_with_prompt_file() {
-        let all_args = vec![
-            "csa".to_string(),
-            "debate".to_string(),
-            "--sa-mode".to_string(),
-            "true".to_string(),
-            "--prompt-file".to_string(),
-            "/dev/stdin".to_string(),
-        ];
-        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
-
-        let forwarded = build_forwarded_args(
-            &all_args,
-            "debate",
-            &DaemonSpawnOptions {
-                run_stdin_prompt: RunStdinPrompt::PromptFileSentinel,
-                ..Default::default()
-            },
-            Some(prompt_file),
-        );
-
-        assert_eq!(
-            forwarded,
-            vec![
-                "--sa-mode",
-                "true",
-                "--prompt-file",
-                "/state/session/input/stdin-prompt.txt"
-            ]
-        );
-    }
-
-    #[test]
-    fn forwarded_args_replace_prompt_file_equals_stdin_sentinel_with_prompt_file() {
-        let all_args = vec![
-            "csa".to_string(),
-            "run".to_string(),
-            "--sa-mode".to_string(),
-            "true".to_string(),
-            "--prompt-file=-".to_string(),
-        ];
-        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
-
-        let forwarded = build_forwarded_args(
-            &all_args,
-            "run",
-            &DaemonSpawnOptions {
-                run_stdin_prompt: RunStdinPrompt::PromptFileSentinel,
-                ..Default::default()
-            },
-            Some(prompt_file),
-        );
-
-        assert_eq!(
-            forwarded,
-            vec![
-                "--sa-mode",
-                "true",
-                "--prompt-file",
-                "/state/session/input/stdin-prompt.txt"
-            ]
-        );
-    }
-
-    #[test]
-    fn forwarded_args_remove_trailing_double_dash_with_stdin_sentinel() {
-        let all_args = vec![
-            "csa".to_string(),
-            "run".to_string(),
-            "--sa-mode".to_string(),
-            "true".to_string(),
-            "--".to_string(),
-            "-".to_string(),
-        ];
-        let prompt_file = Path::new("/state/session/input/stdin-prompt.txt");
-
-        let forwarded = build_forwarded_args(
-            &all_args,
-            "run",
-            &DaemonSpawnOptions {
-                run_stdin_prompt: RunStdinPrompt::PositionalSentinel,
-                ..Default::default()
-            },
-            Some(prompt_file),
-        );
-
-        assert_eq!(
-            forwarded,
-            vec![
-                "--sa-mode",
-                "true",
-                "--prompt-file",
-                "/state/session/input/stdin-prompt.txt"
-            ]
-        );
-    }
-
-    #[test]
-    fn bounded_stdin_prompt_accepts_prompt_at_limit() {
-        let prompt = "x".repeat(16);
-        let read = read_bounded_stdin_prompt(std::io::Cursor::new(prompt.as_bytes()), 16)
-            .expect("prompt at limit should be accepted");
-
-        assert_eq!(read, prompt);
-    }
-
-    #[test]
-    fn bounded_stdin_prompt_rejects_prompt_over_limit() {
-        let prompt = "x".repeat(17);
-        let err = read_bounded_stdin_prompt(std::io::Cursor::new(prompt.as_bytes()), 16)
-            .expect_err("prompt over limit should fail");
-
-        assert!(
-            err.to_string().contains("exceeds the 16 byte daemon limit"),
-            "unexpected error: {err}"
-        );
-    }
-}
+#[path = "run_cmd_daemon_tests.rs"]
+mod tests;

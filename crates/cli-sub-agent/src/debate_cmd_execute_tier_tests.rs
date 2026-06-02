@@ -113,9 +113,14 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
         "Should we ship this migration?",
     ]);
 
-    let exit_code = handle_debate(args, 0, csa_core::types::OutputFormat::Json)
-        .await
-        .expect("explicit gemini debate tier fallback should succeed");
+    let exit_code = handle_debate(
+        args,
+        0,
+        csa_core::types::OutputFormat::Json,
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
+    .await
+    .expect("explicit gemini debate tier fallback should succeed");
     assert_eq!(exit_code, 0);
 
     let gemini_invocations = std::fs::read_to_string(&gemini_invocation_log).unwrap();

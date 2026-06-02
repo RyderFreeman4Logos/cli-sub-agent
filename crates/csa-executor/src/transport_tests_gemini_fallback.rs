@@ -805,3 +805,42 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_preserves_phase2_api_key() {
         Some(&"https://proxy.example.test".to_string())
     );
 }
+
+#[test]
+fn test_apply_gemini_sandbox_runtime_env_overrides_scrubs_startup_subtree_keys() {
+    let mut isolation_plan = IsolationPlan {
+        resource: csa_resource::sandbox::ResourceCapability::None,
+        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        readable_paths: Vec::new(),
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
+    };
+    let mut env_overrides = HashMap::from([(
+        "HOME".to_string(),
+        "/tmp/cli-sub-agent-gemini/01TEST".to_string(),
+    )]);
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        env_overrides.insert((*key).to_string(), format!("spoofed-{key}"));
+    }
+
+    apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
+
+    assert_eq!(
+        isolation_plan.env_overrides.get("HOME"),
+        Some(&"/tmp/cli-sub-agent-gemini/01TEST".to_string())
+    );
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert!(
+            !isolation_plan.env_overrides.contains_key(*key),
+            "Gemini sandbox runtime overrides must not inject startup-subtree key {key}"
+        );
+    }
+}

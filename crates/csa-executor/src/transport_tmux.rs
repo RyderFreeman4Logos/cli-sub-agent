@@ -418,8 +418,11 @@ impl TmuxTransport {
         for var in crate::executor::executor_env::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
 
         if let Some(env) = extra_env {
+            // execute_session passes a trusted merged child env: generic input
+            // was scrubbed before fresh CSA session/pin values were inserted.
             for (k, v) in env {
                 cmd.env(k, v);
             }
@@ -503,10 +506,7 @@ impl TmuxTransport {
         // with inject_cli_session_env in transport_cli.rs.
         let (merged_env, session_dir) = {
             let mut env = extra_env.cloned().unwrap_or_default();
-            // #1741: a generic env map may NEVER carry the subtree-pin keys;
-            // strip them before merging CSA-owned env so request/config env
-            // cannot spoof a pin. The trusted pin is applied last, below.
-            csa_core::env::strip_reserved_pin_keys(&mut env);
+            csa_core::env::scrub_subtree_contract_env_map(&mut env);
             let mut dir = None;
             if let Some(session) = session {
                 env.insert("CSA_SESSION_ID".into(), session.meta_session_id.clone());

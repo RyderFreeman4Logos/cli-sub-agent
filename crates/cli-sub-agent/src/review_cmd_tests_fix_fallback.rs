@@ -134,6 +134,8 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         max_rounds: 1,
         initial_session_id: initial.execution.meta_session_id.clone(),
         review_iterations: 0,
+        current_depth: 0,
+        startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     })
     .await
     .expect("fix loop should use fallback tool");

@@ -138,6 +138,7 @@ fn review_cli_validation_and_consensus_helpers_remain_compatible() {
         ToolName::Codex,
         project_dir.path(),
         None,
+        None,
     );
     assert!(instruction.contains("reviewer 2"));
     assert!(instruction.contains("CLEAN"));

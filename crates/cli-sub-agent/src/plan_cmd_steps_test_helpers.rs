@@ -27,6 +27,7 @@ pub(crate) async fn execute_plan(
     let workflow_path = project_root.join("workflow.toml");
     let mut journal = PlanRunJournal::new(&plan.name, &workflow_path, variables.clone());
     let completed = HashSet::new();
+    let startup_env = startup_env_for_test_project(project_root);
     let mut run_ctx = PlanRunContext {
         project_root,
         workflow_path: &workflow_path,
@@ -38,6 +39,7 @@ pub(crate) async fn execute_plan(
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        startup_env: &startup_env,
     };
     execute_plan_with_journal(plan, variables, &mut run_ctx).await
 }
@@ -52,6 +54,7 @@ pub(crate) async fn execute_step(
     model_spec_override: Option<&String>,
 ) -> StepResult {
     let workflow_path_buf = project_root.join("workflow.toml");
+    let startup_env = startup_env_for_test_project(project_root);
     execute_step_with_workflow(
         step,
         variables,
@@ -62,7 +65,25 @@ pub(crate) async fn execute_step(
             tool_override,
             model_spec_override,
             no_fs_sandbox: false,
+            startup_env: &startup_env,
         },
     )
     .await
+}
+
+fn startup_env_for_test_project(project_root: &Path) -> crate::startup_env::StartupSubtreeEnv {
+    let Some(session_id) = std::env::var(csa_core::env::CSA_SESSION_ID_ENV_KEY)
+        .ok()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return crate::startup_env::StartupSubtreeEnv::default();
+    };
+    let Ok(session_dir) = csa_session::get_session_dir(project_root, &session_id) else {
+        return crate::startup_env::StartupSubtreeEnv::default();
+    };
+    if !session_dir.exists() {
+        return crate::startup_env::StartupSubtreeEnv::default();
+    }
+    crate::startup_env::StartupSubtreeEnv::default()
+        .with_current_session(session_id, session_dir.display().to_string())
 }

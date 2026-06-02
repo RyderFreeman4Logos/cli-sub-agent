@@ -6,9 +6,14 @@ use tracing::{info, warn};
 
 use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::SessionLock;
+use csa_process::StreamMode;
 
 use crate::pipeline;
+use crate::run_cmd_caller_fork::resolve_fork_from_caller;
 use crate::run_cmd_fork::try_auto_seed_fork;
+use crate::run_cmd_model_pin::{
+    RunModelPinInput, inherited_model_pin_from_startup, resolve_handle_run_model_pin,
+};
 use crate::run_cmd_post::{
     handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy,
     write_fallback_chain_to_result_toml,
@@ -17,6 +22,16 @@ use crate::run_cmd_tool_selection::{
     resolve_last_session_selection, resolve_return_target_session_id, resolve_skill_and_prompt,
     resolve_tool_by_strategy,
 };
+use crate::run_helpers::{
+    apply_compound_tier_selector_arg, is_routing_conflict, resolve_positional_stdin_sentinel,
+    resolve_prompt_with_file, resolve_task_edit_requirement, tier_bypass_allowed, truncate_prompt,
+    warn_if_tier_without_tool,
+};
+use crate::run_helpers_branch_guard::{
+    BranchGuardRuntime, evaluate_and_emit_refusal, observe_branch_state,
+};
+use crate::session_guard::{PreExecErrorCtx, persist_pre_exec_error_result};
+use crate::startup_env::StartupSubtreeEnv;
 #[path = "run_cmd_execute_post_exec_gate.rs"]
 mod post_exec_gate;
 #[path = "run_cmd_execute_reuse_hint.rs"]
@@ -27,6 +42,8 @@ mod routing;
 mod run_cli_flags;
 #[path = "run_cmd_execute_context.rs"]
 mod run_context;
+#[path = "run_cmd_execute_output.rs"]
+mod run_output;
 #[path = "run_cmd_execute_skill_resume.rs"]
 mod skill_resume;
 #[path = "run_cmd_execute_tier_guard.rs"]
@@ -45,6 +62,7 @@ use run_cli_flags::{
     warn_if_fast_mode_has_no_codex_run_candidate,
 };
 use run_context::finalize_prompt_text;
+use run_output::emit_run_result_output;
 use skill_resume::maybe_auto_resume_interrupted_skill_session;
 use tier_guard::{DirectToolTierGuardCtx, enforce_direct_tool_tier_guard};
 
@@ -55,7 +73,7 @@ use super::resume::{
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
-    tool: Option<csa_core::types::ToolArg>,
+    tool: Option<ToolArg>,
     auto_route: Option<String>,
     hint_difficulty: Option<String>,
     skill: Option<String>,
@@ -92,7 +110,7 @@ pub(crate) async fn handle_run(
     memory_query: Option<String>,
     current_depth: u32,
     output_format: OutputFormat,
-    stream_mode: csa_process::StreamMode,
+    stream_mode: StreamMode,
     tier: Option<String>,
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
@@ -101,6 +119,7 @@ pub(crate) async fn handle_run(
     require_commit: bool,
     extra_writable: Vec<PathBuf>,
     extra_readable: Vec<PathBuf>,
+    startup_env: StartupSubtreeEnv,
 ) -> Result<i32> {
     let cli_model_spec_explicit = model_spec.is_some();
     let cli_model_explicit = model.is_some();
@@ -154,6 +173,7 @@ pub(crate) async fn handle_run(
             &project_root,
             session_arg.as_deref(),
             parent.as_deref(),
+            startup_env.session_id(),
         )?;
 
         if session_arg.is_none() {
@@ -175,7 +195,7 @@ pub(crate) async fn handle_run(
         return Ok(1);
     };
     let caller_fork_resolution = if fork_from_caller {
-        let resolved = crate::run_cmd_caller_fork::resolve_fork_from_caller(config.as_ref());
+        let resolved = resolve_fork_from_caller(config.as_ref());
         if resolved.is_none() {
             warn!("--fork-from-caller: no caller session resolved; falling back to cold start");
         }
@@ -183,27 +203,18 @@ pub(crate) async fn handle_run(
     } else {
         None
     };
-    let branch_guard = crate::run_helpers_branch_guard::BranchGuardRuntime::for_run(
-        allow_base_branch_working,
-        config.as_ref(),
-        &global_config,
-    );
-    let branch_state =
-        crate::run_helpers_branch_guard::observe_branch_state(&project_root, config.as_ref());
-    if let Some(exit_code) =
-        crate::run_helpers_branch_guard::evaluate_and_emit_refusal(&branch_guard, branch_state)
-    {
+    let branch_guard =
+        BranchGuardRuntime::for_run(allow_base_branch_working, config.as_ref(), &global_config);
+    let branch_state = observe_branch_state(&project_root, config.as_ref());
+    if let Some(exit_code) = evaluate_and_emit_refusal(&branch_guard, branch_state) {
         return Ok(exit_code);
     }
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let mut user_explicit_tool = tool.is_some();
-    let prompt = crate::run_helpers::resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
+    let prompt = resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
 
     let prompt = if prompt_file.is_some() {
-        Some(crate::run_helpers::resolve_prompt_with_file(
-            prompt,
-            prompt_file.as_deref(),
-        )?)
+        Some(resolve_prompt_with_file(prompt, prompt_file.as_deref())?)
     } else {
         prompt
     };
@@ -216,15 +227,16 @@ pub(crate) async fn handle_run(
         thinking,
         &project_root,
     )?;
-    let model_pin_resolution = crate::run_cmd_model_pin::resolve_handle_run_model_pin(
-        crate::run_cmd_model_pin::RunModelPinInput {
+    let inherited_model_pin = inherited_model_pin_from_startup(&startup_env);
+    let model_pin_resolution = resolve_handle_run_model_pin(
+        RunModelPinInput {
             model_spec,
             tier,
             auto_route,
             force_ignore_tier_setting,
             no_failover,
         },
-        current_depth,
+        inherited_model_pin.clone(),
         cli_model_spec_explicit,
         &mut skill_res,
         &mut user_explicit_tool,
@@ -237,14 +249,13 @@ pub(crate) async fn handle_run(
     let resolved_skill = skill_res.resolved_skill;
     let gate_prompt_text = skill_res.prompt_text.clone();
     let frontmatter_difficulty = skill_res.frontmatter_difficulty.clone();
-    let task_needs_edit = crate::run_helpers::resolve_task_edit_requirement(
-        resolved_skill.as_ref(),
-        &skill_res.prompt_text,
-    );
+    let task_needs_edit =
+        resolve_task_edit_requirement(resolved_skill.as_ref(), &skill_res.prompt_text);
     let prompt_text = finalize_prompt_text(
         &project_root,
         skill_res.prompt_text,
         inline_context_from_review_session.as_deref(),
+        &startup_env,
     )?;
     let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
     let thinking = skill_res.thinking;
@@ -271,7 +282,7 @@ pub(crate) async fn handle_run(
         model_pin_resolution.inherited_trusted_pin,
     )?;
     if model_selection_flags.model_spec
-        && crate::run_helpers::tier_bypass_allowed(
+        && tier_bypass_allowed(
             config.as_ref(),
             &global_config,
             model_pin_resolution.inherited_trusted_pin,
@@ -291,7 +302,7 @@ pub(crate) async fn handle_run(
         Some(ToolArg::Specific(tool)) => Some(tool.as_str()),
         _ => None,
     };
-    let fallback_description = crate::run_helpers::truncate_prompt(&prompt_text, 80);
+    let fallback_description = truncate_prompt(&prompt_text, 80);
     let pre_exec_description = description
         .as_deref()
         .or(skill_session_tag.as_deref())
@@ -311,32 +322,29 @@ pub(crate) async fn handle_run(
         frontmatter_difficulty.as_deref(),
     )?;
 
-    let (effective_tier, compounded_tool) =
-        match crate::run_helpers::apply_compound_tier_selector_arg(
-            effective_tier,
-            skill_res.tool.take(),
-            config.as_ref(),
-        ) {
-            Ok(pair) => pair,
-            Err(err) => {
-                return Err(crate::session_guard::persist_pre_exec_error_result(
-                    crate::session_guard::PreExecErrorCtx {
-                        project_root: &project_root,
-                        session_id: if is_fork {
-                            None
-                        } else {
-                            session_arg.as_deref()
-                        },
-                        description: pre_exec_description,
-                        parent: pre_exec_parent,
-                        tool_name: explicit_tool_name,
-                        task_type: Some("run"),
-                        tier_name: None,
-                        error: err,
-                    },
-                ));
-            }
-        };
+    let (effective_tier, compounded_tool) = match apply_compound_tier_selector_arg(
+        effective_tier,
+        skill_res.tool.take(),
+        config.as_ref(),
+    ) {
+        Ok(pair) => pair,
+        Err(err) => {
+            return Err(persist_pre_exec_error_result(PreExecErrorCtx {
+                project_root: &project_root,
+                session_id: if is_fork {
+                    None
+                } else {
+                    session_arg.as_deref()
+                },
+                description: pre_exec_description,
+                parent: pre_exec_parent,
+                tool_name: explicit_tool_name,
+                task_type: Some("run"),
+                tier_name: None,
+                error: err,
+            }));
+        }
+    };
     skill_res.tool = compounded_tool;
 
     enforce_direct_tool_tier_guard(DirectToolTierGuardCtx {
@@ -354,7 +362,7 @@ pub(crate) async fn handle_run(
         explicit_tool_name,
     })?;
 
-    crate::run_helpers::warn_if_tier_without_tool(tier.as_deref(), user_explicit_tool);
+    warn_if_tier_without_tool(tier.as_deref(), user_explicit_tool);
 
     let strategy = skill_res
         .tool
@@ -393,23 +401,21 @@ pub(crate) async fn handle_run(
         force_ignore_tier_setting,
     )
     .map_err(|err| {
-        if crate::run_helpers::is_routing_conflict(&err) {
-            crate::session_guard::persist_pre_exec_error_result(
-                crate::session_guard::PreExecErrorCtx {
-                    project_root: &project_root,
-                    session_id: if is_fork {
-                        None
-                    } else {
-                        session_arg.as_deref()
-                    },
-                    description: pre_exec_description,
-                    parent: pre_exec_parent,
-                    tool_name: explicit_tool_name,
-                    task_type: Some("run"),
-                    tier_name: effective_tier.as_deref(),
-                    error: err,
+        if is_routing_conflict(&err) {
+            persist_pre_exec_error_result(PreExecErrorCtx {
+                project_root: &project_root,
+                session_id: if is_fork {
+                    None
+                } else {
+                    session_arg.as_deref()
                 },
-            )
+                description: pre_exec_description,
+                parent: pre_exec_parent,
+                tool_name: explicit_tool_name,
+                task_type: Some("run"),
+                tier_name: effective_tier.as_deref(),
+                error: err,
+            })
         } else {
             err
         }
@@ -463,6 +469,7 @@ pub(crate) async fn handle_run(
             &project_root,
             session_arg.as_deref(),
             parent.as_deref(),
+            startup_env.session_id(),
         )?;
         let Some(parent_id) = resolved_parent_id else {
             anyhow::bail!("unable to resolve parent session for fork-call return");
@@ -583,6 +590,7 @@ pub(crate) async fn handle_run(
         extra_writable,
         extra_readable,
         branch_guard,
+        startup_env: &startup_env,
     })
     .await?;
 
@@ -651,42 +659,12 @@ pub(crate) async fn handle_run(
         write_fallback_chain_to_result_toml(&project_root, sid, &loop_outcome.fallback_chain);
     }
 
-    match output_format {
-        OutputFormat::Text => {
-            print!("{}", result.output);
-            if result.exit_code != 0
-                && let Some(ref sid) = executed_session_id
-                && crate::error_hints::sandbox_fs_denial_hint(
-                    &result.stderr_output,
-                    &result.output,
-                    true,
-                    sid,
-                )
-                .is_some()
-            {
-                let fs_sandbox_active = csa_session::load_session(&project_root, sid)
-                    .ok()
-                    .and_then(|session| {
-                        session.sandbox_info.as_ref().map(|info| {
-                            crate::pipeline_sandbox::filesystem_sandbox_active(Some(info))
-                        })
-                    })
-                    .unwrap_or(false);
-                if let Some(hint) = crate::error_hints::sandbox_fs_denial_hint(
-                    &result.stderr_output,
-                    &result.output,
-                    fs_sandbox_active,
-                    sid,
-                ) {
-                    eprintln!("{hint}");
-                }
-            }
-        }
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&result)?;
-            println!("{json}");
-        }
-    }
+    emit_run_result_output(
+        &project_root,
+        output_format,
+        executed_session_id.as_deref(),
+        &result,
+    )?;
 
     Ok(result.exit_code)
 }

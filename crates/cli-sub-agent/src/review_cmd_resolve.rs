@@ -519,6 +519,7 @@ pub(crate) fn build_review_instruction_for_project(
             crate::review_consensus::review_iteration::render_review_iteration_context(
                 project_root,
                 branch,
+                options.current_session_id,
             )
     {
         instruction.push_str("\n\n");
@@ -540,5 +541,6 @@ pub(crate) fn build_review_instruction_for_project(
 pub(crate) struct ReviewProjectPromptOptions<'a> {
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) prior_rounds_section: Option<&'a str>,
+    pub(crate) current_session_id: Option<&'a str>,
     pub(crate) full_consistency: bool,
 }

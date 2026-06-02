@@ -25,6 +25,7 @@ fn make_chunked_run_ctx<'a>(
         resume_completed_steps,
         chunked,
         no_fs_sandbox: false,
+        startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     }
 }
 

@@ -219,6 +219,7 @@ async fn execute_plan_stops_for_await_user() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
     let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
@@ -284,6 +285,7 @@ async fn execute_plan_continues_after_skipped_await_user_step() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
     let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)

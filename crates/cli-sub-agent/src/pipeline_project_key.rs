@@ -112,15 +112,17 @@ fn project_key_from_git_toplevel(project_root: &Path) -> Option<String> {
     project_key_from_path(Path::new(&toplevel))
 }
 
-pub(crate) fn resolve_memory_project_key(project_root: &Path) -> Option<String> {
+pub(crate) fn resolve_memory_project_key(
+    project_root: &Path,
+    startup_project_root: Option<&str>,
+) -> Option<String> {
     // Prefer explicit project_root argument (e.g. --cd) over inherited env var,
     // so nested sessions with --cd target the correct repo.
     project_key_from_git_remote(project_root)
         .or_else(|| project_key_from_git_toplevel(project_root))
         .or_else(|| project_key_from_path(project_root))
         .or_else(|| {
-            std::env::var("CSA_PROJECT_ROOT")
-                .ok()
+            startup_project_root
                 .filter(|value| !value.trim().is_empty())
                 .and_then(|value| project_key_from_path(Path::new(&value)))
         })

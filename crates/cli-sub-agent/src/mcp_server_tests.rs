@@ -1,4 +1,6 @@
 use super::*;
+use csa_session::{SessionPhase, ToolState, create_session, get_session_root, save_session};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
@@ -44,6 +46,43 @@ impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.original).expect("restore current dir");
     }
+}
+
+fn seed_retired_runtime_session(project_root: &Path) -> (String, PathBuf) {
+    std::fs::create_dir_all(project_root).expect("create project root");
+
+    let last_accessed = chrono::Utc::now() - chrono::Duration::days(40);
+    let mut session = create_session(
+        project_root,
+        Some("mcp gc runtime test"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    session.phase = SessionPhase::Retired;
+    session.last_accessed = last_accessed;
+    session.tools.insert(
+        "codex".to_string(),
+        ToolState {
+            provider_session_id: Some("provider-session".to_string()),
+            last_action_summary: "completed".to_string(),
+            last_exit_code: 0,
+            updated_at: last_accessed,
+            tool_version: None,
+            token_usage: None,
+        },
+    );
+    save_session(&session).expect("save retired session");
+
+    let runtime_dir = get_session_root(project_root)
+        .expect("session root")
+        .join("sessions")
+        .join(&session.meta_session_id)
+        .join("runtime");
+    std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+    std::fs::write(runtime_dir.join("cache.bin"), b"runtime").expect("write runtime marker");
+
+    (session.meta_session_id, runtime_dir)
 }
 
 // --- parse_tool_name tests ---
@@ -159,6 +198,104 @@ fn get_tools_csa_session_delete_requires_session_id() {
 }
 
 #[tokio::test]
+async fn mcp_gc_reap_runtime_protects_hosting_session_runtime() {
+    let tmp = tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path().join("project");
+    let (session_id, runtime_dir) = seed_retired_runtime_session(&project_root);
+    let _cwd_guard = CurrentDirGuard::set(&project_root);
+    let state = McpServerState {
+        startup_env: crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([(
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            session_id,
+        )])),
+    };
+
+    let response = handle_tool_call(
+        Some(serde_json::json!({
+            "name": "csa_gc",
+            "arguments": {
+                "reap_runtime": true,
+                "max_age_days": 30
+            }
+        })),
+        &state,
+    )
+    .await
+    .expect("MCP csa_gc should succeed");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("Garbage collection completed"));
+    assert!(
+        runtime_dir.exists(),
+        "MCP csa_gc must preserve the hosting session runtime/"
+    );
+}
+
+#[test]
+fn mcp_model_pin_resolution_inherits_server_startup_pin() {
+    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+            "codex/openai/gpt-5.5/xhigh".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+        (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+    ]));
+
+    let resolution = resolve_mcp_model_pin(None, Some("quality"), false, &startup_env);
+
+    assert_eq!(
+        resolution.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+    assert_eq!(resolution.tier, None);
+    assert!(resolution.force_ignore_tier_setting);
+    assert!(resolution.no_failover);
+    assert!(resolution.inherited_trusted_pin);
+}
+
+#[test]
+fn mcp_model_pin_resolution_keeps_explicit_model_spec_over_inherited_pin() {
+    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+            "codex/openai/gpt-5.5/xhigh".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+    ]));
+
+    let resolution = resolve_mcp_model_pin(
+        Some("gemini-cli/google/gemini-2.5-pro/high"),
+        Some("quality"),
+        false,
+        &startup_env,
+    );
+
+    assert_eq!(
+        resolution.model_spec.as_deref(),
+        Some("gemini-cli/google/gemini-2.5-pro/high")
+    );
+    assert_eq!(resolution.tier.as_deref(), Some("quality"));
+    assert!(!resolution.force_ignore_tier_setting);
+    assert!(!resolution.no_failover);
+    assert!(!resolution.inherited_trusted_pin);
+}
+
+#[tokio::test]
 async fn mcp_run_rejects_model_spec_when_project_tiers_exist_and_policy_is_default() {
     let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
     let project = tempdir().expect("project tempdir");
@@ -178,16 +315,114 @@ models = ["codex/openai/gpt-5/high"]
     let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
     let _cwd_guard = CurrentDirGuard::set(project.path());
 
-    let err = handle_run_tool(serde_json::json!({
-        "prompt": "hello",
-        "model_spec": "codex/openai/gpt-5/high"
-    }))
+    let err = handle_run_tool(
+        serde_json::json!({
+            "prompt": "hello",
+            "model_spec": "codex/openai/gpt-5/high"
+        }),
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
     .await
     .expect_err("MCP exact model bypass should be rejected before execution");
     let message = err.to_string();
     assert!(message.contains("Tier bypass is disabled"));
     assert!(message.contains("--model-spec"));
     assert!(message.contains("[tier_policy].allow_force_bypass"));
+}
+
+#[tokio::test]
+async fn mcp_run_allows_inherited_model_spec_when_project_tiers_exist_and_policy_is_default() {
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let project = tempdir().expect("project tempdir");
+    let config_dir = project.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create project config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[tiers.quality]
+description = "quality"
+models = ["codex/openai/gpt-5.5/xhigh"]
+"#,
+    )
+    .expect("write project config");
+
+    let xdg = tempdir().expect("xdg tempdir");
+    let empty_path = tempdir().expect("empty PATH tempdir");
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
+    let _path_guard = EnvVarGuard::set("PATH", empty_path.path());
+    let _cwd_guard = CurrentDirGuard::set(project.path());
+    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+            "codex/openai/gpt-5.5/xhigh".to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+        (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+    ]));
+
+    let response = handle_run_tool(
+        serde_json::json!({
+            "prompt": "hello",
+            "tier": "quality"
+        }),
+        &startup_env,
+    )
+    .await
+    .expect("inherited trusted pin should bypass the tier gate before tool availability");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("Tool 'codex' is not installed"));
+}
+
+#[tokio::test]
+async fn mcp_run_uses_server_startup_depth_for_recursion_guard() {
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let project = tempdir().expect("project tempdir");
+    let config_dir = project.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create project config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+schema_version = 1
+
+[project]
+max_recursion_depth = 1
+"#,
+    )
+    .expect("write project config");
+
+    let xdg = tempdir().expect("xdg tempdir");
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
+    let _cwd_guard = CurrentDirGuard::set(project.path());
+    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(
+        std::collections::HashMap::from([(csa_core::env::CSA_DEPTH_ENV_KEY, "2".to_string())]),
+    );
+
+    let response = handle_run_tool(
+        serde_json::json!({
+            "prompt": "hello"
+        }),
+        &startup_env,
+    )
+    .await
+    .expect("recursion guard returns an MCP content response");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("Max recursion depth (1) exceeded. Current: 2"));
 }
 
 #[test]

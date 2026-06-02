@@ -109,12 +109,10 @@ pub(crate) async fn evaluate_quality_gates(
     gate_steps: &[GateStep],
     gate_timeout_secs: u64,
     gate_mode: &GateMode,
+    current_depth: u32,
 ) -> Result<GatePipelineResult> {
     // Recursion guard: skip when running as a sub-agent
-    let depth: u32 = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let depth = current_depth;
     if depth > 0 {
         debug!(depth, "Skipping quality gates (CSA_DEPTH > 0)");
         return Ok(GatePipelineResult {
@@ -178,12 +176,10 @@ pub(crate) async fn evaluate_quality_gate(
     gate_command: Option<&str>,
     gate_timeout_secs: u64,
     gate_mode: &GateMode,
+    current_depth: u32,
 ) -> Result<GateResult> {
     // Recursion guard: skip when running as a sub-agent
-    let depth: u32 = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let depth = current_depth;
     if depth > 0 {
         debug!(depth, "Skipping quality gate (CSA_DEPTH > 0)");
         return Ok(GateResult::skipped("CSA_DEPTH > 0 (sub-agent)"));
