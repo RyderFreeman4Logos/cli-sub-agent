@@ -310,7 +310,7 @@ async fn handle_tool_call(params: Option<Value>, state: &McpServerState) -> Resu
     match name {
         "csa_session_list" => handle_session_list_tool(arguments).await,
         "csa_session_delete" => handle_session_delete_tool(arguments).await,
-        "csa_gc" => handle_gc_tool(arguments).await,
+        "csa_gc" => handle_gc_tool(arguments, &state.startup_env).await,
         "csa_run" => handle_run_tool(arguments, &state.startup_env).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
     }
@@ -428,7 +428,7 @@ async fn handle_session_delete_tool(args: Value) -> Result<Value> {
 }
 
 /// Handle csa_gc tool
-async fn handle_gc_tool(args: Value) -> Result<Value> {
+async fn handle_gc_tool(args: Value, startup_env: &StartupSubtreeEnv) -> Result<Value> {
     let dry_run = args
         .get("dry_run")
         .and_then(|v| v.as_bool())
@@ -445,7 +445,7 @@ async fn handle_gc_tool(args: Value) -> Result<Value> {
         max_age_days,
         reap_runtime,
         crate::OutputFormat::Text,
-        None,
+        startup_env.session_id(),
     )?;
 
     let msg = if dry_run {

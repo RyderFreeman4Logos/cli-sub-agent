@@ -1,4 +1,5 @@
 use super::*;
+use csa_session::{SessionPhase, ToolState, create_session, get_session_root, save_session};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -45,6 +46,43 @@ impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.original).expect("restore current dir");
     }
+}
+
+fn seed_retired_runtime_session(project_root: &Path) -> (String, PathBuf) {
+    std::fs::create_dir_all(project_root).expect("create project root");
+
+    let last_accessed = chrono::Utc::now() - chrono::Duration::days(40);
+    let mut session = create_session(
+        project_root,
+        Some("mcp gc runtime test"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    session.phase = SessionPhase::Retired;
+    session.last_accessed = last_accessed;
+    session.tools.insert(
+        "codex".to_string(),
+        ToolState {
+            provider_session_id: Some("provider-session".to_string()),
+            last_action_summary: "completed".to_string(),
+            last_exit_code: 0,
+            updated_at: last_accessed,
+            tool_version: None,
+            token_usage: None,
+        },
+    );
+    save_session(&session).expect("save retired session");
+
+    let runtime_dir = get_session_root(project_root)
+        .expect("session root")
+        .join("sessions")
+        .join(&session.meta_session_id)
+        .join("runtime");
+    std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+    std::fs::write(runtime_dir.join("cache.bin"), b"runtime").expect("write runtime marker");
+
+    (session.meta_session_id, runtime_dir)
 }
 
 // --- parse_tool_name tests ---
@@ -156,6 +194,46 @@ fn get_tools_csa_session_delete_requires_session_id() {
             .iter()
             .any(|v| v.as_str() == Some("session_id")),
         "csa_session_delete must require 'session_id' parameter"
+    );
+}
+
+#[tokio::test]
+async fn mcp_gc_reap_runtime_protects_hosting_session_runtime() {
+    let tmp = tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path().join("project");
+    let (session_id, runtime_dir) = seed_retired_runtime_session(&project_root);
+    let _cwd_guard = CurrentDirGuard::set(&project_root);
+    let state = McpServerState {
+        startup_env: crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([(
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            session_id,
+        )])),
+    };
+
+    let response = handle_tool_call(
+        Some(serde_json::json!({
+            "name": "csa_gc",
+            "arguments": {
+                "reap_runtime": true,
+                "max_age_days": 30
+            }
+        })),
+        &state,
+    )
+    .await
+    .expect("MCP csa_gc should succeed");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("Garbage collection completed"));
+    assert!(
+        runtime_dir.exists(),
+        "MCP csa_gc must preserve the hosting session runtime/"
     );
 }
 
