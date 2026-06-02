@@ -307,6 +307,10 @@ fn test_build_command_rebuilds_session_env_after_extra_env_merge() {
             "CSA_DAEMON_SESSION_DIR".to_string(),
             "/tmp/outer-daemon-session".to_string(),
         ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+            "0".to_string(),
+        ),
     ]);
 
     let (cmd, _stdin_data) = exec.build_command("test", None, &session, Some(&extra), None);
@@ -317,6 +321,18 @@ fn test_build_command_rebuilds_session_env_after_extra_env_merge() {
         env_map.get(std::ffi::OsStr::new("CSA_SESSION_ID")),
         Some(&Some(std::ffi::OsStr::new("01HTEST000000000000000000"))),
         "CSA_SESSION_ID must be rebuilt from the new session"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CSA_DEPTH")),
+        Some(&Some(std::ffi::OsStr::new("1"))),
+        "CSA_DEPTH must be rebuilt from the new session"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new(
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY
+        )),
+        Some(&Some(std::ffi::OsStr::new("1"))),
+        "CSA_INTERNAL_INVOCATION must be rebuilt by the typed session path"
     );
     let session_dir = env_map
         .get(std::ffi::OsStr::new("CSA_SESSION_DIR"))
