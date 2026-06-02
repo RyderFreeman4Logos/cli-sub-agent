@@ -266,6 +266,11 @@ fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> any
                 let elapsed = now.signed_duration_since(session.last_accessed);
 
                 if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
+                    if let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id)
+                        && session_has_terminal_process(&session_dir)
+                    {
+                        return Ok(());
+                    }
                     return Err(anyhow::anyhow!(
                         "daemon not running, no recent progress ({}s > {}s threshold)",
                         elapsed.num_seconds(),

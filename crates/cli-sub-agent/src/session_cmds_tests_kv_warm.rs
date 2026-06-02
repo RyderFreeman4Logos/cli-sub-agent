@@ -120,3 +120,71 @@ fn handle_session_wait_kv_warm_exit_when_daemon_alive_at_cap() {
         "live daemon at wait cap must emit KV-warm exit (0), not legacy timeout (124)"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stale_precheck_does_not_fail_live_daemon_session() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-stale-precheck-live-daemon"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    let mut state = load_session(project, &session_id).expect("load session");
+    state.phase = SessionPhase::Active;
+    state.last_accessed = chrono::Utc::now() - chrono::Duration::seconds(7_200);
+    save_session(&state).expect("save stale active session");
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn child");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    let exit_code = handle_session_wait_with_hooks(
+        session_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("stale precheck must not emit a synthetic completion for a live daemon");
+        },
+    )
+    .expect("wait should skip stale precheck for live daemon");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(
+        exit_code, 0,
+        "live daemon must not be pre-failed solely because last_accessed is stale"
+    );
+}
