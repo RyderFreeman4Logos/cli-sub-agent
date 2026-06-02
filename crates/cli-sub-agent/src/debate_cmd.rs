@@ -9,7 +9,7 @@ use crate::debate_cmd_resolve::{
     validate_debate_direct_tool_tier_restriction,
 };
 use crate::startup_env::StartupSubtreeEnv;
-use csa_core::types::OutputFormat;
+use csa_core::types::{OutputFormat, ToolArg, ToolName};
 
 #[cfg(test)]
 use crate::tier_model_fallback::TierAttemptFailure;
@@ -141,7 +141,12 @@ pub(crate) async fn handle_debate(
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let explicit_tool = args.tool.or_else(|| {
+    let mut merged_tool_aliases = global_config.tool_aliases.clone();
+    if let Some(c) = config.as_ref() {
+        merged_tool_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    let cli_tool = resolve_debate_cli_tool(args.tool.take(), &merged_tool_aliases)?;
+    let explicit_tool = cli_tool.or_else(|| {
         args.model_spec
             .as_deref()
             .and_then(|spec| spec.split('/').next())
@@ -154,7 +159,7 @@ pub(crate) async fn handle_debate(
             cli_model_spec: args.model_spec.as_deref(),
             cli_hint_difficulty: args.hint_difficulty.as_deref(),
             cli_session: args.session.as_deref(),
-            cli_tool: args.tool,
+            cli_tool,
             config: config.as_ref(),
             frontmatter_difficulty: frontmatter_difficulty.as_deref(),
             debate_description: debate_description.as_str(),
@@ -285,6 +290,20 @@ pub(crate) async fn handle_debate(
         startup_env,
     })
     .await
+}
+
+fn resolve_debate_cli_tool(
+    tool: Option<ToolArg>,
+    tool_aliases: &std::collections::HashMap<String, String>,
+) -> Result<Option<ToolName>> {
+    match tool.unwrap_or(ToolArg::Auto).resolve_alias(tool_aliases) {
+        Ok(ToolArg::Auto | ToolArg::AnyAvailable) => Ok(None),
+        Ok(ToolArg::Specific(tool)) => Ok(Some(tool)),
+        Ok(ToolArg::Alias(alias)) => {
+            anyhow::bail!("BUG: unresolved debate --tool alias '{alias}' after alias resolution")
+        }
+        Err(err) => anyhow::bail!("{err}"),
+    }
 }
 
 #[cfg(test)]
