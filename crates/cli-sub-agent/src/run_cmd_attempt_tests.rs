@@ -291,6 +291,52 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
 }
 
 #[test]
+fn issue_1730_evaluate_error_rate_limit_failover_retries_on_gemini_legacy_initial_stall() {
+    let config = make_failover_config(&[
+        "gemini-cli/google/gemini-2.5-pro/high",
+        "codex/openai/o4-mini/high",
+    ]);
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
+
+    let action = evaluate_error_rate_limit_failover(
+        "gemini-cli",
+        "gemini_legacy_initial_stall: no stdout within 120s",
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        true,
+        true,
+        Some("tier3"),
+        None,
+        None,
+        true,
+        "debug the stalled request",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("gemini-cli/google/gemini-2.5-pro/high"),
+        &mut fallback_chain,
+        None,
+    )
+    .expect("evaluate failover");
+
+    assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
+    assert_eq!(tried_tools, vec!["gemini-cli".to_string()]);
+    assert_eq!(
+        tried_specs,
+        vec!["gemini-cli/google/gemini-2.5-pro/high".to_string()]
+    );
+    assert_eq!(fallback_chain.len(), 1);
+    let attempt = &fallback_chain[0];
+    assert_eq!(attempt.tool, "gemini-cli");
+    assert_eq!(attempt.skip_reason, "gemini_legacy_initial_stall");
+    assert!(!attempt.quota_exhausted);
+}
+
+#[test]
 fn full_anyhow_chain_preserves_quota_markers_and_fails_over_to_next_provider() {
     // #1629: permanent quota exhaustion on gemini-cli (Google pool) MUST NOT
     // short-circuit failover; cross-provider alternatives (codex/OpenAI) still
