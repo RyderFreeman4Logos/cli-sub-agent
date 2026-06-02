@@ -10,13 +10,16 @@ impl Executor {
     /// generic-map values cannot re-introduce a freshly-stripped recursion
     /// guard, session-scoped var, or hook-bypass switch. This includes the
     /// subtree model-pin keys ([`csa_core::env::SUBTREE_PIN_ENV_KEYS`], which
-    /// are in `STRIPPED_ENV_VARS`): a generic env map may NEVER set them, so a
-    /// caller placing them in request/config env cannot spoof a subtree pin
-    /// (#1741). CSA's authoritative pin is applied separately, AFTER this merge,
-    /// via the trusted [`executor_env::apply_subtree_pin`] typed channel.
+    /// are reserved by [`csa_core::env::SUBTREE_PIN_ENV_KEYS`]): a generic env
+    /// map may NEVER set them, so a caller placing them in request/config env
+    /// cannot spoof a subtree pin (#1741). CSA's authoritative pin is applied
+    /// separately, AFTER this merge, via the trusted
+    /// [`executor_env::apply_subtree_pin`] typed channel.
     pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
         for (key, value) in env_vars {
-            if !Self::STRIPPED_ENV_VARS.contains(&key.as_str()) {
+            if !Self::STRIPPED_ENV_VARS.contains(&key.as_str())
+                && !csa_core::env::SUBTREE_PIN_ENV_KEYS.contains(&key.as_str())
+            {
                 cmd.env(key, value);
             }
         }
@@ -95,6 +98,7 @@ impl Executor {
         for var in Self::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
         if matches!(self, Self::GeminiCli { .. } | Self::AntigravityCli { .. }) {
             Self::strip_gemini_inherited_env(&mut cmd);
         }

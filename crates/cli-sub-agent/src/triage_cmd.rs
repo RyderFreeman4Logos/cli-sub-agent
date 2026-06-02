@@ -108,6 +108,7 @@ pub(crate) async fn handle_triage(
     allow_base_branch_working: bool,
     current_depth: u32,
     output_format: OutputFormat,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
 ) -> Result<i32> {
     let tool = tool
         .map(|raw| {
@@ -117,7 +118,7 @@ pub(crate) async fn handle_triage(
         .transpose()?;
     let prompt = build_triage_prompt(&description);
 
-    crate::run_cmd::SubagentRunConfig::new(prompt, output_format)
+    crate::run_cmd::SubagentRunConfig::new(prompt, output_format, startup_env)
         .tool(tool)
         .timeout(timeout)
         .allow_base_branch_working(allow_base_branch_working)

@@ -260,13 +260,22 @@ fn test_stripped_env_vars_contains_lefthook() {
 }
 
 #[test]
-fn test_stripped_env_vars_reserves_subtree_pin() {
-    // #1741: ambient subtree model-pin vars must be reserved so an ambient
-    // value can never silently pin an otherwise-unpinned nested worker.
-    for var in csa_core::env::SUBTREE_PIN_ENV_KEYS {
-        assert!(
-            Executor::STRIPPED_ENV_VARS.contains(var),
-            "STRIPPED_ENV_VARS must reserve subtree-pin var {var} from the ambient environment"
+fn test_build_execute_in_command_scrubs_startup_subtree_contract_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+
+    let (cmd, _stdin) = exec.build_execute_in_command("test", work_dir, None, None);
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "leaf command must env_remove startup subtree-contract key {key}"
         );
     }
 }

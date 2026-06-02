@@ -26,40 +26,11 @@ use crate::{
     error::{AcpError, AcpResult},
 };
 
-use super::AcpConnection;
+use super::{AcpConnection, AcpSandboxHandle};
 
 fn append_stderr_tail(stderr_buf: &mut String, chunk: &str) {
     stderr_buf.push_str(chunk);
     trim_tail_buffer(stderr_buf);
-}
-
-/// Holds sandbox resources that must live as long as the ACP child process.
-///
-/// Mirrors [`csa_process::SandboxHandle`] for the ACP transport path.
-///
-/// # Signal semantics
-///
-/// - **`Cgroup`**: The ACP process runs inside a systemd transient scope.
-///   On drop, the guard calls `systemctl --user stop <scope>`, sending
-///   `SIGTERM` to all processes in the scope.
-///
-/// - **`Rlimit`**: `RLIMIT_NPROC` was applied in the child's `pre_exec`.
-///   This is a marker variant indicating rlimit-based PID isolation is active.
-///
-/// - **`Bwrap`**: Bubblewrap filesystem sandbox is active.
-///
-/// - **`None`**: No sandbox active.
-pub enum AcpSandboxHandle {
-    /// cgroup scope guard -- dropped to stop the scope.
-    Cgroup(csa_resource::cgroup::CgroupScopeGuard),
-    /// Bubblewrap filesystem sandbox is active.
-    Bwrap,
-    /// Landlock LSM filesystem sandbox is active.
-    Landlock,
-    /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
-    Rlimit,
-    /// No sandbox active.
-    None,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,62 +76,6 @@ struct PreparedSandboxCommand {
     has_bwrap: bool,
 }
 
-impl AcpSandboxHandle {
-    /// Check if the OOM killer was triggered in the sandbox scope.
-    ///
-    /// Only meaningful for the [`Cgroup`](Self::Cgroup) variant; returns
-    /// `false` for all others.  Must be called **before** the handle is
-    /// dropped, as the cgroup scope is stopped on drop.
-    pub fn check_oom_killed(&self) -> bool {
-        self.check_oom_killed_with_signal(None)
-    }
-
-    /// Check whether the cgroup scope was OOM-killed, falling back to a
-    /// SIGKILL-based inference when systemd has already GC'd the failed scope.
-    pub fn check_oom_killed_with_signal(&self, exit_signal: Option<i32>) -> bool {
-        match self {
-            Self::Cgroup(guard) => guard.check_oom_killed_with_signal(exit_signal),
-            _ => false,
-        }
-    }
-
-    /// Produce an actionable OOM diagnosis string, if applicable.
-    ///
-    /// Returns `Some(hint)` when the cgroup OOM killer was triggered,
-    /// including peak/limit memory info and configuration advice.
-    pub fn oom_diagnosis(&self) -> Option<String> {
-        self.oom_diagnosis_with_signal(None)
-    }
-
-    /// Produce an actionable OOM diagnosis string, using the child exit signal
-    /// as a fallback hint when the failed scope has already been collected.
-    pub fn oom_diagnosis_with_signal(&self, exit_signal: Option<i32>) -> Option<String> {
-        match self {
-            Self::Cgroup(guard) => guard.oom_diagnosis_with_signal(exit_signal),
-            _ => None,
-        }
-    }
-
-    /// Query peak memory usage (in MB) from the cgroup scope.
-    ///
-    /// Must be called **before** the handle is dropped, as the cgroup scope
-    /// is stopped on drop and the metric becomes unavailable.
-    pub fn memory_peak_mb(&self) -> Option<u64> {
-        match self {
-            Self::Cgroup(guard) => guard.memory_peak_mb(),
-            _ => None,
-        }
-    }
-
-    /// Return the scope name if this is a cgroup sandbox.
-    pub fn scope_name(&self) -> Option<&str> {
-        match self {
-            Self::Cgroup(guard) => Some(guard.scope_name()),
-            _ => None,
-        }
-    }
-}
-
 impl AcpConnection {
     fn merge_sandbox_env(
         base_env: &HashMap<String, String>,
@@ -183,11 +98,9 @@ impl AcpConnection {
     ) -> IsolationPlan {
         let mut merged_plan = plan.clone();
         if let Some(overrides) = sandbox_env_overrides {
-            merged_plan.env_overrides.extend(
-                overrides
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            );
+            let mut env_overrides = overrides.clone();
+            csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+            merged_plan.env_overrides.extend(env_overrides);
         }
         merged_plan
     }
@@ -379,6 +292,7 @@ impl AcpConnection {
                 for var in Self::STRIPPED_ENV_VARS {
                     cmd.env_remove(var);
                 }
+                csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
                 for (key, value) in &effective_env {
                     cmd.env(key, value);
                 }
@@ -524,7 +438,7 @@ impl AcpConnection {
     /// adapter (e.g. `claude-code-acp`) to fail.  The parent Claude Code
     /// process sets `CLAUDECODE=1` for recursion detection, which makes
     /// any child Claude Code instance refuse to start.
-    fn build_cmd_base(
+    pub(crate) fn build_cmd_base(
         command: &str,
         args: &[String],
         working_dir: &Path,
@@ -549,6 +463,7 @@ impl AcpConnection {
         for var in Self::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
 
         for (key, value) in env {
             cmd.env(key, value);
@@ -658,121 +573,5 @@ impl AcpConnection {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn append_stderr_tail_bounds_retained_memory_to_tail_window() {
-        let mut stderr = "a".repeat(1024 * 1024);
-        append_stderr_tail(&mut stderr, &"b".repeat(1024 * 1024 + 64));
-
-        assert_eq!(
-            stderr.len(),
-            1024 * 1024,
-            "stderr retention should trim back to the 1 MiB tail window"
-        );
-        assert!(
-            stderr.ends_with(&"b".repeat(4096)),
-            "stderr tail should retain the most recent bytes after trimming"
-        );
-    }
-
-    fn has_setenv(args: &[String], key: &str, value: &str) -> bool {
-        args.windows(3)
-            .any(|window| window[0] == "--setenv" && window[1] == key && window[2] == value)
-    }
-
-    #[test]
-    fn prepare_sandbox_command_merges_runtime_env_overrides_into_bwrap_invocation() {
-        let request_env = HashMap::from([
-            ("HOME".to_string(), "/home/original".to_string()),
-            ("PATH".to_string(), "/usr/bin".to_string()),
-        ]);
-        let sandbox_env_overrides = HashMap::from([
-            (
-                "HOME".to_string(),
-                "/tmp/cli-sub-agent-gemini/01TEST".to_string(),
-            ),
-            (
-                "XDG_STATE_HOME".to_string(),
-                "/tmp/cli-sub-agent-gemini/01TEST/.local/state".to_string(),
-            ),
-            (
-                "MISE_CACHE_DIR".to_string(),
-                "/tmp/cli-sub-agent-gemini/01TEST/.cache/mise".to_string(),
-            ),
-        ]);
-        let isolation_plan = IsolationPlan {
-            resource: ResourceCapability::None,
-            filesystem: FilesystemCapability::Bwrap,
-            writable_paths: vec![
-                PathBuf::from("/project"),
-                PathBuf::from("/tmp/cli-sub-agent-gemini/01TEST"),
-            ],
-            readable_paths: Vec::new(),
-            env_overrides: HashMap::new(),
-            degraded_reasons: Vec::new(),
-            memory_max_mb: None,
-            memory_swap_max_mb: None,
-            pids_max: None,
-            readonly_project_root: false,
-            project_root: Some(PathBuf::from("/project")),
-            soft_limit_percent: None,
-            memory_monitor_interval_seconds: None,
-        };
-        let args = vec!["--acp".to_string()];
-        let request = AcpSpawnRequest {
-            command: "/usr/bin/gemini",
-            args: &args,
-            working_dir: Path::new("/project"),
-            env: &request_env,
-            options: AcpConnectionOptions::default(),
-        };
-        let sandbox = AcpSandboxRequest {
-            isolation_plan: &isolation_plan,
-            tool_name: "gemini-cli",
-            session_id: "01TEST",
-            env_overrides: Some(&sandbox_env_overrides),
-        };
-
-        let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
-
-        assert_eq!(prepared.effective_command, "bwrap");
-        assert_eq!(
-            prepared.effective_env.get("HOME"),
-            Some(&"/tmp/cli-sub-agent-gemini/01TEST".to_string()),
-            "scope env should see the Gemini runtime HOME override"
-        );
-        assert_eq!(
-            prepared.effective_env.get("XDG_STATE_HOME"),
-            Some(&"/tmp/cli-sub-agent-gemini/01TEST/.local/state".to_string())
-        );
-        assert!(
-            has_setenv(
-                &prepared.effective_args,
-                "HOME",
-                "/tmp/cli-sub-agent-gemini/01TEST",
-            ),
-            "bwrap args must include runtime HOME override: {:?}",
-            prepared.effective_args
-        );
-        assert!(
-            has_setenv(
-                &prepared.effective_args,
-                "XDG_STATE_HOME",
-                "/tmp/cli-sub-agent-gemini/01TEST/.local/state",
-            ),
-            "bwrap args must include XDG_STATE_HOME override: {:?}",
-            prepared.effective_args
-        );
-        assert!(
-            has_setenv(
-                &prepared.effective_args,
-                "MISE_CACHE_DIR",
-                "/tmp/cli-sub-agent-gemini/01TEST/.cache/mise",
-            ),
-            "bwrap args must include mise cache override: {:?}",
-            prepared.effective_args
-        );
-    }
-}
+#[path = "connection_spawn_tests.rs"]
+mod tests;

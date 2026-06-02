@@ -8,26 +8,16 @@ use tokio::process::Command;
 /// Variables scrubbed before tool spawn.
 ///
 /// The list removes recursive-invocation guards, hook bypass switches,
-/// session-scoped CSA values that must be rebuilt for each fresh session, and
-/// the subtree model-pin context vars. The latter are CSA-owned: any value
-/// inherited from the *ambient* process environment must be cleared here so it
-/// can never silently pin an otherwise-unpinned subtree; CSA re-injects them
-/// (via `inject_subtree_model_pin_env` → `extra_env`) only when the parent was
-/// explicitly `--model-spec`-pinned (#1741).
+/// session-scoped CSA values outside the startup subtree contract. The startup
+/// subtree contract is scrubbed through `csa_core::env::scrub_subtree_contract_env_*`
+/// so the key list has one source of truth (#1750).
 pub const STRIPPED_ENV_VARS: &[&str] = &[
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
     "LEFTHOOK",
     "LEFTHOOK_SKIP",
-    "CSA_SESSION_ID",
-    "CSA_SESSION_DIR",
-    "CSA_PARENT_SESSION",
-    "CSA_PARENT_SESSION_DIR",
     "CSA_DAEMON_SESSION_DIR",
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
-    csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
-    csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-    csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
 ];
 
 /// Apply a CSA-decided subtree model pin to a child command (#1741).

@@ -29,11 +29,13 @@ pub(crate) use connection_stream::LINE_BUF_CAP;
 use connection_stream::{collect_agent_output, stream_new_agent_messages};
 
 // Re-export spawn-related types from the dedicated module.
+#[path = "connection_sandbox_handle.rs"]
+mod connection_sandbox_handle;
+pub use connection_sandbox_handle::AcpSandboxHandle;
+
 #[path = "connection_spawn.rs"]
 mod connection_spawn;
-pub use connection_spawn::{
-    AcpConnectionOptions, AcpSandboxHandle, AcpSandboxRequest, AcpSpawnRequest,
-};
+pub use connection_spawn::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
 
 #[path = "connection_fork.rs"]
 pub(crate) mod connection_fork;

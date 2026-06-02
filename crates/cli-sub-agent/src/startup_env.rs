@@ -66,16 +66,8 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
 };
 
 impl StartupSubtreeEnv {
-    pub(crate) fn capture_and_remove_from_process_env() -> Self {
+    pub(crate) fn capture_from_process_env() -> Self {
         let values = capture_startup_env_values(|key| std::env::var(key).ok());
-        // SAFETY: this runs at the very start of CLI execution, before any
-        // async work or child processes are started. Removing the frozen
-        // subtree contract keys here prevents later env mutation/re-read.
-        unsafe {
-            for key in STARTUP_SUBTREE_ENV_KEYS {
-                std::env::remove_var(key);
-            }
-        }
         Self::from_values(values)
     }
 
@@ -448,22 +440,29 @@ mod tests {
 
     #[test]
     #[serial]
-    fn startup_capture_removes_subtree_keys_from_process_env() {
+    fn startup_capture_preserves_subtree_keys_in_process_env() {
         let _depth = ScopedEnvVarRestore::set(CSA_DEPTH_ENV_KEY, "2");
         let _session = ScopedEnvVarRestore::set(CSA_SESSION_ID_ENV_KEY, "01KTESTSESSION");
         let _model = ScopedEnvVarRestore::set(CSA_MODEL_SPEC_ENV_KEY, "codex/openai/gpt-5/xhigh");
         let _force = ScopedEnvVarRestore::set(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1");
 
-        let startup = StartupSubtreeEnv::capture_and_remove_from_process_env();
+        let startup = StartupSubtreeEnv::capture_from_process_env();
 
         assert_eq!(startup.current_depth(), 2);
         assert_eq!(startup.session_id(), Some("01KTESTSESSION"));
         assert_eq!(startup.model_spec(), Some("codex/openai/gpt-5/xhigh"));
-        for key in STARTUP_SUBTREE_ENV_KEYS {
-            assert!(
-                std::env::var(key).is_err(),
-                "{key} should be removed after startup capture"
-            );
-        }
+        assert_eq!(std::env::var(CSA_DEPTH_ENV_KEY).as_deref(), Ok("2"));
+        assert_eq!(
+            std::env::var(CSA_SESSION_ID_ENV_KEY).as_deref(),
+            Ok("01KTESTSESSION")
+        );
+        assert_eq!(
+            std::env::var(CSA_MODEL_SPEC_ENV_KEY).as_deref(),
+            Ok("codex/openai/gpt-5/xhigh")
+        );
+        assert_eq!(
+            std::env::var(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY).as_deref(),
+            Ok("1")
+        );
     }
 }

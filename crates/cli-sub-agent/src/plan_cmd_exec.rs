@@ -140,13 +140,15 @@ async fn spawn_bash(
         .envs(env_vars.iter())
         .env("CSA_PROJECT_ROOT", project_root)
         .env("CSA_WORKFLOW_PATH", workflow_path)
-        .env("CSA_WORKFLOW_DIR", workflow_dir)
-        .env("CSA_DEPTH", startup_env.next_depth_string())
-        .env("CSA_INTERNAL_INVOCATION", "1");
+        .env("CSA_WORKFLOW_DIR", workflow_dir);
     // This bash step is a CSA-child boundary because it may run nested `csa`
     // commands. Reserve the protected contract keys before re-applying CSA's
     // trusted startup snapshot, so workflow/user env cannot spoof session
     // genealogy or subtree pins.
+    csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
+    cmd.env("CSA_PROJECT_ROOT", project_root)
+        .env("CSA_DEPTH", startup_env.next_depth_string())
+        .env("CSA_INTERNAL_INVOCATION", "1");
     apply_startup_child_contract_env(&mut cmd, startup_env);
     cmd.current_dir(project_root)
         .stdout(std::process::Stdio::piped())

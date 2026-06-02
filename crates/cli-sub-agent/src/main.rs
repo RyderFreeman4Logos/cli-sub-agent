@@ -155,7 +155,7 @@ async fn main() {
 async fn run() -> Result<()> {
     link_bug_class_pipeline();
 
-    let startup_env = startup_env::StartupSubtreeEnv::capture_and_remove_from_process_env();
+    let startup_env = startup_env::StartupSubtreeEnv::capture_from_process_env();
     let current_depth = startup_env.current_depth();
 
     // Initialize tracing (output to stderr, initialize only once)
@@ -384,12 +384,15 @@ async fn run() -> Result<()> {
                 args.allow_base_branch_working,
                 current_depth,
                 output_format,
+                &startup_env,
             )
             .await?;
             exit_current_process(exit_code);
         }
         Commands::Arch(args) => {
-            let exit_code = arch_cmd::handle_arch_args(args, current_depth, output_format).await?;
+            let exit_code =
+                arch_cmd::handle_arch_args(args, current_depth, output_format, &startup_env)
+                    .await?;
             exit_current_process(exit_code);
         }
         Commands::Triage(args) => {
@@ -400,13 +403,15 @@ async fn run() -> Result<()> {
                 args.allow_base_branch_working,
                 current_depth,
                 output_format,
+                &startup_env,
             )
             .await?;
             exit_current_process(exit_code);
         }
         Commands::Mktsk(args) => {
             let exit_code =
-                mktsk_cmd::handle_mktsk_args(args, current_depth, output_format).await?;
+                mktsk_cmd::handle_mktsk_args(args, current_depth, output_format, &startup_env)
+                    .await?;
             exit_current_process(exit_code);
         }
         Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format, &startup_env)?,

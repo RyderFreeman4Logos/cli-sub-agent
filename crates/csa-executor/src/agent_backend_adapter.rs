@@ -146,12 +146,11 @@ impl AgentBackend for ExecutorAgentBackend {
 
         let mut merged_env = self.base_env.clone();
         merged_env.extend(env);
-        // #1741: `SpawnConfig.env` is caller-supplied request env. A generic
-        // backend must NEVER let it introduce the reserved subtree-pin keys —
-        // otherwise a caller could spoof a pinned subtree and bypass tier
-        // routing. Strip them unconditionally; this backend has no CSA pin
-        // decision to inject, so the pin keys never reach the child.
-        csa_core::env::strip_reserved_pin_keys(&mut merged_env);
+        // agent-teams spawns an actual AI tool through CSA's Executor, so this
+        // is a leaf boundary rather than a CSA-owned propagation path. It has no
+        // validated startup snapshot or trusted pin to inject; request env must
+        // therefore lose the entire subtree contract before reaching the child.
+        csa_core::env::scrub_subtree_contract_env_map(&mut merged_env);
 
         Ok(Box::new(ExecutorAgentSession::new(
             name, prompt, executor, cwd, merged_env,

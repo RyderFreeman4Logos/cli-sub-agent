@@ -449,6 +449,7 @@ impl Executor {
         for var in Self::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
 
         self.inject_csa_owned_env(&mut cmd, session);
 

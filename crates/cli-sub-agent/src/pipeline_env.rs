@@ -23,6 +23,7 @@ pub(crate) fn build_merged_env(
         .unwrap_or(true);
 
     let mut merged_env = extra_env.cloned().unwrap_or_default();
+    csa_core::env::scrub_subtree_contract_env_map(&mut merged_env);
     if !merged_env.contains_key("PATH")
         && let Some(path) = std::env::var_os("PATH")
     {
@@ -61,10 +62,13 @@ pub(crate) fn build_merged_env(
     }
 
     merged_env.insert(
-        "CSA_DEPTH".to_string(),
+        csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
         current_depth.saturating_add(1).to_string(),
     );
-    merged_env.insert("CSA_INTERNAL_INVOCATION".to_string(), "1".to_string());
+    merged_env.insert(
+        csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
+        "1".to_string(),
+    );
 
     merged_env
 }

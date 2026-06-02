@@ -74,17 +74,17 @@ fn stripped_env_vars_contains_claudecode() {
 }
 
 #[test]
-fn strips_subtree_pin_env_vars() {
-    // #1741: ambient subtree model-pin vars must be reserved so a value leaked
-    // into the shell can never silently pin an otherwise-unpinned subtree.
-    for var in [
-        "CSA_MODEL_SPEC",
-        "CSA_FORCE_IGNORE_TIER_SETTING",
-        "CSA_NO_FAILOVER",
-    ] {
-        assert!(
-            AcpConnection::STRIPPED_ENV_VARS.contains(&var),
-            "STRIPPED_ENV_VARS must reserve {var} from the ambient environment (#1741)"
+fn build_cmd_base_scrubs_startup_subtree_contract_env_vars() {
+    let env = std::collections::HashMap::new();
+    let cmd = AcpConnection::build_cmd_base("acp-tool", &[], Path::new("/tmp"), &env);
+    let env_map: std::collections::HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+        cmd.as_std().get_envs().collect();
+
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new(*key)),
+            Some(&None),
+            "ACP child command must env_remove startup subtree-contract key {key}"
         );
     }
 }
