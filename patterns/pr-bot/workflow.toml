@@ -2062,7 +2062,7 @@ it waits for a new current-window review before proceeding. This distinguishes
 The gate:
 1. Records push timestamp before checking
 2. Checks for an already-posted exact current-HEAD review before retriggering; otherwise polls for a new review event from `${CLOUD_BOT_LOGIN}` on the current HEAD
-3. If review event found AND has P0/P1/P2 inline comments → **abort** (user must re-run pr-bot)
+3. If review event found AND has P0/P1/HIGH/CRITICAL inline comments → **abort** (user must re-run pr-bot)
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range ${DEFAULT_BRANCH}...HEAD`
 
@@ -2237,19 +2237,19 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     _check_setup_message
     REVIEW_API_FAILED=true
   fi
-  # --- Check inline comments for actionable findings ---
+  # --- Check inline comments for blocking findings ---
   if [ "${BOT_CLEAN}" != "true" ]; then
     set +e
     if [ "${REUSE_EXISTING_POST_FIX_REVIEW}" = "true" ]; then
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/reviews/${POST_FIX_REUSED_REVIEW_ID}/comments?per_page=100" \
-          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
+          | jq -r '[.[] | .[] | select((.user.login // "") == "'"${CLOUD_BOT_LOGIN}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|critical|high)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     else
       ACTIONABLE_COUNT="$(
         gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUM}/comments" \
-          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|P2|critical|high|medium)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
+          | jq -r '[.[] | .[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at >= "'"${POST_FIX_REVIEW_WINDOW_START}"'") | select((.body | test("(^|[^A-Za-z0-9])(P0|P1|critical|high)([^A-Za-z0-9]|$)"; "i"))) ] | length' \
           2>/dev/null
       )"
     fi
@@ -2261,12 +2261,12 @@ if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     fi
     case "${ACTIONABLE_COUNT:-}" in
       ''|*[!0-9]*)
-        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
+        echo "ERROR: Invalid blocking comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
         exit 1
         ;;
     esac
     if [ "${ACTIONABLE_COUNT}" -gt 0 ]; then
-      echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
+      echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new blocking finding(s). Cannot merge." >&2
       echo "Re-run pr-bot to start a new fix cycle."
       exit 1
     elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ] || [ "${REVIEW_API_FAILED:-false}" = "true" ]; then
