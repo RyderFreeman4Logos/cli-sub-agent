@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::process_tree_cpu_ticks;
+
 #[path = "tool_liveness_fatal_error.rs"]
 mod fatal_error;
 use fatal_error::has_fatal_error_signal;
@@ -38,6 +40,7 @@ struct ProcessMetadata {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LivenessSignals {
     pub pid_alive: bool,
+    pub cpu_progress: bool,
     pub output_growth: bool,
     pub session_write: bool,
     pub stderr_activity: bool,
@@ -49,7 +52,7 @@ impl LivenessSignals {
         // Treat only stream/log growth as concrete progress. Generic
         // "recent file write" is retained as a coarse liveness signal but is
         // too noisy for idle-timeout extension (lock files, snapshots, etc.).
-        self.output_growth || self.stderr_activity
+        self.cpu_progress || self.output_growth || self.stderr_activity
     }
 
     pub(crate) fn has_any_signal(self) -> bool {
@@ -63,6 +66,7 @@ struct LivenessSnapshot {
     observed_spool_bytes_written: Option<u64>,
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
+    process_cpu_ticks: Option<u64>,
 }
 
 /// Filesystem-only liveness probe for a running tool session.
@@ -82,6 +86,7 @@ impl ToolLiveness {
 
         let signals = LivenessSignals {
             pid_alive: has_live_pid_signal(session_dir) || daemon_pid_alive,
+            cpu_progress: has_process_cpu_progress_signal(session_dir, &mut snapshot),
             output_growth: has_output_growth_signal(session_dir, &mut snapshot),
             session_write: has_recent_session_write_signal(session_dir, now),
             stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
@@ -457,6 +462,22 @@ fn has_stderr_activity_signal(session_dir: &Path, snapshot: &mut LivenessSnapsho
     stderr_growth
 }
 
+fn has_process_cpu_progress_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
+    let Some(pid) = find_session_pid(session_dir) else {
+        snapshot.process_cpu_ticks = None;
+        return false;
+    };
+    let Some(current_ticks) = process_tree_cpu_ticks(pid) else {
+        snapshot.process_cpu_ticks = None;
+        return false;
+    };
+
+    let progressed =
+        matches!(snapshot.process_cpu_ticks, Some(previous) if current_ticks > previous);
+    snapshot.process_cpu_ticks = Some(current_ticks);
+    progressed
+}
+
 fn detect_growth(path: &Path, previous_size: Option<u64>) -> (bool, Option<u64>) {
     let current_size = fs::metadata(path).ok().map(|meta| meta.len());
     let growth = match (previous_size, current_size) {
@@ -495,6 +516,7 @@ fn load_snapshot(session_dir: &Path) -> LivenessSnapshot {
             "observed_spool_bytes_written" => snapshot.observed_spool_bytes_written = parsed,
             "acp_events_size" => snapshot.acp_events_size = parsed,
             "stderr_log_size" => snapshot.stderr_log_size = parsed,
+            "process_cpu_ticks" => snapshot.process_cpu_ticks = parsed,
             _ => {}
         }
     }
@@ -514,6 +536,9 @@ fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
     }
     if let Some(value) = snapshot.stderr_log_size {
         lines.push(format!("stderr_log_size={value}"));
+    }
+    if let Some(value) = snapshot.process_cpu_ticks {
+        lines.push(format!("process_cpu_ticks={value}"));
     }
     if lines.is_empty() {
         return;

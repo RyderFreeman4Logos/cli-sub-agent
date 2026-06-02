@@ -16,6 +16,8 @@ use idle_watchdog::{
 };
 mod persistent_rate_limit;
 use persistent_rate_limit::PersistentRateLimitTracker;
+mod process_activity;
+pub use process_activity::{ProcessTreeActivity, ProcessTreeStatus, process_tree_cpu_ticks};
 #[path = "lib_output_helpers.rs"]
 mod output_helpers;
 #[path = "lib_subprocess_helpers.rs"]

@@ -281,17 +281,22 @@ async fn test_idle_timeout_with_live_pid_but_no_progress_kills_after_dead_timeou
     let locks_dir = tmp.path().join("locks");
     std::fs::create_dir_all(&locks_dir).expect("create locks dir");
     let lock_path = locks_dir.join("codex.lock");
-    std::fs::write(&lock_path, format!("{{\"pid\": {}}}", std::process::id())).expect("write lock");
-    // Make metadata stale so lock-file timestamp is not misclassified as progress.
-    set_file_mtime_seconds_ago(&lock_path, 120);
 
     let output_path = tmp.path().join("output.log");
     std::fs::write(&output_path, "").expect("seed output");
     set_file_mtime_seconds_ago(&output_path, 120);
 
     let mut cmd = Command::new("bash");
-    cmd.args(["-c", "sleep 30"]);
+    let session_path = tmp.path().display().to_string();
+    cmd.args(["-c", "sleep 30", "codex", &session_path]);
     let child = spawn_tool(cmd, None).await.expect("spawn");
+    std::fs::write(
+        &lock_path,
+        format!("{{\"pid\": {}}}", child.id().unwrap_or(0)),
+    )
+    .expect("write lock");
+    // Make metadata stale so lock-file timestamp is not misclassified as progress.
+    set_file_mtime_seconds_ago(&lock_path, 120);
     let start = Instant::now();
     let result = wait_and_capture_with_idle_timeout(
         child,
@@ -314,6 +319,50 @@ async fn test_idle_timeout_with_live_pid_but_no_progress_kills_after_dead_timeou
     assert!(
         elapsed < Duration::from_secs(15),
         "should terminate after idle+liveness_dead window, elapsed={elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_idle_timeout_with_busy_process_tree_does_not_kill_for_silence() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    let lock_path = locks_dir.join("codex.lock");
+
+    let output_path = tmp.path().join("output.log");
+    std::fs::write(&output_path, "").expect("seed output");
+    set_file_mtime_seconds_ago(&output_path, 120);
+
+    let mut cmd = Command::new("bash");
+    let session_path = tmp.path().display().to_string();
+    cmd.args(["-c", "while :; do :; done", "codex", &session_path]);
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    std::fs::write(
+        &lock_path,
+        format!("{{\"pid\": {}}}", child.id().unwrap_or(0)),
+    )
+    .expect("write lock");
+    set_file_mtime_seconds_ago(&lock_path, 120);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(4),
+        wait_and_capture_with_idle_timeout(
+            child,
+            StreamMode::BufferOnly,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+            Some(&output_path),
+            SpawnOptions::default(),
+            None,
+        ),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "busy process tree should stay alive past idle+liveness_dead despite ACP/output silence"
     );
 }
 
