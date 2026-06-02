@@ -1984,7 +1984,7 @@ bash "${REBASE_SCRIPT}"
 
 ## Step 6a: Merge Without Bot
 
-> **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
+> **Layer**: 0 (Orchestrator) -- merge rationale, no code analysis.
 
 Tool: bash
 
@@ -2071,37 +2071,14 @@ else
 fi
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${COMMENT_BODY}"
 
-MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
-DELETE_BRANCH_FLAG=""
-if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
-  DELETE_BRANCH_FLAG="--delete-branch"
-fi
-# shellcheck disable=SC2086
-gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
-
-# --- Inline post-merge checkout (defense-in-depth for #1401) ---
-_SYNC_BRANCH="${DEFAULT_BRANCH:-}"
-if [ -z "${_SYNC_BRANCH}" ]; then
-  _SYNC_BRANCH="$(git symbolic-ref refs/remotes/${REMOTE_NAME:-origin}/HEAD 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME:-origin}/@@")"
-fi
-if [ -n "${_SYNC_BRANCH}" ]; then
-  git checkout "${_SYNC_BRANCH}" 2>/dev/null && git pull --ff-only "${REMOTE_NAME:-origin}" "${_SYNC_BRANCH}" 2>/dev/null || true
-fi
-
-# Write pr-bot completion marker (deterministic gate for pre-merge hook).
-MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
-mkdir -p "${MARKER_DIR}"
-touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
-
-MERGE_COMPLETED=true
-echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
-echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
+echo "CSA_VAR:MERGE_REASON=${MERGE_REASON}"
+echo "CSA_VAR:MERGE_WITHOUT_BOT_REASON_KIND=${MERGE_WITHOUT_BOT_REASON_KIND}"
+echo '<!-- CSA:NEXT_STEP cmd="merge rationale recorded; proceed to Final Merge" required=true -->'
 ```
 
 ## ENDIF
 
-## IF !(${BOT_UNAVAILABLE})
+## IF !(${BOT_UNAVAILABLE}) || (!(${CLOUD_BOT}) || ((${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && !(${FALLBACK_REVIEW_HAS_ISSUES})))
 
 ## IF ${FIXES_ACCUMULATED} && !(${REBASE_CLEAN_HISTORY_APPLIED})
 
@@ -2147,13 +2124,18 @@ fi
 CSA_SKIP_REVIEW_CHECK=1 \
 CSA_SKIP_REVIEW_CHECK_REASON="pr-bot Step 12 pre-merge push" \
   git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+MERGED_PR_VERIFY_REF="$(gh pr view "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --json number -q .number 2>/dev/null || true)"
+if [ -z "${MERGED_PR_VERIFY_REF}" ]; then
+  echo "ERROR: Could not resolve clean-branch PR for ${WORKFLOW_BRANCH}-clean before final merge." >&2
+  exit 1
+fi
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
 # shellcheck disable=SC2086
-gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
 
 # --- Inline post-merge checkout (defense-in-depth for #1401) ---
 _SYNC_BRANCH="${DEFAULT_BRANCH:-}"
@@ -2172,6 +2154,7 @@ touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 MERGE_COMPLETED=true
 echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 
@@ -2202,6 +2185,7 @@ fi
 CSA_SKIP_REVIEW_CHECK=1 \
 CSA_SKIP_REVIEW_CHECK_REASON="pr-bot Step 12b pre-merge push" \
   git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+MERGED_PR_VERIFY_REF="${PR_NUM}"
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
@@ -2227,6 +2211,7 @@ touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 MERGE_COMPLETED=true
 echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
+echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 
@@ -2236,20 +2221,29 @@ echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" requ
 
 ## ENDIF
 
-## IF ${MERGE_COMPLETED}
-
 ## Step 13: Post-Merge Default Branch Checkout
 
-> **Layer**: 0 (Orchestrator) -- best-effort checkout after successful merge.
+> **Layer**: 0 (Orchestrator) -- merged-state guard plus best-effort checkout.
 
 Tool: bash
+OnFail: abort
 
-After `gh pr merge` succeeds, leave the working tree on the dynamically
-detected default branch and pull its latest remote state. This step is
-best-effort: checkout or pull failure warns but does not change the successful
-merge outcome.
+Verify the PR is actually merged before reporting success. Then leave the
+working tree on the dynamically detected default branch and pull its latest
+remote state. Checkout or pull failure warns but does not change the successful
+merge outcome after the GitHub PR state is `MERGED`.
 
 ```bash
+VERIFY_PR_REF="${MERGED_PR_VERIFY_REF:-${PR_NUM}}"
+PR_STATE="$(gh pr view "${VERIFY_PR_REF}" --repo "${REPO}" --json state -q .state 2>/dev/null || true)"
+if [ "${PR_STATE}" != "MERGED" ]; then
+  if [ -z "${PR_STATE}" ]; then
+    PR_STATE="UNKNOWN"
+  fi
+  echo "ERROR: Final Merge was skipped or failed and PR ${VERIFY_PR_REF} is still ${PR_STATE} -- refusing to report success." >&2
+  exit 1
+fi
+
 set +e
 SYNC_REMOTE="${REMOTE_NAME:-origin}"
 SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
@@ -2262,21 +2256,22 @@ if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
 fi
 if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
   echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
+  echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
   exit 0
 fi
 if ! git checkout "${SYNC_DEFAULT_BRANCH}"; then
   echo "WARNING: post-merge checkout of ${SYNC_DEFAULT_BRANCH} failed; leaving current branch unchanged." >&2
+  echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
   exit 0
 fi
 if ! git pull --ff-only "${SYNC_REMOTE}" "${SYNC_DEFAULT_BRANCH}"; then
   echo "WARNING: post-merge pull of ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} failed; merge already completed." >&2
+  echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
   exit 0
 fi
 git log --oneline -1
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
-
-## ENDIF
 
 ## Post-Merge Extensions
 
