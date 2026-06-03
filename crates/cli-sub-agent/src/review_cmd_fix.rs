@@ -45,6 +45,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub force_override_user_config: bool,
     pub force_ignore_tier_setting: bool,
     pub no_failover: bool,
+    pub build_jobs: Option<u32>,
     pub fast_but_more_cost: bool,
     pub no_fs_sandbox: bool,
     /// CLI `--no-error-marker-scan`: disable the #1652 scan for fix rounds (#1745).
@@ -113,6 +114,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.force_override_user_config,
             ctx.force_ignore_tier_setting,
             ctx.no_failover,
+            ctx.build_jobs,
             ctx.fast_but_more_cost,
             false,
             ctx.no_fs_sandbox,

@@ -305,6 +305,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             tool_name_str,
             ExecutionEnvOptions::from_no_failover(request.no_failover),
         );
+        crate::build_jobs_env::apply_build_jobs_env(&mut extra_env, request.build_jobs);
         crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
         // #1741 (canonical pin-CONSUMING resolution): csa run resolved a subtree
         // pin (explicit or inherited). It is carried OUT-OF-BAND from `extra_env`

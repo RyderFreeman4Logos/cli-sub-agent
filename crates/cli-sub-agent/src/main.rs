@@ -5,6 +5,7 @@ mod audit;
 mod audit_cmds;
 mod batch;
 mod bug_class;
+mod build_jobs_env;
 mod caller_hints_tests;
 mod checklist_cmd;
 mod claude_sub_agent_cmd;
@@ -256,6 +257,7 @@ async fn run() -> Result<()> {
             allow_fallback,
             no_failover,
             fast_but_more_cost,
+            build_jobs,
             wait,
             idle_timeout,
             initial_response_timeout,
@@ -345,6 +347,7 @@ async fn run() -> Result<()> {
                 allow_fallback,
                 no_failover,
                 fast_but_more_cost,
+                build_jobs,
                 wait,
                 idle_timeout,
                 initial_response_timeout,

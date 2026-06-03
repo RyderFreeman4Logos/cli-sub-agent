@@ -278,6 +278,7 @@ deny:
 # ==============================================================================
 
 # Run all tests in the workspace across default and feature builds.
+# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
 test:
     just check-cargo-target-writable
     just check-nextest-state-writable
@@ -286,12 +287,14 @@ test:
     cargo nextest run --workspace --all-features
 
 # Run e2e tests only.
+# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
 test-e2e:
     just check-cargo-target-writable
     just check-nextest-state-writable
     cargo nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
+# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
 # Usage: just test-p my-crate
 test-p package:
     just check-cargo-target-writable
@@ -299,6 +302,7 @@ test-p package:
     cargo nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
+# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
 # Usage: just test-f login_validation
 test-f pattern:
     just check-cargo-target-writable

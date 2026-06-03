@@ -80,6 +80,7 @@ pub(crate) async fn handle_skill_run(
         allow_fallback: false,
         no_failover: false,
         fast_but_more_cost: false,
+        build_jobs: None,
         wait: false,
         idle_timeout: None,
         initial_response_timeout: None,
