@@ -132,23 +132,36 @@ fn resolve_daemon_session_dir_from_env() -> Option<PathBuf> {
 }
 
 fn finalize_daemon_completion(session_dir: &Path, packet: &DaemonCompletionPacket) -> Result<()> {
-    let mut session = load_session_state_from_dir(session_dir)?;
-    let project_root = PathBuf::from(&session.project_path);
-    let completed_at = chrono::Utc::now();
+    crate::session_cmds::with_reconcile_lock(session_dir, || {
+        let mut session = load_session_state_from_dir(session_dir)?;
+        if !matches!(session.phase, SessionPhase::Active) {
+            return Ok(());
+        }
 
-    if load_result_from_dir(session_dir)?.is_none() {
-        let result =
-            daemon_completion_result(&project_root, session_dir, &session, packet, completed_at);
-        persist_result_if_absent(session_dir, &result)?;
-    }
+        let project_root = PathBuf::from(&session.project_path);
+        let completed_at = chrono::Utc::now();
 
-    retire_session_from_daemon_completion(&mut session, packet, completed_at);
-    persist_session_state_to_dir(session_dir, &session)?;
-    csa_session::write_cooldown_marker_from_session_dir(
-        session_dir,
-        &session.meta_session_id,
-        completed_at,
-    );
+        if load_result_from_dir(session_dir)?.is_none() {
+            let result = daemon_completion_result(
+                &project_root,
+                session_dir,
+                &session,
+                packet,
+                completed_at,
+            );
+            persist_result_if_absent(session_dir, &result)?;
+        }
+
+        if retire_session_from_daemon_completion(&mut session, packet, completed_at) {
+            crate::session_cmds::persist_session_state_atomically(session_dir, &session)?;
+            csa_session::write_cooldown_marker_from_session_dir(
+                session_dir,
+                &session.meta_session_id,
+                completed_at,
+            );
+        }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -202,9 +215,9 @@ fn retire_session_from_daemon_completion(
     session: &mut MetaSessionState,
     packet: &DaemonCompletionPacket,
     completed_at: chrono::DateTime<chrono::Utc>,
-) {
+) -> bool {
     if !matches!(session.phase, SessionPhase::Active) {
-        return;
+        return false;
     }
 
     session.last_accessed = completed_at;
@@ -224,6 +237,7 @@ fn retire_session_from_daemon_completion(
         );
         session.phase = SessionPhase::Retired;
     }
+    true
 }
 
 fn load_session_state_from_dir(session_dir: &Path) -> Result<MetaSessionState> {
@@ -232,13 +246,6 @@ fn load_session_state_from_dir(session_dir: &Path) -> Result<MetaSessionState> {
         .with_context(|| format!("Failed to read state file: {}", state_path.display()))?;
     toml::from_str(&contents)
         .with_context(|| format!("Failed to parse state file: {}", state_path.display()))
-}
-
-fn persist_session_state_to_dir(session_dir: &Path, session: &MetaSessionState) -> Result<()> {
-    let state_path = session_dir.join("state.toml");
-    let contents = toml::to_string_pretty(session).context("Failed to serialize session state")?;
-    fs::write(&state_path, contents)
-        .with_context(|| format!("Failed to write state file: {}", state_path.display()))
 }
 
 fn load_result_from_dir(session_dir: &Path) -> Result<Option<SessionResult>> {
@@ -372,6 +379,13 @@ mod tests {
         let mut persisted = load_session(project, &session_id)?;
         persisted.phase = SessionPhase::Available;
         save_session(&persisted)?;
+        let state_path = session_dir.join("state.toml");
+        let old_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let state_file = fs::File::options().write(true).open(&state_path)?;
+        state_file.set_times(std::fs::FileTimes::new().set_modified(old_mtime))?;
+        drop(state_file);
+        let state_before = fs::read_to_string(&state_path)?;
+        let state_modified_before = fs::metadata(&state_path)?.modified()?;
 
         let now = chrono::Utc::now();
         let existing = SessionResult {
@@ -397,6 +411,7 @@ mod tests {
         save_result(project, &session_id, &existing)?;
         let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
         let result_before = fs::read_to_string(&result_path)?;
+        let result_modified_before = fs::metadata(&result_path)?.modified()?;
 
         fs::write(
             daemon_completion_path(&session_dir),
@@ -410,7 +425,16 @@ mod tests {
 
         let persisted = load_session(project, &session_id)?;
         assert_eq!(persisted.phase, SessionPhase::Available);
+        assert_eq!(fs::read_to_string(&state_path)?, state_before);
+        assert_eq!(
+            fs::metadata(&state_path)?.modified()?,
+            state_modified_before
+        );
         assert_eq!(fs::read_to_string(&result_path)?, result_before);
+        assert_eq!(
+            fs::metadata(&result_path)?.modified()?,
+            result_modified_before
+        );
 
         let result = load_result(project, &session_id)?.expect("existing result should remain");
         assert_eq!(result.status, "success");

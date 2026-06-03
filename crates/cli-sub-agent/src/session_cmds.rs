@@ -41,6 +41,7 @@ pub(crate) use reconcile::{
 pub(crate) use reconcile::{
     ensure_terminal_result_for_dead_active_session, retire_if_dead_with_result,
 };
+pub(crate) use reconcile::{persist_session_state_atomically, with_reconcile_lock};
 
 #[path = "session_cmds_compress.rs"]
 mod compress;

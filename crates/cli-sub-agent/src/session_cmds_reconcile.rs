@@ -68,7 +68,7 @@ impl DeadActiveSessionReconciliation {
     pub(crate) fn synthesized_failure(self) -> bool { matches!(self, Self::SynthesizedFailure) }
 }
 
-fn with_reconcile_lock<R>(
+pub(crate) fn with_reconcile_lock<R>(
     session_dir: &Path,
     body: impl FnOnce() -> Result<R>,
 ) -> Result<Option<R>> {
@@ -577,7 +577,10 @@ fn retire_if_dead_with_result_impl(
     Ok(true)
 }
 
-fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionState) -> Result<()> {
+pub(crate) fn persist_session_state_atomically(
+    session_dir: &Path,
+    session: &MetaSessionState,
+) -> Result<()> {
     let state_path = session_dir.join("state.toml");
     let contents = toml::to_string_pretty(session).context("Failed to serialize session state")?;
     let mut temp_file = tempfile::NamedTempFile::new_in(session_dir).with_context(|| {
