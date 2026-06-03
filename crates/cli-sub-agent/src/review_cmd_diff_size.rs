@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::process::Command;
 
 use csa_config::{GlobalConfig, ProjectConfig, ReviewConfig};
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{ReviewDiffSize, ReviewVerdictArtifact, write_review_verdict};
 use tracing::{debug, warn};
+
+const REVIEW_DIFF_SIZE_LINE_PREFIX: &str = "Diff size:";
+const REVIEW_DIFF_SIZE_HEADER_SECTION_IDS: &[&str] = &["summary", "details"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LargeDiffWarning {
@@ -68,7 +71,7 @@ pub(super) fn format_large_diff_warning(warning: LargeDiffWarning) -> String {
 
 pub(super) fn format_review_diff_size_line(diff_size: &ReviewDiffSize) -> String {
     format!(
-        "Diff size: {} files, {} changed lines, {} bytes",
+        "{REVIEW_DIFF_SIZE_LINE_PREFIX} {} files, {} changed lines, {} bytes",
         diff_size.files, diff_size.changed_lines, diff_size.bytes
     )
 }
@@ -81,7 +84,7 @@ pub(super) fn add_review_diff_size_line(
         return output.to_string();
     };
     let line = format_review_diff_size_line(diff_size);
-    if output.starts_with(&line) {
+    if has_review_diff_size_header(output) {
         return output.to_string();
     }
     if output.is_empty() {
@@ -103,12 +106,12 @@ pub(super) fn persist_review_diff_size_headers(
     };
     let line = format_review_diff_size_line(diff_size);
     let output_dir = session_dir.join("output");
-    for file_name in ["summary.md", "details.md"] {
+    for file_name in review_diff_size_header_file_paths(&session_dir) {
         let path = output_dir.join(file_name);
         let Ok(existing) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if existing.starts_with(&line) {
+        if has_review_diff_size_header(&existing) {
             continue;
         }
         if let Err(error) = std::fs::write(&path, format!("{line}\n{existing}")) {
@@ -120,6 +123,49 @@ pub(super) fn persist_review_diff_size_headers(
             );
         }
     }
+}
+
+fn has_review_diff_size_header(output: &str) -> bool {
+    output
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with(REVIEW_DIFF_SIZE_LINE_PREFIX))
+}
+
+fn review_diff_size_header_file_paths(session_dir: &Path) -> BTreeSet<String> {
+    match csa_session::load_output_index(session_dir) {
+        Ok(Some(index)) => index
+            .sections
+            .into_iter()
+            .filter(|section| REVIEW_DIFF_SIZE_HEADER_SECTION_IDS.contains(&section.id.as_str()))
+            .filter_map(|section| section.file_path)
+            .filter(|file_path| is_output_file_name(file_path))
+            .collect(),
+        Ok(None) => legacy_review_diff_size_header_file_paths(),
+        Err(error) => {
+            debug!(
+                session_dir = %session_dir.display(),
+                error = %error,
+                "Failed to read output index for review diff-size headers"
+            );
+            legacy_review_diff_size_header_file_paths()
+        }
+    }
+}
+
+fn legacy_review_diff_size_header_file_paths() -> BTreeSet<String> {
+    REVIEW_DIFF_SIZE_HEADER_SECTION_IDS
+        .iter()
+        .map(|section_id| format!("{section_id}.md"))
+        .collect()
+}
+
+fn is_output_file_name(file_path: &str) -> bool {
+    let path = Path::new(file_path);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 pub(super) fn persist_review_meta_with_diff_report(

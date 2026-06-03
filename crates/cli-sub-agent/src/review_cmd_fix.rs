@@ -391,6 +391,11 @@ fn persist_fix_final_artifacts_with_current_output(
     );
     let final_meta = review_meta_for_final_verdict(&meta_for_verdict, &final_verdict, &outcome);
     diff_report_artifacts::persist_fix_review_meta(project_root, &final_meta, diff_report);
+    super::diff_size::persist_review_diff_size_headers(
+        project_root,
+        &final_meta.session_id,
+        diff_report.diff_size,
+    );
     if outcome.reached_genuine_clean_convergence() {
         crate::review_gate::maybe_write_review_gate_marker(
             project_root,

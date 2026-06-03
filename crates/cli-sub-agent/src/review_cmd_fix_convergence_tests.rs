@@ -238,6 +238,26 @@ fn assert_diff_report_preserved(session_dir: &Path, expected: &ReviewDiffSize) {
     );
 }
 
+fn assert_review_prose_diff_size_headers(session_dir: &Path, expected: &ReviewDiffSize) {
+    let header = super::super::diff_size::format_review_diff_size_line(expected);
+    let review_sections = read_review_prose_sections(session_dir);
+    for section_id in ["summary", "details"] {
+        let (_, content) = review_sections
+            .iter()
+            .find(|(section, _)| section.id == section_id)
+            .unwrap_or_else(|| panic!("missing retained {section_id} section"));
+        assert!(
+            content.starts_with(&header),
+            "retained {section_id} prose must start with the diff-size header"
+        );
+        assert_eq!(
+            content.matches(&header).count(),
+            1,
+            "retained {section_id} prose must not duplicate the diff-size header"
+        );
+    }
+}
+
 #[test]
 fn fix_loop_terminal_outcome_truth_table() {
     struct Case {
@@ -580,6 +600,7 @@ fn persist_fix_final_artifacts_clean_convergence_preserves_diff_report() {
 
     assert_eq!(final_decision, ReviewDecision::Pass);
     assert_diff_report_preserved(&session_dir, &diff_size);
+    assert_review_prose_diff_size_headers(&session_dir, &diff_size);
 }
 
 #[test]
@@ -588,8 +609,12 @@ fn persist_fix_final_artifacts_exhaustion_preserves_diff_report() {
     let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
     let session_id = unique_session_id("01FIXEXHAUSTEDDIFF");
     let session_dir = create_session_dir(&project_root, &session_id);
-    let current_output = "<!-- CSA:SECTION:summary -->\nBlocking issues remain.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nHigh: src/lib.rs:7 current-round blocker.\n<!-- CSA:SECTION:details:END -->\n";
-    csa_session::persist_structured_output(&session_dir, current_output)
+    let diff_size = large_review_diff_size();
+    let diff_header = super::super::diff_size::format_review_diff_size_line(&diff_size);
+    let current_output = format!(
+        "<!-- CSA:SECTION:summary -->\n{diff_header}\nBlocking issues remain.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nHigh: src/lib.rs:7 current-round blocker.\n<!-- CSA:SECTION:details:END -->\n"
+    );
+    csa_session::persist_structured_output(&session_dir, &current_output)
         .expect("persist blocking structured output");
     write_findings_toml(
         &session_dir,
@@ -605,17 +630,17 @@ fn persist_fix_final_artifacts_exhaustion_preserves_diff_report() {
     meta.exit_code = 1;
     meta.fix_rounds = 3;
 
-    let diff_size = large_review_diff_size();
     let final_decision = persist_fix_final_artifacts_for_tests_with_output_and_diff_report(
         &project_root,
         &meta,
         false,
-        current_output,
+        &current_output,
         large_review_diff_report(&diff_size),
     );
 
     assert_eq!(final_decision, ReviewDecision::Fail);
     assert_diff_report_preserved(&session_dir, &diff_size);
+    assert_review_prose_diff_size_headers(&session_dir, &diff_size);
 }
 
 #[test]
