@@ -7,9 +7,9 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use csa_core::types::ReviewDecision;
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
-use csa_session::state::{ReviewSessionMeta, write_review_meta};
+use csa_session::state::ReviewSessionMeta;
 use csa_session::{
-    FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact,
+    FindingsFile, ReviewDiffSize, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact,
     write_findings_toml, write_review_verdict,
 };
 use serde::Deserialize;
@@ -20,6 +20,7 @@ use crate::review_consensus::{
 };
 use crate::startup_env::StartupSubtreeEnv;
 
+use super::diff_size::write_review_meta_with_diff_size;
 use super::output::ReviewerOutcome;
 
 pub(super) struct MultiReviewerConsensusArtifacts<'a> {
@@ -32,6 +33,7 @@ pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) scope: &'a str,
     pub(super) review_iterations: u32,
     pub(super) diff_fingerprint: Option<String>,
+    pub(super) diff_size: Option<&'a ReviewDiffSize>,
 }
 
 pub(super) fn clear_multi_reviewer_artifact_dirs(
@@ -167,6 +169,7 @@ fn dissenting_findings_persisted(
         .all(|outcome| persisted_indices.contains(&(outcome.reviewer_index + 1)))
 }
 
+#[cfg(test)]
 pub(super) fn write_multi_reviewer_parent_artifacts(
     project_root: &std::path::Path,
     reviewers: usize,
@@ -175,6 +178,29 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     all_reviewers_unavailable: bool,
     startup_env: &StartupSubtreeEnv,
     parent_review_meta: Option<&ReviewSessionMeta>,
+) -> Result<()> {
+    write_multi_reviewer_parent_artifacts_with_diff_size(
+        project_root,
+        reviewers,
+        outcomes,
+        final_verdict,
+        all_reviewers_unavailable,
+        startup_env,
+        parent_review_meta,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_multi_reviewer_parent_artifacts_with_diff_size(
+    project_root: &std::path::Path,
+    reviewers: usize,
+    outcomes: &[ReviewerOutcome],
+    final_verdict: &str,
+    all_reviewers_unavailable: bool,
+    startup_env: &StartupSubtreeEnv,
+    parent_review_meta: Option<&ReviewSessionMeta>,
+    diff_size: Option<&ReviewDiffSize>,
 ) -> Result<()> {
     let Some((session_dir, session_id)) = resolve_parent_session(startup_env) else {
         return Ok(());
@@ -200,13 +226,14 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
         &consolidated.findings,
         parent_decision,
         &parent_verdict,
+        diff_size,
     )?;
     if let Some(meta) = parent_review_meta {
         let mut meta = meta.clone();
         meta.decision = parent_decision.as_str().to_string();
         meta.verdict = parent_verdict.clone();
         meta.exit_code = if parent_decision.is_clean() { 0 } else { 1 };
-        write_review_meta(&session_dir, &meta)
+        write_review_meta_with_diff_size(&session_dir, &meta, diff_size)
             .context("failed to write parent review_meta.json")?;
         crate::review_gate::maybe_write_gate_marker_for_clean(
             project_root,
@@ -216,8 +243,8 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
             &meta.scope,
         );
     }
-    write_parent_review_summary(&session_dir, outcomes, &parent_verdict)?;
-    write_parent_review_details(&session_dir, outcomes)?;
+    write_parent_review_summary(&session_dir, outcomes, &parent_verdict, diff_size)?;
+    write_parent_review_details(&session_dir, outcomes, diff_size)?;
     Ok(())
 }
 
@@ -233,7 +260,7 @@ pub(super) fn write_multi_reviewer_consensus_artifacts(
         ctx.diff_fingerprint.clone(),
         startup_env,
     );
-    write_multi_reviewer_parent_artifacts(
+    write_multi_reviewer_parent_artifacts_with_diff_size(
         ctx.project_root,
         ctx.reviewers,
         ctx.outcomes,
@@ -241,6 +268,7 @@ pub(super) fn write_multi_reviewer_consensus_artifacts(
         ctx.all_reviewers_unavailable,
         startup_env,
         final_review_meta.as_ref(),
+        ctx.diff_size,
     )?;
     if final_review_meta.is_none() {
         write_standalone_consensus_review_artifacts(&ctx)?;
@@ -289,18 +317,20 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         diff_fingerprint: ctx.diff_fingerprint.clone(),
         fix_convergence: None,
     };
-    write_review_meta(&session_dir, &meta).context("failed to write consensus review_meta.json")?;
-    let verdict_artifact = ReviewVerdictArtifact::from_parts(
+    write_review_meta_with_diff_size(&session_dir, &meta, ctx.diff_size)
+        .context("failed to write consensus review_meta.json")?;
+    let mut verdict_artifact = ReviewVerdictArtifact::from_parts(
         target.session_id.clone(),
         decision,
         verdict,
         &consolidated.findings,
         Vec::new(),
     );
+    verdict_artifact.diff_size = ctx.diff_size.cloned();
     write_review_verdict(&session_dir, &verdict_artifact)
         .context("failed to write consensus output/review-verdict.json")?;
-    write_parent_review_summary(&session_dir, ctx.outcomes, &meta.verdict)?;
-    write_parent_review_details(&session_dir, ctx.outcomes)?;
+    write_parent_review_summary(&session_dir, ctx.outcomes, &meta.verdict, ctx.diff_size)?;
+    write_parent_review_details(&session_dir, ctx.outcomes, ctx.diff_size)?;
     crate::review_gate::maybe_write_gate_marker_for_clean(
         ctx.project_root,
         &meta.head_sha,
@@ -416,14 +446,16 @@ fn write_parent_review_verdict(
     severity_count_findings: &[Finding],
     decision: ReviewDecision,
     verdict_legacy: &str,
+    diff_size: Option<&ReviewDiffSize>,
 ) -> Result<()> {
-    let verdict = ReviewVerdictArtifact::from_parts(
+    let mut verdict = ReviewVerdictArtifact::from_parts(
         session_id.to_string(),
         decision,
         verdict_legacy.to_string(),
         severity_count_findings,
         Vec::new(),
     );
+    verdict.diff_size = diff_size.cloned();
     write_review_verdict(session_dir, &verdict)
         .context("failed to write parent output/review-verdict.json")
 }
@@ -545,11 +577,18 @@ fn write_parent_review_summary(
     session_dir: &Path,
     outcomes: &[ReviewerOutcome],
     final_verdict: &str,
+    diff_size: Option<&ReviewDiffSize>,
 ) -> Result<()> {
     let output_dir = session_dir.join("output");
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("failed to create {}", output_dir.display()))?;
     let mut summary = format!("Final verdict: {final_verdict}\n\nReviewer outcomes:\n");
+    if let Some(diff_size) = diff_size {
+        summary = format!(
+            "{}\n{summary}",
+            super::diff_size::format_review_diff_size_line(diff_size)
+        );
+    }
     for outcome in outcomes {
         summary.push_str(&format!(
             "- reviewer {} ({}) => {}",
@@ -566,11 +605,19 @@ fn write_parent_review_summary(
         .context("failed to write parent output/summary.md")
 }
 
-fn write_parent_review_details(session_dir: &Path, outcomes: &[ReviewerOutcome]) -> Result<()> {
+fn write_parent_review_details(
+    session_dir: &Path,
+    outcomes: &[ReviewerOutcome],
+    diff_size: Option<&ReviewDiffSize>,
+) -> Result<()> {
     let output_dir = session_dir.join("output");
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("failed to create {}", output_dir.display()))?;
     let mut details = String::new();
+    if let Some(diff_size) = diff_size {
+        details.push_str(&super::diff_size::format_review_diff_size_line(diff_size));
+        details.push_str("\n\n");
+    }
     for outcome in outcomes {
         details.push_str(&format!(
             "## Reviewer {} ({})\n\nVerdict: {}\nExit code: {}\n",

@@ -22,14 +22,15 @@ use super::bug_class_pipeline::{
 use super::execute::{compute_diff_fingerprint, execute_review_with_tier_filter};
 use super::output::ReviewerOutcome;
 use super::output::{
-    GEMINI_AUTH_PROMPT_STATUS_REASON, persist_review_meta, persist_review_verdict_artifact,
-    print_reviewer_outcomes, review_meta_for_verdict_artifact,
+    GEMINI_AUTH_PROMPT_STATUS_REASON, persist_review_verdict_artifact, print_reviewer_outcomes,
+    review_meta_for_verdict_artifact,
 };
 use super::prior_rounds::explicit_review_tool;
 use super::result_handling::{
     build_reviewer_outcome, build_unavailable_reviewer_outcome, reviewer_unavailable_error_reason,
 };
 use super::reviewers::resolve_multi_reviewer_pool;
+use csa_session::ReviewDiffSize;
 use csa_session::state::ReviewSessionMeta;
 use std::path::Path;
 
@@ -44,6 +45,7 @@ pub(super) struct MultiReviewerReviewContext<'a> {
     pub global_config: &'a GlobalConfig,
     pub pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub review_routing: ReviewRoutingMetadata,
+    pub diff_size: Option<&'a ReviewDiffSize>,
     pub review_model: Option<String>,
     pub resolved_model_spec: Option<String>,
     pub resolved_tier_name: Option<String>,
@@ -225,6 +227,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         &head_sha,
         review_iterations,
         diff_fingerprint.clone(),
+        ctx.diff_size,
     );
 
     let consensus_outcomes = consensus_outcomes_for_final_verdict(&outcomes);
@@ -262,6 +265,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         scope: ctx.scope,
         review_iterations,
         diff_fingerprint: diff_fingerprint.clone(),
+        diff_size: ctx.diff_size,
     };
     if let Err(err) = super::parent_artifacts::write_multi_reviewer_consensus_artifacts(
         consensus_artifacts,
@@ -481,6 +485,7 @@ pub(super) fn persist_multi_review_sidecars(
     head_sha: &str,
     review_iterations: u32,
     diff_fingerprint: Option<String>,
+    diff_size: Option<&ReviewDiffSize>,
 ) {
     let review_meta_timestamp = chrono::Utc::now();
 
@@ -512,13 +517,27 @@ pub(super) fn persist_multi_review_sidecars(
             fix_convergence: None,
         };
         let effective_meta = super::output::fail_closed_review_meta(project_root, &review_meta);
-        persist_review_meta(project_root, &effective_meta);
+        super::diff_size::persist_review_meta_with_diff_size(
+            project_root,
+            &effective_meta,
+            diff_size,
+        );
         super::findings_toml::persist_review_findings_toml(project_root, &effective_meta);
-        if let Some(artifact) =
+        if let Some(mut artifact) =
             persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new())
         {
+            super::diff_size::persist_review_verdict_diff_size(
+                project_root,
+                &effective_meta.session_id,
+                &mut artifact,
+                diff_size,
+            );
             let final_meta = review_meta_for_verdict_artifact(&effective_meta, &artifact);
-            persist_review_meta(project_root, &final_meta);
+            super::diff_size::persist_review_meta_with_diff_size(
+                project_root,
+                &final_meta,
+                diff_size,
+            );
         }
     }
 }

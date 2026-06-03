@@ -532,6 +532,7 @@ fn build_review_verdict_artifact(
         primary_failure,
         failure_reason,
         prior_round_refs,
+        diff_size: None,
     }
 }
 

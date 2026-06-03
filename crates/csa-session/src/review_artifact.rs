@@ -85,6 +85,13 @@ impl SeveritySummary {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReviewDiffSize {
+    pub files: usize,
+    pub changed_lines: usize,
+    pub bytes: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ReviewArtifact {
     #[serde(default)]
@@ -115,6 +122,8 @@ pub struct ReviewVerdictArtifact {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub prior_round_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_size: Option<ReviewDiffSize>,
 }
 
 impl ReviewVerdictArtifact {
@@ -149,6 +158,7 @@ impl ReviewVerdictArtifact {
             primary_failure: None,
             failure_reason: None,
             prior_round_refs,
+            diff_size: None,
         }
     }
 }
