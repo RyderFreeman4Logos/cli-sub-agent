@@ -109,8 +109,10 @@ mod test_session_sandbox;
 mod tier_model_fallback;
 mod tiers_cmd;
 mod todo_cmd;
+mod todo_dispatch_cmd;
 mod todo_epic_cmd;
 mod todo_errors_cmd;
+mod todo_persist_cmd;
 mod todo_ref_cmd;
 mod tool_version;
 mod triage_cmd;
@@ -125,7 +127,7 @@ include!("review_round10_exact_tests.rs");
 include!("debate_cmd_exact_tests.rs");
 use cli::{
     Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, SetupCommands, TiersCommands,
-    TodoCommands, TodoRefCommands, validate_command_args,
+    validate_command_args,
 };
 use csa_core::types::OutputFormat;
 #[cfg(test)]
@@ -604,118 +606,7 @@ async fn run() -> Result<()> {
                 tiers_cmd::handle_tiers_list(cd, output_format)?;
             }
         },
-        Commands::Todo { cmd } => match cmd {
-            TodoCommands::Create {
-                title,
-                branch,
-                no_branch,
-                language,
-                cd,
-            } => {
-                todo_cmd::handle_create(title, branch, no_branch, language, cd, output_format)?;
-            }
-            TodoCommands::Save {
-                timestamp,
-                message,
-                cd,
-            } => {
-                todo_cmd::handle_save(timestamp, message, cd)?;
-            }
-            TodoCommands::Attest { timestamp, cd } => todo_cmd::handle_attest(timestamp, cd)?,
-            TodoCommands::Diff {
-                timestamp,
-                revision,
-                from,
-                to,
-                cd,
-            } => {
-                todo_cmd::handle_diff(timestamp, revision, from, to, cd)?;
-            }
-            TodoCommands::History { timestamp, cd } => {
-                todo_cmd::handle_history(timestamp, cd)?;
-            }
-            TodoCommands::List { status, cd } => {
-                todo_cmd::handle_list(status, cd, output_format)?;
-            }
-            TodoCommands::Find { branch, status, cd } => {
-                todo_cmd::handle_find(branch, status, cd, output_format)?;
-            }
-            TodoCommands::Errors { branch, cd } => {
-                todo_errors_cmd::handle_errors(branch, cd)?;
-            }
-            TodoCommands::Show {
-                timestamp,
-                version,
-                path,
-                spec,
-                refs,
-                cd,
-            } => {
-                todo_cmd::handle_show(timestamp, version, path, spec, refs, cd)?;
-            }
-            TodoCommands::Update {
-                timestamp,
-                title,
-                status,
-                description,
-                cd,
-            } => {
-                todo_cmd::handle_update(timestamp, title, status, description, cd)?;
-            }
-            TodoCommands::Status {
-                timestamp,
-                status,
-                cd,
-            } => {
-                todo_cmd::handle_status(timestamp, status, cd)?;
-            }
-            TodoCommands::Dag {
-                timestamp,
-                format,
-                cd,
-            } => {
-                todo_cmd::handle_dag(timestamp, format, cd)?;
-            }
-            TodoCommands::Epic { command } => {
-                todo_epic_cmd::handle_epic_command(command)?;
-            }
-            TodoCommands::Ref { cmd } => match cmd {
-                TodoRefCommands::List {
-                    timestamp,
-                    tokens,
-                    json,
-                    cd,
-                } => {
-                    todo_cmd::handle_ref_list(timestamp, tokens, json, cd)?;
-                }
-                TodoRefCommands::Show {
-                    timestamp,
-                    name,
-                    max_tokens,
-                    cd,
-                } => {
-                    todo_cmd::handle_ref_show(timestamp, name, max_tokens, cd)?;
-                }
-                TodoRefCommands::Add {
-                    timestamp,
-                    name,
-                    content,
-                    file,
-                    cd,
-                } => {
-                    todo_cmd::handle_ref_add(timestamp, name, content, file, cd)?;
-                }
-                TodoRefCommands::ImportTranscript {
-                    timestamp,
-                    tool,
-                    session,
-                    name,
-                    cd,
-                } => {
-                    todo_cmd::handle_ref_import_transcript(timestamp, tool, session, name, cd)?;
-                }
-            },
-        },
+        Commands::Todo { cmd } => todo_dispatch_cmd::handle_todo_command(cmd, output_format)?,
         Commands::Checklist { command } => checklist_cmd::handle_checklist_command(command)?,
         Commands::Plan { cmd } => {
             plan_cmd_daemon::dispatch(

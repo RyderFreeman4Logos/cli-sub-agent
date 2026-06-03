@@ -31,10 +31,12 @@ const EPIC_PLAN_FILE: &str = "epic-plan.toml";
 const LOCK_FILE: &str = ".lock";
 
 pub use epic_plan::{EpicMeta, EpicPlan, ScaleSignals, Story, StoryStatus};
+pub use generated_plan::{GeneratedPlanPersistRequest, GeneratedPlanPersistResult};
 pub use reference::{ReferenceFile, ReferenceIndex, ReferenceSource};
 pub use spec::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 
 pub mod epic_plan;
+mod generated_plan;
 pub mod reference;
 mod spec;
 
