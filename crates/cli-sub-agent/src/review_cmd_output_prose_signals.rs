@@ -16,6 +16,7 @@ use crate::review_cmd::prose_findings::{
 pub(super) struct ReviewProseSignals {
     pub(super) severity_counts: BTreeMap<Severity, u32>,
     pub(super) blocking_summary: bool,
+    pub(super) actionable_prose_sections: bool,
     pub(super) findings: Vec<ReviewFinding>,
 }
 
@@ -29,6 +30,7 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
     let mut signals = ReviewProseSignals {
         severity_counts: zero_severity_counts(),
         blocking_summary,
+        actionable_prose_sections: false,
         findings: Vec::new(),
     };
     let default_unlabeled_severity = blocking_summary.then_some(Severity::Medium);
@@ -88,12 +90,102 @@ fn record_review_prose_signal(
     content: &str,
     default_unlabeled_severity: Option<Severity>,
 ) {
+    signals.actionable_prose_sections |= contains_actionable_review_section(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
     let mut counts = severity_counts_from_review_findings(&findings);
     reconcile_counts_max(&mut counts, &severity_counts_from_text(content));
     merge_severity_counts_add(&mut signals.severity_counts, &counts);
     signals.findings.extend(findings);
+}
+
+fn contains_actionable_review_section(content: &str) -> bool {
+    let mut active_section = false;
+    let mut body = Vec::new();
+
+    for line in content.lines() {
+        if let Some(header) = markdown_header_text(line) {
+            if active_section && section_body_is_actionable(&body) {
+                return true;
+            }
+            active_section = is_actionable_review_section_header(header);
+            body.clear();
+            continue;
+        }
+
+        if active_section {
+            body.push(line);
+        }
+    }
+
+    active_section && section_body_is_actionable(&body)
+}
+
+fn markdown_header_text(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('#') {
+        return None;
+    }
+    Some(trimmed.trim_start_matches('#').trim())
+}
+
+fn is_actionable_review_section_header(header: &str) -> bool {
+    header.eq_ignore_ascii_case("findings")
+        || header.eq_ignore_ascii_case("review findings")
+        || header.eq_ignore_ascii_case("recommended actions")
+}
+
+fn section_body_is_actionable(lines: &[&str]) -> bool {
+    let normalized = lines
+        .iter()
+        .map(|line| normalize_actionable_section_line(line))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    !normalized.is_empty()
+        && normalized
+            .iter()
+            .any(|line| !is_no_actionable_section_sentinel(line))
+}
+
+fn normalize_actionable_section_line(line: &str) -> String {
+    let mut trimmed = line.trim();
+    if matches!(trimmed.as_bytes().first(), Some(b'-' | b'*')) {
+        trimmed = trimmed[1..].trim_start();
+    } else if let Some(numbered) = strip_numbered_prefix(trimmed) {
+        trimmed = numbered.trim_start();
+    }
+    trimmed
+        .trim_matches(|ch: char| ch.is_ascii_punctuation())
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn strip_numbered_prefix(line: &str) -> Option<&str> {
+    let (index, rest) = line.split_once('.')?;
+    if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some(rest)
+}
+
+fn is_no_actionable_section_sentinel(line: &str) -> bool {
+    matches!(
+        line,
+        "none"
+            | "n/a"
+            | "na"
+            | "not applicable"
+            | "no findings"
+            | "no findings found"
+            | "no blocking findings"
+            | "no blocking findings found"
+            | "no actionable findings"
+            | "no actionable findings found"
+            | "no recommended actions"
+            | "no action required"
+            | "no actions required"
+    )
 }
 
 fn merge_severity_counts_add(
