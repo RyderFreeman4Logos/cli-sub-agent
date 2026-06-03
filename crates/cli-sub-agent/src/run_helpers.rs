@@ -232,14 +232,27 @@ pub(crate) fn resolve_tool_and_model(
     }
 
     if force_ignore_tier_setting && tiers_configured && tier.is_none() && model_spec.is_none() {
+        let configured_tool_defaults = tool.and_then(|tool_name| {
+            config.map(|cfg| {
+                (
+                    cfg.tool_default_model(tool_name.as_str()).is_some(),
+                    cfg.tool_default_thinking(tool_name.as_str()).is_some(),
+                )
+            })
+        });
+        let has_configured_default_model =
+            configured_tool_defaults.is_some_and(|(has_model, _)| has_model);
+        let has_configured_default_thinking =
+            configured_tool_defaults.is_some_and(|(_, has_thinking)| has_thinking);
+
         let mut missing = Vec::new();
         if tool.is_none() {
             missing.push("--tool");
         }
-        if model.is_none() {
+        if model.is_none() && !has_configured_default_model {
             missing.push("--model");
         }
-        if thinking.is_none() {
+        if thinking.is_none() && !has_configured_default_thinking {
             missing.push("--thinking");
         }
 

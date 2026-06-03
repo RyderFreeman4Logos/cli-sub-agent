@@ -96,29 +96,30 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
 }
 
 #[tokio::test]
-async fn run_invalid_model_spec_fails_before_creating_session() {
+async fn run_malformed_model_spec_fails_before_creating_session() {
     let temp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&temp).await;
 
-    let result = crate::cli::Cli::try_parse_from([
-        "csa",
-        "run",
-        "--model-spec",
-        "codex/openai/o4-mini/xhigh",
-        "prompt",
-    ]);
+    let result =
+        crate::cli::Cli::try_parse_from(["csa", "run", "--model-spec", "codex/openai", "prompt"]);
     let err = match result {
-        Ok(_) => panic!("unknown model should fail clap parsing"),
+        Ok(_) => panic!("malformed model spec should fail clap parsing"),
         Err(err) => err,
     };
     let msg = err.to_string();
-    assert!(msg.contains("o4-mini"), "missing offending model: {msg}");
-    assert!(msg.contains("gpt-5.5"), "missing valid alternative: {msg}");
+    assert!(
+        msg.contains("codex/openai"),
+        "missing offending spec: {msg}"
+    );
+    assert!(
+        msg.contains("tool/provider/model/thinking_budget"),
+        "missing expected format: {msg}"
+    );
 
     let sessions = csa_session::list_sessions(temp.path(), None).unwrap();
     assert!(
         sessions.is_empty(),
-        "invalid model spec must fail before session creation"
+        "malformed model spec must fail before session creation"
     );
 }
 

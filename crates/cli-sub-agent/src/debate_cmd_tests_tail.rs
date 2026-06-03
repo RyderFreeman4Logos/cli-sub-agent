@@ -651,7 +651,7 @@ fn debate_cli_parses_fast_but_more_cost_flag() {
 }
 
 #[test]
-fn debate_rejects_unknown_codex_model_at_clap_parse() {
+fn debate_accepts_unknown_codex_model_at_clap_parse() {
     use clap::Parser;
 
     let result = crate::cli::Cli::try_parse_from([
@@ -661,13 +661,9 @@ fn debate_rejects_unknown_codex_model_at_clap_parse() {
         "codex/openai/o3/xhigh",
         "question",
     ]);
-    let err = match result {
-        Ok(_) => panic!("unknown model should fail clap parsing"),
-        Err(err) => err,
-    };
-    let msg = err.to_string();
-    assert!(msg.contains("o3"), "missing offending model: {msg}");
-    assert!(msg.contains("gpt-5.5"), "missing valid alternative: {msg}");
+    if let Err(err) = result {
+        panic!("unknown model should pass through to backend validation: {err}");
+    }
 }
 
 #[test]
