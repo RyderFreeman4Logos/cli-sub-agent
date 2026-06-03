@@ -139,25 +139,23 @@ pub(crate) fn resolve_preferred_tool_from_tier(
     preference_order: &[String],
     skip_specs: &[String],
 ) -> Result<TierToolResolution> {
-    let Some(tier) = config.tiers.get(tier_name) else {
+    if !config.tiers.contains_key(tier_name) {
         anyhow::bail!("Tier '{}' not found.", tier_name);
-    };
+    }
+    let available = collect_available_tier_models(tier_name, config, skip_specs);
 
     for preferred_tool in preference_order {
-        if !tier.models.iter().any(|spec| {
-            !skip_specs.iter().any(|skip| skip == spec)
-                && spec
-                    .split('/')
-                    .next()
-                    .is_some_and(|tool_name| tool_name == preferred_tool)
-        }) {
+        if let Some(warning) =
+            ignored_tier_tool_preference_warning(tier_name, preferred_tool, &available)
+        {
             let suggestions = config.suggest_compatible_alternatives(preferred_tool, tier_name);
             warn!(
                 tier = tier_name,
                 tool = preferred_tool,
                 suggestions = %suggestions,
-                "Preferred tool is not configured in tier; ignoring preference"
+                "Preferred tool is not an enabled tier candidate; ignoring preference"
             );
+            eprintln!("{warning}");
         }
     }
 
@@ -171,6 +169,41 @@ pub(crate) fn resolve_preferred_tool_from_tier(
         "Tier '{}' has no currently available tools. Ensure at least one tier tool is installed and enabled.",
         tier_name
     );
+}
+
+fn ignored_tier_tool_preference_warning(
+    tier_name: &str,
+    preferred_tool: &str,
+    available: &[TierToolResolution],
+) -> Option<String> {
+    if available
+        .iter()
+        .any(|resolution| resolution.tool.as_str() == preferred_tool)
+    {
+        return None;
+    }
+
+    let mut candidate_tools: Vec<&str> = Vec::new();
+    for resolution in available {
+        let tool = resolution.tool.as_str();
+        if !candidate_tools.contains(&tool) {
+            candidate_tools.push(tool);
+        }
+    }
+
+    let candidates = if candidate_tools.is_empty() {
+        "none".to_string()
+    } else {
+        candidate_tools.join(", ")
+    };
+    let proceeding = available
+        .first()
+        .map(|resolution| resolution.tool.as_str())
+        .unwrap_or("no available tool");
+
+    Some(format!(
+        "warning: --tool {preferred_tool} ignored - not an enabled candidate of tier '{tier_name}' (candidates: {candidates}); proceeding with {proceeding}"
+    ))
 }
 
 pub(crate) fn resolve_tool_from_tier(
@@ -198,4 +231,52 @@ pub(crate) fn resolve_tool_from_tier(
         return Some(resolution.clone());
     }
     Some(available[0].clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TierToolResolution, ignored_tier_tool_preference_warning};
+    use csa_core::types::ToolName;
+
+    #[test]
+    fn ignored_tier_tool_preference_warning_names_candidates() {
+        let warning = ignored_tier_tool_preference_warning(
+            "tier-4-critical",
+            "claude-code",
+            &[
+                TierToolResolution {
+                    tool: ToolName::GeminiCli,
+                    model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                },
+                TierToolResolution {
+                    tool: ToolName::Codex,
+                    model_spec: "codex/openai/gpt-5.5/xhigh".to_string(),
+                },
+            ],
+        )
+        .expect("missing preferred tool should produce warning");
+
+        assert!(warning.starts_with("warning:"), "{warning}");
+        assert!(warning.contains("--tool claude-code ignored"), "{warning}");
+        assert!(warning.contains("tier 'tier-4-critical'"), "{warning}");
+        assert!(
+            warning.contains("candidates: gemini-cli, codex"),
+            "{warning}"
+        );
+        assert!(warning.contains("proceeding with gemini-cli"), "{warning}");
+    }
+
+    #[test]
+    fn ignored_tier_tool_preference_warning_skips_available_tool() {
+        let warning = ignored_tier_tool_preference_warning(
+            "tier-4-critical",
+            "codex",
+            &[TierToolResolution {
+                tool: ToolName::Codex,
+                model_spec: "codex/openai/gpt-5.5/xhigh".to_string(),
+            }],
+        );
+
+        assert_eq!(warning, None);
+    }
 }
