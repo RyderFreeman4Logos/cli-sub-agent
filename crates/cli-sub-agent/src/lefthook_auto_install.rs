@@ -19,6 +19,7 @@ const TIMESTAMP_FILE: &str = "hook-check-ts";
 /// - `CI` environment variable is set (any non-empty value)
 /// - `project_root` has no `.git/` directory (not a git repo / test temp dir)
 /// - `project_root` has no `lefthook.yml` (lefthook not configured here)
+/// - `project_root` has no CSA review-gate opt-in signal
 pub(crate) fn spawn_lefthook_setup_if_needed(project_root: &Path) {
     if is_ci_environment() {
         debug!("lefthook auto-install: skipping (CI environment)");
@@ -31,6 +32,13 @@ pub(crate) fn spawn_lefthook_setup_if_needed(project_root: &Path) {
     if !project_root.join("lefthook.yml").exists() {
         debug!("lefthook auto-install: skipping (no lefthook.yml)");
         return;
+    }
+    match crate::setup_cmds::review_gate_opt_in_signal(project_root) {
+        Some(signal) => debug!("lefthook auto-install: opt-in detected ({signal})"),
+        None => {
+            debug!("lefthook auto-install: skipping (repo is not CSA-managed / opted in)");
+            return;
+        }
     }
 
     let project_root = project_root.to_path_buf();
@@ -47,6 +55,14 @@ fn is_ci_environment() -> bool {
 }
 
 async fn check_and_setup_lefthook(project_root: &Path) -> anyhow::Result<()> {
+    match crate::setup_cmds::review_gate_opt_in_signal(project_root) {
+        Some(signal) => debug!("lefthook auto-install: opt-in detected ({signal})"),
+        None => {
+            debug!("lefthook auto-install: skipping (repo is not CSA-managed / opted in)");
+            return Ok(());
+        }
+    }
+
     // Locate the per-project state dir for the timestamp.
     let state_dir = csa_session::get_session_root(project_root)?;
     let ts_path = state_dir.join(TIMESTAMP_FILE);
@@ -173,7 +189,70 @@ async fn run_lefthook_install(project_root: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    fn run_git(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("git command should execute");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_git_repo(project_root: &Path) {
+        run_git(project_root, &["init"]);
+        run_git(project_root, &["config", "user.email", "test@example.com"]);
+        run_git(project_root, &["config", "user.name", "Test User"]);
+        fs::write(project_root.join("tracked.txt"), "baseline\n").expect("write baseline");
+        run_git(project_root, &["add", "tracked.txt"]);
+        run_git(project_root, &["commit", "-m", "initial"]);
+    }
+
+    fn track_file(project_root: &Path, relative_path: &str, content: &str) {
+        fs::write(project_root.join(relative_path), content).expect("write tracked file");
+        run_git(project_root, &["add", relative_path]);
+        run_git(project_root, &["commit", "-m", "track lefthook opt-in"]);
+    }
+
+    #[cfg(unix)]
+    fn install_fake_lefthook(bin_dir: &Path, log_path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir_all(bin_dir).expect("create fake bin dir");
+        let fake = bin_dir.join("lefthook");
+        fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n\
+printf '%s\\n' \"$PWD $*\" >> '{}'\n\
+mkdir -p .git/hooks\n\
+cat > .git/hooks/pre-commit <<'HOOK'\n\
+#!/bin/sh\n\
+# lefthook test stub\n\
+HOOK\n\
+cat > .git/hooks/pre-push <<'HOOK'\n\
+#!/bin/sh\n\
+# lefthook test stub\n\
+HOOK\n",
+                log_path.display()
+            ),
+        )
+        .expect("write fake lefthook");
+        let mut perms = fs::metadata(&fake)
+            .expect("fake lefthook metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(fake, perms).expect("chmod fake lefthook");
+    }
 
     // ── rate-limit logic ──────────────────────────────────────────────────────
 
@@ -272,6 +351,65 @@ mod tests {
         fs::create_dir(dir.path().join(".git")).unwrap();
         // No lefthook.yml → must be a no-op
         spawn_lefthook_setup_if_needed(dir.path());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn auto_install_skips_untracked_lefthook_yml_without_opt_in() {
+        let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+        let dir = TempDir::new().expect("create tempdir");
+        init_git_repo(dir.path());
+        fs::write(dir.path().join("lefthook.yml"), "pre-push:\n").expect("write untracked config");
+
+        let bin_dir = dir.path().join("bin");
+        let log_path = dir.path().join("lefthook.log");
+        install_fake_lefthook(&bin_dir, &log_path);
+        let inherited_path = std::env::var("PATH").unwrap_or_default();
+        let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+        let _path_guard = crate::test_env_lock::ScopedEnvVarRestore::set("PATH", &patched_path);
+
+        check_and_setup_lefthook(dir.path())
+            .await
+            .expect("skip should not fail");
+
+        assert!(
+            !log_path.exists(),
+            "non-opted-in repo must not invoke lefthook install"
+        );
+        assert!(
+            !dir.path().join(".git/hooks/pre-push").exists(),
+            "non-opted-in repo must not receive a pre-push hook"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn auto_install_runs_when_lefthook_yml_is_tracked() {
+        let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+        let dir = TempDir::new().expect("create tempdir");
+        init_git_repo(dir.path());
+        track_file(dir.path(), "lefthook.yml", "pre-push:\n");
+
+        let bin_dir = dir.path().join("bin");
+        let log_path = dir.path().join("lefthook.log");
+        install_fake_lefthook(&bin_dir, &log_path);
+        let inherited_path = std::env::var("PATH").unwrap_or_default();
+        let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+        let _path_guard = crate::test_env_lock::ScopedEnvVarRestore::set("PATH", &patched_path);
+
+        check_and_setup_lefthook(dir.path())
+            .await
+            .expect("tracked lefthook.yml should install hooks");
+
+        let log = fs::read_to_string(log_path).expect("read fake lefthook log");
+        assert!(
+            log.contains("install"),
+            "tracked lefthook.yml should invoke lefthook install"
+        );
+        assert!(
+            dir.path().join(".git/hooks/pre-push").exists(),
+            "tracked lefthook.yml should preserve install behavior"
+        );
     }
 
     // ── CI detection ─────────────────────────────────────────────────────────
