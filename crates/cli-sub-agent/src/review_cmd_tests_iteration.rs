@@ -129,6 +129,30 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
 }
 
 #[test]
+fn build_review_instruction_for_project_contains_same_class_site_sweep_anchor() {
+    let project_dir = tempdir().expect("create temp project");
+    let (instruction, _routing) = build_review_instruction_for_project(
+        "uncommitted",
+        "review-only",
+        "auto",
+        ReviewMode::Standard,
+        None,
+        project_dir.path(),
+        resolve::ReviewProjectPromptOptions {
+            project_config: None,
+            resolved_pattern: None,
+            prior_rounds_section: None,
+            current_session_id: None,
+            full_consistency: false,
+        },
+    );
+
+    assert!(instruction.contains("Bounded same-class site sweep"));
+    assert!(instruction.contains("class sweep: N sites"));
+    assert!(instruction.contains("Do not add schema fields"));
+}
+
+#[test]
 fn build_multi_reviewer_instruction_contains_design_preference_anchor() {
     let project_dir = tempdir().unwrap();
     let prompt = crate::review_consensus::build_multi_reviewer_instruction(
@@ -141,6 +165,23 @@ fn build_multi_reviewer_instruction_contains_design_preference_anchor() {
     );
 
     assert!(prompt.contains("Design preferences vs correctness bugs"));
+}
+
+#[test]
+fn build_multi_reviewer_instruction_contains_same_class_site_sweep_anchor() {
+    let project_dir = tempdir().expect("create temp project");
+    let prompt = crate::review_consensus::build_multi_reviewer_instruction(
+        "Base prompt",
+        1,
+        ToolName::Codex,
+        project_dir.path(),
+        None,
+        None,
+    );
+
+    assert!(prompt.contains("Bounded same-class site sweep"));
+    assert!(prompt.contains("class sweep: N sites"));
+    assert!(prompt.contains("Do not add schema fields"));
 }
 
 #[test]

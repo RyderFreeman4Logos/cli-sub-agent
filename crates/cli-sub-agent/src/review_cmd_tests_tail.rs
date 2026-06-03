@@ -372,13 +372,14 @@ fn test_build_review_instruction_no_diff_content() {
         None,
     );
     assert!(
-        result.len() < 2300,
-        "Instruction should stay bounded even with the design anchor, got {} chars",
+        result.len() < 3000,
+        "Instruction should stay bounded even with review anchors, got {} chars",
         result.len()
     );
     assert!(!result.contains("git diff"));
     assert!(!result.contains("Pass 1:"));
     assert!(result.contains("Design preferences vs correctness bugs"));
+    assert!(result.contains("Bounded same-class site sweep"));
 }
 
 #[test]
