@@ -1,8 +1,13 @@
+#[cfg(target_os = "linux")]
 use std::collections::{HashSet, VecDeque};
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
+#[cfg(any(target_os = "linux", test))]
 const BYTES_PER_MB: u64 = 1024 * 1024;
 
 /// Cached Linux process-tree sampler for `csa session wait --memory-warn`.
@@ -10,37 +15,56 @@ const BYTES_PER_MB: u64 = 1024 * 1024;
 /// The cgroup path and daemon PID are resolved once up front so per-tick
 /// sampling only needs a direct file read or a bounded descendant walk.
 pub struct SessionTreeMemorySampler {
+    #[cfg(target_os = "linux")]
     daemon_pid: u32,
+    #[cfg(target_os = "linux")]
     memory_current_path: Option<PathBuf>,
 }
 
 impl SessionTreeMemorySampler {
     pub fn new(project_root: &Path, session_id: &str) -> io::Result<Self> {
-        let session_dir =
-            crate::get_session_dir(project_root, session_id).map_err(io::Error::other)?;
-        let daemon_pid = csa_process::ToolLiveness::daemon_pid_for_signal(&session_dir)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "session daemon PID unavailable")
-            })?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (project_root, session_id);
+            return Ok(Self {});
+        }
 
-        Ok(Self {
-            daemon_pid,
-            memory_current_path: read_process_control_group(daemon_pid).map(|control_group| {
-                Path::new("/sys/fs/cgroup")
-                    .join(control_group.trim_start_matches('/'))
-                    .join("memory.current")
-            }),
-        })
+        #[cfg(target_os = "linux")]
+        {
+            let session_dir =
+                crate::get_session_dir(project_root, session_id).map_err(io::Error::other)?;
+            let daemon_pid = csa_process::ToolLiveness::daemon_pid_for_signal(&session_dir)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "session daemon PID unavailable")
+                })?;
+
+            Ok(Self {
+                daemon_pid,
+                memory_current_path: read_process_control_group(daemon_pid).map(|control_group| {
+                    Path::new("/sys/fs/cgroup")
+                        .join(control_group.trim_start_matches('/'))
+                        .join("memory.current")
+                }),
+            })
+        }
     }
 
     pub fn sample_rss_mb(&self) -> io::Result<u64> {
-        if let Some(memory_current_path) = &self.memory_current_path
-            && let Ok(bytes) = read_memory_current_bytes(memory_current_path)
+        #[cfg(not(target_os = "linux"))]
         {
-            return Ok(bytes_to_mb_ceil(bytes));
+            return Ok(0);
         }
 
-        sample_process_tree_rss_mb(self.daemon_pid)
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(memory_current_path) = &self.memory_current_path
+                && let Ok(bytes) = read_memory_current_bytes(memory_current_path)
+            {
+                return Ok(bytes_to_mb_ceil(bytes));
+            }
+
+            sample_process_tree_rss_mb(self.daemon_pid)
+        }
     }
 }
 
@@ -53,10 +77,7 @@ pub fn session_tree_rss_mb(project_root: &Path, session_id: &str) -> io::Result<
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (project_root, session_id);
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "session wait memory warnings are Linux-only",
-        ));
+        return Ok(0);
     }
 
     #[cfg(target_os = "linux")]
@@ -154,13 +175,16 @@ fn read_vmrss_kib(pid: u32) -> Option<u64> {
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn bytes_to_mb_ceil(bytes: u64) -> u64 {
     bytes.saturating_add(BYTES_PER_MB - 1) / BYTES_PER_MB
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bytes_to_mb_ceil, parse_process_control_group};
+    use super::bytes_to_mb_ceil;
+    #[cfg(target_os = "linux")]
+    use super::parse_process_control_group;
 
     #[test]
     fn bytes_to_mb_ceil_rounds_up_partial_megabytes() {
@@ -170,6 +194,7 @@ mod tests {
         assert_eq!(bytes_to_mb_ceil(1024 * 1024 + 1), 2);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_process_control_group_prefers_unified_v2_entry() {
         let raw = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/csa.scope\n";
@@ -179,6 +204,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_process_control_group_accepts_memory_controller_entry() {
         let raw = "7:memory:/user.slice/user-1000.slice/session-2.scope\n";
@@ -188,6 +214,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_process_control_group_ignores_root_path() {
         let raw = "0::/\n";
