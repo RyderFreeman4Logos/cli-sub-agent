@@ -198,13 +198,6 @@ pub(crate) async fn handle_run(
     else {
         return Ok(1);
     };
-    crate::run_cmd_preflight::apply_run_preflight_override(
-        &project_root,
-        session_arg.as_deref(),
-        no_preflight,
-        &mut config,
-        &mut global_config,
-    )?;
     let caller_fork_resolution = if fork_from_caller {
         let resolved = resolve_fork_from_caller(config.as_ref());
         if resolved.is_none() {
@@ -220,6 +213,13 @@ pub(crate) async fn handle_run(
     if let Some(exit_code) = evaluate_and_emit_refusal(&branch_guard, branch_state) {
         return Ok(exit_code);
     }
+    crate::run_cmd_preflight::apply_run_preflight_override(
+        &project_root,
+        session_arg.as_deref(),
+        no_preflight,
+        &mut config,
+        &mut global_config,
+    )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let mut user_explicit_tool = tool.is_some();
     let prompt = resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);

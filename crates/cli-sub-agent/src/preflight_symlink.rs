@@ -161,15 +161,25 @@ fn validate_one_path(
 }
 
 fn git_tracks_path(project_root: &Path, relative_path: &str) -> bool {
-    Command::new("git")
+    let Ok(output) = Command::new("git")
         .arg("-C")
         .arg(project_root)
-        .args(["ls-files", "--error-unmatch", "--"])
+        .args(["ls-files", "--stage", "--"])
         .arg(relative_path)
-        .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+    else {
+        return false;
+    };
+
+    if !output.status.success() {
+        return false;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .any(|mode| matches!(mode, "100644" | "100755"))
 }
 
 fn describe_symlink_target(path: &Path) -> String {
@@ -344,6 +354,29 @@ mod tests {
         };
 
         run_ai_config_symlink_check(d.path(), &cfg).expect("tracked project files should pass");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_tracked_symlink_replaced_by_regular_ai_config_file_is_violation() {
+        let d = tempfile::tempdir().unwrap();
+        init_git_repo(d.path());
+        std::fs::write(d.path().join("project-claude.md"), "project claude").unwrap();
+        std::os::unix::fs::symlink("project-claude.md", d.path().join("CLAUDE.md")).unwrap();
+        run_git(d.path(), &["add", "CLAUDE.md"]);
+        run_git(d.path(), &["commit", "-m", "track claude symlink"]);
+
+        std::fs::remove_file(d.path().join("CLAUDE.md")).unwrap();
+        std::fs::write(d.path().join("CLAUDE.md"), "desymlinked personal config").unwrap();
+
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("symlink mode flags");
+        assert!(err.to_string().contains("CLAUDE.md"), "got: {err}");
+        assert!(err.to_string().contains("regular file"), "got: {err}");
     }
 
     #[test]

@@ -390,6 +390,32 @@ fn daemon_run_on_main_without_bypass_refuses_before_spawn() {
 }
 
 #[test]
+#[cfg(unix)]
+fn run_on_main_refuses_before_ai_config_preflight_auto_heal() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_git_repo(tmp.path(), "main");
+    let config_path = tmp.path().join(".csa/config.toml");
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        config_path,
+        "[preflight.ai_config_symlink_check]\nenabled = true\n",
+    )
+    .expect("write project config");
+    std::fs::create_dir(tmp.path().join(".agents")).expect("create .agents");
+    let auto_heal_target = tmp.path().join("rules-target");
+    std::os::unix::fs::symlink("../rules-target", tmp.path().join(".agents/rules-ref"))
+        .expect("create missing-target symlink");
+
+    let output = run_csa_with_missing_tool(tmp.path(), tmp.path(), &[]);
+
+    assert_branch_guard_refused(&output);
+    assert!(
+        !auto_heal_target.exists(),
+        "branch guard refusal must happen before preflight auto-heal"
+    );
+}
+
+#[test]
 fn run_on_feature_branch_allows_guard_to_later_tool_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_git_repo(tmp.path(), "main");
