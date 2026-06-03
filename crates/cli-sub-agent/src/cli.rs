@@ -223,6 +223,10 @@ pub enum Commands {
         #[arg(long)]
         no_error_marker_scan: bool,
 
+        /// Skip the AI-config symlink preflight for this run only.
+        #[arg(long)]
+        no_preflight: bool,
+
         /// Skip only the post-exec shell gate; external verification remains required.
         #[arg(long)]
         no_post_exec_gate: bool,

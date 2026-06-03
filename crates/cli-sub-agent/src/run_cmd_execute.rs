@@ -117,6 +117,7 @@ pub(crate) async fn handle_run(
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
     no_error_marker_scan: bool,
+    no_preflight: bool,
     no_post_exec_gate: bool,
     require_commit: bool,
     extra_writable: Vec<PathBuf>,
@@ -192,10 +193,18 @@ pub(crate) async fn handle_run(
         is_fork = true;
     }
 
-    let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
+    let Some((mut config, mut global_config)) =
+        pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
     };
+    crate::run_cmd_preflight::apply_run_preflight_override(
+        &project_root,
+        session_arg.as_deref(),
+        no_preflight,
+        &mut config,
+        &mut global_config,
+    )?;
     let caller_fork_resolution = if fork_from_caller {
         let resolved = resolve_fork_from_caller(config.as_ref());
         if resolved.is_none() {

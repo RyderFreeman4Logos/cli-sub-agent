@@ -75,6 +75,7 @@ mod run_cmd_daemon;
 mod run_cmd_fork;
 mod run_cmd_model_pin;
 mod run_cmd_post;
+mod run_cmd_preflight;
 mod run_cmd_tool_selection;
 mod run_helpers;
 mod run_helpers_branch_guard;
@@ -268,6 +269,7 @@ async fn run() -> Result<()> {
             stream_stdout,
             no_stream_stdout,
             no_error_marker_scan,
+            no_preflight,
             no_post_exec_gate,
             require_commit,
             spec: _spec,
@@ -292,6 +294,14 @@ async fn run() -> Result<()> {
                 exit_current_process(exit_code);
             }
             let effective_no_daemon = no_daemon || goal.is_some();
+            run_cmd_preflight::run_before_daemon_spawn_if_needed(
+                cd.as_deref(),
+                no_preflight,
+                effective_no_daemon,
+                daemon_child,
+                session_id.is_some(),
+                session.is_some() || last || fork_from.is_some() || fork_last,
+            )?;
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 effective_no_daemon,
@@ -362,6 +372,7 @@ async fn run() -> Result<()> {
                 force_ignore_tier_setting,
                 no_fs_sandbox,
                 no_error_marker_scan,
+                no_preflight,
                 no_post_exec_gate,
                 require_commit,
                 extra_writable,

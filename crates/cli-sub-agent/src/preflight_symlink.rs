@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Result, anyhow};
 use csa_config::AiConfigSymlinkCheckConfig;
@@ -133,6 +134,16 @@ fn validate_one_path(
     }
 
     if file_type.is_file() {
+        // Rule 036 protects personal AI-config symlinks from accidental
+        // de-symlinking. That accident leaves a gitignored/untracked regular
+        // file behind, while third-party projects can legitimately commit their
+        // own CLAUDE.md/AGENTS.md. The tracked regular-file case is therefore
+        // project-owned config and must pass; untracked regular files still
+        // flag the de-symlink accident.
+        if git_tracks_path(project_root, relative_path) {
+            return None;
+        }
+
         return Some(format!(
             "{relative_path:<32} is a regular file, expected symlink"
         ));
@@ -147,6 +158,18 @@ fn validate_one_path(
     Some(format!(
         "{relative_path:<32} is not a symlink, expected symlink"
     ))
+}
+
+fn git_tracks_path(project_root: &Path, relative_path: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["ls-files", "--error-unmatch", "--"])
+        .arg(relative_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn describe_symlink_target(path: &Path) -> String {
@@ -302,6 +325,42 @@ mod tests {
             ..Default::default()
         };
         let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("should fail");
+        assert!(err.to_string().contains("AGENTS.md"), "got: {err}");
+        assert!(err.to_string().contains("regular file"), "got: {err}");
+    }
+
+    #[test]
+    fn git_tracked_regular_ai_config_files_pass() {
+        let d = tempfile::tempdir().unwrap();
+        init_git_repo(d.path());
+        std::fs::write(d.path().join("AGENTS.md"), "project agents").unwrap();
+        std::fs::write(d.path().join("CLAUDE.md"), "project claude").unwrap();
+        run_git(d.path(), &["add", "AGENTS.md", "CLAUDE.md"]);
+        run_git(d.path(), &["commit", "-m", "add project ai config"]);
+
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        run_ai_config_symlink_check(d.path(), &cfg).expect("tracked project files should pass");
+    }
+
+    #[test]
+    fn gitignored_regular_ai_config_file_is_violation() {
+        let d = tempfile::tempdir().unwrap();
+        init_git_repo(d.path());
+        std::fs::write(d.path().join(".gitignore"), "AGENTS.md\n").unwrap();
+        run_git(d.path(), &["add", ".gitignore"]);
+        run_git(d.path(), &["commit", "-m", "ignore personal ai config"]);
+        std::fs::write(d.path().join("AGENTS.md"), "desymlinked personal config").unwrap();
+
+        let cfg = AiConfigSymlinkCheckConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let err = run_ai_config_symlink_check(d.path(), &cfg).expect_err("ignored file flags");
         assert!(err.to_string().contains("AGENTS.md"), "got: {err}");
         assert!(err.to_string().contains("regular file"), "got: {err}");
     }
@@ -547,5 +606,27 @@ mod tests {
             ..Default::default()
         };
         run_ai_config_symlink_check(d.path(), &cfg).expect("disabled should return Ok");
+    }
+
+    fn init_git_repo(project_root: &Path) {
+        run_git(project_root, &["init"]);
+        run_git(project_root, &["config", "core.excludesFile", "/dev/null"]);
+        run_git(project_root, &["config", "user.email", "test@example.com"]);
+        run_git(project_root, &["config", "user.name", "Test User"]);
+    }
+
+    fn run_git(project_root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(project_root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
