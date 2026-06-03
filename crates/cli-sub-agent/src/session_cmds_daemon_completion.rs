@@ -92,6 +92,13 @@ pub(crate) fn finalize_daemon_completion_if_present(
     let Some(packet) = load_daemon_completion_packet(session_dir)? else {
         return Ok(None);
     };
+    if super::session_has_terminal_process(session_dir) {
+        debug!(
+            path = %daemon_completion_path(session_dir).display(),
+            "Ignoring daemon completion packet while session process is still live"
+        );
+        return Ok(None);
+    }
     finalize_daemon_completion(session_dir, &packet)?;
     load_result_from_dir(session_dir)
 }
