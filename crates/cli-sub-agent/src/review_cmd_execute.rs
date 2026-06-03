@@ -30,9 +30,9 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
     TierAttemptFailure, chain_failure_reasons, classify_next_model_failure_with_elapsed,
-    fallback_reason_for_result, format_all_models_failed_reason_with_reset,
-    ordered_tier_candidates, parse_backend_reset_duration, persist_fallback_chain,
-    persist_fallback_result_fields,
+    earliest_backend_reset_window, fallback_reason_for_result,
+    format_all_models_failed_reason_with_reset, ordered_tier_candidates,
+    parse_backend_reset_duration, persist_fallback_chain, persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -435,7 +435,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     let failure_reason = format_all_models_failed_reason_with_reset(
                         tier_name.as_deref(),
                         &failures,
-                        reset_windows.iter().copied().max(),
+                        earliest_backend_reset_window(&reset_windows),
                     );
                     return Ok(ReviewExecutionOutcome {
                         execution: crate::pipeline::SessionExecutionResult {
@@ -631,7 +631,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     failure_reason: format_all_models_failed_reason_with_reset(
                         tier_name.as_deref(),
                         &failures,
-                        reset_windows.iter().copied().max(),
+                        earliest_backend_reset_window(&reset_windows),
                     ),
                 });
             }

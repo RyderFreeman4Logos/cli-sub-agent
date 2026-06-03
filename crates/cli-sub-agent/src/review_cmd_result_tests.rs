@@ -175,8 +175,8 @@ fn forced_total_exhaustion_uses_opaque_caller_message() {
     result.primary_failure = Some("auth_unavailable; HTTP 429".to_string());
     result.failure_reason = Some(
         "all tier-4-critical models failed: \
-         gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable, \
-         codex/openai/gpt-5.5/xhigh=HTTP 429; earliest_reset=13h 58m"
+         gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable; quota will reset after 14h, \
+         codex/openai/gpt-5.5/xhigh=HTTP 429; reset in 1h"
             .to_string(),
     );
     result.execution.execution.stderr_output =
@@ -188,7 +188,7 @@ fn forced_total_exhaustion_uses_opaque_caller_message() {
     assert_eq!(resolved.decision, ReviewDecision::Unavailable);
     assert_eq!(
         resolved.sanitized,
-        "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~13h 58m\n"
+        "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~1h 0m\n"
     );
     assert!(!resolved.sanitized.contains("OAuth browser"));
     assert!(!resolved.sanitized.contains("API Key"));

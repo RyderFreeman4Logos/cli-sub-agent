@@ -244,6 +244,10 @@ pub(crate) fn format_all_models_failed_reason_with_reset(
     Some(reason)
 }
 
+pub(crate) fn earliest_backend_reset_window(reset_windows: &[Duration]) -> Option<Duration> {
+    reset_windows.iter().copied().min()
+}
+
 pub(crate) fn opaque_total_exhaustion_message(
     primary_failure: Option<&str>,
     failure_reason: Option<&str>,
@@ -276,6 +280,7 @@ pub(crate) fn opaque_total_exhaustion_message(
 
 pub(crate) fn parse_backend_reset_duration(text: &str) -> Option<Duration> {
     let lower = text.to_ascii_lowercase();
+    let mut earliest_reset: Option<Duration> = None;
     for marker in [
         "earliest_reset=",
         "earliest reset",
@@ -284,23 +289,27 @@ pub(crate) fn parse_backend_reset_duration(text: &str) -> Option<Duration> {
         "reset after",
         "reset in",
     ] {
-        let Some(index) = lower.find(marker) else {
-            continue;
-        };
-        let fragment = lower.get(index + marker.len()..)?;
-        if let Some(duration) = parse_duration_units(fragment) {
-            return Some(duration);
+        for (index, _) in lower.match_indices(marker) {
+            let Some(fragment) = lower.get(index + marker.len()..) else {
+                continue;
+            };
+            if let Some(duration) = parse_duration_units(fragment) {
+                earliest_reset =
+                    Some(earliest_reset.map_or(duration, |current| current.min(duration)));
+            }
         }
     }
-    None
+    earliest_reset
 }
 
 fn parse_duration_units(fragment: &str) -> Option<Duration> {
-    let re = regex::Regex::new(r"([0-9]+)\s*([dhms])").ok()?;
+    let group_re = regex::Regex::new(r"((?:[0-9]+\s*[dhms]\s*)+)").ok()?;
     let bounded = fragment.chars().take(80).collect::<String>();
+    let duration_text = group_re.captures(&bounded)?.get(1)?.as_str();
+    let unit_re = regex::Regex::new(r"([0-9]+)\s*([dhms])").ok()?;
     let mut seconds = 0_u64;
     let mut matched = false;
-    for captures in re.captures_iter(&bounded) {
+    for captures in unit_re.captures_iter(duration_text) {
         let value = captures.get(1)?.as_str().parse::<u64>().ok()?;
         let unit_seconds = match captures.get(2)?.as_str() {
             "d" => 86_400,
@@ -456,7 +465,11 @@ pub(crate) fn persist_result_warning(project_root: &Path, session_id: &str, warn
 
 #[cfg(test)]
 mod tests {
-    use super::{opaque_total_exhaustion_message, ordered_tier_candidates};
+    use super::{
+        TierAttemptFailure, earliest_backend_reset_window,
+        format_all_models_failed_reason_with_reset, opaque_total_exhaustion_message,
+        ordered_tier_candidates, parse_backend_reset_duration,
+    };
     use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
     use csa_core::types::ToolName;
     use std::collections::HashMap;
@@ -586,19 +599,70 @@ mod tests {
     #[test]
     fn opaque_total_exhaustion_uses_provider_reset_window() {
         let failure_reason = "all tier-4-critical models failed: \
-            gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable, \
-            codex/openai/gpt-5.5/xhigh=HTTP 429; \
-            provider said quota will reset after 16h8m32s";
-
-        let message = opaque_total_exhaustion_message(
-            Some("auth_unavailable; HTTP 429"),
-            Some(failure_reason),
-        )
-        .expect("quota/auth total exhaustion should produce an opaque message");
+            gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable; quota will reset after 14h, \
+            codex/openai/gpt-5.5/xhigh=HTTP 429; reset in 1h";
 
         assert_eq!(
-            message,
-            "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~16h 9m"
+            opaque_total_exhaustion_message(
+                Some("auth_unavailable; HTTP 429"),
+                Some(failure_reason)
+            )
+            .as_deref(),
+            Some(
+                "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~1h 0m"
+            )
+        );
+    }
+
+    #[test]
+    fn opaque_total_exhaustion_omits_unparseable_reset_window() {
+        let failure_reason = "all tier-4-critical models failed: \
+            gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable; reset pending, \
+            codex/openai/gpt-5.5/xhigh=HTTP 429; reset unknown";
+
+        assert_eq!(
+            opaque_total_exhaustion_message(
+                Some("auth_unavailable; HTTP 429"),
+                Some(failure_reason)
+            )
+            .as_deref(),
+            Some("review unavailable: all tier-4-critical backends rate-limited")
+        );
+    }
+
+    #[test]
+    fn all_models_failed_reason_uses_earliest_backend_reset_window() {
+        let reset_windows = [
+            parse_backend_reset_duration("provider said quota will reset after 14h"),
+            parse_backend_reset_duration("provider said reset in 1h"),
+            parse_backend_reset_duration("provider said reset unknown"),
+        ];
+        let parseable_reset_windows = reset_windows.into_iter().flatten().collect::<Vec<_>>();
+        let failures = vec![
+            TierAttemptFailure {
+                model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                reason: "auth_unavailable".to_string(),
+                quota_exhausted: Some(false),
+            },
+            TierAttemptFailure {
+                model_spec: "codex/openai/gpt-5.5/xhigh".to_string(),
+                reason: "HTTP 429".to_string(),
+                quota_exhausted: Some(false),
+            },
+        ];
+
+        assert_eq!(
+            format_all_models_failed_reason_with_reset(
+                Some("tier-4-critical"),
+                &failures,
+                earliest_backend_reset_window(&parseable_reset_windows),
+            )
+            .as_deref(),
+            Some(
+                "all tier-4-critical models failed: \
+gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable, \
+codex/openai/gpt-5.5/xhigh=HTTP 429; earliest_reset=1h 0m"
+            )
         );
     }
 }
