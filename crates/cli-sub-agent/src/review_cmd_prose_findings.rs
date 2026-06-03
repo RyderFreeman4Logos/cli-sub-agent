@@ -220,22 +220,37 @@ fn parse_finding_line(
     in_findings_section: bool,
     default_unlabeled_severity: Option<Severity>,
 ) -> Option<ParsedProseFinding> {
-    let (numbered, body) =
-        strip_numbered_prefix(line).map_or((false, line), |body| (true, body.trim_start()));
+    let (structured_entry, body) =
+        structured_finding_body(line).map_or((false, line), |body| (true, body.trim_start()));
 
-    if let Some(parsed) = parse_bracketed_finding(body) {
+    if structured_entry && let Some(parsed) = parse_bracketed_finding(body) {
         return Some(parsed);
     }
 
-    if let Some(parsed) = parse_severity_prefixed_finding(body, numbered || in_findings_section) {
+    if let Some(parsed) =
+        parse_severity_prefixed_finding(body, structured_entry || in_findings_section)
+    {
         return Some(parsed);
     }
 
     let severity = default_unlabeled_severity?;
-    if !(numbered || in_findings_section) {
+    if !(structured_entry || in_findings_section) {
         return None;
     }
     parse_path_prefixed_finding(body, severity)
+}
+
+pub(in crate::review_cmd) fn structured_bracketed_finding_severity(line: &str) -> Option<Severity> {
+    bracketed_finding_severity(structured_finding_body(line)?.trim_start())
+}
+
+fn bracketed_finding_severity(body: &str) -> Option<Severity> {
+    let (label, _) = parse_bracketed_prefix(body.trim_start())?;
+    severity_from_label(label)
+}
+
+fn structured_finding_body(line: &str) -> Option<&str> {
+    strip_numbered_prefix(line).or_else(|| strip_unordered_finding_prefix(line))
 }
 
 fn strip_numbered_prefix(line: &str) -> Option<&str> {
@@ -246,8 +261,21 @@ fn strip_numbered_prefix(line: &str) -> Option<&str> {
     Some(rest)
 }
 
+fn strip_unordered_finding_prefix(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let marker = trimmed.as_bytes().first()?;
+    if !matches!(marker, b'-' | b'*') {
+        return None;
+    }
+    let rest = &trimmed[1..];
+    rest.chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+        .then_some(rest)
+}
+
 fn parse_bracketed_finding(body: &str) -> Option<ParsedProseFinding> {
-    let (label, mut rest) = parse_bracketed_prefix(body.trim_start().trim_start_matches('`'))?;
+    let (label, mut rest) = parse_bracketed_prefix(body.trim_start())?;
     let severity = severity_from_label(label)?;
     rest = rest.trim_start();
 
@@ -258,11 +286,6 @@ fn parse_bracketed_finding(body: &str) -> Option<ParsedProseFinding> {
         rest = after_category.trim_start();
     }
 
-    rest = rest
-        .trim_start()
-        .strip_prefix('`')
-        .unwrap_or(rest)
-        .trim_start();
     rest = rest
         .trim_start_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace())
         .trim_start();
@@ -478,9 +501,20 @@ fn findings_section_body_has_unparseable_text(
         if in_code_fence || trimmed.is_empty() {
             continue;
         }
-        if !clean_conclusion(trimmed) {
+        if clean_conclusion(trimmed) {
+            continue;
+        }
+        if line_has_unparsed_finding_like_structure(trimmed) {
             return true;
         }
     }
     false
+}
+
+fn line_has_unparsed_finding_like_structure(line: &str) -> bool {
+    let body = structured_finding_body(line).unwrap_or(line).trim_start();
+    if body.starts_with('`') {
+        return false;
+    }
+    bracketed_finding_severity(body).is_some() || leading_severity_from_title(body).is_some()
 }
