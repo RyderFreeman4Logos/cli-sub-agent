@@ -131,8 +131,6 @@ fn markdown_header_text(line: &str) -> Option<&str> {
 
 fn is_actionable_review_section_header(header: &str) -> bool {
     header.eq_ignore_ascii_case("findings")
-        || header.eq_ignore_ascii_case("review findings")
-        || header.eq_ignore_ascii_case("recommended actions")
 }
 
 fn section_body_is_actionable(lines: &[&str]) -> bool {
