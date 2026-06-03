@@ -41,6 +41,8 @@ mod session_exec_prompt_guard;
 mod session_exec_tool_state;
 #[path = "pipeline_session_exec_write_guard.rs"]
 mod session_exec_write_guard;
+#[path = "pipeline_session_exec_write_lock.rs"]
+mod session_exec_write_lock;
 #[path = "pipeline_session_exec_state_preflight.rs"]
 mod state_preflight;
 use self::session_exec_pre_exec::{
@@ -111,12 +113,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     )
     .await?;
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-    // New-session cleanup guard: delete the orphan directory on pre-exec failure.
     let mut cleanup_guard = if session_arg.is_none() {
         Some(SessionCleanupGuard::new(session_dir.clone()))
     } else {
         None
     };
+    let _worktree_write_lock = session_exec_write_lock::acquire_or_persist_failure(
+        project_root,
+        &mut session,
+        executor.tool_name(),
+        task_type,
+        readonly_project_root,
+        &mut cleanup_guard,
+    )?;
     let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
         Ok(pair) => pair,
         Err(e) => {

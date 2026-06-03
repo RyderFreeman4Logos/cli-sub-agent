@@ -1,7 +1,7 @@
 use super::handle_run;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, TierStrategy, ToolConfig};
-use csa_core::types::OutputFormat;
+use csa_core::types::{OutputFormat, ToolArg, ToolName};
 use std::collections::HashMap;
 use std::path::Path;
 use tempfile::tempdir;
@@ -247,6 +247,91 @@ async fn handle_run_no_preflight_skips_ai_config_check() {
             .to_string()
             .contains("No tool specified and no tier-based or auto-selectable tool available"),
         "unexpected error: {routing_err:#}"
+    );
+}
+
+#[tokio::test]
+async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
+    let project_dir = tempdir().unwrap();
+    let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::set_var(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    }
+    let config = run_config_with_tier("default", vec!["codex/openai/o4-mini/high"], &["codex"]);
+    write_project_config(project_dir.path(), &config);
+    let _holder = csa_lock::acquire_worktree_write_lock(project_dir.path(), "01HOLDER", &[])
+        .expect("holder worktree write lock should succeed");
+
+    let err = handle_run(
+        Some(ToolArg::Specific(ToolName::Codex)),
+        None,
+        None,
+        None,
+        Some("fix the repository".to_string()),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        false,
+        false,
+        Some("locked worktree run".to_string()),
+        false,
+        None,
+        None,
+        false,
+        true,
+        Some(project_dir.path().display().to_string()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        0,
+        OutputFormat::Text,
+        csa_process::StreamMode::BufferOnly,
+        Some("default".to_string()),
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        Vec::new(),
+        Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
+    )
+    .await
+    .expect_err("run writer should fail before tool execution when worktree lock is held");
+    let err = err.to_string();
+
+    assert!(
+        err.contains("concurrent write session blocked"),
+        "unexpected error: {err}"
+    );
+    assert!(err.contains("01HOLDER"), "missing holder session id: {err}");
+    assert!(
+        err.contains(&project_dir.path().display().to_string()),
+        "missing worktree path: {err}"
+    );
+    assert!(
+        err.contains("sequentially"),
+        "missing serialize guidance: {err}"
     );
 }
 
