@@ -16,6 +16,16 @@ impl ScopedEnvVar {
         }
         Self { key, previous }
     }
+
+    fn unset(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: tests that mutate process environment hold ENV_LOCK, so no
+        // other test in this module observes a concurrent environment change.
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, previous }
+    }
 }
 
 impl Drop for ScopedEnvVar {
@@ -30,6 +40,22 @@ impl Drop for ScopedEnvVar {
             }
         }
     }
+}
+
+fn isolated_home(temp: &tempfile::TempDir) -> (PathBuf, [ScopedEnvVar; 6]) {
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("create isolated HOME");
+    (
+        home.clone(),
+        [
+            ScopedEnvVar::set("HOME", &home),
+            ScopedEnvVar::unset("XDG_STATE_HOME"),
+            ScopedEnvVar::unset("CARGO_HOME"),
+            ScopedEnvVar::unset("RUSTUP_HOME"),
+            ScopedEnvVar::unset("CODEX_HOME"),
+            ScopedEnvVar::unset("CLAUDE_CONFIG_DIR"),
+        ],
+    )
 }
 
 #[test]
@@ -113,6 +139,12 @@ fn test_builder_off_forces_none() {
 #[test]
 fn test_tool_defaults_claude_code() {
     let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::create_dir_all(home.join(".local/state")).unwrap();
+    std::fs::create_dir_all(home.join(".cache/mise")).unwrap();
+    std::fs::create_dir_all(home.join(".cargo")).unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -136,68 +168,29 @@ fn test_tool_defaults_claude_code() {
         "bwrap-backed sessions should pin TMPDIR to the sandbox-private /tmp"
     );
 
-    if let Some(home) = home_dir() {
-        // Tool config dir is only added if it exists on disk (matches
-        // production behavior in isolation_plan.rs:286 `if p.exists()`).
-        let claude_dir = home.join(".claude");
-        if claude_dir.exists() {
-            assert!(
-                plan.writable_paths.contains(&claude_dir),
-                "claude-code defaults should include ~/.claude when it exists"
-            );
-        }
-        // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
-        // match production code at isolation_plan.rs:219,227).
-        let xdg_state = std::env::var("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".local/state"));
-        if xdg_state.exists() {
-            assert!(
-                plan.writable_paths.contains(&xdg_state),
-                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-            );
-        }
-        let mise_cache = home.join(".cache/mise");
-        if mise_cache.exists() {
-            assert!(
-                plan.writable_paths.contains(&mise_cache),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-
-        // Cargo home: when CARGO_HOME is set to a non-default dir, only
-        // CARGO_HOME is added (not ~/.cargo, which may contain credentials).
-        let default_cargo_home = home.join(".cargo");
-        if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
-            let cargo_home = PathBuf::from(&cargo_home_env);
-            if cargo_home != default_cargo_home {
-                assert!(
-                    !plan.writable_paths.contains(&default_cargo_home),
-                    "~/.cargo must NOT be writable when CARGO_HOME differs"
-                );
-                if cargo_home.exists() || cargo_home.parent().is_some_and(|p| p.exists()) {
-                    assert!(
-                        plan.writable_paths.contains(&cargo_home),
-                        "CARGO_HOME should be writable"
-                    );
-                }
-            } else if default_cargo_home.exists() {
-                assert!(
-                    plan.writable_paths.contains(&default_cargo_home),
-                    "~/.cargo should be writable when CARGO_HOME equals default"
-                );
-            }
-        } else if default_cargo_home.exists() {
-            assert!(
-                plan.writable_paths.contains(&default_cargo_home),
-                "~/.cargo should be writable when CARGO_HOME is unset"
-            );
-        }
-    }
+    assert!(
+        plan.writable_paths.contains(&home.join(".claude")),
+        "claude-code defaults should include isolated ~/.claude"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".local/state")),
+        "all tools should include existing XDG_STATE_HOME default"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".cache/mise")),
+        "all tools should include existing ~/.cache/mise"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".cargo")),
+        "default cargo home should be writable when CARGO_HOME is unset"
+    );
 }
 
 #[test]
 fn test_tool_defaults_landlock_uses_session_tmpdir() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -225,8 +218,10 @@ fn test_tool_defaults_landlock_uses_session_tmpdir() {
 #[test]
 fn test_cargo_and_rustup_paths_presence_matches_filesystem() {
     let _guard = ENV_LOCK.lock().unwrap();
-    // Verify that cargo/rustup paths are included correctly based on env
-    // vars and filesystem state.  This test runs against the real HOME.
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    std::fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::fs::create_dir_all(home.join(".rustup")).unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -236,74 +231,21 @@ fn test_cargo_and_rustup_paths_presence_matches_filesystem() {
         .build()
         .expect("should succeed");
 
-    if let Some(home) = home_dir() {
-        let default_cargo_home = home.join(".cargo");
-
-        if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
-            let cargo_home = PathBuf::from(&cargo_home_env);
-            if cargo_home == default_cargo_home {
-                // CARGO_HOME == default: treated as if unset
-                assert!(
-                    plan.writable_paths.contains(&default_cargo_home)
-                        || !default_cargo_home.exists()
-                            && !default_cargo_home.parent().is_some_and(|p| p.exists()),
-                    "default cargo home should be included when CARGO_HOME equals default"
-                );
-            } else {
-                // CARGO_HOME differs: only CARGO_HOME should be writable,
-                // NOT ~/.cargo (avoids leaking credentials).
-                assert!(
-                    !plan.writable_paths.contains(&default_cargo_home),
-                    "~/.cargo must NOT be writable when CARGO_HOME is set elsewhere"
-                );
-                if cargo_home.exists() || cargo_home.parent().is_some_and(|p| p.exists()) {
-                    assert!(
-                        plan.writable_paths.contains(&cargo_home),
-                        "CARGO_HOME should be writable when it (or parent) exists"
-                    );
-                }
-            }
-        } else {
-            // No CARGO_HOME: default path used
-            assert!(
-                plan.writable_paths.contains(&default_cargo_home)
-                    || !default_cargo_home.exists()
-                        && !default_cargo_home.parent().is_some_and(|p| p.exists()),
-                "default cargo home should be included when CARGO_HOME is unset"
-            );
-        }
-
-        // RUSTUP_HOME: same pattern as CARGO_HOME
-        let default_rustup = home.join(".rustup");
-        if let Ok(rustup_home_env) = std::env::var("RUSTUP_HOME") {
-            let rustup_path = PathBuf::from(&rustup_home_env);
-            if rustup_path == default_rustup {
-                assert!(
-                    plan.writable_paths.contains(&default_rustup)
-                        || !default_rustup.exists()
-                            && !default_rustup.parent().is_some_and(|p| p.exists()),
-                    "default rustup should be included when RUSTUP_HOME equals default"
-                );
-            } else {
-                assert!(
-                    !plan.writable_paths.contains(&default_rustup),
-                    "~/.rustup must NOT be writable when RUSTUP_HOME is set elsewhere"
-                );
-            }
-        } else {
-            assert!(
-                plan.writable_paths.contains(&default_rustup)
-                    || !default_rustup.exists()
-                        && !default_rustup.parent().is_some_and(|p| p.exists()),
-                "default rustup should be included when RUSTUP_HOME is unset"
-            );
-        }
-    }
+    assert!(
+        plan.writable_paths.contains(&home.join(".cargo")),
+        "default cargo home should be included when CARGO_HOME is unset"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".rustup")),
+        "default rustup should be included when RUSTUP_HOME is unset"
+    );
 }
 
 #[test]
 fn test_submodule_detection_adds_superproject_root() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let _guard = ENV_LOCK.lock().unwrap();
+    let (_home, _env) = isolated_home(&tmp);
     let superproject = tmp.path().join("monorepo");
     let submodule = superproject.join("crates").join("sub-crate");
 
@@ -340,6 +282,8 @@ fn test_submodule_detection_adds_superproject_root() {
 #[test]
 fn test_non_submodule_does_not_add_superproject() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let _guard = ENV_LOCK.lock().unwrap();
+    let (_home, _env) = isolated_home(&tmp);
     let project = tmp.path().join("project");
 
     // Normal repo: .git is a directory
@@ -384,6 +328,7 @@ fn test_submodule_no_superproject_found() {
 fn test_tool_defaults_codex() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
     let codex_home = temp.path().join("codex-home");
     let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
     let project = PathBuf::from("/tmp/project");
@@ -407,32 +352,17 @@ fn test_tool_defaults_codex() {
         "codex defaults should include CODEX_HOME"
     );
 
-    if let Some(home) = home_dir() {
-        // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
-        // match production code at isolation_plan.rs:219,227).
-        let xdg_state = std::env::var("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".local/state"));
-        if xdg_state.exists() {
-            assert!(
-                plan.writable_paths.contains(&xdg_state),
-                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-            );
-        }
-        let mise_cache = home.join(".cache/mise");
-        if mise_cache.exists() {
-            assert!(
-                plan.writable_paths.contains(&mise_cache),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
+    assert!(
+        plan.writable_paths.contains(&codex_home),
+        "codex defaults should include CODEX_HOME under an isolated HOME"
+    );
 }
 
 #[test]
 fn test_tool_defaults_codex_honors_codex_home_env() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
     let codex_home = temp.path().join("custom-codex-home");
     let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
 
@@ -459,6 +389,7 @@ fn test_tool_defaults_codex_honors_codex_home_env() {
 fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
     let codex_home = temp.path().join("readonly-codex-home");
     std::fs::create_dir(&codex_home).unwrap();
     #[cfg(unix)]
@@ -515,6 +446,7 @@ fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
 fn test_parent_tool_defaults_expose_existing_codex_home_for_nested_csa() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
     let codex_home = temp.path().join("codex-home");
     std::fs::create_dir(&codex_home).unwrap();
     let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
@@ -546,6 +478,11 @@ fn test_parent_tool_defaults_expose_existing_codex_home_for_nested_csa() {
 #[test]
 fn test_tool_defaults_gemini_cli() {
     let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    std::fs::create_dir_all(home.join(".gemini")).unwrap();
+    std::fs::create_dir_all(home.join(".config/gemini-cli")).unwrap();
+    std::fs::create_dir_all(home.join(".cache/mise")).unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -558,38 +495,29 @@ fn test_tool_defaults_gemini_cli() {
     assert!(plan.writable_paths.contains(&project));
     assert!(plan.writable_paths.contains(&session));
 
-    if let Some(home) = home_dir() {
-        // Tool config dirs are only added if they exist on disk (matches
-        // production behavior in isolation_plan.rs:286 `if p.exists()`).
-        let gemini_dir = home.join(".gemini");
-        if gemini_dir.exists() {
-            assert!(
-                plan.writable_paths.contains(&gemini_dir),
-                "gemini-cli defaults should include ~/.gemini when it exists"
-            );
-        }
-        let gemini_config_dir = home.join(".config/gemini-cli");
-        if gemini_config_dir.exists() {
-            assert!(
-                plan.writable_paths.contains(&gemini_config_dir),
-                "gemini-cli defaults should include ~/.config/gemini-cli when it exists"
-            );
-        }
-        // mise cache is a common path for all tools (gated on existence to
-        // match production code at isolation_plan.rs:227).
-        let mise_cache = home.join(".cache/mise");
-        if mise_cache.exists() {
-            assert!(
-                plan.writable_paths.contains(&mise_cache),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
+    assert!(
+        plan.writable_paths.contains(&home.join(".gemini")),
+        "gemini-cli defaults should include existing ~/.gemini"
+    );
+    assert!(
+        plan.writable_paths
+            .contains(&home.join(".config/gemini-cli")),
+        "gemini-cli defaults should include existing ~/.config/gemini-cli"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".cache/mise")),
+        "all tools should include existing ~/.cache/mise"
+    );
 }
 
 #[test]
 fn test_tool_defaults_opencode() {
     let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    std::fs::create_dir_all(home.join(".config/opencode")).unwrap();
+    std::fs::create_dir_all(home.join(".local/state")).unwrap();
+    std::fs::create_dir_all(home.join(".cache/mise")).unwrap();
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -602,35 +530,18 @@ fn test_tool_defaults_opencode() {
     assert!(plan.writable_paths.contains(&project));
     assert!(plan.writable_paths.contains(&session));
 
-    if let Some(home) = home_dir() {
-        // Tool config dir is only added if it exists on disk (matches
-        // production behavior in isolation_plan.rs:286 `if p.exists()`).
-        let opencode_dir = home.join(".config/opencode");
-        if opencode_dir.exists() {
-            assert!(
-                plan.writable_paths.contains(&opencode_dir),
-                "opencode defaults should include ~/.config/opencode when it exists"
-            );
-        }
-        // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
-        // match production code at isolation_plan.rs:219,227).
-        let xdg_state = std::env::var("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".local/state"));
-        if xdg_state.exists() {
-            assert!(
-                plan.writable_paths.contains(&xdg_state),
-                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-            );
-        }
-        let mise_cache = home.join(".cache/mise");
-        if mise_cache.exists() {
-            assert!(
-                plan.writable_paths.contains(&mise_cache),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
+    assert!(
+        plan.writable_paths.contains(&home.join(".config/opencode")),
+        "opencode defaults should include existing ~/.config/opencode"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".local/state")),
+        "all tools should include existing XDG_STATE_HOME default"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".cache/mise")),
+        "all tools should include existing ~/.cache/mise"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -667,10 +578,10 @@ fn test_validate_accepts_tmp_subpath() {
 #[test]
 fn test_validate_accepts_home_subpath() {
     let _guard = ENV_LOCK.lock().unwrap();
-    if let Some(home) = home_dir() {
-        let result = validate_writable_paths(&[home.join("workspace")], Path::new("/tmp/project"));
-        assert!(result.is_ok());
-    }
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    let result = validate_writable_paths(&[home.join("workspace")], Path::new("/tmp/project"));
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -738,6 +649,9 @@ fn test_readonly_project_root_propagates() {
 
 #[test]
 fn test_with_tool_defaults_stores_project_root() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
