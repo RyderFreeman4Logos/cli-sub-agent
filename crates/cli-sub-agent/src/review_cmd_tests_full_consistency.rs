@@ -34,6 +34,7 @@ fn test_build_review_instruction_no_diff_content_default() {
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
@@ -66,6 +67,7 @@ fn test_build_review_instruction_full_consistency() {
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: true,

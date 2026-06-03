@@ -11,6 +11,7 @@ use crate::debate_cmd_output::{
     DebateOutputHeader, DebateSummary, format_debate_stdout_text, render_debate_stdout_json,
 };
 use crate::debate_errors::DebateErrorKind;
+use crate::pattern_resolver::ResolvedPattern;
 
 pub(super) fn render_debate_cli_output(
     output_format: OutputFormat,
@@ -37,7 +38,7 @@ pub(super) const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);
 ///
 /// Fails fast with actionable install guidance if the pattern is missing,
 /// preventing silent degradation where the tool runs without skill context.
-pub(super) fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
+pub(super) fn verify_debate_skill_available(project_root: &Path) -> Result<ResolvedPattern> {
     match crate::pattern_resolver::resolve_pattern("debate", project_root) {
         Ok(resolved) => {
             debug!(
@@ -46,7 +47,7 @@ pub(super) fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
                 skill_md_len = resolved.skill_md.len(),
                 "Debate pattern resolved"
             );
-            Ok(())
+            Ok(resolved)
         }
         Err(resolve_err) => {
             anyhow::bail!(

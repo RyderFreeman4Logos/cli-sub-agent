@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::path::Path;
+
+use crate::pattern_resolver::ResolvedPattern;
 
 pub(crate) const CSA_READONLY_SESSION_ENV: &str = "CSA_READONLY_SESSION";
 
@@ -26,7 +29,38 @@ pub(crate) fn with_readonly_session_env(
 /// The debate tool loads the debate skill from the project's `.claude/skills/`
 /// directory and follows its instructions autonomously. We only pass parameters.
 /// An anti-recursion preamble is prepended (see GitHub issue #272).
+#[cfg(test)]
 pub(crate) fn build_debate_instruction(
+    question: &str,
+    is_continuation: bool,
+    rounds: u32,
+) -> String {
+    build_debate_parameter_instruction(question, is_continuation, rounds)
+}
+
+pub(crate) fn build_debate_instruction_for_project(
+    question: &str,
+    is_continuation: bool,
+    rounds: u32,
+    project_root: &Path,
+    pattern: &ResolvedPattern,
+) -> String {
+    let instruction = build_debate_parameter_instruction(question, is_continuation, rounds);
+    let skill_source_dir = pattern.skill_source_dir("debate");
+    let mut parts = vec![instruction];
+    parts.extend(crate::run_cmd_tool_selection::build_skill_prompt_parts(
+        crate::run_cmd_tool_selection::SkillPromptSource {
+            project_root,
+            skill_source_dir: &skill_source_dir,
+            extra_context_dir: &pattern.dir,
+            skill_md: &pattern.skill_md,
+            agent_config: pattern.agent_config(),
+        },
+    ));
+    parts.join("\n\n")
+}
+
+fn build_debate_parameter_instruction(
     question: &str,
     is_continuation: bool,
     rounds: u32,

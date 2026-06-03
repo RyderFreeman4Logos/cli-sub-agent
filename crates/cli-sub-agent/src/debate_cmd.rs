@@ -42,7 +42,9 @@ use gate::run_pre_debate_quality_gate;
 
 #[path = "debate_cmd_readonly.rs"]
 mod readonly;
+#[cfg(test)]
 use readonly::build_debate_instruction;
+use readonly::build_debate_instruction_for_project;
 pub(crate) use readonly::with_readonly_session_env;
 
 #[path = "debate_cmd_runtime.rs"]
@@ -104,7 +106,7 @@ pub(crate) async fn handle_debate(
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
 
     // 2b. Verify debate skill is available (fail fast before any execution)
-    verify_debate_skill_available(&project_root)?;
+    let debate_pattern = verify_debate_skill_available(&project_root)?;
 
     // 2c. Run pre-debate quality gate (reuses [review] gate settings)
     //
@@ -126,8 +128,14 @@ pub(crate) async fn handle_debate(
     // debate_cmd_question::build_debate_question).
     let (question, frontmatter_difficulty) = question::build_debate_question(&mut args)?;
 
-    // 4. Build debate instruction (parameter passing — tool loads debate skill)
-    let mut prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
+    // 4. Build debate instruction with the resolved pattern injected.
+    let mut prompt = build_debate_instruction_for_project(
+        &question,
+        args.session.is_some(),
+        args.rounds,
+        &project_root,
+        &debate_pattern,
+    );
     if let Some(guard) =
         crate::pipeline::prompt_guard::anti_recursion_guard(config.as_ref(), current_depth)
     {

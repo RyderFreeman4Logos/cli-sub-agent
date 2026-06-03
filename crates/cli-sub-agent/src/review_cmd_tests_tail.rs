@@ -399,6 +399,7 @@ fn test_build_review_instruction_for_project_includes_rust_profile() {
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
@@ -422,6 +423,7 @@ fn test_build_review_instruction_for_project_includes_unknown_profile_for_empty_
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
@@ -526,26 +528,12 @@ fn discover_review_context_for_branch_skips_when_spec_missing() {
 }
 
 #[test]
-fn verify_review_skill_missing_returns_actionable_error() {
+fn verify_review_skill_missing_repo_local_pattern_uses_bundled_fallback() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let err = verify_review_skill_available(tmp.path(), false).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Review pattern not found"),
-        "should mention missing pattern: {msg}"
-    );
-    assert!(
-        msg.contains("weave install"),
-        "should include install guidance: {msg}"
-    );
-    assert!(
-        msg.contains("does NOT install"),
-        "should clarify skill install vs pattern install: {msg}"
-    );
-    assert!(
-        msg.contains("patterns/csa-review"),
-        "should list searched paths: {msg}"
-    );
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    assert!(verify_review_skill_available(tmp.path(), false).is_ok());
+    assert!(!tmp.path().join(".csa").exists());
+    assert!(!tmp.path().join("patterns").exists());
 }
 
 #[test]
@@ -570,20 +558,95 @@ fn verify_review_skill_present_succeeds() {
 }
 
 #[test]
-fn verify_review_skill_no_fallback_without_skill() {
-    // Ensure no execution path silently downgrades when skill is missing.
-    // The verify function must return Err — it must NOT return Ok with a warning.
+fn build_review_instruction_for_project_injects_bundled_pattern_without_repo_local_pattern() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let state_dir = tempfile::TempDir::new().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&state_dir);
+    let pattern = verify_review_skill_available(project_dir.path(), false)
+        .unwrap()
+        .expect("bundled pattern should resolve");
+
+    let (instruction, _routing) = build_review_instruction_for_project(
+        "uncommitted",
+        "review-only",
+        "auto",
+        ReviewMode::Standard,
+        None,
+        project_dir.path(),
+        resolve::ReviewProjectPromptOptions {
+            project_config: None,
+            resolved_pattern: Some(&pattern),
+            prior_rounds_section: None,
+            current_session_id: None,
+            full_consistency: false,
+        },
+    );
+
+    assert!(instruction.contains("Use the csa-review skill. scope=uncommitted"));
+    assert!(instruction.contains("<skill-mode>executor</skill-mode>"));
+    assert!(instruction.contains("<skill-source path=\""));
+    assert!(instruction.contains("CSA Review: Independent Code Review Orchestration"));
+    assert!(!project_dir.path().join(".csa").exists());
+    assert!(!project_dir.path().join("patterns").exists());
+}
+
+#[test]
+fn build_review_instruction_for_project_injects_repo_local_pattern() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let skill_dir = project_dir
+        .path()
+        .join(".csa")
+        .join("patterns")
+        .join("csa-review")
+        .join("skills")
+        .join("csa-review");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Repo Local Review Protocol\nUse this local reviewer.",
+    )
+    .unwrap();
+    let pattern = verify_review_skill_available(project_dir.path(), false)
+        .unwrap()
+        .expect("repo-local pattern should resolve");
+
+    let (instruction, _routing) = build_review_instruction_for_project(
+        "uncommitted",
+        "review-only",
+        "auto",
+        ReviewMode::Standard,
+        None,
+        project_dir.path(),
+        resolve::ReviewProjectPromptOptions {
+            project_config: None,
+            resolved_pattern: Some(&pattern),
+            prior_rounds_section: None,
+            current_session_id: None,
+            full_consistency: false,
+        },
+    );
+
+    assert!(instruction.contains("Use the csa-review skill. scope=uncommitted"));
+    assert!(instruction.contains("Repo Local Review Protocol"));
+    assert!(instruction.contains(&skill_dir.display().to_string()));
+    assert!(!instruction.contains("CSA Review: Independent Code Review Orchestration"));
+}
+
+#[test]
+fn verify_review_skill_no_repo_local_pattern_uses_bundled_without_allow_fallback() {
     let tmp = tempfile::TempDir::new().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let result = verify_review_skill_available(tmp.path(), false);
     assert!(
-        result.is_err(),
-        "missing skill must be a hard error, not a warning"
+        result.is_ok(),
+        "missing repo-local review pattern should resolve via bundled fallback"
     );
 }
 
 #[test]
 fn verify_review_skill_allow_fallback_without_skill() {
     let tmp = tempfile::TempDir::new().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let result = verify_review_skill_available(tmp.path(), true);
     assert!(
         result.is_ok(),

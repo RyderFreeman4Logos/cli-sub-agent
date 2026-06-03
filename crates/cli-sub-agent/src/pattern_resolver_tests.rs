@@ -95,6 +95,24 @@ fn assert_paths_exclude(paths: &[std::path::PathBuf], expected: &Path, msg: &str
     );
 }
 
+fn assert_no_bundled_temp_files(dir: &Path) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            assert_no_bundled_temp_files(&path);
+            continue;
+        }
+
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            !file_name.contains(".tmp."),
+            "temporary bundled file was left behind: {}",
+            path.display()
+        );
+    }
+}
+
 // ------------------------------------------------------------------
 // Resolution tests
 // ------------------------------------------------------------------
@@ -229,6 +247,117 @@ fn resolve_pattern_repo_takes_priority_over_global_store() {
     assert!(first_match.is_some());
     let content = fs::read_to_string(first_match.unwrap().join("skills/debate/SKILL.md")).unwrap();
     assert!(content.contains("Repo Debate"));
+}
+
+#[test]
+fn resolve_pattern_falls_back_to_bundled_csa_review_without_repo_local_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+
+    let resolved = resolve_pattern_with_materialization_root(
+        "csa-review",
+        tmp.path(),
+        Some(materialized.path()),
+    )
+    .unwrap();
+
+    assert!(resolved.skill_md.contains("CSA Review"));
+    assert!(resolved.dir.starts_with(materialized.path()));
+    assert!(resolved.dir.join("workflow.toml").is_file());
+    assert!(
+        resolved
+            .dir
+            .join("skills/csa-review/references/output-schema.md")
+            .is_file()
+    );
+    assert!(!tmp.path().join(".csa").exists());
+    assert!(!tmp.path().join("patterns").exists());
+}
+
+#[test]
+fn resolve_pattern_falls_back_to_bundled_debate_without_repo_local_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+
+    let resolved =
+        resolve_pattern_with_materialization_root("debate", tmp.path(), Some(materialized.path()))
+            .unwrap();
+
+    assert!(resolved.skill_md.contains("Debate"));
+    assert!(resolved.dir.starts_with(materialized.path()));
+    assert!(resolved.dir.join("workflow.toml").is_file());
+    assert!(resolved.dir.join("skills/debate/SKILL.md").is_file());
+    assert!(!tmp.path().join(".csa").exists());
+    assert!(!tmp.path().join("patterns").exists());
+}
+
+#[test]
+fn materialize_bundled_patterns_writes_full_files_without_temp_residue() {
+    for (name, pattern) in [
+        ("csa-review", &BUNDLED_CSA_REVIEW_PATTERN),
+        ("debate", &BUNDLED_DEBATE_PATTERN),
+    ] {
+        let materialized = TempDir::new().unwrap();
+        let dest = materialize_bundled_pattern(name, pattern, Some(materialized.path())).unwrap();
+
+        for file in pattern.files {
+            let path = dest.join(file.path);
+            let actual = fs::read(&path).unwrap();
+            assert_eq!(
+                actual,
+                file.contents,
+                "materialized bundled file content differs for {}",
+                path.display()
+            );
+        }
+
+        assert_no_bundled_temp_files(&dest);
+    }
+}
+
+#[test]
+fn repo_local_csa_review_overrides_bundled_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+    make_pattern_dir(
+        tmp.path(),
+        ".csa/patterns/csa-review",
+        "csa-review",
+        "# CSA Local Review",
+        None,
+    );
+
+    let resolved = resolve_pattern_with_materialization_root(
+        "csa-review",
+        tmp.path(),
+        Some(materialized.path()),
+    )
+    .unwrap();
+
+    assert!(resolved.skill_md.contains("CSA Local Review"));
+    assert!(resolved.dir.ends_with(".csa/patterns/csa-review"));
+    assert!(!materialized.path().join("csa-review").exists());
+}
+
+#[test]
+fn repo_local_debate_overrides_bundled_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+    make_pattern_dir(
+        tmp.path(),
+        "patterns/debate",
+        "debate",
+        "# Local Debate",
+        None,
+    );
+
+    let resolved =
+        resolve_pattern_with_materialization_root("debate", tmp.path(), Some(materialized.path()))
+            .unwrap();
+
+    assert!(resolved.skill_md.contains("Local Debate"));
+    assert!(resolved.dir.ends_with("patterns/debate"));
+    assert!(!materialized.path().join("debate").exists());
 }
 
 #[test]
