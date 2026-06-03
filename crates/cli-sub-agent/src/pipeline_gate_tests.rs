@@ -229,7 +229,7 @@ async fn test_gate_timeout() {
 #[tokio::test]
 #[serial]
 #[cfg(unix)]
-async fn test_gate_kills_background_pipe_holder_after_leader_exits() {
+async fn test_gate_preserves_output_and_reports_drain_timeout_after_leader_exits() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
     let dir = tempfile::tempdir().unwrap();
@@ -244,7 +244,7 @@ async fn test_gate_kills_background_pipe_holder_after_leader_exits() {
         evaluate_quality_gate(
             dir.path(),
             Some(
-                r#"(trap '' TERM; sleep 60) & printf '%s\n' "$!" > "$CSA_GATE_CHILD_PID"; echo started"#,
+                r#"(sleep 60) & printf '%s\n' "$!" > "$CSA_GATE_CHILD_PID"; echo started; echo stderr-started >&2"#,
             ),
             1,
             &GateMode::Full,
@@ -266,31 +266,34 @@ async fn test_gate_kills_background_pipe_holder_after_leader_exits() {
     assert!(!result.skipped);
     assert!(!result.passed());
     assert_eq!(result.exit_code, None);
-    assert!(result.stderr.contains("timed out"));
+    assert!(result.stdout.contains("started"));
+    assert!(result.stderr.contains("stderr-started"));
+    assert!(
+        result
+            .stderr
+            .contains("output pipe drain timed out after 2s"),
+        "stderr should name the drain timeout, got: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Quality gate timed out after 1s"),
+        "drain timeout must not be reported as the overall gate timeout"
+    );
 
     let child_pid: i32 = std::fs::read_to_string(&child_pid_path)
         .expect("background child pid should be recorded")
         .trim()
         .parse()
         .expect("background child pid should be numeric");
-    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    if process_exists(child_pid) {
-        kill_pid(child_pid);
-        panic!("background pipe holder survived gate timeout cleanup");
-    }
+    kill_pid(child_pid);
 
     // SAFETY: Restoring env.
     unsafe { clear_depth() };
 }
 
 #[cfg(unix)]
-fn process_exists(pid: i32) -> bool {
-    let rc = unsafe { libc::kill(pid, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(unix)]
 fn kill_pid(pid: i32) {
+    // SAFETY: Test cleanup for a PID created by this test process.
     unsafe {
         libc::kill(pid, libc::SIGKILL);
     }
