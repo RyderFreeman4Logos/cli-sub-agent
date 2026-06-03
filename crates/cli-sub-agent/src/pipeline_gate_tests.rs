@@ -196,14 +196,19 @@ async fn test_gate_timeout() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
     let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("timeout-child-survived");
+    let extra_env = HashMap::from([(
+        "CSA_GATE_TIMEOUT_MARKER".to_string(),
+        marker.to_string_lossy().into_owned(),
+    )]);
 
     let result = evaluate_quality_gate(
         dir.path(),
-        Some("sleep 60"),
+        Some(r#"(sleep 2; touch "$CSA_GATE_TIMEOUT_MARKER") & wait"#),
         1, // 1 second timeout
         &GateMode::Full,
         0,
-        None,
+        Some(&extra_env),
     )
     .await
     .unwrap();
@@ -211,6 +216,11 @@ async fn test_gate_timeout() {
     assert!(!result.skipped);
     assert!(!result.passed());
     assert!(result.stderr.contains("timed out"));
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(
+        !marker.exists(),
+        "timeout must kill the whole process group, not leave child processes running"
+    );
 
     // SAFETY: Restoring env.
     unsafe { clear_depth() };

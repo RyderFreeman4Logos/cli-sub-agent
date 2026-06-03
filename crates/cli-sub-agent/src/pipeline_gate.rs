@@ -13,9 +13,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::Result;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use csa_config::{GateMode, GateStep};
@@ -334,6 +337,7 @@ async fn execute_gate_command(
         .current_dir(project_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
     if let Some(extra_env) = extra_env {
         cmd.envs(extra_env);
     }
@@ -344,14 +348,16 @@ async fn execute_gate_command(
     #[cfg(unix)]
     cmd.process_group(0);
 
-    let child = cmd.spawn()?;
-    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut child = cmd.spawn()?;
+    let stdout = child.stdout.take().map(spawn_output_reader);
+    let stderr = child.stderr.take().map(spawn_output_reader);
+    let timeout = Duration::from_secs(timeout_secs);
 
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
-            let exit_code = output.status.code();
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => {
+            let exit_code = status.code();
+            let stdout = collect_output(stdout).await;
+            let stderr = collect_output(stderr).await;
 
             let result = GateResult {
                 name: String::new(),
@@ -385,9 +391,13 @@ async fn execute_gate_command(
         }
         Err(_elapsed) => {
             // Timeout: kill the process group
-            // Note: the child has already been consumed by wait_with_output,
-            // but the process group may still have orphaned children.
-            // In practice, tokio drops the child handle which sends SIGKILL.
+            terminate_gate_child_process_group(&mut child).await;
+            let stdout = collect_output(stdout).await;
+            let mut stderr = collect_output(stderr).await;
+            if !stderr.is_empty() {
+                stderr.push('\n');
+            }
+            stderr.push_str(&format!("Quality gate timed out after {timeout_secs}s"));
             warn!(
                 timeout_secs,
                 command, "Quality gate timed out after {timeout_secs}s"
@@ -397,13 +407,56 @@ async fn execute_gate_command(
                 level: 0,
                 command: command.to_string(),
                 exit_code: None,
-                stdout: String::new(),
-                stderr: format!("Quality gate timed out after {timeout_secs}s"),
+                stdout,
+                stderr,
                 skipped: false,
                 skip_reason: None,
             })
         }
     }
+}
+
+fn spawn_output_reader<R>(reader: R) -> JoinHandle<String>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = reader;
+        let mut output = Vec::new();
+        if reader.read_to_end(&mut output).await.is_err() {
+            return String::new();
+        }
+        String::from_utf8_lossy(&output).to_string()
+    })
+}
+
+async fn collect_output(handle: Option<JoinHandle<String>>) -> String {
+    match handle {
+        Some(handle) => handle.await.unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+async fn terminate_gate_child_process_group(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // SAFETY: negative PID targets the process group created by process_group(0).
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if child.try_wait().ok().flatten().is_none() {
+                // SAFETY: negative PID targets the process group created by process_group(0).
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+        }
+    }
+
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
 }
 
 #[cfg(test)]
