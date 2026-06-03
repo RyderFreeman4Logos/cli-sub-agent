@@ -256,6 +256,42 @@ fn resolve_tool_and_model_force_ignore_tier_allows_complete_spec() {
 }
 
 #[test]
+fn resolve_tool_and_model_force_ignore_tier_uses_tool_defaults() {
+    let _guard = assume_tier_tools_available();
+    let mut cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let codex = cfg
+        .tools
+        .get_mut("codex")
+        .expect("config_with_tier should create codex tool config");
+    codex.default_model = Some("gpt-5.4".to_string());
+    codex.default_thinking = Some("xhigh".to_string());
+
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
+        config: Some(&cfg),
+        force_ignore_tier_setting: true,
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
+    let (tool, model_spec, model) = result.expect("configured tool defaults should satisfy bypass");
+    assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec, None);
+    assert_eq!(model, None);
+
+    let executor = super::build_executor(
+        &tool,
+        model_spec.as_deref(),
+        model.as_deref(),
+        None,
+        Some(&cfg),
+        true,
+    )
+    .expect("run execution should apply configured tool defaults");
+    let debug = format!("{executor:?}");
+    assert!(debug.contains("gpt-5.4"), "default model missing: {debug}");
+    assert!(debug.contains("Xhigh"), "default thinking missing: {debug}");
+}
+
+#[test]
 fn resolve_tool_and_model_force_ignore_tier_bypassed_when_tier_provided() {
     let _guard = assume_tier_tools_available();
     let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
