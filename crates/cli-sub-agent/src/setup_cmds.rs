@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::SystemTime;
 use tracing::{debug, info};
 
@@ -311,6 +312,13 @@ pub(crate) fn spawn_review_gate_setup_if_needed(
         debug!("review-gate auto-setup: skipping (no .git directory)");
         return;
     }
+    match review_gate_opt_in_signal(project_root) {
+        Some(signal) => debug!("review-gate auto-setup: opt-in detected ({signal})"),
+        None => {
+            debug!("review-gate auto-setup: skipping (repo is not CSA-managed / opted in)");
+            return;
+        }
+    }
 
     let project_root = project_root.to_path_buf();
     tokio::spawn(async move {
@@ -322,6 +330,14 @@ pub(crate) fn spawn_review_gate_setup_if_needed(
 
 /// Background async task: rate-limited auto-setup of the review gate.
 async fn check_and_setup_review_gate_bg(project_root: &Path) -> anyhow::Result<()> {
+    match review_gate_opt_in_signal(project_root) {
+        Some(signal) => debug!("review-gate auto-setup: opt-in detected ({signal})"),
+        None => {
+            debug!("review-gate auto-setup: skipping (repo is not CSA-managed / opted in)");
+            return Ok(());
+        }
+    }
+
     let state_dir = csa_session::get_session_root(project_root)?;
     let ts_path = state_dir.join(REVIEW_GATE_TIMESTAMP_FILE);
 
@@ -337,6 +353,31 @@ async fn check_and_setup_review_gate_bg(project_root: &Path) -> anyhow::Result<(
     install_review_gate(project_root, /*verbose=*/ false)?;
     info!("review-gate auto-setup: complete");
     Ok(())
+}
+
+pub(crate) fn review_gate_opt_in_signal(project_root: &Path) -> Option<&'static str> {
+    if git_path_is_tracked(project_root, "lefthook.yml") {
+        return Some("tracked lefthook.yml");
+    }
+    if git_path_is_tracked(project_root, "scripts/hooks/review-check.sh") {
+        return Some("tracked scripts/hooks/review-check.sh");
+    }
+    if project_root.join("patterns/csa-review").is_dir() {
+        return Some("patterns/csa-review/");
+    }
+    None
+}
+
+fn git_path_is_tracked(project_root: &Path, relative_path: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["ls-files", "--error-unmatch", "--", relative_path])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// Returns true when the timestamp file is absent or older than CHECK_INTERVAL_SECS.
@@ -488,7 +529,7 @@ fn install_review_check_script(project_root: &Path) -> Result<()> {
 
 /// Run `lefthook install` synchronously.
 fn run_lefthook_install_sync(project_root: &Path) -> Result<()> {
-    let status = std::process::Command::new("lefthook")
+    let status = Command::new("lefthook")
         .arg("install")
         .current_dir(project_root)
         .status()
@@ -551,70 +592,4 @@ fn report_review_gate_status(project_root: &Path) -> Result<()> {
 mod review_gate_script_tests;
 
 #[cfg(test)]
-mod review_gate_tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn idempotent_when_review_check_already_present() {
-        let input =
-            "pre-push:\n  commands:\n    review-check:\n      run: scripts/hooks/review-check.sh\n";
-        // merge_lefthook_review_check guards the idempotency check at the file level.
-        let td = TempDir::new().unwrap();
-        let lf = td.path().join("lefthook.yml");
-        fs::write(&lf, input).unwrap();
-        merge_lefthook_review_check(td.path()).unwrap();
-        let content = fs::read_to_string(&lf).unwrap();
-        // Only one review-check entry should exist.
-        assert_eq!(content.matches("review-check:").count(), 1);
-    }
-
-    #[test]
-    fn inserts_after_commands_in_existing_pre_push() {
-        let input = "pre-push:\n  commands:\n    version-check:\n      run: scripts/hooks/version-check.sh\n";
-        let result = build_merged_lefthook(input);
-        assert!(result.contains("    review-check:"), "entry inserted");
-        // review-check should appear before version-check
-        let rc_pos = result.find("    review-check:").unwrap();
-        let vc_pos = result.find("    version-check:").unwrap();
-        assert!(rc_pos < vc_pos, "review-check before version-check");
-    }
-
-    #[test]
-    fn appends_section_when_no_pre_push() {
-        let input = "pre-commit:\n  commands:\n    quality-gates:\n      run: just pre-commit\n";
-        let result = build_merged_lefthook(input);
-        assert!(result.contains("pre-push:"), "pre-push section added");
-        assert!(result.contains("review-check:"), "entry added");
-    }
-
-    #[test]
-    fn creates_minimal_lefthook_from_empty() {
-        let result = build_merged_lefthook("");
-        assert!(result.contains("pre-push:"));
-        assert!(result.contains("review-check:"));
-    }
-
-    #[test]
-    fn preserves_trailing_newline() {
-        let input = "no_tty: true\npre-push:\n  commands:\n    x:\n      run: x\n";
-        let result = build_merged_lefthook(input);
-        assert!(result.ends_with('\n'));
-    }
-
-    #[test]
-    fn needs_check_true_when_no_file() {
-        let td = TempDir::new().unwrap();
-        let ts = td.path().join(REVIEW_GATE_TIMESTAMP_FILE);
-        assert!(needs_review_gate_check(&ts).unwrap());
-    }
-
-    #[test]
-    fn needs_check_false_after_recent_write() {
-        let td = TempDir::new().unwrap();
-        let ts = td.path().join(REVIEW_GATE_TIMESTAMP_FILE);
-        fs::write(&ts, b"").unwrap();
-        assert!(!needs_review_gate_check(&ts).unwrap());
-    }
-}
+mod review_gate_tests;
