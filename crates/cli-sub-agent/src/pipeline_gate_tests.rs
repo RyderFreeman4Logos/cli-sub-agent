@@ -1,5 +1,6 @@
 use super::*;
 use serial_test::serial;
+use std::collections::HashMap;
 
 /// Set CSA_DEPTH env var for test isolation.
 ///
@@ -96,6 +97,7 @@ async fn test_gate_skipped_when_csa_depth_set() {
         250,
         &GateMode::Full,
         1,
+        None,
     )
     .await
     .unwrap();
@@ -123,7 +125,7 @@ async fn test_gate_skipped_when_no_command_and_no_hooks_path() {
         .await
         .unwrap();
 
-    let result = evaluate_quality_gate(dir.path(), None, 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gate(dir.path(), None, 250, &GateMode::Full, 0, None)
         .await
         .unwrap();
 
@@ -147,6 +149,7 @@ async fn test_gate_runs_explicit_command_success() {
         250,
         &GateMode::Full,
         0,
+        None,
     )
     .await
     .unwrap();
@@ -173,6 +176,7 @@ async fn test_gate_runs_explicit_command_failure() {
         250,
         &GateMode::Full,
         0,
+        None,
     )
     .await
     .unwrap();
@@ -199,6 +203,7 @@ async fn test_gate_timeout() {
         1, // 1 second timeout
         &GateMode::Full,
         0,
+        None,
     )
     .await
     .unwrap();
@@ -220,9 +225,10 @@ async fn test_gate_monitor_mode_still_runs() {
 
     // Even in monitor mode, the gate runs — the mode only affects how callers
     // handle the result.
-    let result = evaluate_quality_gate(dir.path(), Some("exit 1"), 250, &GateMode::Monitor, 0)
-        .await
-        .unwrap();
+    let result =
+        evaluate_quality_gate(dir.path(), Some("exit 1"), 250, &GateMode::Monitor, 0, None)
+            .await
+            .unwrap();
 
     assert!(!result.skipped);
     assert!(!result.passed());
@@ -245,6 +251,7 @@ async fn test_gate_captures_stdout_and_stderr() {
         250,
         &GateMode::Full,
         0,
+        None,
     )
     .await
     .unwrap();
@@ -252,6 +259,97 @@ async fn test_gate_captures_stdout_and_stderr() {
     assert!(result.passed());
     assert!(result.stdout.contains("stdout-content"));
     assert!(result.stderr.contains("stderr-content"));
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+#[serial]
+async fn test_gate_applies_explicit_build_jobs_env() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+    let extra_env = crate::build_jobs_env::build_jobs_env_with(Some(1), |_| Some("99".to_string()))
+        .expect("explicit build jobs should create gate env");
+
+    let result = evaluate_quality_gate(
+        dir.path(),
+        Some(r#"printf '%s/%s' "$CARGO_BUILD_JOBS" "$NEXTEST_TEST_THREADS""#),
+        250,
+        &GateMode::Full,
+        0,
+        Some(&extra_env),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.passed());
+    assert_eq!(result.stdout, "1/1");
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+#[serial]
+async fn test_gate_applies_inherited_build_jobs_env() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+    let extra_env = crate::build_jobs_env::build_jobs_env_with(None, |key| match key {
+        crate::build_jobs_env::CARGO_BUILD_JOBS_ENV => Some("3".to_string()),
+        _ => None,
+    })
+    .expect("inherited build jobs should create gate env");
+
+    let result = evaluate_quality_gate(
+        dir.path(),
+        Some(r#"printf '%s' "$CARGO_BUILD_JOBS""#),
+        250,
+        &GateMode::Full,
+        0,
+        Some(&extra_env),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.passed());
+    assert_eq!(result.stdout, "3");
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+#[serial]
+async fn test_pipeline_applies_build_jobs_env() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+    let extra_env = HashMap::from([
+        ("CARGO_BUILD_JOBS".to_string(), "1".to_string()),
+        ("NEXTEST_TEST_THREADS".to_string(), "1".to_string()),
+    ]);
+    let steps = vec![GateStep {
+        name: "test".to_string(),
+        command: r#"printf '%s/%s' "$CARGO_BUILD_JOBS" "$NEXTEST_TEST_THREADS""#.to_string(),
+        level: 3,
+    }];
+
+    let result = evaluate_quality_gates(
+        dir.path(),
+        &steps,
+        250,
+        &GateMode::Full,
+        0,
+        Some(&extra_env),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.passed);
+    assert_eq!(result.steps[0].stdout, "1/1");
 
     // SAFETY: Restoring env.
     unsafe { clear_depth() };
@@ -377,7 +475,7 @@ async fn test_pipeline_skipped_when_csa_depth_set() {
         level: 1,
     }];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 1)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 1, None)
         .await
         .unwrap();
 
@@ -396,7 +494,7 @@ async fn test_pipeline_empty_steps_skipped() {
     unsafe { set_depth("0") };
 
     let dir = tempfile::tempdir().unwrap();
-    let result = evaluate_quality_gates(dir.path(), &[], 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gates(dir.path(), &[], 250, &GateMode::Full, 0, None)
         .await
         .unwrap();
 
@@ -432,7 +530,7 @@ async fn test_pipeline_sequential_all_pass() {
         },
     ];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0, None)
         .await
         .unwrap();
 
@@ -471,7 +569,7 @@ async fn test_pipeline_fail_fast_on_first_failure() {
         },
     ];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0, None)
         .await
         .unwrap();
 
@@ -504,7 +602,7 @@ async fn test_pipeline_summary_for_review() {
         },
     ];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full, 0, None)
         .await
         .unwrap();
 
@@ -572,7 +670,7 @@ async fn test_evaluate_gate_lefthook_fallback() {
     )
     .unwrap();
 
-    let result = evaluate_quality_gate(dir.path(), None, 250, &GateMode::Full, 0)
+    let result = evaluate_quality_gate(dir.path(), None, 250, &GateMode::Full, 0, None)
         .await
         .unwrap();
 

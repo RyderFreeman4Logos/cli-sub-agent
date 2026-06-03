@@ -10,11 +10,24 @@ pub(crate) fn apply_build_jobs_env(
     apply_build_jobs_env_with(extra_env, build_jobs, |key| std::env::var(key).ok());
 }
 
+pub(crate) fn build_jobs_env(build_jobs: Option<u32>) -> Option<HashMap<String, String>> {
+    build_jobs_env_with(build_jobs, |key| std::env::var(key).ok())
+}
+
 pub(crate) fn apply_build_jobs_env_with(
     extra_env: &mut Option<HashMap<String, String>>,
     build_jobs: Option<u32>,
     inherited_env: impl Fn(&str) -> Option<String>,
 ) {
+    if let Some(updates) = build_jobs_env_with(build_jobs, inherited_env) {
+        extra_env.get_or_insert_with(HashMap::new).extend(updates);
+    }
+}
+
+pub(crate) fn build_jobs_env_with(
+    build_jobs: Option<u32>,
+    inherited_env: impl Fn(&str) -> Option<String>,
+) -> Option<HashMap<String, String>> {
     let mut updates = HashMap::new();
     if let Some(build_jobs) = build_jobs {
         let value = build_jobs.to_string();
@@ -29,8 +42,10 @@ pub(crate) fn apply_build_jobs_env_with(
         }
     }
 
-    if !updates.is_empty() {
-        extra_env.get_or_insert_with(HashMap::new).extend(updates);
+    if updates.is_empty() {
+        None
+    } else {
+        Some(updates)
     }
 }
 
@@ -98,5 +113,35 @@ mod tests {
             env.get(NEXTEST_TEST_THREADS_ENV).map(String::as_str),
             Some("5")
         );
+    }
+
+    #[test]
+    fn build_jobs_env_returns_explicit_gate_env() {
+        let env = build_jobs_env_with(Some(2), inherited_env).expect("explicit env");
+
+        assert_eq!(env.get(CARGO_BUILD_JOBS_ENV).map(String::as_str), Some("2"));
+        assert_eq!(
+            env.get(NEXTEST_TEST_THREADS_ENV).map(String::as_str),
+            Some("2")
+        );
+    }
+
+    #[test]
+    fn build_jobs_env_returns_inherited_gate_env() {
+        let env = build_jobs_env_with(None, |key| match key {
+            CARGO_BUILD_JOBS_ENV => Some("3".to_string()),
+            _ => None,
+        })
+        .expect("inherited env");
+
+        assert_eq!(env.get(CARGO_BUILD_JOBS_ENV).map(String::as_str), Some("3"));
+        assert!(!env.contains_key(NEXTEST_TEST_THREADS_ENV));
+    }
+
+    #[test]
+    fn build_jobs_env_returns_none_when_absent() {
+        let env = build_jobs_env_with(None, |_| None);
+
+        assert!(env.is_none());
     }
 }

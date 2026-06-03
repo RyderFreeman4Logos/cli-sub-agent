@@ -149,11 +149,13 @@ pub(crate) async fn handle_review(
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
     }
+    let review_gate_env = crate::build_jobs_env::build_jobs_env(args.build_jobs);
     let gate_summary = gate::run_pre_review_quality_gate(
         &project_root,
         config.as_ref(),
         &global_config,
         current_depth,
+        review_gate_env.as_ref(),
     )
     .await?;
 

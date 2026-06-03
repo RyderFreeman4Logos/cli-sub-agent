@@ -30,7 +30,7 @@ pub(crate) use diff_report_artifacts::{
     persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
 };
 
-/// All context needed to run the fix loop after a review finds issues.
+/// Context for review fix-loop execution.
 pub(crate) struct FixLoopContext<'a> {
     pub effective_tool: ToolName,
     pub config: Option<&'a ProjectConfig>,
@@ -48,7 +48,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub build_jobs: Option<u32>,
     pub fast_but_more_cost: bool,
     pub no_fs_sandbox: bool,
-    /// CLI `--no-error-marker-scan`: disable the #1652 scan for fix rounds (#1745).
+    /// Disable the #1652 scan for fix rounds (#1745).
     pub no_error_marker_scan: bool,
     pub extra_writable: &'a [PathBuf],
     pub extra_readable: &'a [PathBuf],
@@ -65,7 +65,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub startup_env: &'a crate::startup_env::StartupSubtreeEnv,
 }
 
-/// Run fix rounds, returning the final exit code.
+/// Run fix rounds and return the final exit code.
 ///
 /// Each round resumes the review session with a fix prompt, then re-runs
 /// the quality gate. Returns `Ok(0)` only after the quality gate passes and
@@ -79,6 +79,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     remove_review_gate_marker_for_current_head(ctx.project_root, &session_id);
     let mut last_fix_output: Option<String> = None;
     let mut last_gate_passed = false;
+    let gate_env = crate::build_jobs_env::build_jobs_env(ctx.build_jobs);
 
     for round in 1..=ctx.max_rounds {
         info!(round, max_rounds = ctx.max_rounds, session_id = %session_id, "Fix round starting");
@@ -178,6 +179,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 fix_gate_timeout,
                 fix_gate_mode,
                 ctx.current_depth,
+                gate_env.as_ref(),
             )
             .await?;
 
@@ -198,6 +200,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 fix_gate_timeout,
                 fix_gate_mode,
                 ctx.current_depth,
+                gate_env.as_ref(),
             )
             .await?;
 

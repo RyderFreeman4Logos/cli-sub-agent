@@ -49,7 +49,8 @@ mod skill_resume;
 #[path = "run_cmd_execute_tier_guard.rs"]
 mod tier_guard;
 use post_exec_gate::{
-    apply_post_exec_gate_after_success_with_runner, execute_post_exec_gate_command,
+    PostExecGateApplyOptions, apply_post_exec_gate_after_success_with_runner,
+    execute_post_exec_gate_command,
 };
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
@@ -614,13 +615,17 @@ pub(crate) async fn handle_run(
     );
 
     if result.exit_code == 0 {
+        let post_exec_gate_env = crate::build_jobs_env::build_jobs_env(build_jobs);
         apply_post_exec_gate_after_success_with_runner(
             &project_root,
             &gate_prompt_text,
             executed_session_id.as_deref(),
             config.as_ref(),
-            changed_paths.as_deref(),
-            no_post_exec_gate,
+            PostExecGateApplyOptions {
+                changed_paths: changed_paths.as_deref(),
+                extra_env: post_exec_gate_env,
+                no_post_exec_gate,
+            },
             execute_post_exec_gate_command,
         )
         .await?;
