@@ -99,10 +99,10 @@ fn issue_1740_codex_inline_findings_and_blocking_summary_emit_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
-/// #1740 round 2: "non-blocking issue" is a low-only signal, not a blocking
-/// summary. The low-only finding must keep the verdict non-blocking.
+/// #1740 round 2 + #1806: "non-blocking issue" is not a blocking summary,
+/// but any parsed `## Findings` entry still fails closed.
 #[test]
-fn issue_1740_non_blocking_issue_summary_with_low_only_finding_emits_pass() {
+fn issue_1740_non_blocking_issue_summary_with_low_only_finding_fails_closed() {
     let session_id = "01TEST1740NONBLOCKINGLOW00";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1740-non-blocking-low", session_id);
@@ -140,11 +140,10 @@ fn issue_1740_non_blocking_issue_summary_with_low_only_finding_emits_pass() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1740 round 2: low-only non-blocking issue must not fail"
+        ReviewDecision::Fail,
+        "#1806: any parsed finding in a Findings section must fail closed"
     );
-    assert_ne!(artifact.decision, ReviewDecision::Fail);
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(
         artifact.severity_counts.get(&Severity::Low),
         Some(&1),

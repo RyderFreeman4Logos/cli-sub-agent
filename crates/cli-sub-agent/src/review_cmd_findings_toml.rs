@@ -151,17 +151,19 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
                 return Ok(Some(review_text));
             }
         }
-        let structured_text = ["summary", "details"]
+        let mut latest_summary = None;
+        let mut latest_details = None;
+        for (section, content) in csa_session::read_all_sections(session_dir)? {
+            match section.id.as_str() {
+                "summary" => latest_summary = Some(content),
+                "details" => latest_details = Some(content),
+                _ => {}
+            }
+        }
+        let structured_text = [latest_summary, latest_details]
             .into_iter()
-            .filter_map(|section_id| {
-                let path = session_dir.join("output").join(format!("{section_id}.md"));
-                path.exists().then_some(path)
-            })
-            .map(|path| {
-                fs::read_to_string(&path)
-                    .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))
-            })
-            .collect::<Result<Vec<_>, _>>()?
+            .flatten()
+            .collect::<Vec<_>>()
             .join("\n");
         return Ok((!structured_text.trim().is_empty()).then_some(structured_text));
     }

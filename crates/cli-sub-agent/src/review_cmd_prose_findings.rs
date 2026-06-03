@@ -67,23 +67,54 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
 
 pub(in crate::review_cmd) struct FindingsSectionBody {
     body: String,
+    is_markdown_heading: bool,
 }
 
 impl FindingsSectionBody {
     pub(in crate::review_cmd) fn as_str(&self) -> &str {
         &self.body
     }
+
+    pub(in crate::review_cmd) fn is_markdown_heading(&self) -> bool {
+        self.is_markdown_heading
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::review_cmd) enum FindingsSectionParse {
+    Clean,
+    Findings(Vec<ReviewFinding>),
+    Unparseable,
+}
+
+pub(in crate::review_cmd) fn classify_findings_section_body(
+    body: &str,
+    default_unlabeled_severity: Option<Severity>,
+    clean_conclusion: impl Fn(&str) -> bool,
+) -> FindingsSectionParse {
+    let parser_input = format!("Findings\n{body}");
+    let findings =
+        extract_review_findings_from_prose_with_default(&parser_input, default_unlabeled_severity);
+    if !findings.is_empty() {
+        return FindingsSectionParse::Findings(findings);
+    }
+
+    if findings_section_body_has_unparseable_text(body, &clean_conclusion) {
+        FindingsSectionParse::Unparseable
+    } else {
+        FindingsSectionParse::Clean
+    }
 }
 
 pub(in crate::review_cmd) fn findings_section_bodies(text: &str) -> Vec<FindingsSectionBody> {
     let mut bodies = Vec::new();
-    let mut current = None::<String>;
+    let mut current = None::<(String, bool)>;
     let mut in_code_fence = false;
 
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
-            if let Some(body) = current.as_mut() {
+            if let Some((body, _)) = current.as_mut() {
                 body.push_str(line);
                 body.push('\n');
             }
@@ -92,19 +123,25 @@ pub(in crate::review_cmd) fn findings_section_bodies(text: &str) -> Vec<Findings
         }
 
         if !in_code_fence && is_findings_header(trimmed) {
-            if let Some(body) = current.take() {
-                bodies.push(FindingsSectionBody { body });
+            if let Some((body, is_markdown_heading)) = current.take() {
+                bodies.push(FindingsSectionBody {
+                    body,
+                    is_markdown_heading,
+                });
             }
-            current = Some(String::new());
+            current = Some((String::new(), trimmed.starts_with('#')));
             continue;
         }
 
-        let Some(body) = current.as_mut() else {
+        let Some((body, _)) = current.as_mut() else {
             continue;
         };
         if !in_code_fence && trimmed.starts_with('#') {
-            if let Some(body) = current.take() {
-                bodies.push(FindingsSectionBody { body });
+            if let Some((body, is_markdown_heading)) = current.take() {
+                bodies.push(FindingsSectionBody {
+                    body,
+                    is_markdown_heading,
+                });
             }
             continue;
         }
@@ -113,8 +150,11 @@ pub(in crate::review_cmd) fn findings_section_bodies(text: &str) -> Vec<Findings
         body.push('\n');
     }
 
-    if let Some(body) = current {
-        bodies.push(FindingsSectionBody { body });
+    if let Some((body, is_markdown_heading)) = current {
+        bodies.push(FindingsSectionBody {
+            body,
+            is_markdown_heading,
+        });
     }
 
     bodies
@@ -183,6 +223,10 @@ fn parse_finding_line(
     let (numbered, body) =
         strip_numbered_prefix(line).map_or((false, line), |body| (true, body.trim_start()));
 
+    if let Some(parsed) = parse_bracketed_finding(body) {
+        return Some(parsed);
+    }
+
     if let Some(parsed) = parse_severity_prefixed_finding(body, numbered || in_findings_section) {
         return Some(parsed);
     }
@@ -200,6 +244,39 @@ fn strip_numbered_prefix(line: &str) -> Option<&str> {
         return None;
     }
     Some(rest)
+}
+
+fn parse_bracketed_finding(body: &str) -> Option<ParsedProseFinding> {
+    let (label, mut rest) = parse_bracketed_prefix(body.trim_start().trim_start_matches('`'))?;
+    let severity = severity_from_label(label)?;
+    rest = rest.trim_start();
+
+    if let Some((category, after_category)) = parse_bracketed_prefix(rest)
+        && severity_from_label(category).is_none()
+        && !category.contains(':')
+    {
+        rest = after_category.trim_start();
+    }
+
+    rest = rest
+        .trim_start()
+        .strip_prefix('`')
+        .unwrap_or(rest)
+        .trim_start();
+    rest = rest
+        .trim_start_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace())
+        .trim_start();
+    Some(ParsedProseFinding {
+        severity,
+        file_range: parse_embedded_file_range(rest),
+        description: non_empty_or_fallback(rest, body),
+    })
+}
+
+fn parse_bracketed_prefix(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    Some((&rest[..end], &rest[end + 1..]))
 }
 
 fn parse_severity_prefixed_finding(
@@ -287,13 +364,36 @@ fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, Strin
     ))
 }
 
+fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
+    body.split(char::is_whitespace)
+        .map(|token| token.trim_matches(['`', '(', ')', '[', ']', ',', '.', ';']))
+        .find_map(|token| {
+            parse_file_line_token(token).map(|(path, start)| ReviewFindingFileRange {
+                path,
+                start,
+                end: None,
+            })
+        })
+}
+
 fn parse_file_line_token(token: &str) -> Option<(String, u32)> {
     let (path, line) = token.rsplit_once(':')?;
-    if path.is_empty() || !(path.contains('/') || path.contains('.')) {
+    if path.is_empty() || !looks_like_file_path(path) {
         return None;
     }
     let line = line.parse::<u32>().ok()?;
     Some((path.to_string(), line))
+}
+
+fn looks_like_file_path(path: &str) -> bool {
+    if path.chars().any(char::is_whitespace) {
+        return false;
+    }
+    path.contains('/')
+        || path.contains('.')
+        || path.eq_ignore_ascii_case("justfile")
+        || path == "Makefile"
+        || path == "Dockerfile"
 }
 
 fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
@@ -361,5 +461,26 @@ fn line_has_blocking_review_signal(line: &str) -> bool {
         }
     }
 
+    false
+}
+
+fn findings_section_body_has_unparseable_text(
+    body: &str,
+    clean_conclusion: &impl Fn(&str) -> bool,
+) -> bool {
+    let mut in_code_fence = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence || trimmed.is_empty() {
+            continue;
+        }
+        if !clean_conclusion(trimmed) {
+            return true;
+        }
+    }
     false
 }
