@@ -14,7 +14,10 @@
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 
 use weave::package::{self, SourceKind};
@@ -28,6 +31,8 @@ struct BundledPatternFile {
     path: &'static str,
     contents: &'static [u8],
 }
+
+static BUNDLED_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 static BUNDLED_CSA_REVIEW_FILES: &[BundledPatternFile] = &[
     BundledPatternFile {
@@ -334,13 +339,45 @@ fn write_bundled_pattern(pattern: &BundledPattern, dest_root: &Path) -> Result<(
     for file in pattern.files {
         let dest = dest_root.join(file.path);
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
+            fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        std::fs::write(&dest, file.contents)
-            .with_context(|| format!("failed to write {}", dest.display()))?;
+        atomic_write_bundled_file(&dest, file.contents)?;
     }
     Ok(())
+}
+
+/// Write bundled content via a same-directory temp file and atomic rename.
+fn atomic_write_bundled_file(dest: &Path, contents: &[u8]) -> Result<()> {
+    let parent = dest
+        .parent()
+        .with_context(|| format!("bundled file has no parent path: {}", dest.display()))?;
+    let file_name = dest
+        .file_name()
+        .with_context(|| format!("bundled file has no file name: {}", dest.display()))?;
+    let counter = BUNDLED_WRITE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut tmp_file_name = file_name.to_os_string();
+    tmp_file_name.push(format!(".tmp.{}-{counter}", std::process::id()));
+    let tmp = parent.join(tmp_file_name);
+
+    if let Err(err) = fs::write(&tmp, contents) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err).with_context(|| format!("failed to write {}", tmp.display()));
+    }
+
+    match fs::rename(&tmp, dest) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists && dest.exists() => {
+            fs::remove_file(&tmp).with_context(|| format!("failed to remove {}", tmp.display()))?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&tmp);
+            Err(err).with_context(|| {
+                format!("failed to rename {} to {}", tmp.display(), dest.display())
+            })
+        }
+    }
 }
 
 /// Build the ordered list of directories to search for a pattern.
