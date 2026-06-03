@@ -66,7 +66,7 @@ default: pre-commit
 
 # Detect monolith files by token/line count using tokuin + parallel
 # Fails fast on first file exceeding threshold; blocks commit
-# Env: MONOLITH_TOKEN_THRESHOLD (default 8000), MONOLITH_LINE_THRESHOLD (default 800), TOKUIN_MODEL (default gpt-4)
+# Env: MONOLITH_TOKEN_THRESHOLD (default 8000), MONOLITH_LINE_THRESHOLD (default 800), TOKUIN_MODEL (default gpt-4o)
 find-monolith-files:
     #!/usr/bin/env bash
     set -euo pipefail
