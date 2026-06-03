@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
@@ -23,20 +22,15 @@ pub(super) struct ReviewProseSignals {
 }
 
 pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSignals> {
-    let contents = current_round_review_prose_contents(session_dir)?;
-
-    let blocking_summary = contents
-        .iter()
-        .filter(|(section_id, _)| section_id == "summary")
-        .any(|(_, content)| contains_blocking_issue_signal(content));
+    let prose = current_round_review_prose_contents(session_dir)?;
     let mut signals = ReviewProseSignals {
         severity_counts: zero_severity_counts(),
-        blocking_summary,
+        blocking_summary: prose.blocking_summary,
         unclean_findings_sections: false,
         findings: Vec::new(),
     };
-    let default_unlabeled_severity = blocking_summary.then_some(Severity::Medium);
-    for (section_id, content) in contents {
+    let default_unlabeled_severity = prose.blocking_summary.then_some(Severity::Medium);
+    for (section_id, content) in prose.contents {
         record_review_prose_signal(
             &mut signals,
             &section_id,
@@ -48,7 +42,14 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
     Ok(signals)
 }
 
-fn current_round_review_prose_contents(session_dir: &Path) -> Result<Vec<(String, String)>> {
+struct CurrentRoundReviewProseContents {
+    blocking_summary: bool,
+    contents: Vec<(String, String)>,
+}
+
+fn current_round_review_prose_contents(
+    session_dir: &Path,
+) -> Result<CurrentRoundReviewProseContents> {
     let mut latest_summary = None;
     let mut latest_details = None;
 
@@ -60,30 +61,32 @@ fn current_round_review_prose_contents(session_dir: &Path) -> Result<Vec<(String
         }
     }
 
+    let blocking_summary = latest_summary
+        .as_deref()
+        .is_some_and(contains_blocking_issue_signal);
+
+    if let Some(content) =
+        crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
+    {
+        return Ok(CurrentRoundReviewProseContents {
+            blocking_summary,
+            contents: vec![("canonical".to_string(), content)],
+        });
+    }
+
     let mut contents = Vec::new();
     if let Some(content) = latest_summary {
-        contents.push(("summary".to_string(), content));
-    } else if let Some(content) = read_legacy_section_file(session_dir, "summary")? {
         contents.push(("summary".to_string(), content));
     }
 
     if let Some(content) = latest_details {
         contents.push(("details".to_string(), content));
-    } else if let Some(content) = read_legacy_section_file(session_dir, "details")? {
-        contents.push(("details".to_string(), content));
     }
 
-    Ok(contents)
-}
-
-fn read_legacy_section_file(session_dir: &Path, section_id: &str) -> Result<Option<String>> {
-    let path = session_dir.join("output").join(format!("{section_id}.md"));
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = fs::read_to_string(&path)
-        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
-    Ok(Some(content))
+    Ok(CurrentRoundReviewProseContents {
+        blocking_summary,
+        contents,
+    })
 }
 
 fn record_review_prose_signal(

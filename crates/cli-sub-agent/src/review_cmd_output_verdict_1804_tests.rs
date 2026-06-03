@@ -60,6 +60,22 @@ fn write_empty_findings_toml(session_dir: &Path) {
     .expect("write empty findings.toml");
 }
 
+fn write_full_review_output(session_dir: &Path, review_text: &str) {
+    let transcript = json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item_1",
+            "type": "agent_message",
+            "text": review_text
+        }
+    });
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        serde_json::to_string(&transcript).expect("serialize full.md transcript"),
+    )
+    .expect("write full.md transcript");
+}
+
 #[test]
 fn issue_1804_codex_single_title_word_severity_findings_populate_toml_and_fail() {
     let session_id = "01TEST1804CODEXPROSE00000";
@@ -121,6 +137,80 @@ Review found two blocking findings in the diff.
     assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
     assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
     assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1804_full_md_only_unparsed_findings_section_fails_closed() {
+    let session_id = "01TEST1804FULLONLYFAIL";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1804-full-md-only-unparsed", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    write_full_review_output(
+        &session_dir,
+        r#"Verdict: PASS
+
+No blocking issues.
+
+## Findings
+
+1. High correctness regression remains unparsed because the prose lacks a severity delimiter.
+"#,
+    );
+    assert!(!session_dir.join("output").join("index.toml").exists());
+    assert!(!session_dir.join("output").join("summary.md").exists());
+    assert!(!session_dir.join("output").join("details.md").exists());
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let findings = read_findings_toml(&session_dir);
+    assert!(findings.findings.is_empty());
+    let verdict = read_verdict(&session_dir);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1804_full_md_only_clean_findings_section_stays_pass() {
+    let session_id = "01TEST1804FULLONLYPASS";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1804-full-md-only-clean", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    write_full_review_output(
+        &session_dir,
+        r#"Verdict: PASS
+
+## Findings
+
+No blocking issues.
+"#,
+    );
+    assert!(!session_dir.join("output").join("index.toml").exists());
+    assert!(!session_dir.join("output").join("summary.md").exists());
+    assert!(!session_dir.join("output").join("details.md").exists());
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let findings = read_findings_toml(&session_dir);
+    assert!(findings.findings.is_empty());
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    assert!(verdict.failure_reason.is_none());
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
