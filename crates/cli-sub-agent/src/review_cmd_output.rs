@@ -3,7 +3,7 @@ use std::{fs, str::FromStr};
 
 use anyhow::Result;
 use csa_core::types::ReviewDecision;
-use csa_session::state::{ReviewSessionMeta, write_review_meta};
+use csa_session::state::ReviewSessionMeta;
 use csa_session::{Finding, ReviewVerdictArtifact, Severity, write_review_verdict};
 use tracing::{debug, warn};
 
@@ -63,27 +63,10 @@ const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
 pub(super) const GEMINI_AUTH_PROMPT_STATUS_REASON: &str = "gemini_auth_prompt";
 
-/// Persist a [`ReviewSessionMeta`] to `{session_dir}/review_meta.json`.
-///
-/// Best-effort: failures are logged as warnings but do not fail the review.
-pub(super) fn persist_review_meta(project_root: &Path, meta: &ReviewSessionMeta) {
-    match csa_session::get_session_dir(project_root, &meta.session_id) {
-        Ok(session_dir) => {
-            if let Err(e) = write_review_meta(&session_dir, meta) {
-                warn!(session_id = %meta.session_id, error = %e, "Failed to write review_meta.json");
-            } else {
-                debug!(session_id = %meta.session_id, "Wrote review_meta.json");
-            }
-        }
-        Err(e) => {
-            warn!(session_id = %meta.session_id, error = %e, "Cannot resolve session dir for review meta");
-        }
-    }
-}
-
 /// Persist a [`ReviewVerdictArtifact`] to `{session_dir}/output/review-verdict.json`.
 ///
 /// Best-effort: failures are logged as warnings but do not fail the review.
+#[cfg(test)]
 pub(super) fn persist_review_verdict(
     project_root: &Path,
     meta: &ReviewSessionMeta,
@@ -532,6 +515,10 @@ fn build_review_verdict_artifact(
         primary_failure,
         failure_reason,
         prior_round_refs,
+        diff_size: None,
+        large_diff_warning: false,
+        large_diff_warning_threshold: None,
+        large_diff_warning_changed_lines: None,
     }
 }
 

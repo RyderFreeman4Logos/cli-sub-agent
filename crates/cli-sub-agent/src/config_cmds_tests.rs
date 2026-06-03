@@ -120,6 +120,15 @@ fn build_project_display_toml_keeps_effective_execution_defaults_visible() {
 }
 
 #[test]
+fn build_project_display_toml_round_trips_review_large_diff_warn_lines() {
+    let config: ProjectConfig =
+        toml::from_str("schema_version = 1\n[review]\nlarge_diff_warn_lines = 1500\n").unwrap();
+    let rendered = toml::to_string_pretty(&build_project_display_toml(&config).unwrap()).unwrap();
+    assert!(rendered.contains("[review]"));
+    assert!(rendered.contains("large_diff_warn_lines = 1500"));
+}
+
+#[test]
 fn build_project_display_json_keeps_effective_execution_defaults_visible() {
     let config: ProjectConfig = toml::from_str("schema_version = 1\n").unwrap();
     let rendered = build_project_display_json(&config).unwrap();

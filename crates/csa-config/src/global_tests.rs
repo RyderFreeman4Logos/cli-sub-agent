@@ -583,6 +583,7 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
             tier: None,
             model: None,
             thinking: None,
+            large_diff_warn_lines: ReviewConfig::default_large_diff_warn_lines(),
             gate_command: None,
             gate_commands: vec![],
             gate_timeout_secs: ReviewConfig::default_gate_timeout(),
@@ -611,6 +612,43 @@ gate_timeout_secs = 600
         Some("just pre-commit")
     );
     assert_eq!(config.review.gate_timeout_secs, 600);
+}
+
+#[test]
+fn test_review_config_large_diff_warn_lines_parses_and_defaults() {
+    let config = ReviewConfig::default();
+    assert_eq!(config.large_diff_warn_lines, Some(1000));
+
+    let toml_str = r#"
+[review]
+tool = "auto"
+large_diff_warn_lines = 1500
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.review.large_diff_warn_lines, Some(1500));
+}
+
+#[test]
+fn test_review_config_large_diff_warn_lines_serialized_when_set() {
+    let config = ReviewConfig {
+        large_diff_warn_lines: Some(1500),
+        ..Default::default()
+    };
+    let toml_str = toml::to_string(&config).unwrap();
+    assert!(
+        toml_str.contains("large_diff_warn_lines = 1500"),
+        "large_diff_warn_lines should appear in TOML output: {toml_str}"
+    );
+}
+
+#[test]
+fn test_review_config_large_diff_warn_lines_zero_parses_as_disabled() {
+    let toml_str = r#"
+[review]
+large_diff_warn_lines = 0
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.review.large_diff_warn_lines, Some(0));
 }
 
 #[test]

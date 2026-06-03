@@ -32,6 +32,8 @@ mod artifact_parse;
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]
 mod check_verdict;
+#[path = "review_cmd_diff_size.rs"]
+mod diff_size;
 #[path = "review_cmd_dirty_tree.rs"]
 mod dirty_tree;
 #[path = "review_cmd_execute.rs"]
@@ -77,8 +79,10 @@ use execute::{compute_diff_fingerprint, execute_review_with_tier_filter};
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use flow::{ execute_review_for_tests, persist_review_sidecars_if_session_exists, should_run_fix_loop };
+#[cfg(test)]
+use flow::persist_review_sidecars_if_session_exists_with_diff_size;
 #[cfg(not(test))]
-use flow::{persist_review_sidecars_if_session_exists, should_run_fix_loop};
+use flow::{persist_review_sidecars_if_session_exists_with_diff_size, should_run_fix_loop};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 #[rustfmt::skip]
 use prior_rounds::{ explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id };
@@ -154,6 +158,16 @@ pub(crate) async fn handle_review(
     .await?;
 
     let scope = derive_scope_for_project(&args, &project_root);
+    let diff_size = diff_size::compute_review_diff_size(&project_root, &scope);
+    let large_diff_warning = diff_size.as_ref().and_then(|diff_size| {
+        diff_size::large_diff_warning(
+            diff_size,
+            diff_size::resolve_large_diff_warn_lines(config.as_ref(), &global_config),
+        )
+    });
+    if let Some(warning) = large_diff_warning {
+        diff_size::emit_large_diff_warning(warning);
+    }
     let mode = if args.fix {
         "review-and-fix"
     } else {
@@ -162,9 +176,7 @@ pub(crate) async fn handle_review(
     let review_mode = args.effective_review_mode();
     let security_mode = args.effective_security_mode();
     let auto_discover_context = review_scope_allows_auto_discovery(&args);
-    // --prompt-file provides a path (like --context), not inline content.
     let prompt_file_path = args.prompt_file.as_ref().map(|p| p.display().to_string());
-    // --spec takes priority over --context / --prompt-file for explicit spec-based review
     let explicit_context = args
         .spec
         .as_deref()
@@ -188,7 +200,6 @@ pub(crate) async fn handle_review(
     let prior_rounds_section =
         load_prior_rounds_section_or_persist_error(&args, &project_root, &review_description)?;
 
-    // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
     let (mut prompt, review_routing) = build_review_instruction_for_project(
         &scope,
         mode,
@@ -204,7 +215,6 @@ pub(crate) async fn handle_review(
         },
     );
 
-    // 4b. Inject gate pipeline results into review prompt for reviewer awareness
     if let Some(ref summary) = gate_summary {
         prompt.push_str("\n\n");
         prompt.push_str(summary);
@@ -279,7 +289,6 @@ pub(crate) async fn handle_review(
         resolved_model_spec.is_some(),
     );
 
-    // Resolve stream mode from CLI flags (default: BufferOnly for review)
     let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
     let idle_timeout_seconds = crate::pipeline::resolve_effective_idle_timeout_seconds(
         config.as_ref(),
@@ -294,7 +303,6 @@ pub(crate) async fn handle_review(
         tool.as_str(),
     );
 
-    // Resolve readonly_project_root from config (default: false).
     let readonly_project_root = global_config.review.readonly_sandbox.unwrap_or(false);
 
     let requested_reviewers = args.requested_reviewers() as usize;
@@ -312,7 +320,6 @@ pub(crate) async fn handle_review(
     });
 
     if reviewers == 1 {
-        // Single-reviewer path (with optional --fix loop).
         let review_future = execute_review_with_tier_filter(
             tool,
             prompt.clone(),
@@ -366,9 +373,6 @@ pub(crate) async fn handle_review(
             review_future.await?
         };
 
-        // Ask 3 (#1714): consume the persisted fallback chain built by the
-        // central tier helper so build-time exclusions and runtime failures
-        // drive the same diversity warning path.
         let fallback_chain = result
             .persistable_session_id
             .as_deref()
@@ -402,7 +406,10 @@ pub(crate) async fn handle_review(
         let verdict = resolved.verdict;
         let decision = resolved.decision;
         let auth_prompt_failure = resolved.auth_prompt_failure;
-        print!("{}", sanitized);
+        print!(
+            "{}",
+            diff_size::add_review_diff_size_line(&sanitized, diff_size.as_ref())
+        );
         debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
         let review_iterations = result
             .persistable_session_id
@@ -416,7 +423,6 @@ pub(crate) async fn handle_review(
             .cloned()
             .collect::<Vec<_>>();
 
-        // Write structured review metadata to session directory.
         let effective_exit_code = resolved.effective_exit_code;
         let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
         let fix_attempted = should_run_fix_loop(args.fix, decision);
@@ -439,14 +445,21 @@ pub(crate) async fn handle_review(
             diff_fingerprint,
             fix_convergence: None,
         };
-        let persisted_verdict_exit_code = persist_review_sidecars_if_session_exists(
+        let persisted_verdict_exit_code = persist_review_sidecars_if_session_exists_with_diff_size(
             &project_root,
             &review_meta,
             result.persistable_session_id.as_deref(),
+            diff_size.as_ref(),
+            large_diff_warning,
         );
         let effective_exit_code = persisted_verdict_exit_code.unwrap_or(effective_exit_code);
         if let Some(session_id) = result.persistable_session_id.as_deref() {
             persist_review_result_exit_code(&project_root, session_id, effective_exit_code);
+            diff_size::persist_review_diff_size_headers(
+                &project_root,
+                session_id,
+                diff_size.as_ref(),
+            );
         }
         if verdict != CLEAN {
             dirty_tree::maybe_emit_dirty_tree_hint(
@@ -464,11 +477,9 @@ pub(crate) async fn handle_review(
         let is_cumulative_review = review_scope_is_cumulative(&scope);
         if !should_run_fix_loop(args.fix, decision) {
             post_review::suggest_review_failure_fix(&project_root, &review_meta, &sanitized);
-            // Accumulate only on FINAL result to avoid double-counting when --fix resolves the same issues.
             if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {
                 crate::review_findings::accumulate_findings(&project_root, &sanitized);
             }
-            // PostReview hook: only for final results (no fix loop pending).
             let post_review_output = build_post_review_output(
                 &crate::pipeline::capture_observational_hook_output(
                     csa_hooks::HookEvent::PostReview,
@@ -489,7 +500,6 @@ pub(crate) async fn handle_review(
             return Ok(effective_exit_code);
         }
 
-        // Skip --fix when the effective review tool cannot edit existing files.
         let effective_fix_tool = result.executed_tool;
         let effective_fix_model_spec = result.routed_to.clone().or_else(|| {
             (effective_fix_tool == tool)
@@ -507,7 +517,6 @@ pub(crate) async fn handle_review(
             maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
             return Ok(effective_exit_code);
         }
-        // Resume the effective review session to apply fixes, then re-gate.
         let scope_for_hook = scope.clone();
         let fix_exit_code = fix::run_fix_loop(fix::FixLoopContext {
             effective_tool: effective_fix_tool,
@@ -529,6 +538,10 @@ pub(crate) async fn handle_review(
             extra_writable: &args.extra_writable,
             extra_readable: &args.extra_readable,
             timeout: args.timeout,
+            diff_report: diff_size::ReviewDiffReport {
+                diff_size: diff_size.as_ref(),
+                large_diff_warning,
+            },
             project_root: &project_root,
             scope,
             decision: decision.as_str().to_string(),
@@ -541,7 +554,6 @@ pub(crate) async fn handle_review(
         })
         .await;
 
-        // Fire PostReview hook after fix loop completes; forward stdout so callers can chain the next step mechanically.
         let fix_passed = matches!(&fix_exit_code, Ok(0));
         let post_review_output = build_post_review_output(
             &crate::pipeline::capture_observational_hook_output(
@@ -565,7 +577,6 @@ pub(crate) async fn handle_review(
         if fix_passed {
             emit_post_review_output(&post_review_output);
         } else if !is_cumulative_review {
-            // Fix exhausted — accumulate original findings for promotion.
             crate::review_findings::accumulate_findings(&project_root, &sanitized);
         }
 
@@ -583,6 +594,8 @@ pub(crate) async fn handle_review(
         global_config: &global_config,
         pre_session_hook: pre_session_hook.clone(),
         review_routing,
+        diff_size: diff_size.as_ref(),
+        large_diff_warning,
         review_model,
         resolved_model_spec,
         resolved_tier_name,

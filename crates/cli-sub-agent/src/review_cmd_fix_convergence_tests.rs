@@ -1,12 +1,14 @@
 use super::{
     CLEAN, fix_exit_code_for_convergence, persist_fix_final_artifacts_for_tests_with_output,
+    persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
     reached_genuine_clean_convergence,
 };
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{
-    FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity, write_findings_toml,
+    FindingsFile, ReviewDiffSize, ReviewFinding, ReviewFindingFileRange, Severity,
+    write_findings_toml,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,6 +180,83 @@ fn assert_fix_convergence(
     );
     assert_eq!(convergence.reached_genuine_clean_convergence, reached);
     assert_eq!(convergence.terminal_reason, terminal_reason);
+}
+
+fn large_review_diff_size() -> ReviewDiffSize {
+    ReviewDiffSize {
+        files: 2,
+        changed_lines: 1549,
+        bytes: 8192,
+        notes: Vec::new(),
+    }
+}
+
+fn large_review_diff_report(
+    diff_size: &ReviewDiffSize,
+) -> super::super::diff_size::ReviewDiffReport<'_> {
+    super::super::diff_size::ReviewDiffReport {
+        diff_size: Some(diff_size),
+        large_diff_warning: Some(super::super::diff_size::LargeDiffWarning {
+            changed_lines: diff_size.changed_lines,
+            threshold: 1000,
+        }),
+    }
+}
+
+fn assert_diff_report_preserved(session_dir: &Path, expected: &ReviewDiffSize) {
+    let artifact = read_review_verdict(session_dir);
+    assert_eq!(artifact.diff_size, Some(expected.clone()));
+    assert!(artifact.large_diff_warning);
+    assert_eq!(artifact.large_diff_warning_threshold, Some(1000));
+    assert_eq!(
+        artifact.large_diff_warning_changed_lines,
+        Some(expected.changed_lines)
+    );
+
+    let raw_meta =
+        fs::read_to_string(session_dir.join("review_meta.json")).expect("read review meta");
+    let meta: serde_json::Value = serde_json::from_str(&raw_meta).expect("parse review meta");
+    assert_eq!(
+        meta["diff_size"]["files"],
+        serde_json::json!(expected.files)
+    );
+    assert_eq!(
+        meta["diff_size"]["changed_lines"],
+        serde_json::json!(expected.changed_lines)
+    );
+    assert_eq!(
+        meta["diff_size"]["bytes"],
+        serde_json::json!(expected.bytes)
+    );
+    assert_eq!(meta["large_diff_warning"], serde_json::json!(true));
+    assert_eq!(
+        meta["large_diff_warning_threshold"],
+        serde_json::json!(1000)
+    );
+    assert_eq!(
+        meta["large_diff_warning_changed_lines"],
+        serde_json::json!(expected.changed_lines)
+    );
+}
+
+fn assert_review_prose_diff_size_headers(session_dir: &Path, expected: &ReviewDiffSize) {
+    let header = super::super::diff_size::format_review_diff_size_line(expected);
+    let review_sections = read_review_prose_sections(session_dir);
+    for section_id in ["summary", "details"] {
+        let (_, content) = review_sections
+            .iter()
+            .find(|(section, _)| section.id == section_id)
+            .unwrap_or_else(|| panic!("missing retained {section_id} section"));
+        assert!(
+            content.starts_with(&header),
+            "retained {section_id} prose must start with the diff-size header"
+        );
+        assert_eq!(
+            content.matches(&header).count(),
+            1,
+            "retained {section_id} prose must not duplicate the diff-size header"
+        );
+    }
 }
 
 #[test]
@@ -500,6 +579,69 @@ fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate
         false,
         "post_consistency_non_pass",
     );
+}
+
+#[test]
+fn persist_fix_final_artifacts_clean_convergence_preserves_diff_report() {
+    let project_root = temp_project_root("persist-fix-clean-diff-report");
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXCLEANDIFF");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output = "<!-- CSA:SECTION:summary -->\nVerdict: CLEAN.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nNo blocking findings remain.\n<!-- CSA:SECTION:details:END -->\n";
+    persist_prior_blocking_review_with_current_output(&session_dir, current_output);
+
+    let diff_size = large_review_diff_size();
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output_and_diff_report(
+        &project_root,
+        &make_clean_review_meta(&session_id),
+        true,
+        current_output,
+        large_review_diff_report(&diff_size),
+    );
+
+    assert_eq!(final_decision, ReviewDecision::Pass);
+    assert_diff_report_preserved(&session_dir, &diff_size);
+    assert_review_prose_diff_size_headers(&session_dir, &diff_size);
+}
+
+#[test]
+fn persist_fix_final_artifacts_exhaustion_preserves_diff_report() {
+    let project_root = temp_project_root("persist-fix-exhausted-diff-report");
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", project_root.join("state"));
+    let session_id = unique_session_id("01FIXEXHAUSTEDDIFF");
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let diff_size = large_review_diff_size();
+    let diff_header = super::super::diff_size::format_review_diff_size_line(&diff_size);
+    let current_output = format!(
+        "<!-- CSA:SECTION:summary -->\n{diff_header}\nBlocking issues remain.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nHigh: src/lib.rs:7 current-round blocker.\n<!-- CSA:SECTION:details:END -->\n"
+    );
+    csa_session::persist_structured_output(&session_dir, &current_output)
+        .expect("persist blocking structured output");
+    write_findings_toml(
+        &session_dir,
+        &FindingsFile {
+            findings: vec![stale_finding()],
+        },
+    )
+    .expect("write blocking findings");
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.decision = ReviewDecision::Fail.as_str().to_string();
+    meta.verdict = "HAS_ISSUES".to_string();
+    meta.exit_code = 1;
+    meta.fix_rounds = 3;
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_output_and_diff_report(
+        &project_root,
+        &meta,
+        false,
+        &current_output,
+        large_review_diff_report(&diff_size),
+    );
+
+    assert_eq!(final_decision, ReviewDecision::Fail);
+    assert_diff_report_preserved(&session_dir, &diff_size);
+    assert_review_prose_diff_size_headers(&session_dir, &diff_size);
 }
 
 #[test]

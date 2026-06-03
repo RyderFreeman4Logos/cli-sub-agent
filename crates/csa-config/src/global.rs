@@ -358,6 +358,11 @@ pub struct ReviewConfig {
     /// With an active review tier, the tier thinking budget remains authoritative unless CLI `--thinking` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    /// Warn when the net review diff exceeds this many changed lines.
+    ///
+    /// `0` disables the warning. A missing field inherits the effective default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_diff_warn_lines: Option<usize>,
     /// Deprecated: prefer `gate_commands`. PROJECT-ONLY.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_command: Option<String>,
@@ -387,6 +392,8 @@ const fn default_review_batch_commits() -> u32 {
     1
 }
 
+const DEFAULT_LARGE_DIFF_WARN_LINES: usize = 1000;
+
 fn is_default_gate_timeout(val: &u64) -> bool {
     *val == default_gate_timeout_secs()
 }
@@ -404,6 +411,7 @@ impl Default for ReviewConfig {
             tier: None,
             model: None,
             thinking: None,
+            large_diff_warn_lines: Self::default_large_diff_warn_lines(),
             gate_command: None,
             gate_commands: Vec::new(),
             gate_timeout_secs: default_gate_timeout_secs(),
@@ -421,6 +429,9 @@ impl ReviewConfig {
             && self.tier.is_none()
             && self.model.is_none()
             && self.thinking.is_none()
+            && self
+                .large_diff_warn_lines
+                .is_none_or(|value| value == DEFAULT_LARGE_DIFF_WARN_LINES)
             && self.gate_command.is_none()
             && self.gate_commands.is_empty()
             && self.gate_timeout_secs == default_gate_timeout_secs()
@@ -464,6 +475,10 @@ impl ReviewConfig {
     /// Default cumulative review batch size.
     pub const fn default_batch_commits() -> u32 {
         default_review_batch_commits()
+    }
+
+    pub const fn default_large_diff_warn_lines() -> Option<usize> {
+        Some(DEFAULT_LARGE_DIFF_WARN_LINES)
     }
 }
 

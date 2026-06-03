@@ -1,12 +1,13 @@
 use csa_core::types::ReviewDecision;
+use csa_session::ReviewDiffSize;
 use csa_session::state::ReviewSessionMeta;
 
 #[cfg(test)]
 use super::execute;
 use super::findings_toml::persist_review_findings_toml;
 use super::output::{
-    fail_closed_review_meta, persist_review_meta, persist_review_verdict_artifact,
-    persisted_review_verdict_exit_code, review_meta_for_verdict_artifact,
+    fail_closed_review_meta, persist_review_verdict_artifact, persisted_review_verdict_exit_code,
+    review_meta_for_verdict_artifact,
 };
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
@@ -31,23 +32,61 @@ pub(crate) fn should_run_fix_loop(fix_requested: bool, decision: ReviewDecision)
     fix_requested && matches!(decision, ReviewDecision::Fail)
 }
 
+#[cfg(test)]
 pub(crate) fn persist_review_sidecars_if_session_exists(
     project_root: &std::path::Path,
     meta: &ReviewSessionMeta,
     persistable_session_id: Option<&str>,
 ) -> Option<i32> {
+    persist_review_sidecars_if_session_exists_with_diff_size(
+        project_root,
+        meta,
+        persistable_session_id,
+        None,
+        None,
+    )
+}
+
+pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
+    project_root: &std::path::Path,
+    meta: &ReviewSessionMeta,
+    persistable_session_id: Option<&str>,
+    diff_size: Option<&ReviewDiffSize>,
+    large_diff_warning: Option<super::diff_size::LargeDiffWarning>,
+) -> Option<i32> {
     let persistable_session_id = persistable_session_id?;
     let effective_meta = fail_closed_review_meta(project_root, meta);
 
-    persist_review_meta(project_root, &effective_meta);
+    super::diff_size::persist_review_meta_with_diff_report(
+        project_root,
+        &effective_meta,
+        diff_size,
+        large_diff_warning,
+    );
     persist_review_findings_toml(project_root, &effective_meta);
     let verdict_artifact =
-        persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new());
+        persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new()).map(
+            |mut artifact| {
+                super::diff_size::persist_review_verdict_diff_report(
+                    project_root,
+                    &effective_meta.session_id,
+                    &mut artifact,
+                    diff_size,
+                    large_diff_warning,
+                );
+                artifact
+            },
+        );
     let final_meta = verdict_artifact
         .as_ref()
         .map(|artifact| review_meta_for_verdict_artifact(&effective_meta, artifact))
         .unwrap_or(effective_meta);
-    persist_review_meta(project_root, &final_meta);
+    super::diff_size::persist_review_meta_with_diff_report(
+        project_root,
+        &final_meta,
+        diff_size,
+        large_diff_warning,
+    );
     let verdict_exit_code = verdict_artifact
         .as_ref()
         .map(|artifact| crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision))
