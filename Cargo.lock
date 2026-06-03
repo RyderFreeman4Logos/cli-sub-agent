@@ -509,7 +509,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli-sub-agent"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "csa-acp"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "csa-config"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "csa-core"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "agent-teams",
  "chrono",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "csa-eval"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "csa-executor"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "agent-teams",
  "anyhow",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "csa-hooks"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "csa-lock"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "csa-mcp-hub"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "axum",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "csa-memory"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "csa-process"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "csa-resource"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "csa-core",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "csa-scheduler"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "csa-session"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "csa-todo"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4558,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "weave"
-version = "0.1.847"
+version = "0.1.848"
 dependencies = [
  "anyhow",
  "clap",

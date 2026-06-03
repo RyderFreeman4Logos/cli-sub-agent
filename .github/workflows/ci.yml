@@ -36,7 +36,7 @@ jobs:
         env:
           MONOLITH_TOKEN_THRESHOLD: "8000"
           MONOLITH_LINE_THRESHOLD: "800"
-          TOKUIN_MODEL: "gpt-4"
+          TOKUIN_MODEL: "gpt-4o"
         run: |
           set -euo pipefail
 
