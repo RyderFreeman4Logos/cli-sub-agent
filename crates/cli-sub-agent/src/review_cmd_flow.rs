@@ -43,6 +43,7 @@ pub(crate) fn persist_review_sidecars_if_session_exists(
         meta,
         persistable_session_id,
         None,
+        None,
     )
 }
 
@@ -51,20 +52,27 @@ pub(crate) fn persist_review_sidecars_if_session_exists_with_diff_size(
     meta: &ReviewSessionMeta,
     persistable_session_id: Option<&str>,
     diff_size: Option<&ReviewDiffSize>,
+    large_diff_warning: Option<super::diff_size::LargeDiffWarning>,
 ) -> Option<i32> {
     let persistable_session_id = persistable_session_id?;
     let effective_meta = fail_closed_review_meta(project_root, meta);
 
-    super::diff_size::persist_review_meta_with_diff_size(project_root, &effective_meta, diff_size);
+    super::diff_size::persist_review_meta_with_diff_report(
+        project_root,
+        &effective_meta,
+        diff_size,
+        large_diff_warning,
+    );
     persist_review_findings_toml(project_root, &effective_meta);
     let verdict_artifact =
         persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new()).map(
             |mut artifact| {
-                super::diff_size::persist_review_verdict_diff_size(
+                super::diff_size::persist_review_verdict_diff_report(
                     project_root,
                     &effective_meta.session_id,
                     &mut artifact,
                     diff_size,
+                    large_diff_warning,
                 );
                 artifact
             },
@@ -73,7 +81,12 @@ pub(crate) fn persist_review_sidecars_if_session_exists_with_diff_size(
         .as_ref()
         .map(|artifact| review_meta_for_verdict_artifact(&effective_meta, artifact))
         .unwrap_or(effective_meta);
-    super::diff_size::persist_review_meta_with_diff_size(project_root, &final_meta, diff_size);
+    super::diff_size::persist_review_meta_with_diff_report(
+        project_root,
+        &final_meta,
+        diff_size,
+        large_diff_warning,
+    );
     let verdict_exit_code = verdict_artifact
         .as_ref()
         .map(|artifact| crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision))

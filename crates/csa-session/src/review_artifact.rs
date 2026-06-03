@@ -124,6 +124,16 @@ pub struct ReviewVerdictArtifact {
     pub prior_round_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_size: Option<ReviewDiffSize>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub large_diff_warning: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_diff_warning_threshold: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_diff_warning_changed_lines: Option<usize>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ReviewVerdictArtifact {
@@ -159,6 +169,9 @@ impl ReviewVerdictArtifact {
             failure_reason: None,
             prior_round_refs,
             diff_size: None,
+            large_diff_warning: false,
+            large_diff_warning_threshold: None,
+            large_diff_warning_changed_lines: None,
         }
     }
 }

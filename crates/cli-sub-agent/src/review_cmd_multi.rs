@@ -46,6 +46,7 @@ pub(super) struct MultiReviewerReviewContext<'a> {
     pub pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub review_routing: ReviewRoutingMetadata,
     pub diff_size: Option<&'a ReviewDiffSize>,
+    pub large_diff_warning: Option<super::diff_size::LargeDiffWarning>,
     pub review_model: Option<String>,
     pub resolved_model_spec: Option<String>,
     pub resolved_tier_name: Option<String>,
@@ -227,7 +228,10 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         &head_sha,
         review_iterations,
         diff_fingerprint.clone(),
-        ctx.diff_size,
+        super::diff_size::ReviewDiffReport {
+            diff_size: ctx.diff_size,
+            large_diff_warning: ctx.large_diff_warning,
+        },
     );
 
     let consensus_outcomes = consensus_outcomes_for_final_verdict(&outcomes);
@@ -266,6 +270,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         review_iterations,
         diff_fingerprint: diff_fingerprint.clone(),
         diff_size: ctx.diff_size,
+        large_diff_warning: ctx.large_diff_warning,
     };
     if let Err(err) = super::parent_artifacts::write_multi_reviewer_consensus_artifacts(
         consensus_artifacts,
@@ -485,7 +490,7 @@ pub(super) fn persist_multi_review_sidecars(
     head_sha: &str,
     review_iterations: u32,
     diff_fingerprint: Option<String>,
-    diff_size: Option<&ReviewDiffSize>,
+    diff_report: super::diff_size::ReviewDiffReport<'_>,
 ) {
     let review_meta_timestamp = chrono::Utc::now();
 
@@ -517,26 +522,29 @@ pub(super) fn persist_multi_review_sidecars(
             fix_convergence: None,
         };
         let effective_meta = super::output::fail_closed_review_meta(project_root, &review_meta);
-        super::diff_size::persist_review_meta_with_diff_size(
+        super::diff_size::persist_review_meta_with_diff_report(
             project_root,
             &effective_meta,
-            diff_size,
+            diff_report.diff_size,
+            diff_report.large_diff_warning,
         );
         super::findings_toml::persist_review_findings_toml(project_root, &effective_meta);
         if let Some(mut artifact) =
             persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new())
         {
-            super::diff_size::persist_review_verdict_diff_size(
+            super::diff_size::persist_review_verdict_diff_report(
                 project_root,
                 &effective_meta.session_id,
                 &mut artifact,
-                diff_size,
+                diff_report.diff_size,
+                diff_report.large_diff_warning,
             );
             let final_meta = review_meta_for_verdict_artifact(&effective_meta, &artifact);
-            super::diff_size::persist_review_meta_with_diff_size(
+            super::diff_size::persist_review_meta_with_diff_report(
                 project_root,
                 &final_meta,
-                diff_size,
+                diff_report.diff_size,
+                diff_report.large_diff_warning,
             );
         }
     }

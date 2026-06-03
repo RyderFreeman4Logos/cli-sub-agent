@@ -583,6 +583,7 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
             tier: None,
             model: None,
             thinking: None,
+            large_diff_warn_lines: ReviewConfig::default_large_diff_warn_lines(),
             gate_command: None,
             gate_commands: vec![],
             gate_timeout_secs: ReviewConfig::default_gate_timeout(),

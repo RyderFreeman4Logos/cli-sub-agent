@@ -533,6 +533,9 @@ fn build_review_verdict_artifact(
         failure_reason,
         prior_round_refs,
         diff_size: None,
+        large_diff_warning: false,
+        large_diff_warning_threshold: None,
+        large_diff_warning_changed_lines: None,
     }
 }
 
