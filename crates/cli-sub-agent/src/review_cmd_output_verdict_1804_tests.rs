@@ -13,7 +13,11 @@ fn read_verdict(session_dir: &Path) -> ReviewVerdictArtifact {
         .expect("parse verdict")
 }
 
-const SUPPORTED_FINDINGS_HEADINGS: &[&str] = &["Findings", "Review Findings"];
+const SUPPORTED_FINDINGS_HEADINGS: &[&str] = &[
+    "Findings",
+    "Review Findings",
+    "Findings (ordered by severity)",
+];
 
 const CLEAN_FINDINGS_BODIES: &[(&str, &str, &str)] = &[
     ("no-issues-found", "Review completed.", "No issues found."),
@@ -133,7 +137,7 @@ fn issue_1804_unparsed_findings_sections_fail_closed_with_reason() {
             &session_dir,
             &format!(
                 r#"<!-- CSA:SECTION:summary -->
-Review completed.
+No blocking issues.
 <!-- CSA:SECTION:summary:END -->
 
 <!-- CSA:SECTION:details -->
@@ -225,6 +229,73 @@ fn issue_1804_canonical_clean_findings_sections_stay_pass() {
             fs::remove_dir_all(project_root).expect("remove temp project root");
         }
     }
+}
+
+#[test]
+fn issue_1804_parsed_findings_section_still_fails() {
+    let session_id = "01TEST1804PARSEDHIGH000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1804-parsed-high", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+No blocking issues.
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+1. [High] real bug remains visible in the findings section.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1804_recommended_actions_without_findings_section_stays_pass() {
+    let session_id = "01TEST1804ACTIONONLY000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1804-action-only", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+No blocking issues.
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Recommended Actions
+
+1. Open the PR.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    assert!(verdict.failure_reason.is_none());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
 #[test]

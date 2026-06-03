@@ -65,6 +65,61 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
     findings
 }
 
+pub(in crate::review_cmd) struct FindingsSectionBody {
+    body: String,
+}
+
+impl FindingsSectionBody {
+    pub(in crate::review_cmd) fn as_str(&self) -> &str {
+        &self.body
+    }
+}
+
+pub(in crate::review_cmd) fn findings_section_bodies(text: &str) -> Vec<FindingsSectionBody> {
+    let mut bodies = Vec::new();
+    let mut current = None::<String>;
+    let mut in_code_fence = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if let Some(body) = current.as_mut() {
+                body.push_str(line);
+                body.push('\n');
+            }
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+
+        if !in_code_fence && is_findings_header(trimmed) {
+            if let Some(body) = current.take() {
+                bodies.push(FindingsSectionBody { body });
+            }
+            current = Some(String::new());
+            continue;
+        }
+
+        let Some(body) = current.as_mut() else {
+            continue;
+        };
+        if !in_code_fence && trimmed.starts_with('#') {
+            if let Some(body) = current.take() {
+                bodies.push(FindingsSectionBody { body });
+            }
+            continue;
+        }
+
+        body.push_str(line);
+        body.push('\n');
+    }
+
+    if let Some(body) = current {
+        bodies.push(FindingsSectionBody { body });
+    }
+
+    bodies
+}
+
 pub(in crate::review_cmd) fn severity_counts_from_review_findings(
     findings: &[ReviewFinding],
 ) -> BTreeMap<Severity, u32> {
@@ -251,6 +306,9 @@ fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
 
 pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
     let normalized = line.trim_start_matches('#').trim();
+    let normalized = normalized
+        .split_once('(')
+        .map_or(normalized, |(heading, _)| heading.trim_end());
     normalized.eq_ignore_ascii_case("findings")
         || normalized.eq_ignore_ascii_case("review findings")
 }

@@ -10,7 +10,7 @@ use super::text::{
     contains_blocking_issue_signal, severity_counts_from_text, zero_severity_counts,
 };
 use crate::review_cmd::prose_findings::{
-    extract_review_findings_from_prose_with_default, is_findings_header,
+    extract_review_findings_from_prose_with_default, findings_section_bodies,
     severity_counts_from_review_findings,
 };
 
@@ -35,9 +35,6 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
         unclean_findings_sections: false,
         findings: Vec::new(),
     };
-    let review_has_clean_conclusion = contents
-        .iter()
-        .any(|(_, content)| contains_canonical_clean_conclusion(content));
     let default_unlabeled_severity = blocking_summary.then_some(Severity::Medium);
     for (section_id, content) in contents {
         record_review_prose_signal(
@@ -45,7 +42,6 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
             &section_id,
             &content,
             default_unlabeled_severity.clone(),
-            review_has_clean_conclusion,
         );
     }
 
@@ -95,10 +91,9 @@ fn record_review_prose_signal(
     _section_id: &str,
     content: &str,
     default_unlabeled_severity: Option<Severity>,
-    review_has_clean_conclusion: bool,
 ) {
     signals.unclean_findings_sections |=
-        contains_unclean_findings_section(content, review_has_clean_conclusion);
+        contains_unclean_findings_section(content, default_unlabeled_severity.clone());
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
     let mut counts = severity_counts_from_review_findings(&findings);
@@ -107,27 +102,31 @@ fn record_review_prose_signal(
     signals.findings.extend(findings);
 }
 
-fn contains_unclean_findings_section(content: &str, review_has_clean_conclusion: bool) -> bool {
-    contains_findings_section(content) && !review_has_clean_conclusion
-}
-
-fn contains_findings_section(content: &str) -> bool {
-    content
-        .lines()
-        .filter_map(markdown_header_text)
-        .any(is_findings_header)
+fn contains_unclean_findings_section(
+    content: &str,
+    default_unlabeled_severity: Option<Severity>,
+) -> bool {
+    findings_section_bodies(content).into_iter().any(|body| {
+        findings_section_body_is_unclean(body.as_str(), default_unlabeled_severity.clone())
+    })
 }
 
 fn contains_canonical_clean_conclusion(content: &str) -> bool {
     contains_clean_phrase(content) || detect_prose_clean_conclusion(content)
 }
 
-fn markdown_header_text(line: &str) -> Option<&str> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('#') {
-        return None;
+fn findings_section_body_is_unclean(
+    body: &str,
+    default_unlabeled_severity: Option<Severity>,
+) -> bool {
+    let body = body.trim();
+    if body.is_empty() || contains_canonical_clean_conclusion(body) {
+        return false;
     }
-    Some(trimmed.trim_start_matches('#').trim())
+
+    let parser_input = format!("Findings\n{body}");
+    extract_review_findings_from_prose_with_default(&parser_input, default_unlabeled_severity)
+        .is_empty()
 }
 
 fn merge_severity_counts_add(
