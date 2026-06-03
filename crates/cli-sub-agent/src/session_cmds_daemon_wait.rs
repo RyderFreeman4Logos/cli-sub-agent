@@ -20,6 +20,8 @@ mod types;
 // Re-export the memory warning exit code constant for other modules
 #[allow(unused_imports)]
 pub(crate) use completion::SESSION_WAIT_MEMORY_WARN_EXIT_CODE;
+#[cfg(test)]
+pub(crate) use completion::resolve_wait_completion_status_and_exit;
 pub(crate) use lock::try_acquire_session_wait_lock;
 pub(crate) use next_step::synthesized_wait_next_step;
 use result_loader::{load_completed_daemon_result_with_fallback, refresh_result_for_wait};

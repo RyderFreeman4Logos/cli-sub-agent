@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::plan_cmd::shell_escape_for_command;
+#[cfg(test)]
+use crate::session_result_publish::publish_result_file_if_absent_with_writer;
+use crate::session_result_publish::{
+    ResultFilePublishOutcome as SyntheticResultPersistOutcome,
+    preserve_existing_permissions_if_present, publish_result_file_if_absent,
+};
 #[path = "session_cmds_reconcile_cleanup.rs"]
 mod reconcile_cleanup;
 #[path = "session_cmds_reconcile_diagnostics.rs"]
@@ -571,10 +577,6 @@ fn retire_if_dead_with_result_impl(
     Ok(true)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[rustfmt::skip]
-enum SyntheticResultPersistOutcome { Created, AlreadyExists }
-
 fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionState) -> Result<()> {
     let state_path = session_dir.join("state.toml");
     let contents = toml::to_string_pretty(session).context("Failed to serialize session state")?;
@@ -692,12 +694,11 @@ fn persist_new_result_file<F>(
 where
     F: FnOnce(&Path),
 {
-    persist_new_result_file_with_writer(result_path, contents, before_write, |file, contents| {
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()
-    })
+    before_write(result_path);
+    publish_result_file_if_absent(result_path, contents, "synthetic result")
 }
 
+#[cfg(test)]
 fn persist_new_result_file_with_writer<F, W>(
     result_path: &Path,
     contents: &str,
@@ -709,67 +710,12 @@ where
     W: FnOnce(&mut fs::File, &str) -> std::io::Result<()>,
 {
     before_write(result_path);
-    let result_dir = result_path.parent().ok_or_else(|| {
-        anyhow!(
-            "Synthetic result path has no parent: {}",
-            result_path.display()
-        )
-    })?;
-    let mut temp_file = tempfile::NamedTempFile::new_in(result_dir).with_context(|| {
-        format!(
-            "Failed to create temporary synthetic result in {}",
-            result_dir.display()
-        )
-    })?;
-    if let Err(err) = write_contents(temp_file.as_file_mut(), contents) {
-        return Err(anyhow!(
-            "Failed to write or sync synthetic result for {}: {err}",
-            result_path.display()
-        ));
-    }
-    preserve_existing_permissions_if_present(
-        temp_file.as_file_mut(),
+    publish_result_file_if_absent_with_writer(
         result_path,
+        contents,
         "synthetic result",
-    )?;
-    match fs::hard_link(temp_file.path(), result_path) {
-        Ok(()) => Ok(SyntheticResultPersistOutcome::Created),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            Ok(SyntheticResultPersistOutcome::AlreadyExists)
-        }
-        Err(err) => Err(anyhow!(
-            "Failed to publish synthetic result for {}: {err}",
-            result_path.display()
-        )),
-    }
-}
-
-fn preserve_existing_permissions_if_present(
-    temp_file: &mut fs::File,
-    target_path: &Path,
-    file_kind: &str,
-) -> Result<()> {
-    let permissions = match fs::metadata(target_path) {
-        Ok(metadata) => Some(metadata.permissions()),
-        Err(err) if err.kind() == ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "Failed to read {file_kind} metadata before preserving permissions: {}",
-                    target_path.display()
-                )
-            });
-        }
-    };
-    if let Some(permissions) = permissions {
-        temp_file.set_permissions(permissions).with_context(|| {
-            format!(
-                "Failed to preserve existing permissions for {file_kind}: {}",
-                target_path.display()
-            )
-        })?;
-    }
-    Ok(())
+        write_contents,
+    )
 }
 
 fn format_optional_file_mtime(path: &Path) -> Option<String> {

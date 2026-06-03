@@ -1,13 +1,17 @@
 //! Daemon completion packet handling and terminal result synthesis.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use csa_session::{MetaSessionState, PhaseEvent, SessionPhase, SessionResult};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+
+use crate::session_result_publish::{
+    ResultFilePublishOutcome, publish_result_file_if_absent_with_writer,
+};
 
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
@@ -250,34 +254,36 @@ fn load_result_from_dir(session_dir: &Path) -> Result<Option<SessionResult>> {
 }
 
 fn persist_result_if_absent(session_dir: &Path, result: &SessionResult) -> Result<()> {
+    persist_result_if_absent_with_writer(session_dir, result, |file, contents| {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()
+    })
+}
+
+fn persist_result_if_absent_with_writer<W>(
+    session_dir: &Path,
+    result: &SessionResult,
+    write_contents: W,
+) -> Result<()>
+where
+    W: FnOnce(&mut fs::File, &str) -> std::io::Result<()>,
+{
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     let contents = toml::to_string_pretty(result).context("Failed to serialize daemon result")?;
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&result_path)
-    {
-        Ok(mut file) => {
-            file.write_all(contents.as_bytes()).with_context(|| {
-                format!("Failed to write result file: {}", result_path.display())
-            })?;
-            file.sync_all().with_context(|| {
-                format!("Failed to sync result file: {}", result_path.display())
-            })?;
-            Ok(())
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+    match publish_result_file_if_absent_with_writer(
+        &result_path,
+        &contents,
+        "daemon result",
+        write_contents,
+    )? {
+        ResultFilePublishOutcome::Created => Ok(()),
+        ResultFilePublishOutcome::AlreadyExists => {
             debug!(
                 path = %result_path.display(),
                 "Result appeared while finalizing daemon completion; preserving existing result"
             );
             Ok(())
         }
-        Err(err) => Err(anyhow!(
-            "Failed to create result file {}: {}",
-            result_path.display(),
-            err
-        )),
     }
 }
 
@@ -290,6 +296,59 @@ mod tests {
         save_session,
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn persist_result_if_absent_removes_partial_temp_when_write_fails() -> Result<()> {
+        let tmp = tempdir()?;
+        let now = chrono::Utc::now();
+        let result = SessionResult {
+            status: "failure".to_string(),
+            exit_code: 17,
+            summary: "daemon fallback".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            uncommitted_changes: None,
+            manager_fields: Default::default(),
+        };
+
+        let err =
+            match persist_result_if_absent_with_writer(tmp.path(), &result, |file, _contents| {
+                file.write_all(b"partial")?;
+                Err(std::io::Error::other("boom"))
+            }) {
+                Ok(()) => anyhow::bail!("daemon result write should fail"),
+                Err(err) => err,
+            };
+
+        assert!(
+            err.to_string()
+                .contains("Failed to write or sync daemon result"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !tmp.path()
+                .join(csa_session::result::RESULT_FILE_NAME)
+                .exists(),
+            "partial daemon result should not be published after write failure"
+        );
+        let entries = fs::read_dir(tmp.path())?.collect::<std::io::Result<Vec<_>>>()?;
+        assert!(
+            entries.is_empty(),
+            "temporary daemon result should be cleaned up after write failure"
+        );
+        Ok(())
+    }
 
     #[test]
     fn finalize_daemon_completion_preserves_available_session_and_existing_result() -> Result<()> {

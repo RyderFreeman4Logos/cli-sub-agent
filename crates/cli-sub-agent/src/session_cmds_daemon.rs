@@ -34,6 +34,8 @@ pub(crate) use completion::{
 #[cfg(test)]
 pub(crate) use wait::render_wait_result_summary;
 #[cfg(test)]
+pub(crate) use wait::resolve_wait_completion_status_and_exit;
+#[cfg(test)]
 pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait, handle_session_wait_with_hooks,
