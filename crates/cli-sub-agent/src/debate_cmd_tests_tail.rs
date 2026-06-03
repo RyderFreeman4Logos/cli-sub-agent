@@ -474,8 +474,11 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
     std::fs::create_dir_all(&bin_dir).unwrap();
 
     {
-        let (binary, version, stderr_line) =
-            ("gemini", "gemini-cli 1.0.0", "reason: 'QUOTA_EXHAUSTED'");
+        let (binary, version, stderr_line) = (
+            "gemini",
+            "gemini-cli 1.0.0",
+            "reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached",
+        );
         let path = bin_dir.join(binary);
         std::fs::write(
             &path,

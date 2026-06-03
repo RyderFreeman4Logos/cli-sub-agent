@@ -663,7 +663,7 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
     exact_test_write_executable(
         &bin_dir,
         "gemini",
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached\\n\" >&2\nexit 1\n",
     );
     exact_test_write_executable(
         &bin_dir,
@@ -749,7 +749,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
     exact_test_write_executable(
         &bin_dir,
         "gemini",
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached\\n\" >&2\nexit 1\n",
     );
     exact_test_write_executable(
         &bin_dir,
