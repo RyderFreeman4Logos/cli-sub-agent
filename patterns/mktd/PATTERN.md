@@ -667,7 +667,7 @@ to `${STEP_7_OUTPUT}` (draft TODO) since threat model/debate/revise are skipped.
 Spec comes from `${STEP_8_OUTPUT}` in both modes.
 Execute ONLY the command block below.
 FORBIDDEN: custom shell snippets, heredoc (`<<EOF`, `cat <<`), branch create/switch,
-and writing intermediate files outside the TODO path.
+and writing intermediate files outside `$CSA_SESSION_DIR/output` or csa todo state.
 
 ```bash
 # Resolve TODO content: revised (full) or draft (light)
@@ -719,23 +719,32 @@ if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
   LANG_ARGS+=("--language" "${RESOLVED_LANGUAGE}")
 fi
 TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}" | head -n1) || { echo "csa todo create failed" >&2; exit 1; }
-TODO_PATH=$(csa todo show -t "${TODO_TS}" --path | head -n1) || { echo "csa todo show failed" >&2; exit 1; }
-SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
-printf '%s\n' "${FINAL_TODO}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
-# Extract and save epic-plan.toml if present in FINAL_TODO
+SAVE_DIR="${CSA_SESSION_DIR:?CSA_SESSION_DIR must be set}/output/mktd-save"
+mkdir -p "${SAVE_DIR}" || { echo "create mktd save output dir failed" >&2; exit 1; }
+TODO_ARTIFACT="${SAVE_DIR}/TODO.md"
+SPEC_ARTIFACT="${SAVE_DIR}/spec.toml"
+EPIC_ARTIFACT="${SAVE_DIR}/epic-plan.toml"
+printf '%s\n' "${FINAL_TODO}" > "${TODO_ARTIFACT}" || { echo "write TODO artifact failed" >&2; exit 1; }
+# Extract epic-plan.toml if present in FINAL_TODO; csa todo persist writes it to todo state.
 EPIC_PLAN=$(printf '%s\n' "${FINAL_TODO}" | sed -n '/^```epic-plan.toml$/,/^```$/p' | sed '1d;$d')
+EPIC_ARGS=()
 if [[ -n "${EPIC_PLAN:-}" ]]; then
-  EPIC_PATH="$(dirname "${TODO_PATH}")/epic-plan.toml"
-  printf '%s\n' "${EPIC_PLAN}" > "${EPIC_PATH}" || { echo "write epic-plan.toml failed" >&2; exit 1; }
-  [[ -s "${EPIC_PATH}" ]] || { echo "saved epic-plan.toml is empty" >&2; exit 1; }
-  # Validate via csa todo epic validate
+  printf '%s\n' "${EPIC_PLAN}" > "${EPIC_ARTIFACT}" || { echo "write epic-plan.toml artifact failed" >&2; exit 1; }
+  [[ -s "${EPIC_ARTIFACT}" ]] || { echo "epic-plan.toml artifact is empty" >&2; exit 1; }
+  EPIC_ARGS+=(--epic-plan-file "${EPIC_ARTIFACT}")
+fi
+SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
+printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_ARTIFACT}" || { echo "write spec artifact failed" >&2; exit 1; }
+[[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
+[[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
+TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}") || { echo "csa todo persist failed" >&2; exit 1; }
+SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
+[[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }
+[[ -s "${SPEC_PATH}" ]] || { echo "saved spec is empty" >&2; exit 1; }
+if [[ -n "${EPIC_PLAN:-}" ]]; then
   csa todo epic validate -t "${TODO_TS}" 2>&1 || { echo "epic-plan.toml validation failed" >&2; exit 1; }
   echo "Epic plan saved and validated" >&2
 fi
-SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
-printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_PATH}" || { echo "write spec failed" >&2; exit 1; }
-[[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }
-[[ -s "${SPEC_PATH}" ]] || { echo "saved spec is empty" >&2; exit 1; }
 grep -qE '^- \[ \] .+' "${TODO_PATH}" || { echo "saved TODO has no non-empty checkbox tasks" >&2; exit 1; }
 grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "saved TODO has no DONE WHEN clauses" >&2; exit 1; }
 grep -q '^schema_version = 1$' "${SPEC_PATH}" || { echo "saved spec missing schema_version = 1" >&2; exit 1; }
@@ -757,7 +766,6 @@ if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
     [[ "${HAN_META_CHECK:-0}" -ge 2 ]] || { echo "language metadata mismatch: plan language is ${RESOLVED_LANGUAGE} but content lacks Han characters" >&2; exit 1; }
   fi
 fi
-csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}" || { echo "csa todo save failed" >&2; exit 1; }
 SPEC_RENDERED=$(csa todo show -t "${TODO_TS}" --spec) || { echo "csa todo show --spec failed" >&2; exit 1; }
 [[ "${SPEC_RENDERED}" != "No spec found for this plan" ]] || { echo "spec.toml was not persisted" >&2; exit 1; }
 printf '%s\n' "${SPEC_RENDERED}" | grep -q '^Criteria:$' || { echo "csa todo show --spec missing criteria section" >&2; exit 1; }
