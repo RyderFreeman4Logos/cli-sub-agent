@@ -44,6 +44,7 @@ pub(crate) async fn execute_with_session(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     cli_no_error_marker_scan: bool,
+    cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
@@ -74,6 +75,7 @@ pub(crate) async fn execute_with_session(
         extra_writable,
         extra_readable,
         cli_no_error_marker_scan,
+        cli_no_hook_bypass_scan,
         startup_env,
     )
     .await?;
@@ -110,6 +112,7 @@ pub(crate) async fn execute_with_session_and_meta(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     cli_no_error_marker_scan: bool,
+    cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
@@ -142,6 +145,7 @@ pub(crate) async fn execute_with_session_and_meta(
         extra_writable,
         extra_readable,
         cli_no_error_marker_scan,
+        cli_no_hook_bypass_scan,
         startup_env,
     )
     .await

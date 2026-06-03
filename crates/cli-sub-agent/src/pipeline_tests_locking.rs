@@ -57,6 +57,7 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await;

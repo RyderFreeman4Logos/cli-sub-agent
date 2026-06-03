@@ -107,7 +107,7 @@ fn apply_no_verify_commit_policy_ignores_plain_text_mentions_without_execute_eve
 }
 
 #[test]
-fn apply_no_verify_commit_policy_blocks_legacy_command_like_output_when_events_missing() {
+fn apply_no_verify_commit_policy_ignores_command_like_output_when_events_missing() {
     let mut result = ExecutionResult {
         output: "$ git commit --no-verify -m \"unsafe\"\n".to_string(),
         summary: "ok".to_string(),
@@ -123,13 +123,10 @@ fn apply_no_verify_commit_policy_blocks_legacy_command_like_output_when_events_m
         !executed_shell_commands.is_empty(),
     );
 
-    assert_eq!(result.exit_code, 1);
-    assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
-    );
-    assert!(result.stderr_output.contains("Matched commands:"));
-    assert!(result.stderr_output.contains("git commit --no-verify"));
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "ok");
+    assert!(result.csa_gate_failure.is_none());
+    assert!(result.stderr_output.is_empty());
 }
 
 #[test]
@@ -195,9 +192,10 @@ fn apply_no_verify_commit_policy_blocks_escaped_newline_continuations() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
     assert!(result.stderr_output.contains("Matched commands:"));
     assert!(result.stderr_output.contains("git commit -m msg"));
@@ -222,9 +220,10 @@ fn apply_no_verify_commit_policy_blocks_shell_wrapped_git_commit() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
     assert!(result.stderr_output.contains("Matched commands:"));
     assert!(result.stderr_output.contains("git commit -n"));
@@ -248,9 +247,10 @@ fn apply_no_verify_commit_policy_blocks_shell_wrapped_commit_with_quoted_ampersa
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -272,9 +272,10 @@ fn apply_no_verify_commit_policy_blocks_git_global_option_form() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -297,9 +298,10 @@ fn apply_no_verify_commit_policy_blocks_prefixed_env_assignment_form() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -321,9 +323,10 @@ fn apply_no_verify_commit_policy_blocks_env_command_with_options() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -345,9 +348,10 @@ fn apply_no_verify_commit_policy_blocks_sudo_command_with_options() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -369,9 +373,10 @@ fn apply_no_verify_commit_policy_blocks_no_verify_when_message_contains_ampersan
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -393,9 +398,10 @@ fn apply_no_verify_commit_policy_blocks_short_flag_combinations_containing_n() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -417,9 +423,10 @@ fn apply_no_verify_commit_policy_blocks_short_gpg_sign_followed_by_no_verify_fla
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -441,9 +448,10 @@ fn apply_no_verify_commit_policy_blocks_long_gpg_sign_followed_by_no_verify_flag
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -510,9 +518,10 @@ fn apply_no_verify_commit_policy_blocks_real_short_no_verify_flag_after_message(
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -556,9 +565,10 @@ fn apply_no_verify_commit_policy_blocks_dash_n_inside_combined_short_flags() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -651,7 +661,7 @@ fn apply_no_verify_commit_policy_ignores_markdown_quote_prefix_with_execute_even
 }
 
 #[test]
-fn apply_no_verify_commit_policy_legacy_fallback_handles_env_assignment_prefix() {
+fn apply_no_verify_commit_policy_ignores_env_assignment_output_when_events_missing() {
     let mut result = ExecutionResult {
         output: "GIT_AUTHOR_NAME=bot git commit -n -m \"unsafe\"\n".to_string(),
         summary: "ok".to_string(),
@@ -667,11 +677,62 @@ fn apply_no_verify_commit_policy_legacy_fallback_handles_env_assignment_prefix()
         !executed_shell_commands.is_empty(),
     );
 
-    assert_eq!(result.exit_code, 1);
-    assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "ok");
+    assert!(result.csa_gate_failure.is_none());
+    assert!(result.stderr_output.is_empty());
+}
+
+#[test]
+fn apply_no_verify_commit_policy_blocks_git_push_no_verify() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        summary: "ok".to_string(),
+        ..Default::default()
+    };
+    let executed_shell_commands = vec!["git push --no-verify origin HEAD".to_string()];
+
+    apply_no_verify_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        "normal prompt",
+        &executed_shell_commands,
+        !executed_shell_commands.is_empty(),
     );
+
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
+    assert_eq!(
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
+    );
+    assert!(result.stderr_output.contains("git push --no-verify"));
+}
+
+#[test]
+fn apply_no_verify_commit_policy_blocks_git_commit_no_gpg_sign() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        summary: "ok".to_string(),
+        ..Default::default()
+    };
+    let executed_shell_commands = vec!["git commit --no-gpg-sign -m unsafe".to_string()];
+
+    apply_no_verify_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        "normal prompt",
+        &executed_shell_commands,
+        !executed_shell_commands.is_empty(),
+    );
+
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
+    assert_eq!(
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
+    );
+    assert!(result.stderr_output.contains("git commit --no-gpg-sign"));
 }
 
 #[test]
@@ -693,9 +754,10 @@ fn apply_no_verify_commit_policy_blocks_shell_script_with_preceding_commands() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 
@@ -717,9 +779,10 @@ fn apply_no_verify_commit_policy_blocks_shell_script_without_space_after_separat
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
 }
 

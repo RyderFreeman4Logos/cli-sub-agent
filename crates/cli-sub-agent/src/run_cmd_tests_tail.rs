@@ -136,9 +136,10 @@ fn apply_post_run_commit_policy_overrides_summary_on_preexisting_failure() {
     apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, Some(&guard));
 
     assert_eq!(result.exit_code, 2);
+    assert_eq!(result.summary, "tool failed");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: workspace mutated without commit"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-uncommitted")
     );
     assert!(
         result
@@ -159,9 +160,10 @@ fn apply_unverifiable_commit_policy_overrides_summary_on_preexisting_failure() {
     apply_unverifiable_commit_policy(&mut result, &OutputFormat::Json, true);
 
     assert_eq!(result.exit_code, 7);
+    assert_eq!(result.summary, "transport failed");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: unable to verify workspace mutation state"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-unverifiable")
     );
     assert!(
         result

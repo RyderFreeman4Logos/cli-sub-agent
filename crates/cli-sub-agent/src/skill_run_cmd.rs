@@ -95,6 +95,7 @@ pub(crate) async fn handle_skill_run(
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         no_error_marker_scan: false,
+        no_hook_bypass_scan: false,
         no_preflight: false,
         no_post_exec_gate: false,
         require_commit: false,

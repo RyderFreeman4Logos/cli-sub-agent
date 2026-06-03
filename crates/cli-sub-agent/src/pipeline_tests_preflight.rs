@@ -76,6 +76,7 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
@@ -192,6 +193,7 @@ async fn execute_with_session_and_meta_runs_preflight_for_fresh_spawn_override()
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
@@ -274,6 +276,7 @@ async fn execute_with_session_and_meta_skips_preflight_for_resume_session() {
         &[],
         &[],
         false, // cli_no_error_marker_scan (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await

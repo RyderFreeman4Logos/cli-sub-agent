@@ -18,7 +18,7 @@ use super::attempt_support::{
     merge_run_loop_changed_paths, persist_fork_timeout_result_if_missing,
     resolve_attempt_initial_response_timeout_seconds,
 };
-use super::policy::is_post_run_commit_policy_block;
+use super::policy::is_post_run_commit_policy_gate_failure;
 use super::resume::{
     build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
     resolve_remaining_run_timeout, run_error_timeout_seconds, signal_interruption_exit_code,
@@ -438,6 +438,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     &request.extra_writable,
                     &request.extra_readable,
                     request.no_error_marker_scan,
+                    request.no_hook_bypass_scan,
                     request.startup_env,
                 )
                 .await
@@ -484,6 +485,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 &request.extra_writable,
                 &request.extra_readable,
                 request.no_error_marker_scan,
+                request.no_hook_bypass_scan,
                 request.startup_env,
             )
             .await
@@ -698,7 +700,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         if exec_result.exit_code != 0
             && runtime_fallback_enabled
             && runtime_fallback_attempts < max_runtime_fallback_attempts
-            && !is_post_run_commit_policy_block(&exec_result.summary)
+            && !is_post_run_commit_policy_gate_failure(&exec_result)
             && !permanent_tool_exhaustion
             && let Some(next_tool) = take_next_runtime_fallback_tool(
                 &mut runtime_fallback_candidates,
@@ -735,7 +737,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             continue;
         }
 
-        if is_post_run_commit_policy_block(&exec_result.summary) {
+        if is_post_run_commit_policy_gate_failure(&exec_result) {
             break (exec_result, exec_changed_paths);
         }
 

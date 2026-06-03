@@ -743,6 +743,7 @@ async fn execute_review_once(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        false, // cli_no_hook_bypass_scan: review has no CLI flag; defer to config
         startup_env,
     )
     .await

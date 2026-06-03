@@ -4,11 +4,11 @@
 
 use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_core::types::OutputFormat;
+use std::collections::HashMap;
 
 use super::git::PostRunCommitGuard;
 use super::shell::{
-    detect_lefthook_bypass_commands, detect_lefthook_bypass_commands_from_tool_output,
-    detect_no_verify_commit_commands, detect_no_verify_commit_commands_from_tool_output,
+    detect_hook_bypass_env_usage, detect_lefthook_bypass_commands, detect_no_verify_commit_commands,
 };
 
 const POST_RUN_POLICY_BLOCKED_SUMMARY: &str =
@@ -21,11 +21,38 @@ const POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY: &str =
     "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected";
 const ALLOW_NO_VERIFY_COMMIT_MARKER: &str = "allow_git_commit_no_verify=1";
 
+pub(crate) fn resolve_hook_bypass_scan_enabled(
+    cli_no_hook_bypass_scan: bool,
+    config_hook_bypass_scan: Option<bool>,
+) -> bool {
+    !cli_no_hook_bypass_scan && config_hook_bypass_scan.unwrap_or(true)
+}
+
+#[cfg(test)]
 pub(crate) fn is_post_run_commit_policy_block(summary: &str) -> bool {
     summary == POST_RUN_POLICY_BLOCKED_SUMMARY
         || summary == POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
         || summary == POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY
         || summary == POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY
+}
+
+pub(crate) fn is_post_run_commit_policy_gate_failure(
+    result: &csa_process::ExecutionResult,
+) -> bool {
+    result
+        .csa_gate_failure
+        .as_deref()
+        .is_some_and(is_post_run_commit_policy_gate_failure_reason)
+}
+
+fn is_post_run_commit_policy_gate_failure_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "commit-policy-uncommitted"
+            | "commit-policy-unverifiable"
+            | "commit-policy-no-verify"
+            | "commit-policy-lefthook-bypass"
+    )
 }
 
 pub(crate) fn apply_post_run_commit_policy(
@@ -56,12 +83,53 @@ pub(crate) fn apply_post_run_commit_policy(
                 &format!("Original summary before commit policy: {previous_summary}"),
             );
         }
-        result.summary = POST_RUN_POLICY_BLOCKED_SUMMARY.to_string();
+        append_stderr_block(&mut result.stderr_output, POST_RUN_POLICY_BLOCKED_SUMMARY);
     }
 
     match output_format {
         OutputFormat::Text => eprintln!("{guard_message}"),
         OutputFormat::Json => append_stderr_block(&mut result.stderr_output, &guard_message),
+    }
+}
+
+pub(crate) struct PostSessionCommitPolicyArgs<'a> {
+    pub(crate) output_format: &'a OutputFormat,
+    pub(crate) prompt: &'a str,
+    pub(crate) require_commit_on_mutation: bool,
+    pub(crate) commit_guard: Option<&'a PostRunCommitGuard>,
+    pub(crate) policy_evaluation_failed: bool,
+    pub(crate) hook_bypass_scan_enabled: bool,
+    pub(crate) executed_shell_commands: &'a [String],
+    pub(crate) merged_env_ref: Option<&'a HashMap<String, String>>,
+    pub(crate) execute_events_observed: bool,
+}
+
+pub(crate) fn apply_post_session_commit_policies(
+    result: &mut csa_process::ExecutionResult,
+    args: PostSessionCommitPolicyArgs<'_>,
+) {
+    apply_post_run_commit_policy(
+        result,
+        args.output_format,
+        args.require_commit_on_mutation,
+        args.commit_guard,
+    );
+    apply_unverifiable_commit_policy(result, args.output_format, args.policy_evaluation_failed);
+    if args.hook_bypass_scan_enabled {
+        apply_no_verify_commit_policy(
+            result,
+            args.output_format,
+            args.prompt,
+            args.executed_shell_commands,
+            args.execute_events_observed,
+        );
+        apply_lefthook_bypass_policy(
+            result,
+            args.output_format,
+            args.executed_shell_commands,
+            args.merged_env_ref,
+            args.execute_events_observed,
+        );
     }
 }
 
@@ -87,7 +155,10 @@ pub(crate) fn apply_unverifiable_commit_policy(
             &format!("Original summary before commit policy: {previous_summary}"),
         );
     }
-    result.summary = POST_RUN_POLICY_UNVERIFIABLE_SUMMARY.to_string();
+    append_stderr_block(
+        &mut result.stderr_output,
+        POST_RUN_POLICY_UNVERIFIABLE_SUMMARY,
+    );
 
     let guard_message =
         "ERROR: strict commit policy could not verify workspace mutation state; run is blocked.";
@@ -102,19 +173,13 @@ pub(crate) fn apply_no_verify_commit_policy(
     output_format: &OutputFormat,
     prompt: &str,
     executed_shell_commands: &[String],
-    execute_events_observed: bool,
+    _execute_events_observed: bool,
 ) {
     if prompt_allows_no_verify_commit(prompt) {
         return;
     }
 
-    let mut matched_commands = detect_no_verify_commit_commands(executed_shell_commands);
-    if matched_commands.is_empty() && !execute_events_observed {
-        matched_commands = detect_no_verify_commit_commands_from_tool_output(
-            result,
-            !executed_shell_commands.is_empty(),
-        );
-    }
+    let matched_commands = detect_no_verify_commit_commands(executed_shell_commands);
     if matched_commands.is_empty() {
         return;
     }
@@ -132,10 +197,14 @@ pub(crate) fn apply_no_verify_commit_policy(
             &format!("Original summary before commit policy: {previous_summary}"),
         );
     }
-    result.summary = POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY.to_string();
+    append_stderr_block(
+        &mut result.stderr_output,
+        POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY,
+    );
 
     let mut message = String::from(
-        "ERROR: forbidden `git commit --no-verify` (or `git commit -n`) detected in executed shell commands.\n\
+        "ERROR: forbidden git hook/signature bypass flag detected in executed shell commands.\n\
+Forbidden forms include `git commit --no-verify`, `git commit -n`, `git commit --no-gpg-sign`, and `git push --no-verify`.\n\
 If this is intentional, add `ALLOW_GIT_COMMIT_NO_VERIFY=1` to the prompt.\n\
 Matched commands:",
     );
@@ -156,15 +225,14 @@ pub(crate) fn apply_lefthook_bypass_policy(
     result: &mut csa_process::ExecutionResult,
     output_format: &OutputFormat,
     executed_shell_commands: &[String],
-    execute_events_observed: bool,
+    execution_env: Option<&HashMap<String, String>>,
+    _execute_events_observed: bool,
 ) {
     let mut matched_commands = detect_lefthook_bypass_commands(executed_shell_commands);
-    if matched_commands.is_empty() && !execute_events_observed {
-        matched_commands = detect_lefthook_bypass_commands_from_tool_output(
-            result,
-            !executed_shell_commands.is_empty(),
-        );
-    }
+    matched_commands.extend(detect_hook_bypass_env_usage(
+        executed_shell_commands,
+        execution_env,
+    ));
     if matched_commands.is_empty() {
         return;
     }
@@ -182,10 +250,13 @@ pub(crate) fn apply_lefthook_bypass_policy(
             &format!("Original summary before commit policy: {previous_summary}"),
         );
     }
-    result.summary = POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY.to_string();
+    append_stderr_block(
+        &mut result.stderr_output,
+        POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY,
+    );
 
     let mut message = String::from(
-        "ERROR: forbidden `LEFTHOOK=0` or `LEFTHOOK_SKIP` bypass detected in executed shell commands.\n\
+        "ERROR: forbidden hook-bypass environment detected in executed shell commands or process env.\n\
 Hook bypass is absolutely prohibited (AGENTS.md rule 029).\n\
 Matched commands:",
     );

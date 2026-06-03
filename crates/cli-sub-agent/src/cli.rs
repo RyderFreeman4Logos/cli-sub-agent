@@ -223,6 +223,10 @@ pub enum Commands {
         #[arg(long)]
         no_error_marker_scan: bool,
 
+        /// Disable hook-bypass scanning. Default: enabled.
+        #[arg(long)]
+        no_hook_bypass_scan: bool,
+
         /// Skip the AI-config symlink preflight for this run only.
         #[arg(long)]
         no_preflight: bool,

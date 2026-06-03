@@ -159,6 +159,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 &request.args.extra_writable,
                 &request.args.extra_readable,
                 request.args.no_error_marker_scan,
+                false, // cli_no_hook_bypass_scan: debate has no CLI flag; defer to config
                 request.startup_env,
             );
 
