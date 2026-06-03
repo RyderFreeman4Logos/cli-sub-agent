@@ -237,9 +237,7 @@ fn insert_large_diff_warning_fields(
 
 fn collect_review_diff_payload(project_root: &Path, scope: &str) -> Option<Vec<u8>> {
     if scope == "uncommitted" {
-        let mut payload = run_git(project_root, &["diff", "--staged", "--no-color"])?;
-        payload.extend(run_git(project_root, &["diff", "--no-color"])?);
-        return Some(payload);
+        return collect_uncommitted_diff_payload(project_root);
     }
 
     if let Some(range) = scope.strip_prefix("range:") {
@@ -266,6 +264,72 @@ fn collect_review_diff_payload(project_root: &Path, scope: &str) -> Option<Vec<u
     }
 
     None
+}
+
+fn collect_uncommitted_diff_payload(project_root: &Path) -> Option<Vec<u8>> {
+    let mut payload = run_git(project_root, &["diff", "HEAD", "--no-color"])?;
+    append_untracked_file_diffs(project_root, &mut payload)?;
+    Some(payload)
+}
+
+fn append_untracked_file_diffs(project_root: &Path, payload: &mut Vec<u8>) -> Option<()> {
+    let paths = run_git(
+        project_root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?;
+
+    for path in paths
+        .split(|byte| *byte == b'\0')
+        .filter(|path| !path.is_empty())
+    {
+        append_untracked_file_diff(project_root, path, payload)?;
+    }
+
+    Some(())
+}
+
+fn append_untracked_file_diff(
+    project_root: &Path,
+    relative_path: &[u8],
+    payload: &mut Vec<u8>,
+) -> Option<()> {
+    let relative_path = String::from_utf8_lossy(relative_path);
+    let content = std::fs::read(project_root.join(relative_path.as_ref())).ok()?;
+    let line_count = content_line_count(&content);
+
+    if !payload.is_empty() && !payload.ends_with(b"\n") {
+        payload.push(b'\n');
+    }
+
+    payload.extend_from_slice(
+        format!(
+            "diff --git a/{relative_path} b/{relative_path}\nnew file mode 100644\nindex 0000000..0000000\n--- /dev/null\n+++ b/{relative_path}\n@@ -0,0 +1,{line_count} @@\n",
+        )
+        .as_bytes(),
+    );
+
+    for line in content.split_inclusive(|byte| *byte == b'\n') {
+        payload.push(b'+');
+        payload.extend_from_slice(line);
+        if !line.ends_with(b"\n") {
+            payload.push(b'\n');
+        }
+    }
+
+    Some(())
+}
+
+fn content_line_count(content: &[u8]) -> usize {
+    if content.is_empty() {
+        return 0;
+    }
+
+    let newline_count = content.iter().filter(|byte| **byte == b'\n').count();
+    if content.ends_with(b"\n") {
+        newline_count
+    } else {
+        newline_count + 1
+    }
 }
 
 fn run_git(project_root: &Path, args: &[&str]) -> Option<Vec<u8>> {
@@ -303,11 +367,38 @@ fn diff_size_from_payload(diff: &[u8]) -> ReviewDiffSize {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use csa_core::types::ReviewDecision;
     use csa_session::ReviewVerdictArtifact;
     use tempfile::tempdir;
 
     use super::*;
+
+    fn run_git_command(project_root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(project_root)
+            .output()
+            .expect("git command should execute");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn setup_diff_size_git_repo() -> tempfile::TempDir {
+        let temp = tempdir().expect("tempdir");
+        run_git_command(temp.path(), &["init"]);
+        run_git_command(temp.path(), &["config", "user.email", "test@example.com"]);
+        run_git_command(temp.path(), &["config", "user.name", "Test User"]);
+        std::fs::write(temp.path().join("tracked.txt"), "baseline\n").expect("write tracked file");
+        run_git_command(temp.path(), &["add", "tracked.txt"]);
+        run_git_command(temp.path(), &["commit", "-m", "initial"]);
+        temp
+    }
 
     fn review_meta(session_id: &str) -> ReviewSessionMeta {
         ReviewSessionMeta {
@@ -357,6 +448,36 @@ mod tests {
         assert_eq!(size.files, 2);
         assert_eq!(size.changed_lines, 5);
         assert_eq!(size.bytes, diff.len());
+    }
+
+    #[test]
+    fn uncommitted_diff_size_counts_untracked_files_and_large_diff_warning() {
+        let repo = setup_diff_size_git_repo();
+        std::fs::write(repo.path().join("new.txt"), "one\ntwo\nthree\n")
+            .expect("write untracked file");
+
+        let size = compute_review_diff_size(repo.path(), "uncommitted").expect("compute diff size");
+
+        assert!(size.files >= 1);
+        assert!(size.changed_lines > 0);
+        assert_eq!(size.changed_lines, 3);
+        let warning = large_diff_warning(&size, Some(2)).expect("untracked additions warn");
+        assert_eq!(warning.changed_lines, 3);
+        assert_eq!(warning.threshold, 2);
+    }
+
+    #[test]
+    fn uncommitted_diff_size_counts_overlapping_staged_and_unstaged_edit_once() {
+        let repo = setup_diff_size_git_repo();
+        let tracked_path = repo.path().join("tracked.txt");
+        std::fs::write(&tracked_path, "staged\n").expect("write staged version");
+        run_git_command(repo.path(), &["add", "tracked.txt"]);
+        std::fs::write(&tracked_path, "final\n").expect("write unstaged version");
+
+        let size = compute_review_diff_size(repo.path(), "uncommitted").expect("compute diff size");
+
+        assert_eq!(size.files, 1);
+        assert_eq!(size.changed_lines, 2);
     }
 
     #[test]
