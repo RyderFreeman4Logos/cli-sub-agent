@@ -13,12 +13,19 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use csa_config::{GateMode, GateStep};
+
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Result of running a single quality gate step.
 #[derive(Debug, Clone)]
@@ -319,8 +326,8 @@ async fn detect_lefthook(project_root: &Path) -> Option<String> {
 ///
 /// Reuses the same patterns from `csa-hooks/src/runner.rs`:
 /// - `sh -c` execution
-/// - `process_group(0)` for clean kill
-/// - Negative-PID signal propagation on timeout
+/// - `process_group(0)` for timeout cleanup before the leader is reaped
+/// - `kill_on_drop(true)` as the final leader cleanup backstop
 async fn execute_gate_command(
     command: &str,
     project_root: &Path,
@@ -334,32 +341,46 @@ async fn execute_gate_command(
         .current_dir(project_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
     if let Some(extra_env) = extra_env {
         cmd.envs(extra_env);
     }
 
-    // Create new process group for clean timeout kill.
-    // tokio::process::Command::process_group(0) calls setsid in the child,
-    // allowing timeout to kill the entire group via negative PID.
+    // Create a new process group so the timeout branch can terminate the
+    // group while the un-reaped leader still anchors the PGID against reuse.
     #[cfg(unix)]
     cmd.process_group(0);
 
-    let child = cmd.spawn()?;
-    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut child = cmd.spawn()?;
+    let child_pid = child.id();
+    let stdout = child.stdout.take().map(spawn_output_reader);
+    let stderr = child.stderr.take().map(spawn_output_reader);
+    let timeout = Duration::from_secs(timeout_secs);
 
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
-            let exit_code = output.status.code();
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => {
+            let exit_code = status.code();
+            let output = collect_outputs_with_timeout(stdout, stderr, OUTPUT_DRAIN_TIMEOUT).await;
+            if output.drain_timed_out {
+                warn!(
+                    drain_timeout_secs = OUTPUT_DRAIN_TIMEOUT.as_secs(),
+                    command, "Quality gate command exited but output pipe drain timed out"
+                );
+                return Ok(drain_timeout_result(
+                    command,
+                    OUTPUT_DRAIN_TIMEOUT,
+                    output.stdout,
+                    output.stderr,
+                ));
+            }
 
             let result = GateResult {
                 name: String::new(),
                 level: 0,
                 command: command.to_string(),
                 exit_code,
-                stdout,
-                stderr,
+                stdout: output.stdout,
+                stderr: output.stderr,
                 skipped: false,
                 skip_reason: None,
             };
@@ -384,26 +405,189 @@ async fn execute_gate_command(
             anyhow::bail!("Quality gate command failed to execute: {e}");
         }
         Err(_elapsed) => {
-            // Timeout: kill the process group
-            // Note: the child has already been consumed by wait_with_output,
-            // but the process group may still have orphaned children.
-            // In practice, tokio drops the child handle which sends SIGKILL.
+            // Timeout: kill the process group before wait reaps the leader.
+            terminate_gate_child_process_group(&mut child, child_pid).await;
+            let output = collect_outputs_with_timeout(stdout, stderr, OUTPUT_DRAIN_TIMEOUT).await;
             warn!(
                 timeout_secs,
                 command, "Quality gate timed out after {timeout_secs}s"
             );
-            Ok(GateResult {
-                name: String::new(),
-                level: 0,
-                command: command.to_string(),
-                exit_code: None,
-                stdout: String::new(),
-                stderr: format!("Quality gate timed out after {timeout_secs}s"),
-                skipped: false,
-                skip_reason: None,
-            })
+            Ok(timeout_result(
+                command,
+                timeout_secs,
+                output.stdout,
+                output.stderr,
+            ))
         }
     }
+}
+
+struct OutputReader {
+    handle: JoinHandle<()>,
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+fn spawn_output_reader<R>(reader: R) -> OutputReader
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let task_buffer = Arc::clone(&buffer);
+    let handle = tokio::spawn(async move {
+        let mut reader = reader;
+        let mut chunk = [0_u8; 8192];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let mut output = task_buffer.lock().await;
+                    output.extend_from_slice(&chunk[..n]);
+                }
+                Err(_err) => break,
+            }
+        }
+    });
+    OutputReader { handle, buffer }
+}
+
+async fn collect_output(reader: Option<OutputReader>) -> String {
+    match reader {
+        Some(reader) => {
+            let _ = reader.handle.await;
+            output_buffer_to_string(&reader.buffer).await
+        }
+        None => String::new(),
+    }
+}
+
+async fn output_buffer_to_string(buffer: &Mutex<Vec<u8>>) -> String {
+    let output = buffer.lock().await;
+    String::from_utf8_lossy(&output).to_string()
+}
+
+struct CollectedOutput {
+    stdout: String,
+    stderr: String,
+    drain_timed_out: bool,
+}
+
+async fn collect_outputs_with_timeout(
+    stdout: Option<OutputReader>,
+    stderr: Option<OutputReader>,
+    timeout: Duration,
+) -> CollectedOutput {
+    let stdout_abort = stdout.as_ref().map(|reader| reader.handle.abort_handle());
+    let stderr_abort = stderr.as_ref().map(|reader| reader.handle.abort_handle());
+    let stdout_buffer = stdout.as_ref().map(|reader| Arc::clone(&reader.buffer));
+    let stderr_buffer = stderr.as_ref().map(|reader| Arc::clone(&reader.buffer));
+    let collect = async move {
+        let (stdout, stderr) = tokio::join!(collect_output(stdout), collect_output(stderr));
+        CollectedOutput {
+            stdout,
+            stderr,
+            drain_timed_out: false,
+        }
+    };
+
+    match tokio::time::timeout(timeout, collect).await {
+        Ok(output) => output,
+        Err(_elapsed) => {
+            if let Some(abort) = stdout_abort {
+                abort.abort();
+            }
+            if let Some(abort) = stderr_abort {
+                abort.abort();
+            }
+            CollectedOutput {
+                stdout: match stdout_buffer {
+                    Some(buffer) => output_buffer_to_string(&buffer).await,
+                    None => String::new(),
+                },
+                stderr: match stderr_buffer {
+                    Some(buffer) => output_buffer_to_string(&buffer).await,
+                    None => String::new(),
+                },
+                drain_timed_out: true,
+            }
+        }
+    }
+}
+
+fn drain_timeout_result(
+    command: &str,
+    timeout: Duration,
+    stdout: String,
+    mut stderr: String,
+) -> GateResult {
+    if !stderr.is_empty() {
+        stderr.push('\n');
+    }
+    stderr.push_str(&format!(
+        "Quality gate command exited but output pipe drain timed out after {}s; a background process likely held the pipe open",
+        timeout.as_secs()
+    ));
+
+    GateResult {
+        name: String::new(),
+        level: 0,
+        command: command.to_string(),
+        exit_code: None,
+        stdout,
+        stderr,
+        skipped: false,
+        skip_reason: None,
+    }
+}
+
+fn timeout_result(
+    command: &str,
+    timeout_secs: u64,
+    stdout: String,
+    mut stderr: String,
+) -> GateResult {
+    if !stderr.is_empty() {
+        stderr.push('\n');
+    }
+    stderr.push_str(&format!("Quality gate timed out after {timeout_secs}s"));
+
+    GateResult {
+        name: String::new(),
+        level: 0,
+        command: command.to_string(),
+        exit_code: None,
+        stdout,
+        stderr,
+        skipped: false,
+        skip_reason: None,
+    }
+}
+
+async fn terminate_gate_child_process_group(
+    child: &mut tokio::process::Child,
+    child_pid: Option<u32>,
+) {
+    // This function must only be called before `child.wait()` reaps the leader.
+    // The un-reaped leader anchors the process-group ID against reuse while the
+    // negative-PGID signals are sent.
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child_pid {
+            // SAFETY: negative PID targets the process group created by
+            // process_group(0), and callers invoke this before reaping the
+            // group leader so the PGID cannot have been reused.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // SAFETY: same PGID anchoring invariant as the SIGTERM above.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+    }
+
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
 }
 
 #[cfg(test)]

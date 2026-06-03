@@ -196,14 +196,19 @@ async fn test_gate_timeout() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
     let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("timeout-child-survived");
+    let extra_env = HashMap::from([(
+        "CSA_GATE_TIMEOUT_MARKER".to_string(),
+        marker.to_string_lossy().into_owned(),
+    )]);
 
     let result = evaluate_quality_gate(
         dir.path(),
-        Some("sleep 60"),
+        Some(r#"(sleep 2; touch "$CSA_GATE_TIMEOUT_MARKER") & wait"#),
         1, // 1 second timeout
         &GateMode::Full,
         0,
-        None,
+        Some(&extra_env),
     )
     .await
     .unwrap();
@@ -211,9 +216,96 @@ async fn test_gate_timeout() {
     assert!(!result.skipped);
     assert!(!result.passed());
     assert!(result.stderr.contains("timed out"));
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(
+        !marker.exists(),
+        "timeout must kill the whole process group, not leave child processes running"
+    );
 
     // SAFETY: Restoring env.
     unsafe { clear_depth() };
+}
+
+#[tokio::test]
+#[serial]
+#[cfg(unix)]
+async fn test_gate_preserves_output_and_reports_drain_timeout_after_leader_exits() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+    let child_pid_path = dir.path().join("pipe-holder.pid");
+    let extra_env = HashMap::from([(
+        "CSA_GATE_CHILD_PID".to_string(),
+        child_pid_path.to_string_lossy().into_owned(),
+    )]);
+
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        evaluate_quality_gate(
+            dir.path(),
+            Some(
+                r#"(sleep 60) & printf '%s\n' "$!" > "$CSA_GATE_CHILD_PID"; echo started; echo stderr-started >&2"#,
+            ),
+            1,
+            &GateMode::Full,
+            0,
+            Some(&extra_env),
+        ),
+    )
+    .await
+    {
+        Ok(result) => result.unwrap(),
+        Err(_elapsed) => {
+            kill_pid_from_file(&child_pid_path);
+            // SAFETY: Restoring env before failing the test.
+            unsafe { clear_depth() };
+            panic!("gate must not hang when a background child holds stdout/stderr open");
+        }
+    };
+
+    assert!(!result.skipped);
+    assert!(!result.passed());
+    assert_eq!(result.exit_code, None);
+    assert!(result.stdout.contains("started"));
+    assert!(result.stderr.contains("stderr-started"));
+    assert!(
+        result
+            .stderr
+            .contains("output pipe drain timed out after 2s"),
+        "stderr should name the drain timeout, got: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Quality gate timed out after 1s"),
+        "drain timeout must not be reported as the overall gate timeout"
+    );
+
+    let child_pid: i32 = std::fs::read_to_string(&child_pid_path)
+        .expect("background child pid should be recorded")
+        .trim()
+        .parse()
+        .expect("background child pid should be numeric");
+    kill_pid(child_pid);
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[cfg(unix)]
+fn kill_pid(pid: i32) {
+    // SAFETY: Test cleanup for a PID created by this test process.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
+#[cfg(unix)]
+fn kill_pid_from_file(path: &std::path::Path) {
+    if let Ok(pid) = std::fs::read_to_string(path).map(|content| content.trim().parse::<i32>()) {
+        if let Ok(pid) = pid {
+            kill_pid(pid);
+        }
+    }
 }
 
 #[tokio::test]
