@@ -10,6 +10,7 @@
 //! 3. Superproject root (submodule only): `.csa/patterns/<name>/`
 //! 4. Superproject root (submodule only): `patterns/<name>/`
 //! 5. `<global_store>/<pkg>/<commit>/patterns/<name>/` from lockfiles under current/superproject
+//! 6. Binary-bundled fallback for first-party review/debate patterns
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -18,6 +19,119 @@ use tracing::debug;
 
 use weave::package::{self, SourceKind};
 use weave::parser::{AgentConfig, SkillConfig};
+
+struct BundledPattern {
+    files: &'static [BundledPatternFile],
+}
+
+struct BundledPatternFile {
+    path: &'static str,
+    contents: &'static [u8],
+}
+
+static BUNDLED_CSA_REVIEW_FILES: &[BundledPatternFile] = &[
+    BundledPatternFile {
+        path: ".skill.toml",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/.skill.toml"
+        )),
+    },
+    BundledPatternFile {
+        path: "PATTERN.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/PATTERN.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "workflow.toml",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/workflow.toml"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/csa-review/SKILL.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/skills/csa-review/SKILL.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/csa-review/references/disagreement-escalation.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/skills/csa-review/references/disagreement-escalation.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/csa-review/references/fix-workflow.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/skills/csa-review/references/fix-workflow.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/csa-review/references/output-schema.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/skills/csa-review/references/output-schema.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/csa-review/references/red-team-mode.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/skills/csa-review/references/red-team-mode.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/csa-review/references/review-protocol.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/csa-review/skills/csa-review/references/review-protocol.md"
+        )),
+    },
+];
+
+static BUNDLED_DEBATE_FILES: &[BundledPatternFile] = &[
+    BundledPatternFile {
+        path: ".skill.toml",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/debate/.skill.toml"
+        )),
+    },
+    BundledPatternFile {
+        path: "PATTERN.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/debate/PATTERN.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "workflow.toml",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/debate/workflow.toml"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/debate/SKILL.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/debate/skills/debate/SKILL.md"
+        )),
+    },
+];
+
+static BUNDLED_CSA_REVIEW_PATTERN: BundledPattern = BundledPattern {
+    files: BUNDLED_CSA_REVIEW_FILES,
+};
+static BUNDLED_DEBATE_PATTERN: BundledPattern = BundledPattern {
+    files: BUNDLED_DEBATE_FILES,
+};
 
 // ---------------------------------------------------------------------------
 // TOML value merge (top-level shallow, nested tables deep-merge)
@@ -76,6 +190,14 @@ impl ResolvedPattern {
 ///
 /// `project_root` is the working directory / project root for the CSA run.
 pub(crate) fn resolve_pattern(name: &str, project_root: &Path) -> Result<ResolvedPattern> {
+    resolve_pattern_with_materialization_root(name, project_root, None)
+}
+
+fn resolve_pattern_with_materialization_root(
+    name: &str,
+    project_root: &Path,
+    materialization_root: Option<&Path>,
+) -> Result<ResolvedPattern> {
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         bail!("Invalid pattern name: '{name}' (must be a simple name, no path separators)");
     }
@@ -83,54 +205,133 @@ pub(crate) fn resolve_pattern(name: &str, project_root: &Path) -> Result<Resolve
     let candidates = search_paths(name, project_root);
 
     for dir in &candidates {
-        // Primary: skills/<name>/SKILL.md (new layout)
-        let skill_md_path = dir.join("skills").join(name).join("SKILL.md");
-        if skill_md_path.is_file() {
-            let skill_md = std::fs::read_to_string(&skill_md_path)
-                .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
-
-            let config = load_skill_config(dir, name, project_root)?;
-
-            debug!(pattern_dir = %dir.display(), "Pattern resolved");
-
-            return Ok(ResolvedPattern {
-                dir: dir.clone(),
-                skill_md,
-                config,
-            });
+        if let Some(resolved) = resolve_pattern_from_dir(name, project_root, dir)? {
+            return Ok(resolved);
         }
+    }
 
-        // Fallback: PATTERN.md at pattern root (legacy weave-locked layout)
-        let pattern_md_path = dir.join("PATTERN.md");
-        if pattern_md_path.is_file() {
-            let skill_md = std::fs::read_to_string(&pattern_md_path)
-                .with_context(|| format!("failed to read {}", pattern_md_path.display()))?;
-
-            let config = load_skill_config(dir, name, project_root)?;
-
-            debug!(pattern_dir = %dir.display(), "Pattern resolved (PATTERN.md fallback)");
-
-            return Ok(ResolvedPattern {
-                dir: dir.clone(),
-                skill_md,
-                config,
-            });
+    if let Some(bundled) = bundled_pattern(name) {
+        let dir = materialize_bundled_pattern(name, bundled, materialization_root)?;
+        if let Some(resolved) = resolve_pattern_from_dir(name, project_root, &dir)? {
+            debug!(pattern_dir = %resolved.dir.display(), "Pattern resolved (bundled fallback)");
+            return Ok(resolved);
         }
+        bail!(
+            "Bundled pattern '{name}' materialized to {} but did not contain skills/{name}/SKILL.md or PATTERN.md",
+            dir.display()
+        );
     }
 
     bail!(
         "Pattern '{name}' not found. Searched:\n{}",
-        candidates
-            .iter()
-            .map(|p| {
-                format!(
-                    "  - {0}/skills/{name}/SKILL.md\n  - {0}/PATTERN.md",
-                    p.display()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        format_searched_paths(name, &candidates)
     )
+}
+
+fn resolve_pattern_from_dir(
+    name: &str,
+    project_root: &Path,
+    dir: &Path,
+) -> Result<Option<ResolvedPattern>> {
+    // Primary: skills/<name>/SKILL.md (new layout)
+    let skill_md_path = dir.join("skills").join(name).join("SKILL.md");
+    if skill_md_path.is_file() {
+        let skill_md = std::fs::read_to_string(&skill_md_path)
+            .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
+
+        let config = load_skill_config(dir, name, project_root)?;
+
+        debug!(pattern_dir = %dir.display(), "Pattern resolved");
+
+        return Ok(Some(ResolvedPattern {
+            dir: dir.to_path_buf(),
+            skill_md,
+            config,
+        }));
+    }
+
+    // Fallback: PATTERN.md at pattern root (legacy weave-locked layout)
+    let pattern_md_path = dir.join("PATTERN.md");
+    if pattern_md_path.is_file() {
+        let skill_md = std::fs::read_to_string(&pattern_md_path)
+            .with_context(|| format!("failed to read {}", pattern_md_path.display()))?;
+
+        let config = load_skill_config(dir, name, project_root)?;
+
+        debug!(pattern_dir = %dir.display(), "Pattern resolved (PATTERN.md fallback)");
+
+        return Ok(Some(ResolvedPattern {
+            dir: dir.to_path_buf(),
+            skill_md,
+            config,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn format_searched_paths(name: &str, candidates: &[PathBuf]) -> String {
+    candidates
+        .iter()
+        .map(|p| {
+            format!(
+                "  - {0}/skills/{name}/SKILL.md\n  - {0}/PATTERN.md",
+                p.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn bundled_pattern(name: &str) -> Option<&'static BundledPattern> {
+    match name {
+        "csa-review" => Some(&BUNDLED_CSA_REVIEW_PATTERN),
+        "debate" => Some(&BUNDLED_DEBATE_PATTERN),
+        _ => None,
+    }
+}
+
+fn materialize_bundled_pattern(
+    name: &str,
+    pattern: &BundledPattern,
+    materialization_root: Option<&Path>,
+) -> Result<PathBuf> {
+    let dest = bundled_pattern_materialization_root(materialization_root).join(name);
+    write_bundled_pattern(pattern, &dest)
+        .with_context(|| format!("failed to materialize bundled pattern '{name}'"))?;
+    Ok(dest)
+}
+
+fn bundled_pattern_materialization_root(explicit_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = explicit_root {
+        return root.to_path_buf();
+    }
+
+    for env_name in ["CSA_SESSION_DIR", "CSA_DAEMON_SESSION_DIR"] {
+        if let Some(value) = std::env::var_os(env_name)
+            && !value.is_empty()
+        {
+            return PathBuf::from(value).join("bundled-patterns");
+        }
+    }
+
+    let state_dir = paths::state_dir_write().unwrap_or_else(paths::state_dir_fallback);
+    state_dir
+        .join("bundled-patterns")
+        .join(env!("CARGO_PKG_VERSION"))
+}
+
+fn write_bundled_pattern(pattern: &BundledPattern, dest_root: &Path) -> Result<()> {
+    for file in pattern.files {
+        let dest = dest_root.join(file.path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::write(&dest, file.contents)
+            .with_context(|| format!("failed to write {}", dest.display()))?;
+    }
+    Ok(())
 }
 
 /// Build the ordered list of directories to search for a pattern.

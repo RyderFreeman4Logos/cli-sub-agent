@@ -180,22 +180,12 @@ async fn still_working_backoff_waits_before_retry() {
 // --- verify_debate_skill_available tests (#140) ---
 
 #[test]
-fn verify_debate_skill_missing_returns_actionable_error() {
+fn verify_debate_skill_missing_repo_local_pattern_uses_bundled_fallback() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let err = verify_debate_skill_available(tmp.path()).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Debate pattern not found"),
-        "should mention missing pattern: {msg}"
-    );
-    assert!(
-        msg.contains("csa skill install"),
-        "should include install guidance: {msg}"
-    );
-    assert!(
-        msg.contains("patterns/debate"),
-        "should list searched paths: {msg}"
-    );
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    assert!(verify_debate_skill_available(tmp.path()).is_ok());
+    assert!(!tmp.path().join(".csa").exists());
+    assert!(!tmp.path().join("patterns").exists());
 }
 
 #[test]
@@ -388,14 +378,13 @@ fn resolve_debate_tool_same_model_fallback_skips_unavailable_parent_binary() {
 }
 
 #[test]
-fn verify_debate_skill_no_fallback_without_skill() {
-    // Ensure no execution path silently downgrades when skill is missing.
-    // The verify function must return Err — it must NOT return Ok with a warning.
+fn verify_debate_skill_no_repo_local_pattern_uses_bundled_fallback() {
     let tmp = tempfile::TempDir::new().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     let result = verify_debate_skill_available(tmp.path());
     assert!(
-        result.is_err(),
-        "missing skill must be a hard error, not a warning"
+        result.is_ok(),
+        "missing repo-local debate pattern should resolve via bundled fallback"
     );
 }
 

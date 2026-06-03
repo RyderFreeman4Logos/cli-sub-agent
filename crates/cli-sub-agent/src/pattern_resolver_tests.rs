@@ -232,6 +232,93 @@ fn resolve_pattern_repo_takes_priority_over_global_store() {
 }
 
 #[test]
+fn resolve_pattern_falls_back_to_bundled_csa_review_without_repo_local_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+
+    let resolved = resolve_pattern_with_materialization_root(
+        "csa-review",
+        tmp.path(),
+        Some(materialized.path()),
+    )
+    .unwrap();
+
+    assert!(resolved.skill_md.contains("CSA Review"));
+    assert!(resolved.dir.starts_with(materialized.path()));
+    assert!(resolved.dir.join("workflow.toml").is_file());
+    assert!(
+        resolved
+            .dir
+            .join("skills/csa-review/references/output-schema.md")
+            .is_file()
+    );
+    assert!(!tmp.path().join(".csa").exists());
+    assert!(!tmp.path().join("patterns").exists());
+}
+
+#[test]
+fn resolve_pattern_falls_back_to_bundled_debate_without_repo_local_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+
+    let resolved =
+        resolve_pattern_with_materialization_root("debate", tmp.path(), Some(materialized.path()))
+            .unwrap();
+
+    assert!(resolved.skill_md.contains("Debate"));
+    assert!(resolved.dir.starts_with(materialized.path()));
+    assert!(resolved.dir.join("workflow.toml").is_file());
+    assert!(resolved.dir.join("skills/debate/SKILL.md").is_file());
+    assert!(!tmp.path().join(".csa").exists());
+    assert!(!tmp.path().join("patterns").exists());
+}
+
+#[test]
+fn repo_local_csa_review_overrides_bundled_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+    make_pattern_dir(
+        tmp.path(),
+        ".csa/patterns/csa-review",
+        "csa-review",
+        "# CSA Local Review",
+        None,
+    );
+
+    let resolved = resolve_pattern_with_materialization_root(
+        "csa-review",
+        tmp.path(),
+        Some(materialized.path()),
+    )
+    .unwrap();
+
+    assert!(resolved.skill_md.contains("CSA Local Review"));
+    assert!(resolved.dir.ends_with(".csa/patterns/csa-review"));
+    assert!(!materialized.path().join("csa-review").exists());
+}
+
+#[test]
+fn repo_local_debate_overrides_bundled_pattern() {
+    let tmp = TempDir::new().unwrap();
+    let materialized = TempDir::new().unwrap();
+    make_pattern_dir(
+        tmp.path(),
+        "patterns/debate",
+        "debate",
+        "# Local Debate",
+        None,
+    );
+
+    let resolved =
+        resolve_pattern_with_materialization_root("debate", tmp.path(), Some(materialized.path()))
+            .unwrap();
+
+    assert!(resolved.skill_md.contains("Local Debate"));
+    assert!(resolved.dir.ends_with("patterns/debate"));
+    assert!(!materialized.path().join("debate").exists());
+}
+
+#[test]
 fn search_paths_include_superproject_roots_for_submodule_project_root() {
     let tmp = TempDir::new().unwrap();
     fs::create_dir(tmp.path().join(".git")).unwrap();
