@@ -27,6 +27,7 @@ pub(super) async fn run_pre_debate_quality_gate(
             gate_timeout,
             gate_mode,
             current_depth,
+            None,
         )
         .await?;
 
@@ -71,6 +72,7 @@ pub(super) async fn run_pre_debate_quality_gate(
         gate_timeout,
         gate_mode,
         current_depth,
+        None,
     )
     .await?;
 

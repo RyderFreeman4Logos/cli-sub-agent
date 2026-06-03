@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -9,6 +10,7 @@ pub(super) async fn run_pre_review_quality_gate(
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     current_depth: u32,
+    extra_env: Option<&HashMap<String, String>>,
 ) -> Result<Option<String>> {
     let gate_steps = global_config.review.effective_gate_steps();
     let gate_timeout = config
@@ -23,6 +25,7 @@ pub(super) async fn run_pre_review_quality_gate(
             gate_timeout,
             gate_mode,
             current_depth,
+            extra_env,
         )
         .await;
     }
@@ -33,6 +36,7 @@ pub(super) async fn run_pre_review_quality_gate(
         gate_timeout,
         gate_mode,
         current_depth,
+        extra_env,
     )
     .await?;
 
@@ -75,6 +79,7 @@ async fn run_single_quality_gate(
     gate_timeout: u64,
     gate_mode: &GateMode,
     current_depth: u32,
+    extra_env: Option<&HashMap<String, String>>,
 ) -> Result<Option<String>> {
     let gate_command = config
         .and_then(|c| c.review.as_ref())
@@ -85,6 +90,7 @@ async fn run_single_quality_gate(
         gate_timeout,
         gate_mode,
         current_depth,
+        extra_env,
     )
     .await?;
 

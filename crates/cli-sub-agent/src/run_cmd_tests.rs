@@ -91,6 +91,23 @@ fn run_cli_parses_fast_but_more_cost_flag() {
 }
 
 #[test]
+fn run_cli_parses_build_jobs_flag() {
+    let cli = try_parse_cli(&["csa", "run", "--build-jobs", "4", "x"]).unwrap();
+
+    match cli.command {
+        crate::cli::Commands::Run { build_jobs, .. } => assert_eq!(build_jobs, Some(4)),
+        _ => panic!("expected run command"),
+    }
+}
+
+#[test]
+fn run_cli_rejects_zero_build_jobs() {
+    let result = try_parse_cli(&["csa", "run", "--build-jobs", "0", "x"]);
+
+    assert!(result.is_err(), "build_jobs=0 should be rejected");
+}
+
+#[test]
 fn run_cli_parses_allow_fallback_flag() {
     let cli = try_parse_cli(&["csa", "run", "--tool", "codex", "--allow-fallback", "x"]).unwrap();
 

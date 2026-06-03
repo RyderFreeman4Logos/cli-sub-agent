@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -50,6 +51,12 @@ impl PostExecGateFailure {
 }
 
 type PostExecGateFuture = Pin<Box<dyn Future<Output = Result<PostExecGateCommandOutcome>> + Send>>;
+
+pub(super) struct PostExecGateApplyOptions<'a> {
+    pub(super) changed_paths: Option<&'a [String]>,
+    pub(super) extra_env: Option<HashMap<String, String>>,
+    pub(super) no_post_exec_gate: bool,
+}
 
 fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
     let prompt = prompt_text.trim_start();
@@ -198,6 +205,7 @@ pub(super) fn execute_post_exec_gate_command(
     command: &str,
     project_root: &Path,
     timeout_seconds: u64,
+    extra_env: Option<HashMap<String, String>>,
 ) -> PostExecGateFuture {
     let command = command.to_string();
     let project_root = project_root.to_path_buf();
@@ -209,6 +217,9 @@ pub(super) fn execute_post_exec_gate_command(
             .current_dir(&project_root)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
+        if let Some(extra_env) = extra_env {
+            cmd.envs(extra_env);
+        }
         strip_inherited_csa_env(&mut cmd);
 
         #[cfg(unix)]
@@ -264,10 +275,11 @@ pub(super) async fn maybe_run_post_exec_gate_with_runner<F>(
     session_id: Option<&str>,
     config: Option<&ProjectConfig>,
     changed_paths: Option<&[String]>,
+    extra_env: Option<HashMap<String, String>>,
     runner: F,
 ) -> Result<PostExecGateOutcome>
 where
-    F: FnOnce(&str, &Path, u64) -> PostExecGateFuture,
+    F: FnOnce(&str, &Path, u64, Option<HashMap<String, String>>) -> PostExecGateFuture,
 {
     let gate_config = config
         .map(|cfg| cfg.run.post_exec_gate.clone())
@@ -291,6 +303,7 @@ where
         &gate_config.command,
         project_root,
         gate_config.timeout_seconds,
+        extra_env,
     )
     .await?
     {
@@ -339,14 +352,13 @@ pub(super) async fn apply_post_exec_gate_after_success_with_runner<F>(
     prompt_text: &str,
     session_id: Option<&str>,
     config: Option<&ProjectConfig>,
-    changed_paths: Option<&[String]>,
-    no_post_exec_gate: bool,
+    options: PostExecGateApplyOptions<'_>,
     runner: F,
 ) -> Result<()>
 where
-    F: FnOnce(&str, &Path, u64) -> PostExecGateFuture,
+    F: FnOnce(&str, &Path, u64, Option<HashMap<String, String>>) -> PostExecGateFuture,
 {
-    if no_post_exec_gate {
+    if options.no_post_exec_gate {
         if let Some(session_id) = session_id {
             crate::run_cmd_post::record_post_exec_gate_skipped_by_flag(project_root, session_id);
         }
@@ -358,7 +370,8 @@ where
         prompt_text,
         session_id,
         config,
-        changed_paths,
+        options.changed_paths,
+        options.extra_env,
         runner,
     )
     .await

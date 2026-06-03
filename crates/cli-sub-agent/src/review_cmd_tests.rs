@@ -407,6 +407,7 @@ fn default_review_args() -> ReviewArgs {
         thinking: None,
         no_failover: false,
         fast_but_more_cost: false,
+        build_jobs: None,
         diff: false,
         full_consistency: false,
         branch: None,
@@ -699,8 +700,15 @@ fn review_cli_defaults_no_timeout() {
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
     assert!(!args.allow_fallback);
+    assert_eq!(args.build_jobs, None);
     // #1745: scan opt-out defaults to false (scan enabled).
     assert!(!args.no_error_marker_scan);
+}
+
+#[test]
+fn review_cli_parses_build_jobs_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--build-jobs", "4"]);
+    assert_eq!(args.build_jobs, Some(4));
 }
 
 #[test]
@@ -726,6 +734,12 @@ fn review_cli_rejects_zero_timeout() {
 fn review_cli_rejects_zero_idle_timeout() {
     let result = Cli::try_parse_from(["csa", "review", "--diff", "--idle-timeout", "0"]);
     assert!(result.is_err(), "idle_timeout=0 should be rejected");
+}
+
+#[test]
+fn review_cli_rejects_zero_build_jobs() {
+    let result = Cli::try_parse_from(["csa", "review", "--diff", "--build-jobs", "0"]);
+    assert!(result.is_err(), "build_jobs=0 should be rejected");
 }
 
 // --- resolve_review_stream_mode tests ---

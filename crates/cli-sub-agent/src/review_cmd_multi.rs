@@ -54,6 +54,7 @@ pub(super) struct MultiReviewerReviewContext<'a> {
     pub stream_mode: csa_process::StreamMode,
     pub idle_timeout_seconds: u64,
     pub readonly_project_root: bool,
+    pub build_jobs: Option<u32>,
     pub prior_rounds_section: Option<&'a str>,
     pub current_session_id: Option<&'a str>,
     pub current_depth: u32,
@@ -121,6 +122,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let reviewer_force_override = ctx.args.force_override_user_config;
         let reviewer_force_ignore_tier = ctx.args.force_ignore_tier_setting;
         let reviewer_no_failover = ctx.args.no_failover;
+        let reviewer_build_jobs = ctx.build_jobs;
         let reviewer_fast_but_more_cost = ctx.args.fast_but_more_cost;
         let reviewer_no_fs_sandbox = ctx.args.no_fs_sandbox;
         let reviewer_no_error_marker_scan = ctx.args.no_error_marker_scan;
@@ -178,6 +180,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 reviewer_force_override,
                 reviewer_force_ignore_tier,
                 reviewer_no_failover,
+                reviewer_build_jobs,
                 reviewer_fast_but_more_cost,
                 false,
                 reviewer_no_fs_sandbox,

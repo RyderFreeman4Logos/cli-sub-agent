@@ -172,6 +172,13 @@ pub enum Commands {
         #[arg(long)]
         fast_but_more_cost: bool,
 
+        /// Cap build (CARGO_BUILD_JOBS) and test (NEXTEST_TEST_THREADS)
+        /// parallelism of the validation gate to N. Use on memory-tight hosts
+        /// to avoid OOM-kills / spawn flakes. Unset = uncapped (honors an
+        /// inherited CARGO_BUILD_JOBS).
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+        build_jobs: Option<u32>,
+
         /// Block-wait for a free slot instead of failing when all slots are occupied
         #[arg(long)]
         wait: bool,

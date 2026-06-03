@@ -178,6 +178,7 @@ pub(crate) async fn execute_review(
         force_override_user_config,
         force_ignore_tier_setting,
         no_failover,
+        None,
         false,
         false,
         no_fs_sandbox,
@@ -214,6 +215,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     force_override_user_config: bool,
     force_ignore_tier_setting: bool,
     no_failover: bool,
+    build_jobs: Option<u32>,
     fast_but_more_cost: bool,
     warn_no_codex_fast_mode: bool,
     no_fs_sandbox: bool,
@@ -307,6 +309,8 @@ pub(crate) async fn execute_review_with_tier_filter(
             executor.tool_name(),
             review_execution_env_options(no_failover),
         );
+        let mut base_env_owned = base_env_owned;
+        crate::build_jobs_env::apply_build_jobs_env(&mut base_env_owned, build_jobs);
         // #1741: keep a pinned subtree pinned through the reviewer child so a
         // nested Layer-N+1 call from the reviewer does not re-select the tier
         // default. Mirrors csa run (run_cmd_attempt.rs). `attempt_model_spec` is

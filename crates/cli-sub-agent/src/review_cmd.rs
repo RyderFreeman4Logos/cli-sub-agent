@@ -149,11 +149,13 @@ pub(crate) async fn handle_review(
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
     }
+    let review_gate_env = crate::build_jobs_env::build_jobs_env(args.build_jobs);
     let gate_summary = gate::run_pre_review_quality_gate(
         &project_root,
         config.as_ref(),
         &global_config,
         current_depth,
+        review_gate_env.as_ref(),
     )
     .await?;
 
@@ -342,6 +344,7 @@ pub(crate) async fn handle_review(
             args.force_override_user_config,
             args.force_ignore_tier_setting,
             args.no_failover,
+            args.build_jobs,
             args.fast_but_more_cost,
             true,
             args.no_fs_sandbox,
@@ -532,6 +535,7 @@ pub(crate) async fn handle_review(
             force_override_user_config: args.force_override_user_config,
             force_ignore_tier_setting: args.force_ignore_tier_setting,
             no_failover: args.no_failover,
+            build_jobs: args.build_jobs,
             fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,
             no_error_marker_scan: args.no_error_marker_scan,
@@ -603,6 +607,7 @@ pub(crate) async fn handle_review(
         stream_mode,
         idle_timeout_seconds,
         readonly_project_root,
+        build_jobs: args.build_jobs,
         prior_rounds_section: prior_rounds_section.as_deref(),
         current_session_id: startup_env.session_id(),
         current_depth,

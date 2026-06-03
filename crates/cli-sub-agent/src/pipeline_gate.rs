@@ -10,6 +10,7 @@
 //!
 //! When `CSA_DEPTH > 0`, the gate is skipped entirely to prevent recursion.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -110,6 +111,7 @@ pub(crate) async fn evaluate_quality_gates(
     gate_timeout_secs: u64,
     gate_mode: &GateMode,
     current_depth: u32,
+    extra_env: Option<&HashMap<String, String>>,
 ) -> Result<GatePipelineResult> {
     // Recursion guard: skip when running as a sub-agent
     let depth = current_depth;
@@ -139,8 +141,14 @@ pub(crate) async fn evaluate_quality_gates(
 
     for step in gate_steps {
         info!(name = %step.name, level = step.level, "Running gate step");
-        let result =
-            execute_gate_command(&step.command, project_root, gate_timeout_secs, gate_mode).await?;
+        let result = execute_gate_command(
+            &step.command,
+            project_root,
+            gate_timeout_secs,
+            gate_mode,
+            extra_env,
+        )
+        .await?;
 
         let step_result = GateResult {
             name: step.name.clone(),
@@ -177,6 +185,7 @@ pub(crate) async fn evaluate_quality_gate(
     gate_timeout_secs: u64,
     gate_mode: &GateMode,
     current_depth: u32,
+    extra_env: Option<&HashMap<String, String>>,
 ) -> Result<GateResult> {
     // Recursion guard: skip when running as a sub-agent
     let depth = current_depth;
@@ -218,6 +227,7 @@ pub(crate) async fn evaluate_quality_gate(
         project_root,
         gate_timeout_secs,
         gate_mode,
+        extra_env,
     )
     .await
 }
@@ -316,6 +326,7 @@ async fn execute_gate_command(
     project_root: &Path,
     timeout_secs: u64,
     gate_mode: &GateMode,
+    extra_env: Option<&HashMap<String, String>>,
 ) -> Result<GateResult> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
@@ -323,6 +334,9 @@ async fn execute_gate_command(
         .current_dir(project_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(extra_env) = extra_env {
+        cmd.envs(extra_env);
+    }
 
     // Create new process group for clean timeout kill.
     // tokio::process::Command::process_group(0) calls setsid in the child,

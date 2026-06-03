@@ -1,5 +1,5 @@
 use super::{
-    PostExecGateCommandOutcome, PostExecGateOutcome,
+    PostExecGateApplyOptions, PostExecGateCommandOutcome, PostExecGateOutcome,
     apply_post_exec_gate_after_success_with_runner, execute_post_exec_gate_command,
     maybe_run_post_exec_gate_with_runner,
 };
@@ -127,6 +127,14 @@ fn commit_tracked_change(project_root: &Path) {
     run_git(project_root, &["commit", "-m", "change tracked"]);
 }
 
+fn post_exec_options(no_post_exec_gate: bool) -> PostExecGateApplyOptions<'static> {
+    PostExecGateApplyOptions {
+        changed_paths: None,
+        extra_env: None,
+        no_post_exec_gate,
+    }
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn execute_post_exec_gate_strips_inherited_csa_env() {
@@ -146,6 +154,28 @@ async fn execute_post_exec_gate_strips_inherited_csa_env() {
            test -z "${CSA_UNLISTED_GATE_ENV+x}""#,
         project_dir.path(),
         30,
+        None,
+    )
+    .await
+    .expect("post-exec gate command should run");
+
+    assert_eq!(outcome, PostExecGateCommandOutcome::Exited(Some(0)));
+}
+
+#[tokio::test]
+async fn execute_post_exec_gate_applies_build_jobs_env() {
+    let project_dir = tempdir().unwrap();
+    let env = HashMap::from([
+        ("CARGO_BUILD_JOBS".to_string(), "1".to_string()),
+        ("NEXTEST_TEST_THREADS".to_string(), "1".to_string()),
+    ]);
+
+    let outcome = execute_post_exec_gate_command(
+        r#"test "$CARGO_BUILD_JOBS" = "1" &&
+           test "$NEXTEST_TEST_THREADS" = "1""#,
+        project_dir.path(),
+        30,
+        Some(env),
     )
     .await
     .expect("post-exec gate command should run");
@@ -168,9 +198,10 @@ async fn post_exec_gate_passes_when_command_succeeds() {
         Some("01TESTPOSTEXECGATEPASS0000000"),
         Some(&config),
         None,
+        None,
         {
             let calls = Arc::clone(&calls);
-            move |command, cwd, timeout_seconds| {
+            move |command, cwd, timeout_seconds, _extra_env| {
                 let calls = Arc::clone(&calls);
                 let command = command.to_string();
                 let cwd = cwd.to_path_buf();
@@ -209,7 +240,8 @@ async fn post_exec_gate_failure_returns_structured_diagnostic() {
         Some("01TESTPOSTEXECGATEFAIL0000000"),
         Some(&config),
         None,
-        |_command, _cwd, _timeout_seconds| {
+        None,
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
         },
     )
@@ -242,7 +274,8 @@ async fn post_exec_gate_skips_when_worktree_is_clean() {
         Some("01TESTPOSTEXECGATESKIP0000000"),
         Some(&config),
         None,
-        |_command, _cwd, _timeout_seconds| {
+        None,
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async move {
                 panic!("runner must not execute when worktree is clean");
             })
@@ -269,7 +302,8 @@ async fn post_exec_gate_skips_review_and_debate_prompts() {
             Some("01TESTPOSTEXECGATEREVIEW00000"),
             Some(&config),
             None,
-            |_command, _cwd, _timeout_seconds| {
+            None,
+            |_command, _cwd, _timeout_seconds, _extra_env| {
                 Box::pin(async move {
                     panic!("runner must not execute for review/debate prompts");
                 })
@@ -301,7 +335,8 @@ async fn post_exec_gate_skips_when_dirty_worktree_is_pre_existing() {
         Some("01TESTPOSTEXECGATEPREEXIST000"),
         Some(&config),
         Some(&changed_paths),
-        |_command, _cwd, _timeout_seconds| {
+        None,
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async move {
                 panic!("runner must not execute when this session changed no paths");
             })
@@ -334,9 +369,10 @@ async fn post_exec_gate_runs_when_changed_paths_are_non_empty() {
         Some("01TESTPOSTEXECGATEARTIFACT00"),
         Some(&config),
         Some(&changed_paths),
+        None,
         {
             let calls = Arc::clone(&calls);
-            move |command, cwd, timeout_seconds| {
+            move |command, cwd, timeout_seconds, _extra_env| {
                 let calls = Arc::clone(&calls);
                 let command = command.to_string();
                 let cwd = cwd.to_path_buf();
@@ -369,9 +405,8 @@ async fn post_exec_gate_nonzero_committed_clean_is_fatal() {
         "Implement and commit the fix",
         Some(&session_id),
         Some(&config),
-        None,
-        false,
-        |_command, _cwd, _timeout_seconds| {
+        post_exec_options(false),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
         },
     )
@@ -405,9 +440,8 @@ async fn post_exec_gate_nonzero_dirty_is_fatal() {
         "Modify tracked.txt",
         Some(&session_id),
         Some(&config),
-        None,
-        false,
-        |_command, _cwd, _timeout_seconds| {
+        post_exec_options(false),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
         },
     )
@@ -436,9 +470,8 @@ async fn post_exec_gate_runner_error_overwrites_result_as_failure() {
         "Modify tracked.txt",
         Some(&session_id),
         Some(&config),
-        None,
-        false,
-        |_command, _cwd, _timeout_seconds| {
+        post_exec_options(false),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async { Err(anyhow::anyhow!("gate process unavailable")) })
         },
     )
@@ -471,9 +504,8 @@ async fn post_exec_gate_timeout_committed_clean_is_advisory() {
         "Implement and commit the fix",
         Some(&session_id),
         Some(&config),
-        None,
-        false,
-        |_command, _cwd, _timeout_seconds| {
+        post_exec_options(false),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async { Ok(PostExecGateCommandOutcome::TimedOut) })
         },
     )
@@ -510,9 +542,8 @@ async fn post_exec_gate_timeout_dirty_is_fatal() {
         "Modify tracked.txt",
         Some(&session_id),
         Some(&config),
-        None,
-        false,
-        |_command, _cwd, _timeout_seconds| {
+        post_exec_options(false),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async { Ok(PostExecGateCommandOutcome::TimedOut) })
         },
     )
@@ -546,9 +577,8 @@ async fn post_exec_gate_success_passes_both_cleanliness_states() {
             "Implement and commit the fix",
             Some(&clean_session_id),
             Some(&config),
-            None,
-            false,
-            |_command, _cwd, _timeout_seconds| {
+            post_exec_options(false),
+            |_command, _cwd, _timeout_seconds, _extra_env| {
                 Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(0))) })
             },
         )
@@ -575,9 +605,8 @@ async fn post_exec_gate_success_passes_both_cleanliness_states() {
             "Modify tracked.txt",
             Some(&dirty_session_id),
             Some(&config),
-            None,
-            false,
-            |_command, _cwd, _timeout_seconds| {
+            post_exec_options(false),
+            |_command, _cwd, _timeout_seconds, _extra_env| {
                 Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(0))) })
             },
         )
@@ -616,9 +645,8 @@ async fn run_cli_no_post_exec_gate_skips_runner_and_persists_warning() {
         "Modify tracked.txt",
         Some(&session_id),
         Some(&config),
-        None,
-        true,
-        |_command, _cwd, _timeout_seconds| {
+        post_exec_options(true),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async move {
                 panic!("runner must not execute when --no-post-exec-gate is set");
             })
@@ -655,9 +683,10 @@ async fn post_exec_gate_runs_when_session_introduced_changes() {
         Some("01TESTPOSTEXECGATEDELTA00000"),
         Some(&config),
         Some(&changed_paths),
+        None,
         {
             let calls = Arc::clone(&calls);
-            move |command, cwd, timeout_seconds| {
+            move |command, cwd, timeout_seconds, _extra_env| {
                 let calls = Arc::clone(&calls);
                 let command = command.to_string();
                 let cwd = cwd.to_path_buf();
@@ -694,9 +723,10 @@ async fn post_exec_gate_runs_when_session_committed_changes() {
         Some(&session_id),
         Some(&config),
         Some(&changed_paths),
+        None,
         {
             let calls = Arc::clone(&calls);
-            move |command, cwd, timeout_seconds| {
+            move |command, cwd, timeout_seconds, _extra_env| {
                 let calls = Arc::clone(&calls);
                 let command = command.to_string();
                 let cwd = cwd.to_path_buf();
@@ -733,9 +763,10 @@ async fn post_exec_gate_runs_when_untracked_source_exists_without_changed_paths(
         Some("01TESTPOSTEXECGATEUNTRACKED"),
         Some(&config),
         None,
+        None,
         {
             let calls = Arc::clone(&calls);
-            move |command, cwd, timeout_seconds| {
+            move |command, cwd, timeout_seconds, _extra_env| {
                 let calls = Arc::clone(&calls);
                 let command = command.to_string();
                 let cwd = cwd.to_path_buf();
