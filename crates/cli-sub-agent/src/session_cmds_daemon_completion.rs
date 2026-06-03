@@ -280,3 +280,82 @@ fn persist_result_if_absent(session_dir: &Path, result: &SessionResult) -> Resul
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
+    use csa_session::{
+        SessionPhase, create_session, get_session_dir, load_result, load_session, save_result,
+        save_session,
+    };
+    use tempfile::tempdir;
+
+    #[test]
+    fn finalize_daemon_completion_preserves_available_session_and_existing_result() -> Result<()> {
+        let tmp = tempdir()?;
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let state_home = tmp.path().join("xdg-state");
+        std::fs::create_dir_all(&state_home)?;
+        let _home_guard = ScopedEnvVarRestore::set("HOME", tmp.path());
+        let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+        let project = tmp.path();
+
+        let session = create_session(
+            project,
+            Some("daemon-available-completion-packet"),
+            None,
+            Some("codex"),
+        )?;
+        let session_id = session.meta_session_id;
+        let session_dir = get_session_dir(project, &session_id)?;
+
+        let mut persisted = load_session(project, &session_id)?;
+        persisted.phase = SessionPhase::Available;
+        save_session(&persisted)?;
+
+        let now = chrono::Utc::now();
+        let existing = SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "existing compact result".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            uncommitted_changes: None,
+            manager_fields: Default::default(),
+        };
+        save_result(project, &session_id, &existing)?;
+        let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+        let result_before = fs::read_to_string(&result_path)?;
+
+        fs::write(
+            daemon_completion_path(&session_dir),
+            "exit_code = 17\nstatus = \"failure\"\n",
+        )?;
+
+        let finalized = finalize_daemon_completion_if_present(&session_dir)?
+            .expect("existing result should remain visible");
+        assert_eq!(finalized.status, "success");
+        assert_eq!(finalized.exit_code, 0);
+
+        let persisted = load_session(project, &session_id)?;
+        assert_eq!(persisted.phase, SessionPhase::Available);
+        assert_eq!(fs::read_to_string(&result_path)?, result_before);
+
+        let result = load_result(project, &session_id)?.expect("existing result should remain");
+        assert_eq!(result.status, "success");
+        assert_eq!(result.exit_code, 0);
+        Ok(())
+    }
+}
