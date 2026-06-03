@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use super::artifacts::{has_blocking_severity, severity_counts_are_zero};
 use super::clean_detection::contains_clean_phrase;
+use crate::review_cmd::prose_findings::structured_bracketed_finding_severity;
 
 #[derive(Debug, Deserialize)]
 struct TranscriptEvent {
@@ -158,13 +159,19 @@ pub(super) fn zero_severity_counts() -> std::collections::BTreeMap<Severity, u32
 }
 
 pub(super) fn severity_counts_from_text(text: &str) -> std::collections::BTreeMap<Severity, u32> {
-    let marker_re =
-        Regex::new(r"(?i)\[(critical|high|medium|low|info|p[0-4])\]").expect("valid regex");
     let mut counts = zero_severity_counts();
     let mut in_findings_section = false;
+    let mut in_code_fence = false;
 
     for line in text.lines() {
         let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
         if is_findings_header(line) {
             in_findings_section = true;
             continue;
@@ -179,13 +186,7 @@ pub(super) fn severity_counts_from_text(text: &str) -> std::collections::BTreeMa
             continue;
         }
 
-        for captures in marker_re.captures_iter(line) {
-            let Some(severity) = captures
-                .get(1)
-                .and_then(|level| severity_from_label(level.as_str()))
-            else {
-                continue;
-            };
+        if let Some(severity) = structured_bracketed_finding_severity(line) {
             *counts.entry(severity).or_insert(0) += 1;
         }
     }

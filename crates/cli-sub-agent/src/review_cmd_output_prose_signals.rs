@@ -9,6 +9,7 @@ use super::text::{
     contains_blocking_issue_signal, severity_counts_from_text, zero_severity_counts,
 };
 use crate::review_cmd::prose_findings::{
+    FindingsSectionParse, classify_findings_section_body,
     extract_review_findings_from_prose_with_default, findings_section_bodies,
     severity_counts_from_review_findings,
 };
@@ -17,7 +18,8 @@ use crate::review_cmd::prose_findings::{
 pub(super) struct ReviewProseSignals {
     pub(super) severity_counts: BTreeMap<Severity, u32>,
     pub(super) blocking_summary: bool,
-    pub(super) unclean_findings_sections: bool,
+    pub(super) parsed_findings_sections: bool,
+    pub(super) unparseable_findings_sections: bool,
     pub(super) findings: Vec<ReviewFinding>,
 }
 
@@ -26,7 +28,8 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
     let mut signals = ReviewProseSignals {
         severity_counts: zero_severity_counts(),
         blocking_summary: prose.blocking_summary,
-        unclean_findings_sections: false,
+        parsed_findings_sections: false,
+        unparseable_findings_sections: false,
         findings: Vec::new(),
     };
     let default_unlabeled_severity = prose.blocking_summary.then_some(Severity::Medium);
@@ -95,8 +98,10 @@ fn record_review_prose_signal(
     content: &str,
     default_unlabeled_severity: Option<Severity>,
 ) {
-    signals.unclean_findings_sections |=
-        contains_unclean_findings_section(content, default_unlabeled_severity.clone());
+    let (parsed_findings_sections, unparseable_findings_sections) =
+        classify_findings_sections(content, default_unlabeled_severity.clone());
+    signals.parsed_findings_sections |= parsed_findings_sections;
+    signals.unparseable_findings_sections |= unparseable_findings_sections;
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
     let mut counts = severity_counts_from_review_findings(&findings);
@@ -105,39 +110,31 @@ fn record_review_prose_signal(
     signals.findings.extend(findings);
 }
 
-fn contains_unclean_findings_section(
+fn classify_findings_sections(
     content: &str,
     default_unlabeled_severity: Option<Severity>,
-) -> bool {
-    findings_section_bodies(content).into_iter().any(|body| {
-        findings_section_body_is_unclean(body.as_str(), default_unlabeled_severity.clone())
-    })
+) -> (bool, bool) {
+    let mut parsed_findings_sections = false;
+    let mut unparseable_findings_sections = false;
+    for body in findings_section_bodies(content) {
+        if !body.is_markdown_heading() {
+            continue;
+        }
+        match classify_findings_section_body(
+            body.as_str(),
+            default_unlabeled_severity.clone(),
+            contains_canonical_clean_conclusion,
+        ) {
+            FindingsSectionParse::Clean => {}
+            FindingsSectionParse::Findings(_) => parsed_findings_sections = true,
+            FindingsSectionParse::Unparseable => unparseable_findings_sections = true,
+        }
+    }
+    (parsed_findings_sections, unparseable_findings_sections)
 }
 
 fn contains_canonical_clean_conclusion(content: &str) -> bool {
     contains_clean_phrase(content) || detect_prose_clean_conclusion(content)
-}
-
-fn findings_section_body_is_unclean(
-    body: &str,
-    default_unlabeled_severity: Option<Severity>,
-) -> bool {
-    body.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("```"))
-        .any(|line| {
-            !contains_canonical_clean_conclusion(line)
-                && !line_parses_as_structured_finding(line, default_unlabeled_severity.clone())
-        })
-}
-
-fn line_parses_as_structured_finding(
-    line: &str,
-    default_unlabeled_severity: Option<Severity>,
-) -> bool {
-    let parser_input = format!("Findings\n{line}");
-    !extract_review_findings_from_prose_with_default(&parser_input, default_unlabeled_severity)
-        .is_empty()
 }
 
 fn merge_severity_counts_add(

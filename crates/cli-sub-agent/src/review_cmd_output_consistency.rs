@@ -46,8 +46,8 @@ pub(super) fn enforce_final_verdict_consistency(
         prose_signals.blocking_summary || has_blocking_severity(&prose_signals.severity_counts);
     let has_empty_machine_findings =
         findings_file.findings.is_empty() && severity_counts_are_zero(&artifact.severity_counts);
-    let unparsed_findings_prose =
-        prose_signals.unclean_findings_sections && has_empty_machine_findings;
+    let parsed_findings_prose = prose_signals.parsed_findings_sections;
+    let unparsed_findings_prose = prose_signals.unparseable_findings_sections;
 
     if unparsed_findings_prose {
         artifact
@@ -56,7 +56,7 @@ pub(super) fn enforce_final_verdict_consistency(
     }
 
     if artifact.decision == ReviewDecision::Pass
-        && (resume_to_fix || blocking_prose || unparsed_findings_prose)
+        && (resume_to_fix || blocking_prose || parsed_findings_prose || unparsed_findings_prose)
     {
         ensure_nonzero_fail_closed_count(&mut artifact.severity_counts);
         artifact.decision = ReviewDecision::Fail;
