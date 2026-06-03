@@ -81,3 +81,141 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         "lock loser must not overwrite the winner's runtime_binary"
     );
 }
+
+#[tokio::test]
+async fn run_writer_fails_fast_when_worktree_write_lock_is_held() {
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
+    let project_root = temp.path();
+
+    let _holder = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
+        .expect("holder worktree write lock should succeed");
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: csa_executor::CodexRuntimeMetadata::from_transport(
+            csa_executor::CodexTransport::Acp,
+        ),
+    };
+
+    let execution = execute_with_session_and_meta(
+        &executor,
+        &ToolName::Codex,
+        "write prompt",
+        csa_core::types::OutputFormat::Json,
+        None,
+        false,
+        None,
+        None,
+        project_root,
+        None,
+        None,
+        None,
+        Some("run"),
+        None,
+        None,
+        csa_process::StreamMode::BufferOnly,
+        DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        &[],
+        &[],
+        false,
+        false,
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
+    .await;
+    let err = match execution {
+        Ok(_) => panic!("held worktree write lock must reject non-lineage run writer"),
+        Err(err) => err,
+    };
+    let err = err.to_string();
+
+    assert!(
+        err.contains("concurrent write session blocked"),
+        "unexpected error: {err}"
+    );
+    assert!(err.contains("01HOLDER"), "missing holder session id: {err}");
+    assert!(
+        err.contains(&project_root.display().to_string()),
+        "missing worktree path: {err}"
+    );
+    assert!(
+        err.contains("sequentially"),
+        "missing serialize guidance: {err}"
+    );
+}
+
+#[tokio::test]
+async fn debate_session_is_not_blocked_by_worktree_write_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
+    let project_root = temp.path();
+
+    let session =
+        csa_session::create_session(project_root, Some("debate-target"), None, Some("codex"))
+            .unwrap();
+    let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).unwrap();
+    let _session_lock = csa_lock::acquire_lock(&session_dir, "codex", "active debate").unwrap();
+    let _worktree_lock = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
+        .expect("holder worktree write lock should succeed");
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: csa_executor::CodexRuntimeMetadata::from_transport(
+            csa_executor::CodexTransport::Acp,
+        ),
+    };
+
+    let execution = execute_with_session_and_meta(
+        &executor,
+        &ToolName::Codex,
+        "debate prompt",
+        csa_core::types::OutputFormat::Json,
+        Some(session.meta_session_id.clone()),
+        false,
+        None,
+        None,
+        project_root,
+        None,
+        None,
+        None,
+        Some("debate"),
+        None,
+        None,
+        csa_process::StreamMode::BufferOnly,
+        DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        &[],
+        &[],
+        false,
+        false,
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
+    .await;
+    let err = match execution {
+        Ok(_) => panic!("held per-session lock must still reject the resume attempt"),
+        Err(err) => err,
+    };
+    let err = err.to_string();
+
+    assert!(
+        err.contains("Failed to acquire lock for session"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !err.contains("concurrent write session blocked"),
+        "debate must not be blocked by worktree write lock: {err}"
+    );
+}

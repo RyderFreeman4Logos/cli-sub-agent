@@ -10,6 +10,9 @@
 //! owns the fd). `Drop` calls `flock(fd, LOCK_UN)` to release.
 
 pub mod slot;
+mod worktree;
+
+pub use worktree::{WorktreeWriteLock, acquire_worktree_write_lock};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -22,11 +25,15 @@ use std::path::{Path, PathBuf};
 
 /// Diagnostic information written to lock files
 #[derive(Debug, Serialize, Deserialize)]
-struct LockDiagnostic {
+pub(crate) struct LockDiagnostic {
     pid: u32,
     tool_name: String,
     acquired_at: DateTime<Utc>,
     reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) holder_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_path: Option<String>,
 }
 
 /// Session lock guard backed by `flock(2)`.
@@ -92,6 +99,16 @@ pub fn acquire_lock_at_path(
     lock_name: &str,
     reason: &str,
 ) -> Result<SessionLock> {
+    acquire_lock_at_path_with_metadata(lock_path, lock_name, reason, None, None)
+}
+
+pub(crate) fn acquire_lock_at_path_with_metadata(
+    lock_path: &Path,
+    lock_name: &str,
+    reason: &str,
+    holder_session_id: Option<&str>,
+    resource_path: Option<&Path>,
+) -> Result<SessionLock> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create locks directory: {}", parent.display()))?;
@@ -125,6 +142,8 @@ pub fn acquire_lock_at_path(
             tool_name: lock_name.to_string(),
             acquired_at: Utc::now(),
             reason: reason.to_string(),
+            holder_session_id: holder_session_id.map(ToString::to_string),
+            resource_path: resource_path.map(|path| path.display().to_string()),
         };
 
         let json =
@@ -149,16 +168,35 @@ pub fn acquire_lock_at_path(
             .context("Failed to read lock file")?;
 
         let error_msg = if let Ok(diagnostic) = serde_json::from_str::<LockDiagnostic>(&contents) {
-            format!(
-                "Session locked by PID {} (tool: {}, reason: {}, acquired: {})",
-                diagnostic.pid, diagnostic.tool_name, diagnostic.reason, diagnostic.acquired_at
-            )
+            format_lock_diagnostic(&diagnostic)
         } else {
             "Session is locked (unable to read diagnostic info)".to_string()
         };
 
         Err(anyhow::anyhow!(error_msg))
     }
+}
+
+fn format_lock_diagnostic(diagnostic: &LockDiagnostic) -> String {
+    let holder = diagnostic
+        .holder_session_id
+        .as_deref()
+        .map(|session| format!(", holder_session_id: {session}"))
+        .unwrap_or_default();
+    let resource = diagnostic
+        .resource_path
+        .as_deref()
+        .map(|path| format!(", resource_path: {path}"))
+        .unwrap_or_default();
+    format!(
+        "Session locked by PID {} (tool: {}, reason: {}, acquired: {}{}{})",
+        diagnostic.pid,
+        diagnostic.tool_name,
+        diagnostic.reason,
+        diagnostic.acquired_at,
+        holder,
+        resource
+    )
 }
 
 /// Acquire a non-blocking exclusive lock for a session and tool.
@@ -222,6 +260,16 @@ pub fn acquire_project_resource_lock(
     tool_name: &str,
     reason: &str,
 ) -> Result<SessionLock> {
+    let (lock_path, lock_name, _) =
+        project_resource_lock_path(project_root, resource_kind, tool_name)?;
+    acquire_lock_at_path(&lock_path, &lock_name, reason)
+}
+
+pub(crate) fn project_resource_lock_path(
+    project_root: &Path,
+    resource_kind: &str,
+    tool_name: &str,
+) -> Result<(PathBuf, String, PathBuf)> {
     let kind = resource_kind.trim();
     if kind.is_empty() {
         anyhow::bail!("resource kind cannot be empty");
@@ -252,7 +300,16 @@ pub fn acquire_project_resource_lock(
         .join(digest)
         .join(format!("{safe_tool}.lock"));
     let lock_name = format!("{kind}:{tool}");
-    acquire_lock_at_path(&lock_path, &lock_name, reason)
+    Ok((lock_path, lock_name, canonical))
+}
+
+pub(crate) fn read_lock_diagnostic(lock_path: &Path) -> Result<Option<LockDiagnostic>> {
+    let mut contents = String::new();
+    File::open(lock_path)
+        .with_context(|| format!("Failed to open lock file: {}", lock_path.display()))?
+        .read_to_string(&mut contents)
+        .with_context(|| format!("Failed to read lock file: {}", lock_path.display()))?;
+    Ok(serde_json::from_str::<LockDiagnostic>(&contents).ok())
 }
 
 #[cfg(test)]
