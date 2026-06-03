@@ -248,12 +248,16 @@ check-chinese:
     @echo "Checking for Chinese characters..."
     @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**' --glob '!.claude/rules/**' --glob '!.agents/**' --glob '!CLAUDE.md' --glob '!GEMINI.md'
 
-# Format code and auto-stage modified .rs files.
-# This allows 'just fmt' to be run immediately before commit without manual 'git add'.
+# Format code and re-stage only .rs files that were already staged before fmt.
+# This keeps pre-commit formatting scoped to the intended commit.
 fmt:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staged="$(git diff --cached --name-only -- '*.rs')"
     cargo fmt --all
-    # Only stage tracked .rs files that were modified by fmt
-    git diff --name-only | grep '\.rs$' | xargs -r git add
+    if [ -n "$staged" ]; then
+        printf '%s\n' "$staged" | xargs -r git add --
+    fi
 
 # Run clippy for the entire workspace (strict mode).
 clippy:
