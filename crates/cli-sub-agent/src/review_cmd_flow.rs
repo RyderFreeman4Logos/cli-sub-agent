@@ -47,7 +47,7 @@ pub(crate) fn persist_review_sidecars_if_session_exists(
     )
 }
 
-pub(crate) fn persist_review_sidecars_if_session_exists_with_diff_size(
+pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
     project_root: &std::path::Path,
     meta: &ReviewSessionMeta,
     persistable_session_id: Option<&str>,

@@ -79,6 +79,8 @@ use execute::{compute_diff_fingerprint, execute_review_with_tier_filter};
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use flow::{ execute_review_for_tests, persist_review_sidecars_if_session_exists, should_run_fix_loop };
+#[cfg(test)]
+use flow::persist_review_sidecars_if_session_exists_with_diff_size;
 #[cfg(not(test))]
 use flow::{persist_review_sidecars_if_session_exists_with_diff_size, should_run_fix_loop};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};

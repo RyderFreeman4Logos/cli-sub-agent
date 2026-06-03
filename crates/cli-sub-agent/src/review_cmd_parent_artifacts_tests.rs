@@ -264,6 +264,8 @@ fn issue_1696_parent_verdict_counts_all_reviewer_findings_when_decision_passes()
         &consolidated.findings,
         decision,
         crate::review_consensus::CLEAN,
+        None,
+        None,
     )
     .expect("parent review verdict should be written");
 
@@ -712,6 +714,8 @@ fn consensus_artifacts_copy_child_only_findings_into_parent_session_outputs() {
         scope: "range:main...HEAD",
         review_iterations: 1,
         diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
     };
 
     write_multi_reviewer_consensus_artifacts(
@@ -1285,6 +1289,8 @@ fn write_multi_reviewer_consensus_artifacts_preserves_blocking_findings_on_clean
         scope: "range:main...HEAD",
         review_iterations: 2,
         diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
     };
 
     write_multi_reviewer_consensus_artifacts(
@@ -1448,6 +1454,8 @@ fn write_standalone_consensus_review_artifacts_updates_carrier_session() {
         scope: "range:main...HEAD",
         review_iterations: 2,
         diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
     };
 
     let written = write_standalone_consensus_review_artifacts(&ctx)
@@ -1536,6 +1544,8 @@ fn standalone_consensus_preserves_blocking_child_findings_on_clean_consensus() {
         scope: "range:main...HEAD",
         review_iterations: 1,
         diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
     };
 
     let written = write_standalone_consensus_review_artifacts(&ctx)
@@ -1613,6 +1623,8 @@ fn write_standalone_consensus_review_artifacts_skips_synthetic_unavailable_carri
         scope: "range:main...HEAD",
         review_iterations: 2,
         diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
     };
 
     let written = write_standalone_consensus_review_artifacts(&ctx)
