@@ -46,17 +46,17 @@ pub(super) fn enforce_final_verdict_consistency(
         prose_signals.blocking_summary || has_blocking_severity(&prose_signals.severity_counts);
     let has_empty_machine_findings =
         findings_file.findings.is_empty() && severity_counts_are_zero(&artifact.severity_counts);
-    let unparsed_actionable_prose =
-        prose_signals.actionable_prose_sections && has_empty_machine_findings;
+    let unparsed_findings_prose =
+        prose_signals.unclean_findings_sections && has_empty_machine_findings;
 
-    if unparsed_actionable_prose {
+    if unparsed_findings_prose {
         artifact
             .failure_reason
             .get_or_insert_with(|| PROSE_FINDINGS_UNPARSED_REASON.to_string());
     }
 
     if artifact.decision == ReviewDecision::Pass
-        && (resume_to_fix || blocking_prose || unparsed_actionable_prose)
+        && (resume_to_fix || blocking_prose || unparsed_findings_prose)
     {
         ensure_nonzero_fail_closed_count(&mut artifact.severity_counts);
         artifact.decision = ReviewDecision::Fail;

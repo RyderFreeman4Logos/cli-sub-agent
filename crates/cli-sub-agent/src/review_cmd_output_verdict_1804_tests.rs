@@ -13,6 +13,49 @@ fn read_verdict(session_dir: &Path) -> ReviewVerdictArtifact {
         .expect("parse verdict")
 }
 
+const SUPPORTED_FINDINGS_HEADINGS: &[&str] = &["Findings", "Review Findings"];
+
+const CLEAN_FINDINGS_BODIES: &[(&str, &str, &str)] = &[
+    ("no-issues-found", "Review completed.", "No issues found."),
+    (
+        "no-issues-were-found",
+        "Review completed.",
+        "No issues were found.",
+    ),
+    (
+        "no-blocking-issues",
+        "Review completed.",
+        "No blocking issues.",
+    ),
+    ("no-findings", "Review completed.", "No findings."),
+    (
+        "no-blocking-findings-found",
+        "Review completed.",
+        "No blocking findings found.",
+    ),
+    (
+        "no-actionable-findings",
+        "Review completed.",
+        "No actionable findings.",
+    ),
+    ("ship-ready", "Review completed.", "Ship-ready."),
+    ("ship-ready-spaced", "Review completed.", "Ship ready."),
+    (
+        "positive-no-issue-clause",
+        "Review completed.",
+        "No correctness issues were introduced.",
+    ),
+    ("none-with-pass-summary", "PASS", "None."),
+];
+
+fn write_empty_findings_toml(session_dir: &Path) {
+    fs::write(
+        session_dir.join("output").join("findings.toml"),
+        "findings = []\n",
+    )
+    .expect("write empty findings.toml");
+}
+
 #[test]
 fn issue_1804_codex_single_title_word_severity_findings_populate_toml_and_fail() {
     let session_id = "01TEST1804CODEXPROSE00000";
@@ -79,183 +122,109 @@ Review found two blocking findings in the diff.
 }
 
 #[test]
-fn issue_1804_unparsed_actionable_findings_section_fails_closed_with_reason() {
-    let session_id = "01TEST1804UNPARSEDPROSE00";
-    let (_env_lock, project_root, session_dir) =
-        lock_test_session("issue-1804-unparsed-prose", session_id);
+fn issue_1804_unparsed_findings_sections_fail_closed_with_reason() {
+    for (heading_index, heading) in SUPPORTED_FINDINGS_HEADINGS.iter().enumerate() {
+        let session_id = format!("01TEST1804UNPARSED{heading_index:02}");
+        let test_name = format!("issue-1804-unparsed-heading-{heading_index}");
+        let (_env_lock, project_root, session_dir) = lock_test_session(&test_name, &session_id);
 
-    fs::write(
-        session_dir.join("output").join("findings.toml"),
-        "findings = []\n",
-    )
-    .expect("write empty findings.toml");
-    csa_session::persist_structured_output(
-        &session_dir,
-        r#"<!-- CSA:SECTION:summary -->
+        write_empty_findings_toml(&session_dir);
+        csa_session::persist_structured_output(
+            &session_dir,
+            &format!(
+                r#"<!-- CSA:SECTION:summary -->
 Review completed.
 <!-- CSA:SECTION:summary:END -->
 
 <!-- CSA:SECTION:details -->
-## Findings
+## {heading}
 
-The reviewer identified an actionable correctness problem, but the prose does not match any machine parser shape.
+1. High correctness regression remains unparsed because the prose lacks a severity delimiter.
 
 ## Recommended Actions
 
 1. Inspect the prose manually before accepting this review.
 <!-- CSA:SECTION:details:END -->
-"#,
-    )
-    .expect("persist structured output");
+"#
+            ),
+        )
+        .expect("persist structured output");
 
-    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
-    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+        let meta = make_review_meta_with_decision(&session_id, ReviewDecision::Pass, "CLEAN");
+        persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
-    let verdict = read_verdict(&session_dir);
-    assert_ne!(verdict.decision, ReviewDecision::Pass);
-    assert_eq!(verdict.decision, ReviewDecision::Fail);
-    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
-    assert_eq!(
-        verdict.failure_reason.as_deref(),
-        Some("prose_findings_present_but_unparsed")
-    );
-    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+        let findings = read_findings_toml(&session_dir);
+        assert!(findings.findings.is_empty(), "{heading}");
+        let verdict = read_verdict(&session_dir);
+        assert_ne!(verdict.decision, ReviewDecision::Pass, "{heading}");
+        assert_eq!(verdict.decision, ReviewDecision::Fail, "{heading}");
+        assert_eq!(verdict.verdict_legacy, "HAS_ISSUES", "{heading}");
+        assert_eq!(
+            verdict.failure_reason.as_deref(),
+            Some("prose_findings_present_but_unparsed"),
+            "{heading}"
+        );
+        assert_eq!(
+            verdict.severity_counts.get(&Severity::Medium),
+            Some(&1),
+            "{heading}"
+        );
 
-    fs::remove_dir_all(project_root).expect("remove temp project root");
+        fs::remove_dir_all(project_root).expect("remove temp project root");
+    }
 }
 
 #[test]
-fn issue_1804_unparsed_actionable_review_findings_section_fails_closed_with_reason() {
-    let session_id = "01TEST1804REVIEWFINDING00";
-    let (_env_lock, project_root, session_dir) =
-        lock_test_session("issue-1804-review-findings-unparsed", session_id);
+fn issue_1804_canonical_clean_findings_sections_stay_pass() {
+    for (heading_index, heading) in SUPPORTED_FINDINGS_HEADINGS.iter().enumerate() {
+        for (body_index, (case_name, summary, body)) in CLEAN_FINDINGS_BODIES.iter().enumerate() {
+            let session_id = format!("01TEST1804CLEAN{heading_index:02}{body_index:02}");
+            let test_name = format!("issue-1804-clean-{heading_index}-{case_name}");
+            let (_env_lock, project_root, session_dir) = lock_test_session(&test_name, &session_id);
 
-    fs::write(
-        session_dir.join("output").join("findings.toml"),
-        "findings = []\n",
-    )
-    .expect("write empty findings.toml");
-    csa_session::persist_structured_output(
-        &session_dir,
-        r#"<!-- CSA:SECTION:summary -->
-Review completed.
+            write_empty_findings_toml(&session_dir);
+            csa_session::persist_structured_output(
+                &session_dir,
+                &format!(
+                    r#"<!-- CSA:SECTION:summary -->
+{summary}
 <!-- CSA:SECTION:summary:END -->
 
 <!-- CSA:SECTION:details -->
-## Review Findings
+## {heading}
 
-The reviewer identified an actionable correctness problem, but the prose does not match any machine parser shape.
-
-## Recommended Actions
-
-1. Inspect the prose manually before accepting this review.
-<!-- CSA:SECTION:details:END -->
-"#,
-    )
-    .expect("persist structured output");
-
-    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
-    persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-    let verdict = read_verdict(&session_dir);
-    assert_ne!(verdict.decision, ReviewDecision::Pass);
-    assert_eq!(verdict.decision, ReviewDecision::Fail);
-    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
-    assert_eq!(
-        verdict.failure_reason.as_deref(),
-        Some("prose_findings_present_but_unparsed")
-    );
-    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
-
-    fs::remove_dir_all(project_root).expect("remove temp project root");
-}
-
-#[test]
-fn issue_1804_clean_findings_sentinel_stays_pass() {
-    let session_id = "01TEST1804CLEANPROSE0000";
-    let (_env_lock, project_root, session_dir) =
-        lock_test_session("issue-1804-clean-prose", session_id);
-
-    fs::write(
-        session_dir.join("output").join("findings.toml"),
-        "findings = []\n",
-    )
-    .expect("write empty findings.toml");
-    csa_session::persist_structured_output(
-        &session_dir,
-        r#"<!-- CSA:SECTION:summary -->
-PASS
-<!-- CSA:SECTION:summary:END -->
-
-<!-- CSA:SECTION:details -->
-## Findings
-
-No blocking findings found.
-
-## Recommended Actions
-
-None.
-<!-- CSA:SECTION:details:END -->
-"#,
-    )
-    .expect("persist structured output");
-
-    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
-    persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-    let findings = read_findings_toml(&session_dir);
-    assert!(findings.findings.is_empty());
-    let verdict = read_verdict(&session_dir);
-    assert_eq!(verdict.decision, ReviewDecision::Pass);
-    assert_eq!(verdict.verdict_legacy, "CLEAN");
-    assert!(verdict.severity_counts.values().all(|count| *count == 0));
-    assert!(verdict.failure_reason.is_none());
-
-    fs::remove_dir_all(project_root).expect("remove temp project root");
-}
-
-#[test]
-fn issue_1804_clean_review_findings_sentinel_stays_pass() {
-    let session_id = "01TEST1804CLEANREVIEW000";
-    let (_env_lock, project_root, session_dir) =
-        lock_test_session("issue-1804-clean-review-findings", session_id);
-
-    fs::write(
-        session_dir.join("output").join("findings.toml"),
-        "findings = []\n",
-    )
-    .expect("write empty findings.toml");
-    csa_session::persist_structured_output(
-        &session_dir,
-        r#"<!-- CSA:SECTION:summary -->
-PASS
-<!-- CSA:SECTION:summary:END -->
-
-<!-- CSA:SECTION:details -->
-## Review Findings
-
-None.
+{body}
 
 ## Recommended Actions
 
 1. Open the PR.
 <!-- CSA:SECTION:details:END -->
-"#,
-    )
-    .expect("persist structured output");
+"#
+                ),
+            )
+            .expect("persist structured output");
 
-    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
-    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+            let meta = make_review_meta_with_decision(&session_id, ReviewDecision::Pass, "CLEAN");
+            persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
-    let findings = read_findings_toml(&session_dir);
-    assert!(findings.findings.is_empty());
-    let verdict = read_verdict(&session_dir);
-    assert_eq!(verdict.decision, ReviewDecision::Pass);
-    assert_eq!(verdict.verdict_legacy, "CLEAN");
-    assert!(verdict.severity_counts.values().all(|count| *count == 0));
-    assert!(verdict.failure_reason.is_none());
+            let findings = read_findings_toml(&session_dir);
+            assert!(findings.findings.is_empty(), "{heading}: {case_name}");
+            let verdict = read_verdict(&session_dir);
+            assert_eq!(
+                verdict.decision,
+                ReviewDecision::Pass,
+                "{heading}: {case_name}"
+            );
+            assert_eq!(verdict.verdict_legacy, "CLEAN", "{heading}: {case_name}");
+            assert!(
+                verdict.severity_counts.values().all(|count| *count == 0),
+                "{heading}: {case_name}"
+            );
+            assert!(verdict.failure_reason.is_none(), "{heading}: {case_name}");
 
-    fs::remove_dir_all(project_root).expect("remove temp project root");
+            fs::remove_dir_all(project_root).expect("remove temp project root");
+        }
+    }
 }
 
 #[test]
