@@ -23,6 +23,8 @@ use tracing::{debug, info, warn};
 
 use csa_config::{GateMode, GateStep};
 
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Result of running a single quality gate step.
 #[derive(Debug, Clone)]
 pub(crate) struct GateResult {
@@ -349,6 +351,7 @@ async fn execute_gate_command(
     cmd.process_group(0);
 
     let mut child = cmd.spawn()?;
+    let child_pid = child.id();
     let stdout = child.stdout.take().map(spawn_output_reader);
     let stderr = child.stderr.take().map(spawn_output_reader);
     let timeout = Duration::from_secs(timeout_secs);
@@ -356,16 +359,24 @@ async fn execute_gate_command(
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => {
             let exit_code = status.code();
-            let stdout = collect_output(stdout).await;
-            let stderr = collect_output(stderr).await;
+            let output = collect_outputs_with_timeout(stdout, stderr, OUTPUT_DRAIN_TIMEOUT).await;
+            if output.timed_out {
+                terminate_gate_child_process_group(&mut child, child_pid).await;
+                return Ok(timeout_result(
+                    command,
+                    timeout_secs,
+                    output.stdout,
+                    output.stderr,
+                ));
+            }
 
             let result = GateResult {
                 name: String::new(),
                 level: 0,
                 command: command.to_string(),
                 exit_code,
-                stdout,
-                stderr,
+                stdout: output.stdout,
+                stderr: output.stderr,
                 skipped: false,
                 skip_reason: None,
             };
@@ -391,27 +402,18 @@ async fn execute_gate_command(
         }
         Err(_elapsed) => {
             // Timeout: kill the process group
-            terminate_gate_child_process_group(&mut child).await;
-            let stdout = collect_output(stdout).await;
-            let mut stderr = collect_output(stderr).await;
-            if !stderr.is_empty() {
-                stderr.push('\n');
-            }
-            stderr.push_str(&format!("Quality gate timed out after {timeout_secs}s"));
+            terminate_gate_child_process_group(&mut child, child_pid).await;
+            let output = collect_outputs_with_timeout(stdout, stderr, OUTPUT_DRAIN_TIMEOUT).await;
             warn!(
                 timeout_secs,
                 command, "Quality gate timed out after {timeout_secs}s"
             );
-            Ok(GateResult {
-                name: String::new(),
-                level: 0,
-                command: command.to_string(),
-                exit_code: None,
-                stdout,
-                stderr,
-                skipped: false,
-                skip_reason: None,
-            })
+            Ok(timeout_result(
+                command,
+                timeout_secs,
+                output.stdout,
+                output.stderr,
+            ))
         }
     }
 }
@@ -437,20 +439,86 @@ async fn collect_output(handle: Option<JoinHandle<String>>) -> String {
     }
 }
 
-async fn terminate_gate_child_process_group(child: &mut tokio::process::Child) {
+struct CollectedOutput {
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+}
+
+async fn collect_outputs_with_timeout(
+    stdout: Option<JoinHandle<String>>,
+    stderr: Option<JoinHandle<String>>,
+    timeout: Duration,
+) -> CollectedOutput {
+    let stdout_abort = stdout.as_ref().map(JoinHandle::abort_handle);
+    let stderr_abort = stderr.as_ref().map(JoinHandle::abort_handle);
+    let collect = async move {
+        let (stdout, stderr) = tokio::join!(collect_output(stdout), collect_output(stderr));
+        CollectedOutput {
+            stdout,
+            stderr,
+            timed_out: false,
+        }
+    };
+
+    match tokio::time::timeout(timeout, collect).await {
+        Ok(output) => output,
+        Err(_elapsed) => {
+            if let Some(abort) = stdout_abort {
+                abort.abort();
+            }
+            if let Some(abort) = stderr_abort {
+                abort.abort();
+            }
+            CollectedOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: true,
+            }
+        }
+    }
+}
+
+fn timeout_result(
+    command: &str,
+    timeout_secs: u64,
+    stdout: String,
+    mut stderr: String,
+) -> GateResult {
+    if !stderr.is_empty() {
+        stderr.push('\n');
+    }
+    stderr.push_str(&format!("Quality gate timed out after {timeout_secs}s"));
+
+    GateResult {
+        name: String::new(),
+        level: 0,
+        command: command.to_string(),
+        exit_code: None,
+        stdout,
+        stderr,
+        skipped: false,
+        skip_reason: None,
+    }
+}
+
+async fn terminate_gate_child_process_group(
+    child: &mut tokio::process::Child,
+    child_pid: Option<u32>,
+) {
     #[cfg(unix)]
     {
-        if let Some(pid) = child.id() {
+        if let Some(pid) = child_pid {
             // SAFETY: negative PID targets the process group created by process_group(0).
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
-            if child.try_wait().ok().flatten().is_none() {
-                // SAFETY: negative PID targets the process group created by process_group(0).
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
-                }
+            // SAFETY: negative PID targets the process group created by process_group(0).
+            // A PGID is not reused while any member is alive, so the group kill
+            // must run even when the original shell leader has already exited.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
     }

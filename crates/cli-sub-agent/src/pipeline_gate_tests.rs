@@ -228,6 +228,85 @@ async fn test_gate_timeout() {
 
 #[tokio::test]
 #[serial]
+#[cfg(unix)]
+async fn test_gate_kills_background_pipe_holder_after_leader_exits() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+    let child_pid_path = dir.path().join("pipe-holder.pid");
+    let extra_env = HashMap::from([(
+        "CSA_GATE_CHILD_PID".to_string(),
+        child_pid_path.to_string_lossy().into_owned(),
+    )]);
+
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        evaluate_quality_gate(
+            dir.path(),
+            Some(
+                r#"(trap '' TERM; sleep 60) & printf '%s\n' "$!" > "$CSA_GATE_CHILD_PID"; echo started"#,
+            ),
+            1,
+            &GateMode::Full,
+            0,
+            Some(&extra_env),
+        ),
+    )
+    .await
+    {
+        Ok(result) => result.unwrap(),
+        Err(_elapsed) => {
+            kill_pid_from_file(&child_pid_path);
+            // SAFETY: Restoring env before failing the test.
+            unsafe { clear_depth() };
+            panic!("gate must not hang when a background child holds stdout/stderr open");
+        }
+    };
+
+    assert!(!result.skipped);
+    assert!(!result.passed());
+    assert_eq!(result.exit_code, None);
+    assert!(result.stderr.contains("timed out"));
+
+    let child_pid: i32 = std::fs::read_to_string(&child_pid_path)
+        .expect("background child pid should be recorded")
+        .trim()
+        .parse()
+        .expect("background child pid should be numeric");
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    if process_exists(child_pid) {
+        kill_pid(child_pid);
+        panic!("background pipe holder survived gate timeout cleanup");
+    }
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[cfg(unix)]
+fn process_exists(pid: i32) -> bool {
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn kill_pid(pid: i32) {
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
+#[cfg(unix)]
+fn kill_pid_from_file(path: &std::path::Path) {
+    if let Ok(pid) = std::fs::read_to_string(path).map(|content| content.trim().parse::<i32>()) {
+        if let Ok(pid) = pid {
+            kill_pid(pid);
+        }
+    }
+}
+
+#[tokio::test]
+#[serial]
 async fn test_gate_monitor_mode_still_runs() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
