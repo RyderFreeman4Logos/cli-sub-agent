@@ -5,11 +5,13 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use csa_session::{get_session_dir, load_output_index};
+use csa_session::load_output_index;
 use serde::{Deserialize, Serialize};
 
 #[path = "session_cmds_daemon_attach.rs"]
 mod attach;
+#[path = "session_cmds_daemon_completion.rs"]
+mod completion;
 
 #[cfg(test)]
 use attach::{
@@ -24,12 +26,17 @@ mod wait;
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use crate::startup_env::StartupSubtreeEnv;
 
-const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
-const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
-const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-bot";
+pub(crate) use completion::{
+    DaemonCompletionPacket, daemon_completion_exists, daemon_completion_result,
+    finalize_daemon_completion_if_present, load_daemon_completion_packet,
+    persist_daemon_completion_from_env, retire_session_from_daemon_completion,
+    seed_daemon_session_env,
+};
 #[cfg(test)]
 pub(crate) use wait::render_wait_result_summary;
+#[cfg(test)]
+pub(crate) use wait::resolve_wait_completion_status_and_exit;
 #[cfg(test)]
 pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
@@ -47,23 +54,8 @@ enum AttachPrimaryOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DaemonCompletionPacket {
-    exit_code: i32,
-    status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct UnpushedCommitsRecoveryPacket {
     recovery_command: String,
-}
-
-impl DaemonCompletionPacket {
-    fn from_exit_code(exit_code: i32) -> Self {
-        Self {
-            exit_code,
-            status: csa_session::SessionResult::status_from_exit_code(exit_code),
-        }
-    }
 }
 
 /// Check whether a daemon PID is still running.
@@ -140,67 +132,6 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
         return pid_str.parse().ok();
     }
     None
-}
-
-pub(crate) fn seed_daemon_session_env(session_id: &str, cd: Option<&str>) {
-    let project_root = match crate::pipeline::determine_project_root(cd) {
-        Ok(root) => root,
-        Err(_) => return,
-    };
-    let session_dir = match get_session_dir(&project_root, session_id) {
-        Ok(dir) => dir,
-        Err(_) => return,
-    };
-
-    // SAFETY: daemon child sets process-scoped env before async worker tasks rely on it.
-    unsafe {
-        std::env::set_var(DAEMON_PROJECT_ROOT_ENV, &project_root);
-        std::env::set_var(DAEMON_SESSION_DIR_ENV, &session_dir);
-    }
-}
-
-pub(crate) fn persist_daemon_completion_from_env(exit_code: i32) {
-    let session_dir = resolve_daemon_session_dir_from_env();
-    let Some(session_dir) = session_dir else {
-        return;
-    };
-    let _ = persist_daemon_completion(&session_dir, exit_code);
-}
-
-fn load_daemon_completion_packet(session_dir: &Path) -> Result<Option<DaemonCompletionPacket>> {
-    let path = daemon_completion_path(session_dir);
-    if !path.is_file() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&path)?;
-    let packet = toml::from_str(&content)?;
-    Ok(Some(packet))
-}
-
-fn persist_daemon_completion(session_dir: &Path, exit_code: i32) -> Result<()> {
-    let packet = DaemonCompletionPacket::from_exit_code(exit_code);
-    let path = daemon_completion_path(session_dir);
-    let temp_path = path.with_extension("toml.tmp");
-    fs::write(&temp_path, toml::to_string_pretty(&packet)?)?;
-    fs::rename(temp_path, path)?;
-    Ok(())
-}
-
-fn daemon_completion_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(DAEMON_COMPLETION_FILE)
-}
-
-fn resolve_daemon_session_dir_from_env() -> Option<PathBuf> {
-    if let Some(session_dir) = std::env::var_os(DAEMON_SESSION_DIR_ENV) {
-        return Some(PathBuf::from(session_dir));
-    }
-
-    let session_id = std::env::var("CSA_DAEMON_SESSION_ID").ok()?;
-    let project_root = std::env::var_os(DAEMON_PROJECT_ROOT_ENV)
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())?;
-    get_session_dir(&project_root, &session_id).ok()
 }
 
 /// Attach to a running daemon session, tailing the primary output channel and optional stderr.

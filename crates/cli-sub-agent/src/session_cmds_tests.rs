@@ -10,7 +10,8 @@ use super::{
 };
 use crate::cli::{Cli, Commands, SessionCommands};
 use crate::session_cmds_daemon::{
-    persist_daemon_completion_from_env, seed_daemon_session_env, synthesized_wait_next_step,
+    persist_daemon_completion_from_env, resolve_wait_completion_status_and_exit,
+    seed_daemon_session_env, synthesized_wait_next_step,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use crate::test_session_sandbox::ScopedSessionSandbox;

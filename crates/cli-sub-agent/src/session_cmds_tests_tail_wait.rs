@@ -77,9 +77,12 @@ fn handle_session_wait_retires_active_session_after_dead_failure_completion_pack
     .unwrap();
     let session_id = session.meta_session_id;
     let session_dir = get_session_dir(project, &session_id).unwrap();
+    let mut stale_session = load_session(project, &session_id).unwrap();
+    stale_session.last_accessed = chrono::Utc::now() - chrono::Duration::seconds(7_200);
+    save_session(&stale_session).unwrap();
     std::fs::write(
         session_dir.join("daemon-completion.toml"),
-        "exit_code = 1\nstatus = \"failure\"\n",
+        "exit_code = 17\nstatus = \"failure\"\n",
     )
     .unwrap();
 
@@ -96,126 +99,36 @@ fn handle_session_wait_retires_active_session_after_dead_failure_completion_pack
         .unwrap()
         .expect("wait should synthesize a terminal result for a dead active session");
     assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 17);
 
     let persisted = load_session(project, &session_id).unwrap();
     assert_eq!(persisted.phase, SessionPhase::Retired);
     assert_eq!(
         persisted.termination_reason.as_deref(),
-        Some("orphaned_process")
+        Some("daemon_completion")
     );
 }
 
 #[test]
-fn handle_session_wait_prefers_synthetic_failure_status_and_exit_code_over_completion_packet() {
-    let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).expect("create state home");
-    let _home_guard = EnvVarGuard::set("HOME", td.path());
-    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
-    let project = td.path();
+fn resolve_wait_completion_prefers_synthetic_failure_over_completion_packet() {
+    let real_result = make_result("success", 0);
 
-    let session = create_session(
-        project,
-        Some("wait-synthetic-exit-code"),
-        None,
-        Some("codex"),
-    )
-    .expect("create session");
-    let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).expect("session dir");
-    std::fs::write(
-        session_dir.join("daemon-completion.toml"),
-        "exit_code = 0\nstatus = \"success\"\n",
-    )
-    .expect("write completion packet");
+    let (status, exit_code) =
+        resolve_wait_completion_status_and_exit("success", 0, true, Some(&real_result));
 
-    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-        WaitBehavior {
-            wait_timeout_secs: 1,
-            memory_warn_mb: None,
-            timing: WaitLoopTiming::default(),
-        },
-        |_project_root, _current_session_id, _trigger| {
-            Ok(WaitReconciliationOutcome {
-                result_became_available: true,
-                synthetic: true,
-            })
-        },
-        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
-            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
-        },
-    )
-    .expect("wait should succeed");
-
+    assert_eq!(status.as_ref(), "failure");
     assert_eq!(exit_code, 1);
-    assert_eq!(
-        emitted_completion,
-        Some((session_id, "failure".to_string(), 1, true))
-    );
 }
 
 #[test]
-fn handle_session_wait_prefers_late_real_result_status_and_exit_code_over_completion_packet() {
-    let td = tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).expect("create state home");
-    let _home_guard = EnvVarGuard::set("HOME", td.path());
-    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
-    let project = td.path();
+fn resolve_wait_completion_prefers_real_result_over_completion_packet() {
+    let real_result = make_result("failure", 7);
 
-    let session = create_session(project, Some("wait-late-real-result"), None, Some("codex"))
-        .expect("create session");
-    let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).expect("session dir");
-    std::fs::write(
-        session_dir.join("daemon-completion.toml"),
-        "exit_code = 0\nstatus = \"success\"\n",
-    )
-    .expect("write completion packet");
+    let (status, exit_code) =
+        resolve_wait_completion_status_and_exit("success", 0, false, Some(&real_result));
 
-    let late_result = SessionResult {
-        summary: "late real terminal result".to_string(),
-        ..make_result("failure", 7)
-    };
-
-    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-        WaitBehavior {
-            wait_timeout_secs: 1,
-            memory_warn_mb: None,
-            timing: WaitLoopTiming::default(),
-        },
-        |project_root, current_session_id, _trigger| {
-            save_result(project_root, current_session_id, &late_result).expect("save late result");
-            Ok(WaitReconciliationOutcome {
-                result_became_available: true,
-                synthetic: false,
-            })
-        },
-        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
-            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
-        },
-    )
-    .expect("wait should succeed");
-
+    assert_eq!(status.as_ref(), "failure");
     assert_eq!(exit_code, 1);
-    assert_eq!(
-        emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 1, false))
-    );
-
-    let persisted = load_result(project, &session_id)
-        .expect("load result")
-        .expect("late real result should persist");
-    assert_eq!(persisted.status, "failure");
-    assert_eq!(persisted.exit_code, 7);
 }
 
 #[test]

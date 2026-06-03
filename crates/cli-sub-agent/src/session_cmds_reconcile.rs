@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::plan_cmd::shell_escape_for_command;
+#[cfg(test)]
+use crate::session_result_publish::publish_result_file_if_absent_with_writer;
+use crate::session_result_publish::{
+    ResultFilePublishOutcome as SyntheticResultPersistOutcome,
+    preserve_existing_permissions_if_present, publish_result_file_if_absent,
+};
 #[path = "session_cmds_reconcile_cleanup.rs"]
 mod reconcile_cleanup;
 #[path = "session_cmds_reconcile_diagnostics.rs"]
@@ -49,20 +55,32 @@ struct SyntheticResultHooks<'a> {
     after_publish: &'a dyn Fn(&Path),
 }
 
+struct DaemonCompletionReconcileContext<'a> {
+    project_root: &'a Path,
+    session_id: &'a str,
+    trigger: &'a str,
+    session_dir: &'a Path,
+    result_path: &'a Path,
+    liveness: reconcile_liveness::ReconcileLivenessDecision,
+    hooks: SyntheticResultHooks<'a>,
+    persist_session: &'a dyn Fn(&Path, &MetaSessionState) -> Result<()>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadActiveSessionReconciliation {
     NoChange,
+    DaemonCompletionFinalized,
     SynthesizedFailure,
     LateResultRetired,
 }
 
 #[rustfmt::skip]
 impl DeadActiveSessionReconciliation {
-    pub(crate) fn result_became_available(self) -> bool { matches!(self, Self::SynthesizedFailure | Self::LateResultRetired) }
+    pub(crate) fn result_became_available(self) -> bool { matches!(self, Self::DaemonCompletionFinalized | Self::SynthesizedFailure | Self::LateResultRetired) }
     pub(crate) fn synthesized_failure(self) -> bool { matches!(self, Self::SynthesizedFailure) }
 }
 
-fn with_reconcile_lock<R>(
+pub(crate) fn with_reconcile_lock<R>(
     session_dir: &Path,
     body: impl FnOnce() -> Result<R>,
 ) -> Result<Option<R>> {
@@ -327,7 +345,38 @@ where
         }
         Err(err) => return Err(err),
     }
+    let daemon_completion_packet =
+        match crate::session_cmds_daemon::load_daemon_completion_packet(session_dir) {
+            Ok(packet) => packet,
+            Err(err) => {
+                warn!(
+                    session_id = %session_id,
+                    trigger = %trigger,
+                    error = %err,
+                    "Ignoring unusable daemon completion packet during dead-session reconciliation"
+                );
+                None
+            }
+        };
     let now = chrono::Utc::now();
+    if let Some(packet) = daemon_completion_packet {
+        return finalize_daemon_completion_during_reconcile(
+            DaemonCompletionReconcileContext {
+                project_root,
+                session_id,
+                trigger,
+                session_dir,
+                result_path: &result_path,
+                liveness,
+                hooks,
+                persist_session,
+            },
+            session,
+            packet,
+            now,
+            before_retire,
+        );
+    }
     let tool_name = session
         .tools
         .iter()
@@ -480,6 +529,115 @@ where
     Ok(DeadActiveSessionReconciliation::SynthesizedFailure)
 }
 
+fn finalize_daemon_completion_during_reconcile<B>(
+    context: DaemonCompletionReconcileContext<'_>,
+    mut session: MetaSessionState,
+    packet: crate::session_cmds_daemon::DaemonCompletionPacket,
+    completed_at: chrono::DateTime<chrono::Utc>,
+    before_retire: B,
+) -> Result<DeadActiveSessionReconciliation>
+where
+    B: FnOnce(&mut MetaSessionState),
+{
+    let DaemonCompletionReconcileContext {
+        project_root,
+        session_id,
+        trigger,
+        session_dir,
+        result_path,
+        liveness,
+        hooks,
+        persist_session,
+    } = context;
+    let SyntheticResultHooks {
+        before_write,
+        after_publish,
+    } = hooks;
+    let result = crate::session_cmds_daemon::daemon_completion_result(
+        project_root,
+        session_dir,
+        &session,
+        &packet,
+        completed_at,
+    );
+    #[rustfmt::skip]
+    let result_contents = toml::to_string_pretty(&result).map_err(|err| anyhow!("Failed to serialize daemon completion result for {session_id}: {err}"))?;
+    match persist_new_result_file(result_path, &result_contents, before_write)? {
+        SyntheticResultPersistOutcome::AlreadyExists => {
+            let retired = retire_if_dead_with_result_impl(
+                project_root,
+                session_id,
+                trigger,
+                session_dir,
+                liveness,
+                persist_session,
+            )?;
+            info!(
+                session_id = %session_id,
+                trigger = %trigger,
+                reconciliation_reason = "late_result_write",
+                result_path = %result_path.display(),
+                result_mtime = %format_optional_file_mtime(result_path).unwrap_or_else(|| "unknown".to_string()),
+                "Late result.toml write won during daemon-completion reconciliation"
+            );
+            return Ok(if retired {
+                DeadActiveSessionReconciliation::LateResultRetired
+            } else {
+                DeadActiveSessionReconciliation::NoChange
+            });
+        }
+        SyntheticResultPersistOutcome::Created => {}
+    }
+
+    after_publish(result_path);
+    before_retire(&mut session);
+    if !crate::session_cmds_daemon::retire_session_from_daemon_completion(
+        &mut session,
+        &packet,
+        completed_at,
+    ) {
+        rollback_reconciliation_artifacts(result_path, result_contents.as_bytes(), None)
+            .map_err(|cleanup_err| {
+                anyhow!(
+                    "Failed to transition daemon-completed session to Retired phase during reconciliation for {session_id}; additionally failed to remove daemon completion result: {cleanup_err}"
+                )
+            })?;
+        return Err(anyhow!(
+            "Failed to transition daemon-completed session to Retired phase during reconciliation for {session_id}"
+        ));
+    }
+    if let Err(err) = persist_session(session_dir, &session) {
+        warn!(
+            session_id = %session_id,
+            trigger = %trigger,
+            reconciliation_reason = "daemon_completion",
+            error = %err,
+            "Failed to persist retired daemon-completed session state during reconciliation; removing daemon completion result and leaving session state unchanged"
+        );
+        rollback_reconciliation_artifacts(result_path, result_contents.as_bytes(), None).map_err(
+            |cleanup_err| {
+                anyhow!(
+                    "Failed to persist retired daemon-completed session state for {session_id}: {err}; additionally failed to remove daemon completion result: {cleanup_err}"
+                )
+            },
+        )?;
+        return Err(anyhow!(
+            "Failed to persist retired daemon-completed session state for {session_id}: {err}"
+        ));
+    }
+    csa_session::write_cooldown_marker_from_session_dir(session_dir, session_id, completed_at);
+    warn!(
+        session_id = %session_id,
+        trigger = %trigger,
+        reconciliation_reason = "daemon_completion",
+        result_path = %result_path.display(),
+        exit_code = packet.exit_code,
+        status = %packet.status,
+        "Recovered daemon-completed session from completion packet"
+    );
+    Ok(DeadActiveSessionReconciliation::DaemonCompletionFinalized)
+}
+
 pub(crate) fn retire_if_dead_with_result(
     project_root: &Path,
     session_id: &str,
@@ -571,11 +729,10 @@ fn retire_if_dead_with_result_impl(
     Ok(true)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[rustfmt::skip]
-enum SyntheticResultPersistOutcome { Created, AlreadyExists }
-
-fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionState) -> Result<()> {
+pub(crate) fn persist_session_state_atomically(
+    session_dir: &Path,
+    session: &MetaSessionState,
+) -> Result<()> {
     let state_path = session_dir.join("state.toml");
     let contents = toml::to_string_pretty(session).context("Failed to serialize session state")?;
     let mut temp_file = tempfile::NamedTempFile::new_in(session_dir).with_context(|| {
@@ -692,12 +849,11 @@ fn persist_new_result_file<F>(
 where
     F: FnOnce(&Path),
 {
-    persist_new_result_file_with_writer(result_path, contents, before_write, |file, contents| {
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()
-    })
+    before_write(result_path);
+    publish_result_file_if_absent(result_path, contents, "synthetic result")
 }
 
+#[cfg(test)]
 fn persist_new_result_file_with_writer<F, W>(
     result_path: &Path,
     contents: &str,
@@ -709,67 +865,12 @@ where
     W: FnOnce(&mut fs::File, &str) -> std::io::Result<()>,
 {
     before_write(result_path);
-    let result_dir = result_path.parent().ok_or_else(|| {
-        anyhow!(
-            "Synthetic result path has no parent: {}",
-            result_path.display()
-        )
-    })?;
-    let mut temp_file = tempfile::NamedTempFile::new_in(result_dir).with_context(|| {
-        format!(
-            "Failed to create temporary synthetic result in {}",
-            result_dir.display()
-        )
-    })?;
-    if let Err(err) = write_contents(temp_file.as_file_mut(), contents) {
-        return Err(anyhow!(
-            "Failed to write or sync synthetic result for {}: {err}",
-            result_path.display()
-        ));
-    }
-    preserve_existing_permissions_if_present(
-        temp_file.as_file_mut(),
+    publish_result_file_if_absent_with_writer(
         result_path,
+        contents,
         "synthetic result",
-    )?;
-    match fs::hard_link(temp_file.path(), result_path) {
-        Ok(()) => Ok(SyntheticResultPersistOutcome::Created),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            Ok(SyntheticResultPersistOutcome::AlreadyExists)
-        }
-        Err(err) => Err(anyhow!(
-            "Failed to publish synthetic result for {}: {err}",
-            result_path.display()
-        )),
-    }
-}
-
-fn preserve_existing_permissions_if_present(
-    temp_file: &mut fs::File,
-    target_path: &Path,
-    file_kind: &str,
-) -> Result<()> {
-    let permissions = match fs::metadata(target_path) {
-        Ok(metadata) => Some(metadata.permissions()),
-        Err(err) if err.kind() == ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "Failed to read {file_kind} metadata before preserving permissions: {}",
-                    target_path.display()
-                )
-            });
-        }
-    };
-    if let Some(permissions) = permissions {
-        temp_file.set_permissions(permissions).with_context(|| {
-            format!(
-                "Failed to preserve existing permissions for {file_kind}: {}",
-                target_path.display()
-            )
-        })?;
-    }
-    Ok(())
+        write_contents,
+    )
 }
 
 fn format_optional_file_mtime(path: &Path) -> Option<String> {

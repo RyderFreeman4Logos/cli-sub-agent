@@ -21,8 +21,8 @@ use super::{
 };
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use crate::session_cmds_daemon::{
-    emit_failure_summary_for_empty_output, load_daemon_completion_packet,
-    session_has_terminal_process,
+    emit_failure_summary_for_empty_output, finalize_daemon_completion_if_present,
+    load_daemon_completion_packet, session_has_terminal_process,
 };
 
 /// Core polling loop implementation for session wait.
@@ -127,19 +127,22 @@ where
                     "session wait",
                 )?;
             } else {
-                let reconciled = reconcile_dead_active_session(
-                    effective_root,
-                    &resolved.session_id,
-                    "session wait",
-                )?;
-                synthetic = reconciled.synthetic;
-                if reconciled.result_became_available {
-                    loaded_result = load_completed_daemon_result_with_fallback(
+                loaded_result = finalize_daemon_completion_if_present(&session_dir)?;
+                if loaded_result.is_none() {
+                    let reconciled = reconcile_dead_active_session(
                         effective_root,
                         &resolved.session_id,
-                        &session_dir,
-                        is_cross_project,
+                        "session wait",
                     )?;
+                    synthetic = reconciled.synthetic;
+                    if reconciled.result_became_available {
+                        loaded_result = load_completed_daemon_result_with_fallback(
+                            effective_root,
+                            &resolved.session_id,
+                            &session_dir,
+                            is_cross_project,
+                        )?;
+                    }
                 }
             }
             let streamed_output = emit_wait_terminal_output(
