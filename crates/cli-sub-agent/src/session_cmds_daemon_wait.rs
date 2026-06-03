@@ -1,6 +1,7 @@
 use super::*;
 use chrono::Utc;
 use csa_config::GlobalConfig;
+use std::time::{Duration, Instant, SystemTime};
 
 #[path = "session_cmds_daemon_wait_completion.rs"]
 mod completion;
@@ -241,12 +242,17 @@ fn emit_wait_completion_signal(
 
 /// Check if a session is stale before starting to wait.
 /// Returns Err if the session is stale (daemon not running, no recent progress).
-fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
+fn check_session_stale_before_wait(
+    project_root: &Path,
+    session_id: &str,
+    session_dir: &Path,
+    wait_behavior: WaitBehavior,
+) -> anyhow::Result<()> {
     // Load the session to check its phase and last_accessed time.
     // Only flag truly stale sessions (Active phase, no daemon, no recent progress).
     // Sessions with an existing result.toml are NOT stale — they completed, and the
     // main polling loop will return the result correctly.
-    match csa_session::load_session(project_root, session_id) {
+    match load_session_for_stale_precheck(project_root, session_id, session_dir, wait_behavior) {
         Ok(session) => {
             // Only check Active sessions for staleness
             if matches!(session.phase, csa_session::SessionPhase::Active) {
@@ -266,9 +272,7 @@ fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> any
                 let elapsed = now.signed_duration_since(session.last_accessed);
 
                 if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
-                    if let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id)
-                        && session_has_terminal_process(&session_dir)
-                    {
+                    if session_has_terminal_process(session_dir) {
                         return Ok(());
                     }
                     return Err(anyhow::anyhow!(
@@ -285,6 +289,83 @@ fn check_session_stale_before_wait(project_root: &Path, session_id: &str) -> any
     }
 
     Ok(())
+}
+
+fn load_session_for_stale_precheck(
+    project_root: &Path,
+    session_id: &str,
+    session_dir: &Path,
+    wait_behavior: WaitBehavior,
+) -> anyhow::Result<csa_session::MetaSessionState> {
+    let state_path = session_dir.join("state.toml");
+    let retry_until = startup_state_retry_deadline(
+        &state_path,
+        session_dir,
+        Duration::from_secs(wait_behavior.wait_timeout_secs),
+    );
+
+    loop {
+        match csa_session::load_session(project_root, session_id) {
+            Ok(session) => return Ok(session),
+            Err(load_err) => {
+                let Some(deadline) = retry_until else {
+                    return Err(load_err);
+                };
+                if Instant::now() >= deadline || !state_load_error_can_be_initializing(&state_path)
+                {
+                    return Err(load_err);
+                }
+
+                tracing::debug!(
+                    session_id,
+                    state_path = %state_path.display(),
+                    "Session state is still initializing; retrying stale precheck load"
+                );
+                std::thread::sleep(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(wait_behavior.timing.poll_interval),
+                );
+            }
+        }
+    }
+}
+
+fn startup_state_retry_deadline(
+    state_path: &Path,
+    session_dir: &Path,
+    retry_window: Duration,
+) -> Option<Instant> {
+    if retry_window.is_zero() {
+        return None;
+    }
+
+    let modified = state_retry_modified_time(state_path, session_dir)?;
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(Duration::ZERO);
+    if age > retry_window {
+        return None;
+    }
+
+    Some(Instant::now() + retry_window.saturating_sub(age))
+}
+
+fn state_retry_modified_time(state_path: &Path, session_dir: &Path) -> Option<SystemTime> {
+    match std::fs::metadata(state_path) {
+        Ok(metadata) => metadata.modified().ok(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::metadata(session_dir).ok()?.modified().ok()
+        }
+        Err(_) => None,
+    }
+}
+
+fn state_load_error_can_be_initializing(state_path: &Path) -> bool {
+    match std::fs::read_to_string(state_path) {
+        Ok(_) => true,
+        Err(err) => err.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 fn emit_wait_memory_warn_marker(session_id: &str, rss_mb: u64, limit_mb: u64) {

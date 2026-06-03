@@ -188,3 +188,119 @@ fn stale_precheck_does_not_fail_live_daemon_session() {
         "live daemon must not be pre-failed solely because last_accessed is stale"
     );
 }
+
+#[test]
+fn wait_retries_blank_state_during_startup_precheck() {
+    assert_wait_retries_initializing_state_until_complete("\n  \n");
+}
+
+#[test]
+fn wait_retries_partial_state_missing_required_field_during_startup_precheck() {
+    assert_wait_retries_initializing_state_until_complete(
+        "project_path = \"/tmp/wait-partial-state\"\n",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wait_errors_on_malformed_state_past_startup_precheck_window() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-malformed-state-old"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    let state_path = get_session_dir(project, &session_id)
+        .expect("session dir")
+        .join("state.toml");
+    std::fs::write(&state_path, "not valid toml = [\n").expect("write malformed state");
+    super::set_file_mtime_seconds_ago(&state_path, 2);
+
+    let exit_code = handle_session_wait_with_hooks(
+        session_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("malformed state must fail before reconciliation")
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("malformed state must not emit completion")
+        },
+    )
+    .expect("old malformed state should be reported as a wait failure");
+
+    assert_eq!(
+        exit_code, 1,
+        "old malformed state must remain a hard wait failure"
+    );
+}
+
+fn assert_wait_retries_initializing_state_until_complete(initial_state: &str) {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-initializing-state"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    save_result(project, &session_id, &make_result("success", 0)).expect("save result");
+
+    let state_path = get_session_dir(project, &session_id)
+        .expect("session dir")
+        .join("state.toml");
+    let complete_state = std::fs::read_to_string(&state_path).expect("read complete state");
+    std::fs::write(&state_path, initial_state).expect("write initializing state");
+
+    let restore_path = state_path.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(restore_path, complete_state).expect("restore complete state");
+    });
+
+    let exit_code = handle_session_wait_with_hooks(
+        session_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("completed result should be loaded without reconciliation")
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {},
+    )
+    .expect("wait should retry initializing state and then read completed result");
+
+    writer.join().expect("state restore thread");
+    assert_eq!(exit_code, 0);
+}
