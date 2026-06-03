@@ -1,17 +1,12 @@
 //! Daemon completion packet handling and terminal result synthesis.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use csa_session::{MetaSessionState, PhaseEvent, SessionPhase, SessionResult};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
-
-use crate::session_result_publish::{
-    ResultFilePublishOutcome, publish_result_file_if_absent_with_writer,
-};
 
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
@@ -62,7 +57,7 @@ pub(crate) fn persist_daemon_completion_from_env(exit_code: i32) {
         );
         return;
     }
-    if let Err(err) = finalize_daemon_completion(&session_dir, &packet) {
+    if let Err(err) = finalize_daemon_completion_if_present(&session_dir) {
         warn!(
             path = %session_dir.display(),
             exit_code,
@@ -93,9 +88,9 @@ pub(crate) fn load_daemon_completion_packet(
 pub(crate) fn finalize_daemon_completion_if_present(
     session_dir: &Path,
 ) -> Result<Option<SessionResult>> {
-    let Some(packet) = load_daemon_completion_packet(session_dir)? else {
+    if load_daemon_completion_packet(session_dir)?.is_none() {
         return Ok(None);
-    };
+    }
     if super::session_has_terminal_process(session_dir) {
         debug!(
             path = %daemon_completion_path(session_dir).display(),
@@ -103,7 +98,13 @@ pub(crate) fn finalize_daemon_completion_if_present(
         );
         return Ok(None);
     }
-    finalize_daemon_completion(session_dir, &packet)?;
+    let session = load_session_state_from_dir(session_dir)?;
+    let project_root = PathBuf::from(&session.project_path);
+    crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+        &project_root,
+        &session.meta_session_id,
+        "daemon completion",
+    )?;
     load_result_from_dir(session_dir)
 }
 
@@ -131,41 +132,7 @@ fn resolve_daemon_session_dir_from_env() -> Option<PathBuf> {
     csa_session::get_session_dir(&project_root, &session_id).ok()
 }
 
-fn finalize_daemon_completion(session_dir: &Path, packet: &DaemonCompletionPacket) -> Result<()> {
-    crate::session_cmds::with_reconcile_lock(session_dir, || {
-        let mut session = load_session_state_from_dir(session_dir)?;
-        if !matches!(session.phase, SessionPhase::Active) {
-            return Ok(());
-        }
-
-        let project_root = PathBuf::from(&session.project_path);
-        let completed_at = chrono::Utc::now();
-
-        if load_result_from_dir(session_dir)?.is_none() {
-            let result = daemon_completion_result(
-                &project_root,
-                session_dir,
-                &session,
-                packet,
-                completed_at,
-            );
-            persist_result_if_absent(session_dir, &result)?;
-        }
-
-        if retire_session_from_daemon_completion(&mut session, packet, completed_at) {
-            crate::session_cmds::persist_session_state_atomically(session_dir, &session)?;
-            csa_session::write_cooldown_marker_from_session_dir(
-                session_dir,
-                &session.meta_session_id,
-                completed_at,
-            );
-        }
-        Ok(())
-    })?;
-    Ok(())
-}
-
-fn daemon_completion_result(
+pub(crate) fn daemon_completion_result(
     project_root: &Path,
     session_dir: &Path,
     session: &MetaSessionState,
@@ -211,7 +178,7 @@ fn daemon_completion_result(
     }
 }
 
-fn retire_session_from_daemon_completion(
+pub(crate) fn retire_session_from_daemon_completion(
     session: &mut MetaSessionState,
     packet: &DaemonCompletionPacket,
     completed_at: chrono::DateTime<chrono::Utc>,
@@ -260,40 +227,6 @@ fn load_result_from_dir(session_dir: &Path) -> Result<Option<SessionResult>> {
         .with_context(|| format!("Failed to parse result file: {}", result_path.display()))
 }
 
-fn persist_result_if_absent(session_dir: &Path, result: &SessionResult) -> Result<()> {
-    persist_result_if_absent_with_writer(session_dir, result, |file, contents| {
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()
-    })
-}
-
-fn persist_result_if_absent_with_writer<W>(
-    session_dir: &Path,
-    result: &SessionResult,
-    write_contents: W,
-) -> Result<()>
-where
-    W: FnOnce(&mut fs::File, &str) -> std::io::Result<()>,
-{
-    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
-    let contents = toml::to_string_pretty(result).context("Failed to serialize daemon result")?;
-    match publish_result_file_if_absent_with_writer(
-        &result_path,
-        &contents,
-        "daemon result",
-        write_contents,
-    )? {
-        ResultFilePublishOutcome::Created => Ok(()),
-        ResultFilePublishOutcome::AlreadyExists => {
-            debug!(
-                path = %result_path.display(),
-                "Result appeared while finalizing daemon completion; preserving existing result"
-            );
-            Ok(())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,41 +235,24 @@ mod tests {
         SessionPhase, create_session, get_session_dir, load_result, load_session, save_result,
         save_session,
     };
+    use std::io::Write;
     use tempfile::tempdir;
 
     #[test]
     fn persist_result_if_absent_removes_partial_temp_when_write_fails() -> Result<()> {
         let tmp = tempdir()?;
-        let now = chrono::Utc::now();
-        let result = SessionResult {
-            status: "failure".to_string(),
-            exit_code: 17,
-            summary: "daemon fallback".to_string(),
-            tool: "codex".to_string(),
-            original_tool: None,
-            fallback_tool: None,
-            fallback_reason: None,
-            started_at: now,
-            completed_at: now,
-            events_count: 0,
-            artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
-        };
+        let result_path = tmp.path().join(csa_session::result::RESULT_FILE_NAME);
 
-        let err =
-            match persist_result_if_absent_with_writer(tmp.path(), &result, |file, _contents| {
+        let err = crate::session_result_publish::publish_result_file_if_absent_with_writer(
+            &result_path,
+            "status = \"failure\"\nexit_code = 17\n",
+            "daemon result",
+            |file, _contents| {
                 file.write_all(b"partial")?;
                 Err(std::io::Error::other("boom"))
-            }) {
-                Ok(()) => anyhow::bail!("daemon result write should fail"),
-                Err(err) => err,
-            };
+            },
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()
@@ -344,9 +260,7 @@ mod tests {
             "unexpected error: {err:#}"
         );
         assert!(
-            !tmp.path()
-                .join(csa_session::result::RESULT_FILE_NAME)
-                .exists(),
+            !result_path.exists(),
             "partial daemon result should not be published after write failure"
         );
         let entries = fs::read_dir(tmp.path())?.collect::<std::io::Result<Vec<_>>>()?;

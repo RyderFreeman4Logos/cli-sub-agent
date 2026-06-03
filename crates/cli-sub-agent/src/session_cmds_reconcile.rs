@@ -55,16 +55,28 @@ struct SyntheticResultHooks<'a> {
     after_publish: &'a dyn Fn(&Path),
 }
 
+struct DaemonCompletionReconcileContext<'a> {
+    project_root: &'a Path,
+    session_id: &'a str,
+    trigger: &'a str,
+    session_dir: &'a Path,
+    result_path: &'a Path,
+    liveness: reconcile_liveness::ReconcileLivenessDecision,
+    hooks: SyntheticResultHooks<'a>,
+    persist_session: &'a dyn Fn(&Path, &MetaSessionState) -> Result<()>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadActiveSessionReconciliation {
     NoChange,
+    DaemonCompletionFinalized,
     SynthesizedFailure,
     LateResultRetired,
 }
 
 #[rustfmt::skip]
 impl DeadActiveSessionReconciliation {
-    pub(crate) fn result_became_available(self) -> bool { matches!(self, Self::SynthesizedFailure | Self::LateResultRetired) }
+    pub(crate) fn result_became_available(self) -> bool { matches!(self, Self::DaemonCompletionFinalized | Self::SynthesizedFailure | Self::LateResultRetired) }
     pub(crate) fn synthesized_failure(self) -> bool { matches!(self, Self::SynthesizedFailure) }
 }
 
@@ -333,7 +345,38 @@ where
         }
         Err(err) => return Err(err),
     }
+    let daemon_completion_packet =
+        match crate::session_cmds_daemon::load_daemon_completion_packet(session_dir) {
+            Ok(packet) => packet,
+            Err(err) => {
+                warn!(
+                    session_id = %session_id,
+                    trigger = %trigger,
+                    error = %err,
+                    "Ignoring unusable daemon completion packet during dead-session reconciliation"
+                );
+                None
+            }
+        };
     let now = chrono::Utc::now();
+    if let Some(packet) = daemon_completion_packet {
+        return finalize_daemon_completion_during_reconcile(
+            DaemonCompletionReconcileContext {
+                project_root,
+                session_id,
+                trigger,
+                session_dir,
+                result_path: &result_path,
+                liveness,
+                hooks,
+                persist_session,
+            },
+            session,
+            packet,
+            now,
+            before_retire,
+        );
+    }
     let tool_name = session
         .tools
         .iter()
@@ -484,6 +527,115 @@ where
         "Recovered orphaned session with synthetic result"
     );
     Ok(DeadActiveSessionReconciliation::SynthesizedFailure)
+}
+
+fn finalize_daemon_completion_during_reconcile<B>(
+    context: DaemonCompletionReconcileContext<'_>,
+    mut session: MetaSessionState,
+    packet: crate::session_cmds_daemon::DaemonCompletionPacket,
+    completed_at: chrono::DateTime<chrono::Utc>,
+    before_retire: B,
+) -> Result<DeadActiveSessionReconciliation>
+where
+    B: FnOnce(&mut MetaSessionState),
+{
+    let DaemonCompletionReconcileContext {
+        project_root,
+        session_id,
+        trigger,
+        session_dir,
+        result_path,
+        liveness,
+        hooks,
+        persist_session,
+    } = context;
+    let SyntheticResultHooks {
+        before_write,
+        after_publish,
+    } = hooks;
+    let result = crate::session_cmds_daemon::daemon_completion_result(
+        project_root,
+        session_dir,
+        &session,
+        &packet,
+        completed_at,
+    );
+    #[rustfmt::skip]
+    let result_contents = toml::to_string_pretty(&result).map_err(|err| anyhow!("Failed to serialize daemon completion result for {session_id}: {err}"))?;
+    match persist_new_result_file(result_path, &result_contents, before_write)? {
+        SyntheticResultPersistOutcome::AlreadyExists => {
+            let retired = retire_if_dead_with_result_impl(
+                project_root,
+                session_id,
+                trigger,
+                session_dir,
+                liveness,
+                persist_session,
+            )?;
+            info!(
+                session_id = %session_id,
+                trigger = %trigger,
+                reconciliation_reason = "late_result_write",
+                result_path = %result_path.display(),
+                result_mtime = %format_optional_file_mtime(result_path).unwrap_or_else(|| "unknown".to_string()),
+                "Late result.toml write won during daemon-completion reconciliation"
+            );
+            return Ok(if retired {
+                DeadActiveSessionReconciliation::LateResultRetired
+            } else {
+                DeadActiveSessionReconciliation::NoChange
+            });
+        }
+        SyntheticResultPersistOutcome::Created => {}
+    }
+
+    after_publish(result_path);
+    before_retire(&mut session);
+    if !crate::session_cmds_daemon::retire_session_from_daemon_completion(
+        &mut session,
+        &packet,
+        completed_at,
+    ) {
+        rollback_reconciliation_artifacts(result_path, result_contents.as_bytes(), None)
+            .map_err(|cleanup_err| {
+                anyhow!(
+                    "Failed to transition daemon-completed session to Retired phase during reconciliation for {session_id}; additionally failed to remove daemon completion result: {cleanup_err}"
+                )
+            })?;
+        return Err(anyhow!(
+            "Failed to transition daemon-completed session to Retired phase during reconciliation for {session_id}"
+        ));
+    }
+    if let Err(err) = persist_session(session_dir, &session) {
+        warn!(
+            session_id = %session_id,
+            trigger = %trigger,
+            reconciliation_reason = "daemon_completion",
+            error = %err,
+            "Failed to persist retired daemon-completed session state during reconciliation; removing daemon completion result and leaving session state unchanged"
+        );
+        rollback_reconciliation_artifacts(result_path, result_contents.as_bytes(), None).map_err(
+            |cleanup_err| {
+                anyhow!(
+                    "Failed to persist retired daemon-completed session state for {session_id}: {err}; additionally failed to remove daemon completion result: {cleanup_err}"
+                )
+            },
+        )?;
+        return Err(anyhow!(
+            "Failed to persist retired daemon-completed session state for {session_id}: {err}"
+        ));
+    }
+    csa_session::write_cooldown_marker_from_session_dir(session_dir, session_id, completed_at);
+    warn!(
+        session_id = %session_id,
+        trigger = %trigger,
+        reconciliation_reason = "daemon_completion",
+        result_path = %result_path.display(),
+        exit_code = packet.exit_code,
+        status = %packet.status,
+        "Recovered daemon-completed session from completion packet"
+    );
+    Ok(DeadActiveSessionReconciliation::DaemonCompletionFinalized)
 }
 
 pub(crate) fn retire_if_dead_with_result(
