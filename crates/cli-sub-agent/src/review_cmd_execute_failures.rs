@@ -26,7 +26,7 @@ pub(super) fn classify_review_failover_reason(
 ) -> Option<ReviewFailoverFailure> {
     if status_reason == Some("gemini_auth_prompt") {
         return Some(ReviewFailoverFailure {
-            reason: "gemini_auth_prompt".to_string(),
+            reason: "auth_unavailable".to_string(),
             quota_exhausted: None,
         });
     }

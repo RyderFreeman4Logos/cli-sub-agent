@@ -231,6 +231,138 @@ pub(crate) fn format_all_models_failed_reason(
     })
 }
 
+pub(crate) fn format_all_models_failed_reason_with_reset(
+    tier_name: Option<&str>,
+    failures: &[TierAttemptFailure],
+    reset_after: Option<Duration>,
+) -> Option<String> {
+    let mut reason = format_all_models_failed_reason(tier_name, failures)?;
+    if let Some(reset_after) = reset_after {
+        reason.push_str("; earliest_reset=");
+        reason.push_str(&format_reset_duration(reset_after));
+    }
+    Some(reason)
+}
+
+pub(crate) fn opaque_total_exhaustion_message(
+    primary_failure: Option<&str>,
+    failure_reason: Option<&str>,
+) -> Option<String> {
+    let primary_failure = primary_failure?.trim();
+    if primary_failure.is_empty() {
+        return None;
+    }
+
+    let mut reason_count = 0;
+    for reason in primary_failure.split(';').map(str::trim) {
+        if reason.is_empty() {
+            continue;
+        }
+        reason_count += 1;
+        if !is_quota_rate_auth_reason(reason) {
+            return None;
+        }
+    }
+    if reason_count == 0 {
+        return None;
+    }
+
+    let tier_label = parse_all_models_failed_tier_label(failure_reason)?;
+    Some(format_opaque_total_exhaustion_message(
+        tier_label,
+        failure_reason.and_then(parse_backend_reset_duration),
+    ))
+}
+
+pub(crate) fn parse_backend_reset_duration(text: &str) -> Option<Duration> {
+    let lower = text.to_ascii_lowercase();
+    for marker in [
+        "earliest_reset=",
+        "earliest reset",
+        "quota will reset after",
+        "quota resets after",
+        "reset after",
+        "reset in",
+    ] {
+        let Some(index) = lower.find(marker) else {
+            continue;
+        };
+        let fragment = lower.get(index + marker.len()..)?;
+        if let Some(duration) = parse_duration_units(fragment) {
+            return Some(duration);
+        }
+    }
+    None
+}
+
+fn parse_duration_units(fragment: &str) -> Option<Duration> {
+    let re = regex::Regex::new(r"([0-9]+)\s*([dhms])").ok()?;
+    let bounded = fragment.chars().take(80).collect::<String>();
+    let mut seconds = 0_u64;
+    let mut matched = false;
+    for captures in re.captures_iter(&bounded) {
+        let value = captures.get(1)?.as_str().parse::<u64>().ok()?;
+        let unit_seconds = match captures.get(2)?.as_str() {
+            "d" => 86_400,
+            "h" => 3_600,
+            "m" => 60,
+            "s" => 1,
+            _ => return None,
+        };
+        seconds = seconds.checked_add(value.checked_mul(unit_seconds)?)?;
+        matched = true;
+    }
+    matched.then(|| Duration::from_secs(seconds))
+}
+
+fn parse_all_models_failed_tier_label(failure_reason: Option<&str>) -> Option<&str> {
+    let reason = failure_reason?.trim();
+    let rest = reason.strip_prefix("all ")?;
+    let (tier_label, _) = rest.split_once(" models failed:")?;
+    (!tier_label.trim().is_empty()).then_some(tier_label.trim())
+}
+
+fn is_quota_rate_auth_reason(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("auth_unavailable")
+        || lower.contains("gemini_auth_prompt")
+        || lower.contains("429")
+        || lower.contains("quota")
+        || lower.contains("rate-limit")
+        || lower.contains("rate limit")
+        || lower.contains("resource_exhausted")
+        || lower.contains("resource exhausted")
+        || lower.contains("usage limit")
+        || lower.contains("http 401")
+        || lower.contains("http 403")
+}
+
+fn format_opaque_total_exhaustion_message(
+    tier_label: &str,
+    reset_after: Option<Duration>,
+) -> String {
+    let mut message = format!("review unavailable: all {tier_label} backends rate-limited");
+    if let Some(reset_after) = reset_after {
+        message.push_str("; earliest reset ~");
+        message.push_str(&format_reset_duration(reset_after));
+    }
+    message
+}
+
+fn format_reset_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let mut minutes = seconds / 60;
+    if !seconds.is_multiple_of(60) {
+        minutes += 1;
+    }
+    let hours = minutes / 60;
+    let minutes = minutes % 60;
+    if hours > 0 {
+        return format!("{hours}h {minutes}m");
+    }
+    format!("{minutes}m")
+}
+
 pub(crate) fn fallback_reason_for_result(failures: &[TierAttemptFailure]) -> Option<&'static str> {
     failures
         .iter()
@@ -324,7 +456,7 @@ pub(crate) fn persist_result_warning(project_root: &Path, session_id: &str, warn
 
 #[cfg(test)]
 mod tests {
-    use super::ordered_tier_candidates;
+    use super::{opaque_total_exhaustion_message, ordered_tier_candidates};
     use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
     use csa_core::types::ToolName;
     use std::collections::HashMap;
@@ -449,5 +581,24 @@ mod tests {
             (ToolName::ClaudeCode, None),
             (ToolName::GeminiCli, None),
         ]));
+    }
+
+    #[test]
+    fn opaque_total_exhaustion_uses_provider_reset_window() {
+        let failure_reason = "all tier-4-critical models failed: \
+            gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable, \
+            codex/openai/gpt-5.5/xhigh=HTTP 429; \
+            provider said quota will reset after 16h8m32s";
+
+        let message = opaque_total_exhaustion_message(
+            Some("auth_unavailable; HTTP 429"),
+            Some(failure_reason),
+        )
+        .expect("quota/auth total exhaustion should produce an opaque message");
+
+        assert_eq!(
+            message,
+            "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~16h 9m"
+        );
     }
 }

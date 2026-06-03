@@ -169,6 +169,37 @@ fn resolve_single_review_result_maps_api_key_failure_to_unavailable() {
 }
 
 #[test]
+fn forced_total_exhaustion_uses_opaque_caller_message() {
+    let mut result = outcome("", 1);
+    result.forced_decision = Some(ReviewDecision::Unavailable);
+    result.primary_failure = Some("auth_unavailable; HTTP 429".to_string());
+    result.failure_reason = Some(
+        "all tier-4-critical models failed: \
+         gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable, \
+         codex/openai/gpt-5.5/xhigh=HTTP 429; earliest_reset=13h 58m"
+            .to_string(),
+    );
+    result.execution.execution.stderr_output =
+        "OAuth browser stack: API Key not found; attempted-and-errored".to_string();
+
+    let resolved =
+        resolve_single_review_result(&result, ToolName::Codex, "uncommitted", Path::new("."));
+
+    assert_eq!(resolved.decision, ReviewDecision::Unavailable);
+    assert_eq!(
+        resolved.sanitized,
+        "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~13h 58m\n"
+    );
+    assert!(!resolved.sanitized.contains("OAuth browser"));
+    assert!(!resolved.sanitized.contains("API Key"));
+    assert!(!resolved.sanitized.contains("attempted-and-errored"));
+
+    let reviewer = build_reviewer_outcome(0, ToolName::Codex, &result).expect("reviewer outcome");
+    assert_eq!(reviewer.output, resolved.sanitized);
+    assert!(reviewer.diagnostic.is_none());
+}
+
+#[test]
 fn build_reviewer_outcome_does_not_mark_review_prose_quota_mentions_unavailable() {
     let reviewer = build_reviewer_outcome(
         0,

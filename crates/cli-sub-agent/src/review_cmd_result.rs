@@ -11,6 +11,7 @@ use crate::review_consensus::{
     CLEAN, HAS_ISSUES, SKIP, UNAVAILABLE, UNCERTAIN, parse_explicit_review_decision_token,
     parse_review_decision,
 };
+use crate::tier_model_fallback::opaque_total_exhaustion_message;
 
 use super::execute::ReviewExecutionOutcome;
 use super::output::{
@@ -96,8 +97,14 @@ pub(super) fn resolve_single_review_result(
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
     let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
     let tool_unavailable_reason = tool_unavailable_failure_reason(result, tool);
+    let opaque_total_exhaustion = opaque_total_exhaustion_message(
+        result.primary_failure.as_deref(),
+        result.failure_reason.as_deref(),
+    );
     let sanitized = if auth_prompt_failure {
         AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
+    } else if let Some(message) = opaque_total_exhaustion.as_deref() {
+        format!("{message}\n")
     } else if forced_unavailable {
         format!(
             "{REVIEW_UNAVAILABLE_PREFIX}{}\n",
@@ -115,10 +122,14 @@ pub(super) fn resolve_single_review_result(
         && !forced_unavailable
         && tool_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.execution.output);
-    let tool_diagnostic = detect_tool_diagnostic(
-        &result.execution.execution.output,
-        &result.execution.execution.stderr_output,
-    );
+    let tool_diagnostic = if opaque_total_exhaustion.is_some() {
+        None
+    } else {
+        detect_tool_diagnostic(
+            &result.execution.execution.output,
+            &result.execution.execution.stderr_output,
+        )
+    };
     if empty_output {
         if let Some(ref diagnostic) = tool_diagnostic {
             eprintln!("[csa-review] Tool failure detected: {diagnostic}");
@@ -186,6 +197,10 @@ pub(super) fn build_reviewer_outcome(
         Some(ReviewDecision::Unavailable)
     );
     let tool_unavailable_reason = tool_unavailable_failure_reason(session_result, reviewer_tool);
+    let opaque_total_exhaustion = opaque_total_exhaustion_message(
+        session_result.primary_failure.as_deref(),
+        session_result.failure_reason.as_deref(),
+    );
     let empty = !auth_prompt_failure
         && !forced_unavailable
         && tool_unavailable_reason.is_none()
@@ -238,6 +253,8 @@ pub(super) fn build_reviewer_outcome(
         verdict: verdict_from_decision(decision),
         output: if auth_prompt_failure {
             AUTH_PROMPT_REVIEW_UNAVAILABLE.to_string()
+        } else if let Some(message) = opaque_total_exhaustion.as_deref() {
+            format!("{message}\n")
         } else if forced_unavailable {
             format!(
                 "{REVIEW_UNAVAILABLE_PREFIX}{}\n",
@@ -252,9 +269,13 @@ pub(super) fn build_reviewer_outcome(
             sanitize_review_output(&result.execution.output)
         },
         exit_code: crate::verdict_exit_code::exit_code_from_review_decision(decision),
-        diagnostic: diagnostic
-            .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
-            .or_else(|| tool_unavailable_reason.clone()),
+        diagnostic: if opaque_total_exhaustion.is_some() {
+            None
+        } else {
+            diagnostic
+                .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
+                .or_else(|| tool_unavailable_reason.clone())
+        },
     })
 }
 

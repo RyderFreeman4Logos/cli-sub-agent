@@ -1,0 +1,328 @@
+use chrono::Utc;
+
+use super::{
+    WAIT_OUTPUT_MAX_BYTES, read_wait_output_log, render_wait_output_log, render_wait_result_summary,
+};
+
+#[test]
+fn read_wait_output_log_tails_large_stdout_without_loading_prefix() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let stdout_log = temp.path().join("stdout.log");
+    let prefix = vec![b'a'; WAIT_OUTPUT_MAX_BYTES as usize];
+    let suffix = b"\nfinal visible line\n";
+    let mut content = prefix;
+    content.extend_from_slice(suffix);
+    std::fs::write(&stdout_log, content).expect("stdout log should be written");
+
+    let log = read_wait_output_log(&stdout_log).expect("stdout log should be read");
+
+    assert!(log.truncated);
+    assert!(log.raw.len() <= WAIT_OUTPUT_MAX_BYTES as usize);
+    let rendered = String::from_utf8(log.raw).expect("tail should be valid utf-8");
+    assert_eq!(rendered, "final visible line\n");
+}
+
+#[test]
+fn render_truncated_codex_json_tail_filters_agent_messages() {
+    let raw = [
+        r#"{"type":"item.completed","item":{"type":"tool_result","text":"hidden shell output"}}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"visible summary"}}"#,
+    ]
+    .join("\n");
+
+    let rendered = render_wait_output_log(raw.as_bytes(), true)
+        .expect("truncated codex transcript should render");
+
+    assert_eq!(rendered, "visible summary");
+    assert!(!rendered.contains("hidden shell output"));
+}
+
+#[test]
+fn compact_summary_includes_usage_and_review_verdict() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TESTWAITSUMMARY","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+    )
+    .expect("review verdict should be written");
+    std::fs::write(
+        temp.path().join("review_meta.json"),
+        r#"{
+  "session_id": "01TESTWAITSUMMARY",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 0,
+  "fix_attempted": false,
+  "fix_rounds": 0,
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#,
+    )
+    .expect("review meta should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: r#"{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":25}}"#.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITSUMMARY", &result);
+
+    assert!(summary.len() <= 2048);
+    assert!(summary.contains("Session: 01TESTWAITSUMMARY"));
+    assert!(summary.contains("Elapsed: 1m 5s"));
+    assert!(summary.contains("Tokens: input=100, output=25, total=125, cache_read=40"));
+    assert!(summary.contains("Review verdict: PASS"));
+}
+
+#[test]
+fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TESTWAITQUOTA","timestamp":"2026-04-01T00:00:00Z","decision":"unavailable","verdict_legacy":"UNAVAILABLE","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"primary_failure":"auth_unavailable; HTTP 429","failure_reason":"all tier-4-critical models failed: gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable, codex/openai/gpt-5.5/xhigh=HTTP 429; earliest_reset=13h 58m","prior_round_refs":[]}"#,
+    )
+    .expect("review verdict should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "failed".to_string(),
+        exit_code: 1,
+        summary: "review unavailable".to_string(),
+        tool: "codex".to_string(),
+        original_tool: Some("gemini-cli".to_string()),
+        fallback_tool: Some("codex".to_string()),
+        fallback_reason: Some("429_quota_exhausted".to_string()),
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: Some(vec![
+            csa_core::types::FallbackAttempt {
+                tool: "gemini-cli".to_string(),
+                model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+                skip_reason: "attempted-and-errored".to_string(),
+                quota_exhausted: false,
+                timestamp: now,
+            },
+            csa_core::types::FallbackAttempt {
+                tool: "codex".to_string(),
+                model_spec: Some("codex/openai/gpt-5.5/xhigh".to_string()),
+                skip_reason: "rate-limit-429".to_string(),
+                quota_exhausted: false,
+                timestamp: now,
+            },
+        ]),
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITQUOTA", &result);
+
+    assert!(summary.contains("Review verdict: UNAVAILABLE (auth_unavailable; HTTP 429)"));
+    assert!(summary.contains(
+        "Failover: review unavailable: all tier-4-critical backends rate-limited; earliest reset ~13h 58m"
+    ));
+    assert!(!summary.contains("attempted-and-errored"));
+    assert!(!summary.contains("API Key"));
+}
+
+#[test]
+fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TESTWAITARTPASS","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+    )
+    .expect("review verdict should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "review complete".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITARTPASS", &result);
+
+    assert!(summary.contains("Review verdict: PASS"));
+}
+
+#[test]
+fn compact_summary_includes_writer_uncommitted_warning() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "done".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: Some(csa_session::UncommittedChanges {
+            file_count: 7,
+            insertions: 240,
+            deletions: 12,
+            files: vec!["src/lib.rs".to_string()],
+            truncated: 6,
+        }),
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITDIRTY", &result);
+
+    assert!(summary.contains(
+        "⚠ writer session ended with 7 uncommitted files (+240/-12) — work NOT committed"
+    ));
+}
+
+#[test]
+fn compact_summary_does_not_print_pass_when_result_failed() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TESTWAITFAILPASS","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+    )
+    .expect("review verdict should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "failed".to_string(),
+        exit_code: 137,
+        summary: "fatal backend error: process killed".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITFAILPASS", &result);
+
+    assert!(!summary.contains("Review verdict: PASS"));
+    assert!(summary.contains("Review verdict: UNAVAILABLE"));
+    assert!(summary.contains("Summary: fatal backend error: process killed"));
+}
+
+#[test]
+fn compact_summary_does_not_print_pass_for_failed_fix_convergence() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TESTWAITFAILED","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+    )
+    .expect("review verdict should be written");
+    std::fs::write(
+        temp.path().join("review_meta.json"),
+        r#"{
+  "session_id": "01TESTWAITFAILED",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "failure_reason": "fix_non_convergence:quality_gate_failed",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 1,
+  "fix_attempted": true,
+  "fix_rounds": 3,
+  "fix_convergence": {
+    "quality_gate_passed": false,
+    "fix_output_was_substantive": true,
+    "post_consistency_decision": "fail",
+    "reached_genuine_clean_convergence": false,
+    "terminal_reason": "quality_gate_failed"
+  },
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#,
+    )
+    .expect("review meta should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "failed".to_string(),
+        exit_code: 1,
+        summary: "fix did not converge".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITFAILED", &result);
+
+    assert!(!summary.contains("Review verdict: PASS"));
+    assert!(summary.contains("Review verdict: UNAVAILABLE"));
+}
