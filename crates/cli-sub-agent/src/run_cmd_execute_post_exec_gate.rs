@@ -56,6 +56,7 @@ pub(super) struct PostExecGateApplyOptions<'a> {
     pub(super) changed_paths: Option<&'a [String]>,
     pub(super) extra_env: Option<HashMap<String, String>>,
     pub(super) no_post_exec_gate: bool,
+    pub(super) planning_only: bool,
 }
 
 fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
@@ -362,6 +363,9 @@ where
         if let Some(session_id) = session_id {
             crate::run_cmd_post::record_post_exec_gate_skipped_by_flag(project_root, session_id);
         }
+        return Ok(());
+    }
+    if options.planning_only {
         return Ok(());
     }
 

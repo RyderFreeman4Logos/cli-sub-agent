@@ -132,6 +132,16 @@ fn post_exec_options(no_post_exec_gate: bool) -> PostExecGateApplyOptions<'stati
         changed_paths: None,
         extra_env: None,
         no_post_exec_gate,
+        planning_only: false,
+    }
+}
+
+fn planning_post_exec_options() -> PostExecGateApplyOptions<'static> {
+    PostExecGateApplyOptions {
+        changed_paths: None,
+        extra_env: None,
+        no_post_exec_gate: false,
+        planning_only: true,
     }
 }
 
@@ -558,6 +568,41 @@ async fn post_exec_gate_timeout_dirty_is_fatal() {
         result.summary,
         "timeout left dirty/uncommitted work unverified"
     );
+}
+
+#[tokio::test]
+async fn post_exec_gate_skips_planning_only_session_without_overwriting_success() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    std::fs::write(
+        project_dir.path().join("tracked.txt"),
+        "planning artifact\n",
+    )
+    .unwrap();
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Produce an mktd plan",
+        Some(&session_id),
+        Some(&config),
+        planning_post_exec_options(),
+        |_command, _cwd, _timeout_seconds, _extra_env| {
+            Box::pin(async move {
+                panic!("runner must not execute for planning-only sessions");
+            })
+        },
+    )
+    .await
+    .expect("planning-only session should not run code gate");
+
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "task completed");
 }
 
 #[tokio::test]
