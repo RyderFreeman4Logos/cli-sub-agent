@@ -7,9 +7,7 @@ mod lefthook;
 pub(crate) use lefthook::{
     command_contains_forbidden_lefthook_bypass, segment_contains_forbidden_lefthook_bypass,
 };
-pub(crate) use lefthook::{
-    detect_lefthook_bypass_commands, detect_lefthook_bypass_commands_from_tool_output,
-};
+pub(crate) use lefthook::{detect_hook_bypass_env_usage, detect_lefthook_bypass_commands};
 
 pub(crate) fn detect_no_verify_commit_commands(executed_shell_commands: &[String]) -> Vec<String> {
     let mut matches = Vec::new();
@@ -28,80 +26,10 @@ pub(crate) fn detect_no_verify_commit_commands(executed_shell_commands: &[String
     matches
 }
 
-pub(crate) fn detect_no_verify_commit_commands_from_tool_output(
-    result: &csa_process::ExecutionResult,
-    trace_only: bool,
-) -> Vec<String> {
-    let mut matches = Vec::new();
-    collect_no_verify_command_like_lines(&result.output, &mut matches, trace_only);
-    collect_no_verify_command_like_lines(&result.summary, &mut matches, trace_only);
-    collect_no_verify_command_like_lines(&result.stderr_output, &mut matches, trace_only);
-    matches
-}
-
-fn collect_no_verify_command_like_lines(source: &str, matches: &mut Vec<String>, trace_only: bool) {
-    let mut inside_code_fence = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            inside_code_fence = !inside_code_fence;
-            continue;
-        }
-        if inside_code_fence || trimmed.is_empty() {
-            continue;
-        }
-        if trace_only && !has_command_prompt_prefix(trimmed) {
-            continue;
-        }
-        if !looks_like_shell_command_line(trimmed) {
-            continue;
-        }
-        let normalized_command = strip_command_prompt_prefix(trimmed);
-        if !command_contains_forbidden_no_verify_commit(normalized_command) {
-            continue;
-        }
-        if !matches
-            .iter()
-            .any(|existing| existing == normalized_command)
-        {
-            matches.push(normalized_command.to_string());
-        }
-    }
-}
-
-fn looks_like_shell_command_line(line: &str) -> bool {
-    let command_line = strip_command_prompt_prefix(line);
-    let Some(first_token) = command_line.split_whitespace().next() else {
-        return false;
-    };
-    if is_env_assignment(first_token) {
-        return true;
-    }
-    is_git_token(first_token)
-        || is_shell_token(first_token)
-        || first_token.rsplit('/').next() == Some("env")
-        || first_token.rsplit('/').next() == Some("sudo")
-        || first_token.eq_ignore_ascii_case("sudo")
-        || first_token.eq_ignore_ascii_case("env")
-        || first_token.eq_ignore_ascii_case("command")
-        || first_token.eq_ignore_ascii_case("time")
-        || first_token.eq_ignore_ascii_case("export")
-}
-
-fn has_command_prompt_prefix(line: &str) -> bool {
-    line.starts_with("$ ") || line.starts_with("+ ")
-}
-
-fn strip_command_prompt_prefix(line: &str) -> &str {
-    line.strip_prefix("$ ")
-        .or_else(|| line.strip_prefix("+ "))
-        .unwrap_or(line)
-}
-
 pub(crate) fn command_contains_forbidden_no_verify_commit(command: &str) -> bool {
     split_shell_segments_preserving_quotes(command)
         .into_iter()
-        .any(|segment| segment_contains_forbidden_no_verify_commit(&segment))
+        .any(|segment| segment_contains_forbidden_git_bypass(&segment))
 }
 
 fn split_shell_segments_preserving_quotes(command: &str) -> Vec<String> {
@@ -176,22 +104,25 @@ fn push_shell_segment(segments: &mut Vec<String>, current: &mut String) {
     current.clear();
 }
 
-fn segment_contains_forbidden_no_verify_commit(segment: &str) -> bool {
+fn segment_contains_forbidden_git_bypass(segment: &str) -> bool {
     let tokens = tokenize_shell_tokens(segment);
     if tokens.is_empty() {
         return false;
     }
 
     if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
-        && shell_script_contains_forbidden_no_verify_commit(shell_script_tokens)
+        && shell_script_contains_forbidden_git_bypass(shell_script_tokens)
     {
         return true;
     }
 
-    let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&tokens) else {
+    let Some((_, git_subcommand_idx)) = locate_git_hook_relevant_command(&tokens) else {
         return false;
     };
-    commit_args_include_no_verify(&tokens[git_commit_subcommand_idx + 1..])
+    git_args_include_forbidden_bypass(
+        tokens[git_subcommand_idx].as_str(),
+        &tokens[git_subcommand_idx + 1..],
+    )
 }
 
 pub(crate) fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
@@ -298,7 +229,7 @@ fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
     Some(&tokens[idx + 2..])
 }
 
-fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
+fn locate_git_hook_relevant_command(tokens: &[String]) -> Option<(usize, usize)> {
     let idx = skip_command_prefix_tokens(tokens, 0);
     if idx >= tokens.len() {
         return None;
@@ -306,11 +237,11 @@ fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
     if !is_git_token(tokens[idx].as_str()) {
         return None;
     }
-    let subcommand_idx = find_git_commit_subcommand(tokens, idx + 1)?;
+    let subcommand_idx = find_git_hook_relevant_subcommand(tokens, idx + 1)?;
     Some((idx, subcommand_idx))
 }
 
-fn shell_script_contains_forbidden_no_verify_commit(tokens: &[String]) -> bool {
+fn shell_script_contains_forbidden_git_bypass(tokens: &[String]) -> bool {
     let script_tokens = expand_shell_script_tokens(tokens);
     let mut command_start = 0usize;
 
@@ -333,8 +264,12 @@ fn shell_script_contains_forbidden_no_verify_commit(tokens: &[String]) -> bool {
 
         if git_idx < command_tokens.len()
             && is_git_token(command_tokens[git_idx].as_str())
-            && let Some(commit_idx) = find_git_commit_subcommand(command_tokens, git_idx + 1)
-            && commit_args_include_no_verify(&command_tokens[commit_idx + 1..])
+            && let Some(subcommand_idx) =
+                find_git_hook_relevant_subcommand(command_tokens, git_idx + 1)
+            && git_args_include_forbidden_bypass(
+                command_tokens[subcommand_idx].as_str(),
+                &command_tokens[subcommand_idx + 1..],
+            )
         {
             return true;
         }
@@ -438,14 +373,14 @@ fn skip_command_prefix_tokens_with_mode(
     idx
 }
 
-fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
+fn find_git_hook_relevant_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
     while idx < tokens.len() {
         let token = tokens[idx].as_str();
-        if token.eq_ignore_ascii_case("commit") {
+        if is_hook_relevant_git_subcommand(token) {
             return Some(idx);
         }
         if token == "--" {
-            if idx + 1 < tokens.len() && tokens[idx + 1].eq_ignore_ascii_case("commit") {
+            if idx + 1 < tokens.len() && is_hook_relevant_git_subcommand(tokens[idx + 1].as_str()) {
                 return Some(idx + 1);
             }
             return None;
@@ -460,6 +395,10 @@ fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize
         idx += 1;
     }
     None
+}
+
+fn is_hook_relevant_git_subcommand(token: &str) -> bool {
+    token.eq_ignore_ascii_case("commit") || token.eq_ignore_ascii_case("push")
 }
 
 fn skip_prefixed_command_options<F>(tokens: &[String], mut idx: usize, consumes_value: F) -> usize
@@ -564,14 +503,15 @@ fn is_git_token(token: &str) -> bool {
     token.eq_ignore_ascii_case("git") || token.ends_with("/git")
 }
 
-fn commit_args_include_no_verify(args: &[String]) -> bool {
+fn git_args_include_forbidden_bypass(subcommand: &str, args: &[String]) -> bool {
     let mut idx = 0usize;
     while idx < args.len() {
         let token = args[idx].as_str();
         if token == "--" || is_command_separator_token(token) {
             break;
         }
-        if token.eq_ignore_ascii_case("--no-verify") {
+        if token.eq_ignore_ascii_case("--no-verify") || token.eq_ignore_ascii_case("--no-gpg-sign")
+        {
             return true;
         }
 
@@ -587,7 +527,7 @@ fn commit_args_include_no_verify(args: &[String]) -> bool {
             let mut chars = token[1..].chars().peekable();
             let mut consumes_value = false;
             while let Some(flag) = chars.next() {
-                if flag == 'n' {
+                if subcommand.eq_ignore_ascii_case("commit") && flag == 'n' {
                     return true;
                 }
                 if short_option_consumes_value(flag) {

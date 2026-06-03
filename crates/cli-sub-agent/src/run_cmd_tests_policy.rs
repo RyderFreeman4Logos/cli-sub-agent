@@ -214,11 +214,17 @@ fn apply_post_run_commit_policy_sets_failure_when_policy_requires_commit() {
     apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, Some(&guard));
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: workspace mutated without commit"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-uncommitted")
     );
     assert!(result.stderr_output.contains("ERROR"));
+    assert!(
+        result
+            .stderr_output
+            .contains("post-run policy blocked: workspace mutated without commit")
+    );
 }
 
 #[test]
@@ -277,9 +283,10 @@ fn apply_unverifiable_commit_policy_sets_failure_when_verification_is_unavailabl
     apply_unverifiable_commit_policy(&mut result, &OutputFormat::Json, true);
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: unable to verify workspace mutation state"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-unverifiable")
     );
     assert!(
         result
@@ -341,9 +348,10 @@ fn apply_no_verify_commit_policy_sets_failure_when_forbidden_flag_detected() {
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "commit completed");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden git commit --no-verify detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-no-verify")
     );
     assert!(
         result

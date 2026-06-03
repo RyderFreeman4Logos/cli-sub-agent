@@ -3,6 +3,7 @@ use crate::run_cmd::shell::{
     command_contains_forbidden_lefthook_bypass, segment_contains_forbidden_lefthook_bypass,
 };
 use csa_core::types::OutputFormat;
+use std::collections::HashMap;
 
 #[test]
 fn apply_lefthook_bypass_policy_blocks_inline_lefthook_zero() {
@@ -20,13 +21,15 @@ fn apply_lefthook_bypass_policy_blocks_inline_lefthook_zero() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
     assert!(result.stderr_output.contains("Matched commands:"));
     assert!(result.stderr_output.contains("LEFTHOOK=0"));
@@ -48,13 +51,15 @@ fn apply_lefthook_bypass_policy_blocks_env_lefthook_zero() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
 }
 
@@ -74,13 +79,15 @@ fn apply_lefthook_bypass_policy_blocks_export_lefthook_zero() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
 }
 
@@ -101,13 +108,15 @@ fn apply_lefthook_bypass_policy_blocks_lefthook_skip() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
 }
 
@@ -127,13 +136,15 @@ fn apply_lefthook_bypass_policy_blocks_shell_wrapped_lefthook_bypass() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
 }
 
@@ -154,13 +165,15 @@ fn apply_lefthook_bypass_policy_blocks_export_in_shell_wrapper() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
 }
 
@@ -382,6 +395,7 @@ fn apply_lefthook_bypass_policy_allows_normal_git_commands() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
@@ -406,6 +420,7 @@ fn apply_lefthook_bypass_policy_allows_unrelated_env_vars() {
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 
@@ -415,7 +430,7 @@ fn apply_lefthook_bypass_policy_allows_unrelated_env_vars() {
 }
 
 #[test]
-fn apply_lefthook_bypass_policy_blocks_output_fallback_when_no_execute_events() {
+fn apply_lefthook_bypass_policy_ignores_output_text_when_no_execute_events() {
     let mut result = ExecutionResult {
         output: "$ LEFTHOOK=0 git commit -m \"unsafe\"\n".to_string(),
         stderr_output: String::new(),
@@ -430,14 +445,71 @@ fn apply_lefthook_bypass_policy_blocks_output_fallback_when_no_execute_events() 
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
+        !executed_shell_commands.is_empty(),
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "ok");
+    assert!(result.csa_gate_failure.is_none());
+    assert!(result.stderr_output.is_empty());
+}
+
+#[test]
+fn apply_lefthook_bypass_policy_blocks_process_env_applied_to_git_command() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "ok".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let executed_shell_commands = vec!["git commit -m \"unsafe\"".to_string()];
+    let execution_env = HashMap::from([("LEFTHOOK".to_string(), "0".to_string())]);
+
+    apply_lefthook_bypass_policy(
+        &mut result,
+        &OutputFormat::Json,
+        &executed_shell_commands,
+        Some(&execution_env),
         !executed_shell_commands.is_empty(),
     );
 
     assert_eq!(result.exit_code, 1);
+    assert_eq!(result.summary, "ok");
     assert_eq!(
-        result.summary,
-        "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected"
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-lefthook-bypass")
     );
+    assert!(result.stderr_output.contains("LEFTHOOK=0 applied"));
+}
+
+#[test]
+fn apply_lefthook_bypass_policy_ignores_process_env_without_git_or_hook_command() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "ok".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let executed_shell_commands = vec!["echo LEFTHOOK=0".to_string()];
+    let execution_env = HashMap::from([("LEFTHOOK".to_string(), "0".to_string())]);
+
+    apply_lefthook_bypass_policy(
+        &mut result,
+        &OutputFormat::Json,
+        &executed_shell_commands,
+        Some(&execution_env),
+        !executed_shell_commands.is_empty(),
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "ok");
+    assert!(result.csa_gate_failure.is_none());
+    assert!(result.stderr_output.is_empty());
 }
 
 #[test]
@@ -456,6 +528,7 @@ fn apply_lefthook_bypass_policy_skips_output_fallback_when_execute_events_presen
         &mut result,
         &OutputFormat::Json,
         &executed_shell_commands,
+        None,
         !executed_shell_commands.is_empty(),
     );
 

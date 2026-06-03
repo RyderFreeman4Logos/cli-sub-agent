@@ -538,6 +538,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &mut result,
             &output_format,
             &executed_shell_commands,
+            merged_env_ref,
             execute_events_observed,
         );
     }
