@@ -317,6 +317,23 @@ fn test_gemini_quota_exhausted_case_insensitive() {
 }
 
 #[test]
+fn test_gemini_quota_exhausted_with_spending_cap_is_permanent() {
+    let result = detect_rate_limit(
+        "gemini-cli",
+        "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED; monthly spending cap reached",
+        "",
+        1,
+        None,
+    );
+    assert!(result.is_some());
+    let detected = result.unwrap();
+    assert_eq!(detected.matched_pattern, "monthly spending cap");
+    assert_eq!(detected.reason, "QUOTA_EXHAUSTED");
+    assert!(detected.advance_to_next_model);
+    assert!(detected.quota_exhausted);
+}
+
+#[test]
 fn test_persistent_429_quota_exhausted_advances_to_next_model() {
     let detected = detect_rate_limit(
         "codex",

@@ -502,7 +502,9 @@ fn evaluate_rate_limit_failover_continues_past_permanent_quota_to_next_provider(
     ]);
     let exec_result = ExecutionResult {
         output: String::new(),
-        stderr_output: "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED".to_string(),
+        stderr_output:
+            "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED monthly spending cap reached"
+                .to_string(),
         summary: "monthly spending cap reached".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
@@ -931,7 +933,9 @@ fn evaluate_rate_limit_failover_gemini_quota_skips_antigravity_picks_codex() {
     ]);
     let exec_result = ExecutionResult {
         output: String::new(),
-        stderr_output: "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED".to_string(),
+        stderr_output:
+            "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED monthly spending cap reached"
+                .to_string(),
         summary: "daily quota for project exceeded".to_string(),
         exit_code: 1,
         peak_memory_mb: None,
@@ -979,7 +983,9 @@ fn evaluate_rate_limit_failover_chained_google_pool_exhaustion_continues_past() 
     ]);
     let exec_result = ExecutionResult {
         output: String::new(),
-        stderr_output: "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED".to_string(),
+        stderr_output:
+            "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED monthly spending cap reached"
+                .to_string(),
         summary: "Google quota pool exhausted".to_string(),
         exit_code: 1,
         peak_memory_mb: None,

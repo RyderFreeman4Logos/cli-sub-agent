@@ -139,7 +139,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
 
     std::fs::write(
         bin_dir.join("gemini"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached\\n\" >&2\nexit 1\n",
     )
     .unwrap();
     std::fs::write(
@@ -274,7 +274,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
     std::fs::write(
         bin_dir.join("gemini"),
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'gemini should not be invoked\\n' >> \"{gemini_invocation_log_str}\"\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n"
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf 'gemini should not be invoked\\n' >> \"{gemini_invocation_log_str}\"\nprintf \"reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached\\n\" >&2\nexit 1\n"
         ),
     )
     .unwrap();
@@ -418,7 +418,7 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
 
     std::fs::write(
         bin_dir.join("gemini"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached\\n\" >&2\nexit 1\n",
     )
     .unwrap();
     for binary in ["codex", "codex-acp"] {

@@ -207,24 +207,6 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: false,
             },
             FailoverPattern {
-                pattern: "429_quota_exhausted",
-                reason: "HTTP 429",
-                advance_to_next_model: true,
-                quota_exhausted: false,
-            },
-            FailoverPattern {
-                pattern: "quota_exhausted",
-                reason: "HTTP 429",
-                advance_to_next_model: true,
-                quota_exhausted: false,
-            },
-            FailoverPattern {
-                pattern: "quota exhausted",
-                reason: "HTTP 429",
-                advance_to_next_model: true,
-                quota_exhausted: false,
-            },
-            FailoverPattern {
                 pattern: "monthly spending cap",
                 reason: "QUOTA_EXHAUSTED",
                 advance_to_next_model: true,
@@ -247,6 +229,24 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 reason: "QUOTA_EXHAUSTED",
                 advance_to_next_model: true,
                 quota_exhausted: true,
+            },
+            FailoverPattern {
+                pattern: "429_quota_exhausted",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
+                pattern: "quota_exhausted",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
+                pattern: "quota exhausted",
+                reason: "HTTP 429",
+                advance_to_next_model: true,
+                quota_exhausted: false,
             },
             FailoverPattern {
                 pattern: "quota exceeded",
