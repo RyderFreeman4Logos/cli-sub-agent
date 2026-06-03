@@ -248,12 +248,38 @@ check-chinese:
     @echo "Checking for Chinese characters..."
     @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**' --glob '!.claude/rules/**' --glob '!.agents/**' --glob '!CLAUDE.md' --glob '!GEMINI.md'
 
-# Format code and auto-stage modified .rs files.
-# This allows 'just fmt' to be run immediately before commit without manual 'git add'.
+# Format code and re-stage only .rs files that were already staged before fmt.
+# Abort first when any staged Rust file also has unstaged hunks.
 fmt:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staged_rs=()
+    while IFS= read -r -d '' path; do
+        staged_rs+=("$path")
+    done < <(git diff --cached --name-only -z -- '*.rs')
+    unstaged_rs=()
+    while IFS= read -r -d '' path; do
+        unstaged_rs+=("$path")
+    done < <(git diff --name-only -z -- '*.rs')
+    partial=()
+    for staged in "${staged_rs[@]}"; do
+        for unstaged in "${unstaged_rs[@]}"; do
+            if [[ "$staged" == "$unstaged" ]]; then
+                partial+=("$staged")
+                break
+            fi
+        done
+    done
+    if (( ${#partial[@]} > 0 )); then
+        printf 'just fmt: refusing to format -- these Rust files are partially staged (mixed staged/unstaged hunks); stage or stash the remaining hunks first:\n' >&2
+        printf '  %q\n' "${partial[@]}" >&2
+        exit 1
+    fi
+    if (( ${#staged_rs[@]} == 0 )); then
+        exit 0
+    fi
     cargo fmt --all
-    # Only stage tracked .rs files that were modified by fmt
-    git diff --name-only | grep '\.rs$' | xargs -r git add
+    printf '%s\0' "${staged_rs[@]}" | xargs -0 git add --
 
 # Run clippy for the entire workspace (strict mode).
 clippy:
