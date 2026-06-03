@@ -9,6 +9,7 @@ use tracing::warn;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{ToolName, ToolSelectionStrategy};
 use csa_session::{MetaSessionState, SessionPhase, resolve_session_prefix};
+use weave::parser::AgentConfig;
 
 use crate::cli::ReturnTarget;
 use crate::run_helpers::{
@@ -480,6 +481,47 @@ pub(crate) struct SkillResolution {
     pub(crate) thinking: Option<String>,
 }
 
+pub(crate) struct SkillPromptSource<'a> {
+    pub(crate) project_root: &'a Path,
+    pub(crate) skill_source_dir: &'a Path,
+    pub(crate) extra_context_dir: &'a Path,
+    pub(crate) skill_md: &'a str,
+    pub(crate) agent_config: Option<&'a AgentConfig>,
+}
+
+pub(crate) fn build_skill_prompt_parts(source: SkillPromptSource<'_>) -> Vec<String> {
+    let mut parts = vec![
+        "<skill-mode>executor</skill-mode>".to_string(),
+        format!(
+            "<workspace-scope root=\"{}\">\nSTRICT SCOPE: Only read/write files under this root. If a tool returns workspace-boundary errors (for example, 'Path not in workspace'), stop and report failure instead of retrying sibling paths.\n</workspace-scope>",
+            source.project_root.display()
+        ),
+        format!(
+            "<skill-source path=\"{}\">\nResolve relative skill references from this directory.\n</skill-source>",
+            source.skill_source_dir.display()
+        ),
+        crate::skill_repo::sanitize_skill_md(source.skill_md),
+    ];
+
+    if let Some(agent) = source.agent_config {
+        for extra in &agent.extra_context {
+            let extra_path = source.extra_context_dir.join(extra);
+            match std::fs::read_to_string(&extra_path) {
+                Ok(content) => {
+                    parts.push(format!(
+                        "<context-file path=\"{extra}\">\n{content}\n</context-file>"
+                    ));
+                }
+                Err(e) => {
+                    warn!(path = %extra, error = %e, "Failed to load skill extra_context file");
+                }
+            }
+        }
+    }
+
+    parts
+}
+
 /// Resolve the skill (if any), build the prompt, and apply agent config
 /// overrides for tool/model/thinking.
 pub(crate) fn resolve_skill_and_prompt(
@@ -500,31 +542,13 @@ pub(crate) fn resolve_skill_and_prompt(
         // Skills execute inside `csa run` as the leaf executor. Inject an
         // explicit mode marker so skill docs can branch deterministically and
         // avoid orchestrator-style recursive `csa run` loops.
-        let mut parts = vec![
-            "<skill-mode>executor</skill-mode>".to_string(),
-            format!(
-                "<workspace-scope root=\"{}\">\nSTRICT SCOPE: Only read/write files under this root. If a tool returns workspace-boundary errors (for example, 'Path not in workspace'), stop and report failure instead of retrying sibling paths.\n</workspace-scope>",
-                project_root.display()
-            ),
-            sk.skill_md.clone(),
-        ];
-
-        // Load extra_context files relative to the skill directory.
-        if let Some(agent) = sk.agent_config() {
-            for extra in &agent.extra_context {
-                let extra_path = sk.dir.join(extra);
-                match std::fs::read_to_string(&extra_path) {
-                    Ok(content) => {
-                        parts.push(format!(
-                            "<context-file path=\"{extra}\">\n{content}\n</context-file>"
-                        ));
-                    }
-                    Err(e) => {
-                        warn!(path = %extra, error = %e, "Failed to load skill extra_context file");
-                    }
-                }
-            }
-        }
+        let mut parts = build_skill_prompt_parts(SkillPromptSource {
+            project_root,
+            skill_source_dir: &sk.dir,
+            extra_context_dir: &sk.dir,
+            skill_md: &sk.skill_md,
+            agent_config: sk.agent_config(),
+        });
 
         let mut difficulty = None;
         if let Some(user_prompt) = prompt {

@@ -2,6 +2,7 @@ use super::*;
 use crate::debate_cmd_output::*;
 use crate::debate_cmd_resolve::resolve_debate_tool;
 use crate::test_env_lock::TEST_ENV_LOCK;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::global::ReviewConfig;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
@@ -402,6 +403,60 @@ fn build_debate_instruction_continuation() {
 fn build_debate_instruction_custom_rounds() {
     let prompt = build_debate_instruction("topic", false, 5);
     assert!(prompt.contains("rounds=5"));
+}
+
+#[test]
+fn build_debate_instruction_for_project_injects_bundled_pattern_without_repo_local_pattern() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let state_dir = tempfile::TempDir::new().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&state_dir);
+    let pattern = verify_debate_skill_available(project_dir.path()).unwrap();
+
+    let prompt = build_debate_instruction_for_project(
+        "Should we use gRPC?",
+        false,
+        3,
+        project_dir.path(),
+        &pattern,
+    );
+
+    assert!(prompt.contains("Use the debate skill. rounds=3"));
+    assert!(prompt.contains("<skill-mode>executor</skill-mode>"));
+    assert!(prompt.contains("<skill-source path=\""));
+    assert!(prompt.contains("Debate: Adversarial Multi-Tool Strategy Formulation"));
+    assert!(!project_dir.path().join(".csa").exists());
+    assert!(!project_dir.path().join("patterns").exists());
+}
+
+#[test]
+fn build_debate_instruction_for_project_injects_repo_local_pattern() {
+    let project_dir = tempfile::TempDir::new().unwrap();
+    let skill_dir = project_dir
+        .path()
+        .join("patterns")
+        .join("debate")
+        .join("skills")
+        .join("debate");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Repo Local Debate Protocol\nUse this local debater.",
+    )
+    .unwrap();
+    let pattern = verify_debate_skill_available(project_dir.path()).unwrap();
+
+    let prompt = build_debate_instruction_for_project(
+        "Should we use gRPC?",
+        false,
+        3,
+        project_dir.path(),
+        &pattern,
+    );
+
+    assert!(prompt.contains("Use the debate skill. rounds=3"));
+    assert!(prompt.contains("Repo Local Debate Protocol"));
+    assert!(prompt.contains(&skill_dir.display().to_string()));
+    assert!(!prompt.contains("Debate: Adversarial Multi-Tool Strategy Formulation"));
 }
 
 #[test]

@@ -144,7 +144,7 @@ pub(crate) async fn handle_review(
         args.model_spec.is_some(),
     )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
-    verify_review_skill_available(&project_root, args.allow_fallback)?;
+    let review_pattern = verify_review_skill_available(&project_root, args.allow_fallback)?;
     if is_worktree_submodule(&project_root) {
         warn!(project_root = %project_root.display(),
             "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
@@ -211,6 +211,7 @@ pub(crate) async fn handle_review(
         &project_root,
         ReviewProjectPromptOptions {
             project_config: config.as_ref(),
+            resolved_pattern: review_pattern.as_ref(),
             prior_rounds_section: prior_rounds_section.as_deref(),
             current_session_id: startup_env.session_id(),
             full_consistency: args.full_consistency,

@@ -184,6 +184,15 @@ impl ResolvedPattern {
     pub fn agent_config(&self) -> Option<&AgentConfig> {
         self.config.as_ref().and_then(|c| c.agent.as_ref())
     }
+
+    pub(crate) fn skill_source_dir(&self, name: &str) -> PathBuf {
+        let skill_dir = self.dir.join("skills").join(name);
+        if skill_dir.join("SKILL.md").is_file() {
+            skill_dir
+        } else {
+            self.dir.clone()
+        }
+    }
 }
 
 /// Resolve a pattern by name, searching standard paths in priority order.

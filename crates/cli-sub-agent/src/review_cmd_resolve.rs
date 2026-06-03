@@ -4,6 +4,7 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use crate::cli::{ReviewArgs, ReviewMode};
+use crate::pattern_resolver::ResolvedPattern;
 use crate::review_context::{
     ResolvedReviewContext, ResolvedReviewContextKind, discover_prior_round_assumptions,
     discover_review_checklist, render_spec_review_context,
@@ -30,7 +31,7 @@ pub(crate) use selection::{
 pub(crate) fn verify_review_skill_available(
     project_root: &Path,
     allow_fallback: bool,
-) -> Result<()> {
+) -> Result<Option<ResolvedPattern>> {
     match crate::pattern_resolver::resolve_pattern("csa-review", project_root) {
         Ok(resolved) => {
             debug!(
@@ -40,7 +41,7 @@ pub(crate) fn verify_review_skill_available(
                 skill_md_len = resolved.skill_md.len(),
                 "Review pattern resolved"
             );
-            Ok(())
+            Ok(Some(resolved))
         }
         Err(resolve_err) => {
             if allow_fallback {
@@ -48,7 +49,7 @@ pub(crate) fn verify_review_skill_available(
                     "Review pattern not found; continuing because --allow-fallback is set. \
                      Install with `weave install RyderFreeman4Logos/cli-sub-agent` for structured review protocol."
                 );
-                return Ok(());
+                return Ok(None);
             }
 
             anyhow::bail!(
@@ -445,6 +446,8 @@ pub(crate) fn build_review_instruction(
         security_mode,
         review_mode,
         context,
+        None,
+        None,
     );
     crate::review_design_anchor::append_design_anchor(&mut instruction);
     instruction
@@ -456,6 +459,8 @@ fn build_review_instruction_without_design_anchor(
     security_mode: &str,
     review_mode: ReviewMode,
     context: Option<&ResolvedReviewContext>,
+    project_root: Option<&Path>,
+    pattern: Option<&ResolvedPattern>,
 ) -> String {
     let mut instruction = format!(
         "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, UNCERTAIN, or UNAVAILABLE."
@@ -472,7 +477,22 @@ fn build_review_instruction_without_design_anchor(
             instruction.push_str(&render_spec_review_context(spec));
         }
     }
-    instruction
+    if let (Some(project_root), Some(pattern)) = (project_root, pattern) {
+        let skill_source_dir = pattern.skill_source_dir("csa-review");
+        let mut parts = vec![instruction];
+        parts.extend(crate::run_cmd_tool_selection::build_skill_prompt_parts(
+            crate::run_cmd_tool_selection::SkillPromptSource {
+                project_root,
+                skill_source_dir: &skill_source_dir,
+                extra_context_dir: &pattern.dir,
+                skill_md: &pattern.skill_md,
+                agent_config: pattern.agent_config(),
+            },
+        ));
+        parts.join("\n\n")
+    } else {
+        instruction
+    }
 }
 
 pub(crate) fn build_review_instruction_for_project(
@@ -491,6 +511,8 @@ pub(crate) fn build_review_instruction_for_project(
         security_mode,
         review_mode,
         context,
+        Some(project_root),
+        options.resolved_pattern,
     );
     let consistency_scope = if options.full_consistency {
         "touched-files"
@@ -540,6 +562,7 @@ pub(crate) fn build_review_instruction_for_project(
 
 pub(crate) struct ReviewProjectPromptOptions<'a> {
     pub(crate) project_config: Option<&'a ProjectConfig>,
+    pub(crate) resolved_pattern: Option<&'a ResolvedPattern>,
     pub(crate) prior_rounds_section: Option<&'a str>,
     pub(crate) current_session_id: Option<&'a str>,
     pub(crate) full_consistency: bool,

@@ -118,6 +118,7 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
@@ -162,6 +163,7 @@ fn count_prior_reviews_zero_omits_iteration_block() {
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
@@ -198,6 +200,7 @@ fn count_prior_reviews_one_injects_iteration_two() {
         project_dir.path(),
         resolve::ReviewProjectPromptOptions {
             project_config: None,
+            resolved_pattern: None,
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
