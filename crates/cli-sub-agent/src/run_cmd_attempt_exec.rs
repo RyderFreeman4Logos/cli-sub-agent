@@ -131,6 +131,7 @@ pub(super) async fn run_persistent_with_timeout(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
     match tokio::time::timeout(
@@ -165,6 +166,7 @@ pub(super) async fn run_persistent_with_timeout(
             extra_writable,
             extra_readable,
             no_error_marker_scan,
+            no_hook_bypass_scan,
             startup_env,
         ),
     )
@@ -205,6 +207,7 @@ pub(super) async fn run_persistent_without_timeout(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
     execute_persistent(
@@ -237,6 +240,7 @@ pub(super) async fn run_persistent_without_timeout(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        no_hook_bypass_scan,
         startup_env,
     )
     .await
@@ -273,6 +277,7 @@ async fn execute_persistent(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     no_error_marker_scan: bool,
+    no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
     let effective_description = if let Some(fork_res) = fork_resolution {
@@ -322,6 +327,7 @@ async fn execute_persistent(
         extra_writable,
         extra_readable,
         no_error_marker_scan,
+        no_hook_bypass_scan,
         startup_env,
     )
     .await

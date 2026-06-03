@@ -304,6 +304,7 @@ pub(super) async fn execute_csa_step(
             &[],   // extra_writable
             &[],   // extra_readable
             false, // cli_no_error_marker_scan: plan has no CLI flag; defer to config (#1745)
+            false, // cli_no_hook_bypass_scan: plan has no CLI flag; defer to config
             options.startup_env,
         )
     };

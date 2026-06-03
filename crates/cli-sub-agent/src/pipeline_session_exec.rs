@@ -85,10 +85,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    // CLI `--no-error-marker-scan` override. `true` forces the #1652 scan OFF for
-    // this session, overriding config; `false` defers to `[resources].error_marker_scan`
-    // (default-true). The idle/wall-clock timeouts always remain active (#1745).
     cli_no_error_marker_scan: bool,
+    cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
     let memory_project_key = resolve_memory_project_key(project_root, startup_env.project_root());
@@ -411,6 +409,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let error_marker_scan_enabled =
         !cli_no_error_marker_scan && config.is_none_or(|cfg| cfg.resources.error_marker_scan);
     execute_options = execute_options.with_error_marker_scan_enabled(error_marker_scan_enabled);
+    let hook_bypass_scan_enabled = crate::run_cmd::resolve_hook_bypass_scan_enabled(
+        cli_no_hook_bypass_scan,
+        config.map(|cfg| cfg.resources.hook_bypass_scan),
+    );
     // #1741: carry CSA's trusted subtree pin via the typed ExecuteOptions
     // channel (never via the generic env map), so it is the sole writer of the
     // pin keys at the spawn boundary.
@@ -516,30 +518,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
                 || post_run_workspace.is_none());
-        crate::run_cmd::apply_post_run_commit_policy(
+        crate::run_cmd::apply_post_session_commit_policies(
             &mut result,
-            &output_format,
-            require_commit_on_mutation,
-            commit_guard.as_ref(),
-        );
-        crate::run_cmd::apply_unverifiable_commit_policy(
-            &mut result,
-            &output_format,
-            policy_evaluation_failed,
-        );
-        crate::run_cmd::apply_no_verify_commit_policy(
-            &mut result,
-            &output_format,
-            prompt,
-            &executed_shell_commands,
-            execute_events_observed,
-        );
-        crate::run_cmd::apply_lefthook_bypass_policy(
-            &mut result,
-            &output_format,
-            &executed_shell_commands,
-            merged_env_ref,
-            execute_events_observed,
+            crate::run_cmd::PostSessionCommitPolicyArgs {
+                output_format: &output_format,
+                prompt,
+                require_commit_on_mutation,
+                commit_guard: commit_guard.as_ref(),
+                policy_evaluation_failed,
+                hook_bypass_scan_enabled,
+                executed_shell_commands: &executed_shell_commands,
+                merged_env_ref,
+                execute_events_observed,
+            },
         );
     }
     let sa_mode = std::env::var(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)

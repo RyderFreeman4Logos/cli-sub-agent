@@ -690,6 +690,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         &[],   // extra_writable
         &[],   // extra_readable,
         false, // cli_no_error_marker_scan (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await
@@ -767,6 +768,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         &[],   // extra_writable
         &[],   // extra_readable,
         false, // cli_no_error_marker_scan (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
     .await

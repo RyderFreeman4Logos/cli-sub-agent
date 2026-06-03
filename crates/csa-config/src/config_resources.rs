@@ -33,6 +33,15 @@ pub struct ResourcesConfig {
     /// the idle-timeout and wall-clock timeout still apply.
     #[serde(default = "default_error_marker_scan")]
     pub error_marker_scan: bool,
+    /// Whether post-run hook-bypass command/env scanning is enabled.
+    ///
+    /// When `true` (the default), CSA rejects sessions whose executed command
+    /// events or explicit child process env show hook-bypass forms such as
+    /// `git commit --no-verify`, `git push --no-verify`, or `LEFTHOOK=0`.
+    /// Set to `false` only for emergency recovery; the scan is deliberately
+    /// scoped to executed commands/env rather than prompt or output text.
+    #[serde(default = "default_hook_bypass_scan")]
+    pub hook_bypass_scan: bool,
     /// Maximum time to block when waiting for a free global tool slot.
     #[serde(default = "default_slot_wait_timeout_seconds")]
     pub slot_wait_timeout_seconds: u64,
@@ -159,6 +168,14 @@ fn default_error_marker_scan() -> bool {
     true
 }
 
+/// Serde default for [`ResourcesConfig::hook_bypass_scan`].
+///
+/// An ABSENT field MUST deserialize to `true`; `#[serde(default)]` would yield
+/// `false` and silently disable hook-bypass enforcement.
+fn default_hook_bypass_scan() -> bool {
+    true
+}
+
 fn default_stdin_write_timeout_seconds() -> u64 {
     30
 }
@@ -175,6 +192,7 @@ impl Default for ResourcesConfig {
             liveness_dead_seconds: default_liveness_dead_seconds(),
             fatal_error_markers: default_fatal_error_markers(),
             error_marker_scan: default_error_marker_scan(),
+            hook_bypass_scan: default_hook_bypass_scan(),
             slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
             stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
             termination_grace_period_seconds: default_termination_grace_period_seconds(),
@@ -201,6 +219,7 @@ impl ResourcesConfig {
             && self.liveness_dead_seconds == default_liveness_dead_seconds()
             && self.fatal_error_markers == default_fatal_error_markers()
             && self.error_marker_scan == default_error_marker_scan()
+            && self.hook_bypass_scan == default_hook_bypass_scan()
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.termination_grace_period_seconds == default_termination_grace_period_seconds()
@@ -245,12 +264,37 @@ mod tests {
         assert!(cfg.error_marker_scan);
     }
 
+    #[test]
+    fn hook_bypass_scan_absent_deserializes_to_true() {
+        let cfg: ResourcesConfig = toml::from_str("").expect("empty [resources] table");
+        assert!(
+            cfg.hook_bypass_scan,
+            "absent hook_bypass_scan must default to true (scan enabled)"
+        );
+    }
+
+    #[test]
+    fn hook_bypass_scan_explicit_false_is_honored() {
+        let cfg: ResourcesConfig =
+            toml::from_str("hook_bypass_scan = false").expect("explicit false");
+        assert!(!cfg.hook_bypass_scan);
+    }
+
+    #[test]
+    fn hook_bypass_scan_explicit_true_is_honored() {
+        let cfg: ResourcesConfig =
+            toml::from_str("hook_bypass_scan = true").expect("explicit true");
+        assert!(cfg.hook_bypass_scan);
+    }
+
     /// The struct `Default` must agree with the serde default so a freshly
     /// constructed config and a deserialized-empty config behave identically.
     #[test]
     fn default_impl_enables_error_marker_scan() {
         assert!(ResourcesConfig::default().error_marker_scan);
+        assert!(ResourcesConfig::default().hook_bypass_scan);
         assert!(default_error_marker_scan());
+        assert!(default_hook_bypass_scan());
     }
 
     /// `is_default()` must treat scan-enabled as the default state (so a config
@@ -260,6 +304,11 @@ mod tests {
         assert!(ResourcesConfig::default().is_default());
         let disabled = ResourcesConfig {
             error_marker_scan: false,
+            ..ResourcesConfig::default()
+        };
+        assert!(!disabled.is_default());
+        let disabled = ResourcesConfig {
+            hook_bypass_scan: false,
             ..ResourcesConfig::default()
         };
         assert!(!disabled.is_default());

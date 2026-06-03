@@ -120,6 +120,7 @@ pub(crate) async fn handle_claude_sub_agent(
         &[],   // extra_writable
         &[],   // extra_readable
         false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         startup_env,
     )
     .await?;

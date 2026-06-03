@@ -119,6 +119,7 @@ async fn run_preflight_fixture(project_root: &Path, no_preflight: bool) -> anyho
         false,
         false,
         false, // no_error_marker_scan (#1745)
+        false, // no_hook_bypass_scan (#1824)
         no_preflight,
         false,
         false,
@@ -184,6 +185,7 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
         false,
         false,
         false, // no_error_marker_scan (#1745)
+        false, // no_hook_bypass_scan (#1824)
         false,
         false,
         false,
@@ -299,6 +301,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         false,
         false,
         false, // no_error_marker_scan (#1745)
+        false, // no_hook_bypass_scan (#1824)
         false,
         false,
         false,

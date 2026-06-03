@@ -369,6 +369,32 @@ fn test_cli_no_error_marker_scan_flag_parses() {
 }
 
 #[test]
+fn test_cli_no_hook_bypass_scan_flag_parses() {
+    // #1824: opt-out flag must parse on `csa run` and default to false.
+    let cli = try_parse_cli(&["csa", "run", "--no-hook-bypass-scan", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            no_hook_bypass_scan,
+            ..
+        } => {
+            assert!(no_hook_bypass_scan);
+        }
+        _ => panic!("expected Run command"),
+    }
+
+    let cli_default = try_parse_cli(&["csa", "run", "prompt"]).unwrap();
+    match cli_default.command {
+        crate::cli::Commands::Run {
+            no_hook_bypass_scan,
+            ..
+        } => {
+            assert!(!no_hook_bypass_scan);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
 fn test_cli_no_preflight_flag_parses() {
     let cli = try_parse_cli(&["csa", "run", "--no-preflight", "prompt"]).unwrap();
     match cli.command {

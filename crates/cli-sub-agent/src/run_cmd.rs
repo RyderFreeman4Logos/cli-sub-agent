@@ -32,8 +32,8 @@ pub(crate) use git::{
     is_git_worktree,
 };
 pub(crate) use policy::{
-    apply_lefthook_bypass_policy, apply_no_verify_commit_policy, apply_post_run_commit_policy,
-    apply_unverifiable_commit_policy, execute_tool_calls_observed, extract_executed_shell_commands,
+    PostSessionCommitPolicyArgs, apply_post_session_commit_policies, execute_tool_calls_observed,
+    extract_executed_shell_commands, resolve_hook_bypass_scan_enabled,
 };
 pub(crate) use shell::detect_no_verify_commit_commands;
 pub(crate) use uncommitted::{format_uncommitted_warning, is_writer_session};
@@ -44,7 +44,9 @@ pub(crate) use crate::pipeline::promote_idle_timeout_for_explicit_wall_timeout;
 pub(crate) use git::{PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status};
 #[cfg(test)]
 pub(crate) use policy::{
-    events_contain_execute_tool_calls, extract_executed_shell_commands_from_events,
+    apply_lefthook_bypass_policy, apply_no_verify_commit_policy, apply_post_run_commit_policy,
+    apply_unverifiable_commit_policy, events_contain_execute_tool_calls,
+    extract_executed_shell_commands_from_events,
 };
 #[cfg(test)]
 pub(crate) use policy::{format_post_run_commit_guard_message, is_post_run_commit_policy_block};
@@ -156,6 +158,7 @@ impl SubagentRunConfig {
             false,
             false,
             false, // no_error_marker_scan: programmatic run wrapper; defer to config (#1745)
+            false, // no_hook_bypass_scan: programmatic run wrapper; defer to config
             false,
             false,
             false,

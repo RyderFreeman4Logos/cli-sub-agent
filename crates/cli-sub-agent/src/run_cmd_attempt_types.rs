@@ -69,6 +69,9 @@ pub(crate) struct RunLoopRequest<'a> {
     /// fatal-error-marker silent-hang scan for this run, overriding config
     /// (#1745). Idle/wall-clock timeouts still apply.
     pub(crate) no_error_marker_scan: bool,
+    /// CLI `--no-hook-bypass-scan`: disables post-run hook-bypass scanning for
+    /// this run, overriding config.
+    pub(crate) no_hook_bypass_scan: bool,
     pub(crate) extra_writable: Vec<PathBuf>,
     pub(crate) extra_readable: Vec<PathBuf>,
     pub(crate) branch_guard: BranchGuardRuntime,

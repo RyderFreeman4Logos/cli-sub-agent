@@ -21,6 +21,13 @@ const POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY: &str =
     "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected";
 const ALLOW_NO_VERIFY_COMMIT_MARKER: &str = "allow_git_commit_no_verify=1";
 
+pub(crate) fn resolve_hook_bypass_scan_enabled(
+    cli_no_hook_bypass_scan: bool,
+    config_hook_bypass_scan: Option<bool>,
+) -> bool {
+    !cli_no_hook_bypass_scan && config_hook_bypass_scan.unwrap_or(true)
+}
+
 #[cfg(test)]
 pub(crate) fn is_post_run_commit_policy_block(summary: &str) -> bool {
     summary == POST_RUN_POLICY_BLOCKED_SUMMARY
@@ -82,6 +89,47 @@ pub(crate) fn apply_post_run_commit_policy(
     match output_format {
         OutputFormat::Text => eprintln!("{guard_message}"),
         OutputFormat::Json => append_stderr_block(&mut result.stderr_output, &guard_message),
+    }
+}
+
+pub(crate) struct PostSessionCommitPolicyArgs<'a> {
+    pub(crate) output_format: &'a OutputFormat,
+    pub(crate) prompt: &'a str,
+    pub(crate) require_commit_on_mutation: bool,
+    pub(crate) commit_guard: Option<&'a PostRunCommitGuard>,
+    pub(crate) policy_evaluation_failed: bool,
+    pub(crate) hook_bypass_scan_enabled: bool,
+    pub(crate) executed_shell_commands: &'a [String],
+    pub(crate) merged_env_ref: Option<&'a HashMap<String, String>>,
+    pub(crate) execute_events_observed: bool,
+}
+
+pub(crate) fn apply_post_session_commit_policies(
+    result: &mut csa_process::ExecutionResult,
+    args: PostSessionCommitPolicyArgs<'_>,
+) {
+    apply_post_run_commit_policy(
+        result,
+        args.output_format,
+        args.require_commit_on_mutation,
+        args.commit_guard,
+    );
+    apply_unverifiable_commit_policy(result, args.output_format, args.policy_evaluation_failed);
+    if args.hook_bypass_scan_enabled {
+        apply_no_verify_commit_policy(
+            result,
+            args.output_format,
+            args.prompt,
+            args.executed_shell_commands,
+            args.execute_events_observed,
+        );
+        apply_lefthook_bypass_policy(
+            result,
+            args.output_format,
+            args.executed_shell_commands,
+            args.merged_env_ref,
+            args.execute_events_observed,
+        );
     }
 }
 

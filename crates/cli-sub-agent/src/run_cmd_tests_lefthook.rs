@@ -6,6 +6,21 @@ use csa_core::types::OutputFormat;
 use std::collections::HashMap;
 
 #[test]
+fn hook_bypass_scan_defaults_enabled() {
+    assert!(resolve_hook_bypass_scan_enabled(false, None));
+}
+
+#[test]
+fn hook_bypass_scan_respects_config_false() {
+    assert!(!resolve_hook_bypass_scan_enabled(false, Some(false)));
+}
+
+#[test]
+fn hook_bypass_scan_cli_opt_out_overrides_config_true() {
+    assert!(!resolve_hook_bypass_scan_enabled(true, Some(true)));
+}
+
+#[test]
 fn apply_lefthook_bypass_policy_blocks_inline_lefthook_zero() {
     let mut result = ExecutionResult {
         output: String::new(),
