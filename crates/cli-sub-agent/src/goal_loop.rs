@@ -110,6 +110,7 @@ pub(crate) struct GoalRunRequest {
     /// CLI `--no-error-marker-scan`: disables the #1652 fatal-error-marker
     /// silent-hang scan for this run, overriding config (#1745).
     pub(crate) no_error_marker_scan: bool,
+    pub(crate) no_preflight: bool,
     pub(crate) no_post_exec_gate: bool,
     pub(crate) require_commit: bool,
     pub(crate) extra_writable: Vec<PathBuf>,
@@ -180,6 +181,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         request.force_ignore_tier_setting,
         request.no_fs_sandbox,
         request.no_error_marker_scan,
+        request.no_preflight,
         request.no_post_exec_gate,
         request.require_commit,
         request.extra_writable,
@@ -342,6 +344,7 @@ async fn run_goal_iteration(
         request.force_ignore_tier_setting,
         request.no_fs_sandbox,
         request.no_error_marker_scan,
+        request.no_preflight,
         request.no_post_exec_gate,
         request.require_commit,
         request.extra_writable.clone(),

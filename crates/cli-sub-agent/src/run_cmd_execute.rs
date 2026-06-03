@@ -117,6 +117,7 @@ pub(crate) async fn handle_run(
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
     no_error_marker_scan: bool,
+    no_preflight: bool,
     no_post_exec_gate: bool,
     require_commit: bool,
     extra_writable: Vec<PathBuf>,
@@ -192,7 +193,8 @@ pub(crate) async fn handle_run(
         is_fork = true;
     }
 
-    let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
+    let Some((mut config, mut global_config)) =
+        pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
     };
@@ -211,6 +213,13 @@ pub(crate) async fn handle_run(
     if let Some(exit_code) = evaluate_and_emit_refusal(&branch_guard, branch_state) {
         return Ok(exit_code);
     }
+    crate::run_cmd_preflight::apply_run_preflight_override(
+        &project_root,
+        session_arg.as_deref(),
+        no_preflight,
+        &mut config,
+        &mut global_config,
+    )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let mut user_explicit_tool = tool.is_some();
     let prompt = resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);

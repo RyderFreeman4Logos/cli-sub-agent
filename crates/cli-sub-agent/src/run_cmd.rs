@@ -158,6 +158,7 @@ impl SubagentRunConfig {
             false, // no_error_marker_scan: programmatic run wrapper; defer to config (#1745)
             false,
             false,
+            false,
             Vec::new(),
             Vec::new(),
             self.startup_env,

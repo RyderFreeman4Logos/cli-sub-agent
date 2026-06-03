@@ -74,6 +74,61 @@ fn run_config_without_routable_tools() -> ProjectConfig {
     run_config_with_tier("default", Vec::new(), &[])
 }
 
+async fn run_preflight_fixture(project_root: &Path, no_preflight: bool) -> anyhow::Result<i32> {
+    handle_run(
+        None,
+        None,
+        None,
+        None,
+        Some("inspect the repository".to_string()),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        false,
+        false,
+        None,
+        false,
+        None,
+        None,
+        false,
+        true,
+        Some(project_root.display().to_string()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        false,
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        0,
+        OutputFormat::Text,
+        csa_process::StreamMode::BufferOnly,
+        None,
+        false,
+        false,
+        false, // no_error_marker_scan (#1745)
+        no_preflight,
+        false,
+        false,
+        Vec::new(),
+        Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
     let project_dir = tempdir().unwrap();
@@ -131,6 +186,7 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
         false, // no_error_marker_scan (#1745)
         false,
         false,
+        false,
         Vec::new(),
         Vec::new(),
         crate::startup_env::StartupSubtreeEnv::default(),
@@ -159,6 +215,36 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
     assert!(
         sessions.is_empty(),
         "tier bypass gate should reject before session creation"
+    );
+}
+
+#[tokio::test]
+async fn handle_run_no_preflight_skips_ai_config_check() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let mut config = run_config_without_routable_tools();
+    config.preflight.ai_config_symlink_check.enabled = true;
+    write_project_config(project_dir.path(), &config);
+    std::fs::write(project_dir.path().join("AGENTS.md"), "not a symlink").unwrap();
+
+    let preflight_err = run_preflight_fixture(project_dir.path(), false)
+        .await
+        .expect_err("enabled preflight should reject regular AI config");
+    assert!(
+        preflight_err
+            .to_string()
+            .contains("preflight: AI-config symlink integrity check failed"),
+        "unexpected error: {preflight_err:#}"
+    );
+
+    let routing_err = run_preflight_fixture(project_dir.path(), true)
+        .await
+        .expect_err("--no-preflight should skip to routing");
+    assert!(
+        routing_err
+            .to_string()
+            .contains("No tool specified and no tier-based or auto-selectable tool available"),
+        "unexpected error: {routing_err:#}"
     );
 }
 
@@ -213,6 +299,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         false,
         false,
         false, // no_error_marker_scan (#1745)
+        false,
         false,
         false,
         Vec::new(),

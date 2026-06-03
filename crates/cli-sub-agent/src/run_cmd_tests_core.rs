@@ -369,6 +369,25 @@ fn test_cli_no_error_marker_scan_flag_parses() {
 }
 
 #[test]
+fn test_cli_no_preflight_flag_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--no-preflight", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { no_preflight, .. } => {
+            assert!(no_preflight);
+        }
+        _ => panic!("expected Run command"),
+    }
+
+    let cli_default = try_parse_cli(&["csa", "run", "prompt"]).unwrap();
+    match cli_default.command {
+        crate::cli::Commands::Run { no_preflight, .. } => {
+            assert!(!no_preflight);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
 fn test_cli_prompt_flag_parses_and_conflicts_with_positional_prompt() {
     let cli = try_parse_cli(&["csa", "run", "--prompt", "hello"]).unwrap();
     match cli.command {
