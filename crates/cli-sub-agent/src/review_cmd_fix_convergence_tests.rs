@@ -187,6 +187,7 @@ fn large_review_diff_size() -> ReviewDiffSize {
         files: 2,
         changed_lines: 1549,
         bytes: 8192,
+        notes: Vec::new(),
     }
 }
 

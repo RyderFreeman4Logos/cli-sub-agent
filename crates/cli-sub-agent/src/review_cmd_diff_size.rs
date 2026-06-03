@@ -7,6 +7,9 @@ use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{ReviewDiffSize, ReviewVerdictArtifact, write_review_verdict};
 use tracing::{debug, warn};
 
+#[path = "review_cmd_diff_size_untracked.rs"]
+mod untracked_diff_size;
+
 const REVIEW_DIFF_SIZE_LINE_PREFIX: &str = "Diff size:";
 const REVIEW_DIFF_SIZE_HEADER_SECTION_IDS: &[&str] = &["summary", "details"];
 
@@ -32,6 +35,10 @@ impl LargeDiffWarning {
 }
 
 pub(super) fn compute_review_diff_size(project_root: &Path, scope: &str) -> Option<ReviewDiffSize> {
+    if scope == "uncommitted" {
+        return compute_uncommitted_review_diff_size(project_root);
+    }
+
     let diff = collect_review_diff_payload(project_root, scope)?;
     Some(diff_size_from_payload(&diff))
 }
@@ -70,10 +77,15 @@ pub(super) fn format_large_diff_warning(warning: LargeDiffWarning) -> String {
 }
 
 pub(super) fn format_review_diff_size_line(diff_size: &ReviewDiffSize) -> String {
-    format!(
+    let mut line = format!(
         "{REVIEW_DIFF_SIZE_LINE_PREFIX} {} files, {} changed lines, {} bytes",
         diff_size.files, diff_size.changed_lines, diff_size.bytes
-    )
+    );
+    if !diff_size.notes.is_empty() {
+        line.push_str("; ");
+        line.push_str(&diff_size.notes.join("; "));
+    }
+    line
 }
 
 pub(super) fn add_review_diff_size_line(
@@ -312,70 +324,19 @@ fn collect_review_diff_payload(project_root: &Path, scope: &str) -> Option<Vec<u
     None
 }
 
+fn compute_uncommitted_review_diff_size(project_root: &Path) -> Option<ReviewDiffSize> {
+    let payload = run_git(project_root, &["diff", "HEAD", "--no-color"])?;
+    let mut diff_size = diff_size_from_payload(&payload);
+    let mut untracked = untracked_diff_size::collect(project_root)?;
+    diff_size.files += untracked.files;
+    diff_size.changed_lines += untracked.changed_lines;
+    diff_size.bytes = diff_size.bytes.saturating_add(untracked.bytes);
+    diff_size.notes.append(&mut untracked.notes);
+    Some(diff_size)
+}
+
 fn collect_uncommitted_diff_payload(project_root: &Path) -> Option<Vec<u8>> {
-    let mut payload = run_git(project_root, &["diff", "HEAD", "--no-color"])?;
-    append_untracked_file_diffs(project_root, &mut payload)?;
-    Some(payload)
-}
-
-fn append_untracked_file_diffs(project_root: &Path, payload: &mut Vec<u8>) -> Option<()> {
-    let paths = run_git(
-        project_root,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    )?;
-
-    for path in paths
-        .split(|byte| *byte == b'\0')
-        .filter(|path| !path.is_empty())
-    {
-        append_untracked_file_diff(project_root, path, payload)?;
-    }
-
-    Some(())
-}
-
-fn append_untracked_file_diff(
-    project_root: &Path,
-    relative_path: &[u8],
-    payload: &mut Vec<u8>,
-) -> Option<()> {
-    let relative_path = String::from_utf8_lossy(relative_path);
-    let content = std::fs::read(project_root.join(relative_path.as_ref())).ok()?;
-    let line_count = content_line_count(&content);
-
-    if !payload.is_empty() && !payload.ends_with(b"\n") {
-        payload.push(b'\n');
-    }
-
-    payload.extend_from_slice(
-        format!(
-            "diff --git a/{relative_path} b/{relative_path}\nnew file mode 100644\nindex 0000000..0000000\n--- /dev/null\n+++ b/{relative_path}\n@@ -0,0 +1,{line_count} @@\n",
-        )
-        .as_bytes(),
-    );
-
-    for line in content.split_inclusive(|byte| *byte == b'\n') {
-        payload.push(b'+');
-        payload.extend_from_slice(line);
-        if !line.ends_with(b"\n") {
-            payload.push(b'\n');
-        }
-    }
-
-    Some(())
-}
-
-fn content_line_count(content: &[u8]) -> usize {
-    if content.is_empty() {
-        return 0;
-    }
-
-    let newline_count = content.iter().filter(|byte| **byte == b'\n').count();
-    if content.ends_with(b"\n") {
-        newline_count
-    } else {
-        newline_count + 1
-    }
+    run_git(project_root, &["diff", "HEAD", "--no-color"])
 }
 
 fn run_git(project_root: &Path, args: &[&str]) -> Option<Vec<u8>> {
@@ -412,6 +373,7 @@ fn diff_size_from_payload(diff: &[u8]) -> ReviewDiffSize {
         files: files.len(),
         changed_lines,
         bytes: diff.len(),
+        notes: Vec::new(),
     }
 }
 
@@ -531,9 +493,9 @@ mod tests {
 
         let size = compute_review_diff_size(repo.path(), "uncommitted").expect("compute diff size");
 
-        assert!(size.files >= 1);
-        assert!(size.changed_lines > 0);
+        assert_eq!(size.files, 1);
         assert_eq!(size.changed_lines, 3);
+        assert!(size.notes.is_empty());
         let warning = large_diff_warning(&size, Some(2)).expect("untracked additions warn");
         assert_eq!(warning.changed_lines, 3);
         assert_eq!(warning.threshold, 2);
@@ -559,6 +521,7 @@ mod tests {
             files: 3,
             changed_lines: 1001,
             bytes: 4096,
+            notes: Vec::new(),
         };
 
         assert!(large_diff_warning(&size, Some(1001)).is_none());
@@ -578,6 +541,7 @@ mod tests {
             files: 2,
             changed_lines: 1549,
             bytes: 8192,
+            notes: Vec::new(),
         };
         let warning = LargeDiffWarning {
             changed_lines: 1549,
@@ -616,6 +580,7 @@ mod tests {
             files: 2,
             changed_lines: 1549,
             bytes: 8192,
+            notes: Vec::new(),
         };
         let warning = LargeDiffWarning {
             changed_lines: 1549,

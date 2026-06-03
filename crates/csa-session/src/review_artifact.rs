@@ -90,6 +90,8 @@ pub struct ReviewDiffSize {
     pub files: usize,
     pub changed_lines: usize,
     pub bytes: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
