@@ -119,13 +119,21 @@ fn findings_section_body_is_unclean(
     body: &str,
     default_unlabeled_severity: Option<Severity>,
 ) -> bool {
-    let body = body.trim();
-    if body.is_empty() || contains_canonical_clean_conclusion(body) {
-        return false;
-    }
+    body.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("```"))
+        .any(|line| {
+            !contains_canonical_clean_conclusion(line)
+                && !line_parses_as_structured_finding(line, default_unlabeled_severity.clone())
+        })
+}
 
-    let parser_input = format!("Findings\n{body}");
-    extract_review_findings_from_prose_with_default(&parser_input, default_unlabeled_severity)
+fn line_parses_as_structured_finding(
+    line: &str,
+    default_unlabeled_severity: Option<Severity>,
+) -> bool {
+    let parser_input = format!("Findings\n{line}");
+    !extract_review_findings_from_prose_with_default(&parser_input, default_unlabeled_severity)
         .is_empty()
 }
 

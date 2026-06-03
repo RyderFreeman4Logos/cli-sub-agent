@@ -179,6 +179,47 @@ No blocking issues.
 }
 
 #[test]
+fn issue_1804_mixed_clean_and_unparsed_findings_section_fails_closed() {
+    let session_id = "01TEST1804MIXEDCLEAN00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1804-mixed-clean-unparsed", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+No blocking issues.
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+No blocking issues.
+
+1. High correctness regression remains unparsed because the prose lacks a severity delimiter.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let findings = read_findings_toml(&session_dir);
+    assert!(findings.findings.is_empty());
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_1804_canonical_clean_findings_sections_stay_pass() {
     for (heading_index, heading) in SUPPORTED_FINDINGS_HEADINGS.iter().enumerate() {
         for (body_index, (case_name, summary, body)) in CLEAN_FINDINGS_BODIES.iter().enumerate() {
@@ -232,6 +273,44 @@ fn issue_1804_canonical_clean_findings_sections_stay_pass() {
 }
 
 #[test]
+fn issue_1804_multiline_clean_findings_section_stays_pass() {
+    let session_id = "01TEST1804MULTICLEAN00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1804-multiline-clean", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+Review completed.
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+No issues found.
+
+No blocking findings found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let findings = read_findings_toml(&session_dir);
+    assert!(findings.findings.is_empty());
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    assert!(verdict.failure_reason.is_none());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_1804_parsed_findings_section_still_fails() {
     let session_id = "01TEST1804PARSEDHIGH000";
     let (_env_lock, project_root, session_dir) =
@@ -247,7 +326,7 @@ No blocking issues.
 <!-- CSA:SECTION:details -->
 ## Findings
 
-1. [High] real bug remains visible in the findings section.
+1. [High]: real bug remains visible in the findings section.
 <!-- CSA:SECTION:details:END -->
 "#,
     )
