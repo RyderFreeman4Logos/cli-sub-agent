@@ -30,8 +30,9 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
     TierAttemptFailure, chain_failure_reasons, classify_next_model_failure_with_elapsed,
-    fallback_reason_for_result, format_all_models_failed_reason, ordered_tier_candidates,
-    persist_fallback_chain, persist_fallback_result_fields,
+    earliest_backend_reset_window, fallback_reason_for_result,
+    format_all_models_failed_reason_with_reset, ordered_tier_candidates,
+    parse_backend_reset_duration, persist_fallback_chain, persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -261,6 +262,7 @@ pub(crate) async fn execute_review_with_tier_filter(
         &candidates,
     );
     let mut failures = Vec::new();
+    let mut reset_windows = Vec::new();
 
     for (attempt_index, (attempt_tool, attempt_model_spec)) in candidates.iter().enumerate() {
         let attempt_started_at = std::time::Instant::now();
@@ -369,6 +371,9 @@ pub(crate) async fn execute_review_with_tier_filter(
                     let model_label = attempt_model_spec
                         .clone()
                         .unwrap_or_else(|| attempt_tool.as_str().to_string());
+                    if let Some(reset_after) = parse_backend_reset_duration(&error_text) {
+                        reset_windows.push(reset_after);
+                    }
                     failures.push(TierAttemptFailure::from_rate_limit(
                         model_label.clone(),
                         &detected,
@@ -427,8 +432,11 @@ pub(crate) async fn execute_review_with_tier_filter(
                             ),
                         );
                     }
-                    let failure_reason =
-                        format_all_models_failed_reason(tier_name.as_deref(), &failures);
+                    let failure_reason = format_all_models_failed_reason_with_reset(
+                        tier_name.as_deref(),
+                        &failures,
+                        earliest_backend_reset_window(&reset_windows),
+                    );
                     return Ok(ReviewExecutionOutcome {
                         execution: crate::pipeline::SessionExecutionResult {
                             execution: csa_process::ExecutionResult {
@@ -568,6 +576,12 @@ pub(crate) async fn execute_review_with_tier_filter(
                 .clone()
                 .unwrap_or_else(|| attempt_tool.as_str().to_string());
             let reason = failure.reason.clone();
+            if let Some(reset_after) = parse_backend_reset_duration(&format!(
+                "{}\n{}",
+                execution.execution.stderr_output, execution.execution.output
+            )) {
+                reset_windows.push(reset_after);
+            }
             failures.push(TierAttemptFailure {
                 model_spec: model_label.clone(),
                 reason: reason.clone(),
@@ -614,9 +628,10 @@ pub(crate) async fn execute_review_with_tier_filter(
                     forced_decision: Some(ReviewDecision::Unavailable),
                     routed_to: None,
                     primary_failure: chain_failure_reasons(&failures),
-                    failure_reason: format_all_models_failed_reason(
+                    failure_reason: format_all_models_failed_reason_with_reset(
                         tier_name.as_deref(),
                         &failures,
+                        earliest_backend_reset_window(&reset_windows),
                     ),
                 });
             }

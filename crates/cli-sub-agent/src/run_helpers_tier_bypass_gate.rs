@@ -42,6 +42,8 @@ pub(crate) fn enforce_tier_bypass_gate(ctx: TierBypassGateCtx<'_>) -> Result<()>
          To allow emergency exact-model/force bypasses, set \
          [tier_policy].allow_force_bypass = true in the global CSA config \
          (~/.config/cli-sub-agent/config.toml). \
+         This is the intended manual escape hatch for total-exhaustion situations; \
+         CSA will not auto-enable it or auto-admit excluded tools. \
          Refused flags: {}.",
         tier_names.join(", "),
         refused_flags.join(", ")

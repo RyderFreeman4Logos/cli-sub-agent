@@ -113,6 +113,8 @@ fn tier_bypass_gate_rejects_model_spec_and_force_by_default() {
     assert!(msg.contains("Use --tier <name>"));
     assert!(msg.contains("Available tiers: [tier-2-standard, tier-4-critical]"));
     assert!(msg.contains("[tier_policy].allow_force_bypass = true"));
+    assert!(msg.contains("manual escape hatch for total-exhaustion situations"));
+    assert!(msg.contains("CSA will not auto-enable it or auto-admit excluded tools"));
     assert!(msg.contains("Refused flags: --model-spec, --force-ignore-tier-setting"));
 }
 
