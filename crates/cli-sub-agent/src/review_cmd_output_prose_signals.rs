@@ -9,7 +9,8 @@ use super::text::{
     contains_blocking_issue_signal, severity_counts_from_text, zero_severity_counts,
 };
 use crate::review_cmd::prose_findings::{
-    extract_review_findings_from_prose_with_default, severity_counts_from_review_findings,
+    extract_review_findings_from_prose_with_default, is_findings_header,
+    severity_counts_from_review_findings,
 };
 
 #[derive(Debug, Clone)]
@@ -108,7 +109,7 @@ fn contains_actionable_review_section(content: &str) -> bool {
             if active_section && section_body_is_actionable(&body) {
                 return true;
             }
-            active_section = is_actionable_review_section_header(header);
+            active_section = is_findings_header(header);
             body.clear();
             continue;
         }
@@ -127,10 +128,6 @@ fn markdown_header_text(line: &str) -> Option<&str> {
         return None;
     }
     Some(trimmed.trim_start_matches('#').trim())
-}
-
-fn is_actionable_review_section_header(header: &str) -> bool {
-    header.eq_ignore_ascii_case("findings")
 }
 
 fn section_body_is_actionable(lines: &[&str]) -> bool {

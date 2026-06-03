@@ -249,7 +249,7 @@ fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
     }
 }
 
-fn is_findings_header(line: &str) -> bool {
+pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
     let normalized = line.trim_start_matches('#').trim();
     normalized.eq_ignore_ascii_case("findings")
         || normalized.eq_ignore_ascii_case("review findings")
