@@ -77,9 +77,12 @@ where
     // Check if the session is Stale before entering the polling loop.
     // This prevents indefinite polling of sessions that have no live daemon process
     // and no progress for an extended period.
-    if let Err(stale_err) =
-        super::check_session_stale_before_wait(effective_root, &resolved.session_id)
-    {
+    if let Err(stale_err) = super::check_session_stale_before_wait(
+        effective_root,
+        &resolved.session_id,
+        &session_dir,
+        wait_options.behavior,
+    ) {
         eprintln!(
             "Session {} appears stale: {}",
             resolved.session_id, stale_err
