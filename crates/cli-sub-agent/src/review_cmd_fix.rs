@@ -17,13 +17,18 @@ use csa_session::{
 };
 
 use super::CLEAN;
-use super::output::{
-    is_review_output_empty, persist_review_meta, persist_review_verdict, sanitize_review_output,
-};
+use super::output::{is_review_output_empty, sanitize_review_output};
 use super::resolve::ANTI_RECURSION_PREAMBLE;
 
 #[path = "review_cmd_fix_clean_output.rs"]
 mod clean_output;
+#[path = "review_cmd_fix_diff_report.rs"]
+mod diff_report_artifacts;
+#[cfg(test)]
+pub(crate) use diff_report_artifacts::{
+    persist_fix_final_artifacts_for_tests, persist_fix_final_artifacts_for_tests_with_output,
+    persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
+};
 
 /// All context needed to run the fix loop after a review finds issues.
 pub(crate) struct FixLoopContext<'a> {
@@ -47,6 +52,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub extra_writable: &'a [PathBuf],
     pub extra_readable: &'a [PathBuf],
     pub timeout: Option<u64>,
+    pub diff_report: super::diff_size::ReviewDiffReport<'a>,
     pub project_root: &'a Path,
     pub scope: String,
     pub decision: String,
@@ -66,6 +72,7 @@ pub(crate) struct FixLoopContext<'a> {
 /// return `Ok(1)` or an error.
 pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     let mut session_id = ctx.initial_session_id;
+    let diff_report = ctx.diff_report;
     // Entering the fix loop means the current review is not clean; any existing
     // marker for this SHA is stale until genuine clean convergence rewrites it.
     remove_review_gate_marker_for_current_head(ctx.project_root, &session_id);
@@ -229,6 +236,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 &review_meta,
                 true,
                 Some(&fix_output),
+                diff_report,
             );
             if final_decision == ReviewDecision::Pass {
                 info!(
@@ -271,6 +279,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         &review_meta,
         last_gate_passed,
         last_fix_output.as_deref(),
+        diff_report,
     );
     error!(
         max_rounds = ctx.max_rounds,
@@ -297,6 +306,7 @@ fn persist_fix_final_artifacts(
         review_meta,
         quality_gate_passed,
         None,
+        diff_report_artifacts::empty_diff_report(),
     )
 }
 
@@ -305,6 +315,7 @@ fn persist_fix_final_artifacts_with_current_output(
     review_meta: &ReviewSessionMeta,
     quality_gate_passed: bool,
     current_fix_output: Option<&str>,
+    diff_report: super::diff_size::ReviewDiffReport<'_>,
 ) -> ReviewDecision {
     let fix_output_was_substantive = current_fix_output
         .map(|output| !is_review_output_empty(output))
@@ -326,7 +337,7 @@ fn persist_fix_final_artifacts_with_current_output(
         });
     }
 
-    persist_review_meta(project_root, &meta_for_verdict);
+    diff_report_artifacts::persist_fix_review_meta(project_root, &meta_for_verdict, diff_report);
     if quality_gate_passed && fix_output_was_substantive {
         match csa_session::get_session_dir(project_root, &meta_for_verdict.session_id) {
             Ok(session_dir) => {
@@ -371,7 +382,7 @@ fn persist_fix_final_artifacts_with_current_output(
         }
     }
     remove_stale_review_verdict(project_root, &meta_for_verdict);
-    persist_review_verdict(project_root, &meta_for_verdict, &[], Vec::new());
+    diff_report_artifacts::persist_fix_review_verdict(project_root, &meta_for_verdict, diff_report);
     let final_verdict = read_persisted_fix_final_verdict(project_root, &meta_for_verdict);
     let outcome = FixTerminalOutcome::new(
         quality_gate_passed,
@@ -379,7 +390,7 @@ fn persist_fix_final_artifacts_with_current_output(
         final_verdict.decision,
     );
     let final_meta = review_meta_for_final_verdict(&meta_for_verdict, &final_verdict, &outcome);
-    persist_review_meta(project_root, &final_meta);
+    diff_report_artifacts::persist_fix_review_meta(project_root, &final_meta, diff_report);
     if outcome.reached_genuine_clean_convergence() {
         crate::review_gate::maybe_write_review_gate_marker(
             project_root,
@@ -641,30 +652,6 @@ fn remove_review_gate_marker(project_root: &Path, session_id: &str, head_sha: &s
             "Cannot remove review-gate marker"
         );
     }
-}
-
-#[cfg(test)]
-pub(crate) fn persist_fix_final_artifacts_for_tests(
-    project_root: &Path,
-    review_meta: &ReviewSessionMeta,
-    quality_gate_passed: bool,
-) -> ReviewDecision {
-    persist_fix_final_artifacts(project_root, review_meta, quality_gate_passed)
-}
-
-#[cfg(test)]
-pub(crate) fn persist_fix_final_artifacts_for_tests_with_output(
-    project_root: &Path,
-    review_meta: &ReviewSessionMeta,
-    quality_gate_passed: bool,
-    current_fix_output: &str,
-) -> ReviewDecision {
-    persist_fix_final_artifacts_with_current_output(
-        project_root,
-        review_meta,
-        quality_gate_passed,
-        Some(current_fix_output),
-    )
 }
 
 #[cfg(test)]

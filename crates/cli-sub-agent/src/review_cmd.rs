@@ -538,6 +538,10 @@ pub(crate) async fn handle_review(
             extra_writable: &args.extra_writable,
             extra_readable: &args.extra_readable,
             timeout: args.timeout,
+            diff_report: diff_size::ReviewDiffReport {
+                diff_size: diff_size.as_ref(),
+                large_diff_warning,
+            },
             project_root: &project_root,
             scope,
             decision: decision.as_str().to_string(),

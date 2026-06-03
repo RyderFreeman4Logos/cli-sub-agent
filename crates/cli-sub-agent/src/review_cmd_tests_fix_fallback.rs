@@ -127,6 +127,10 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         extra_writable: &[],
         extra_readable: &[],
         timeout: None,
+        diff_report: super::diff_size::ReviewDiffReport {
+            diff_size: None,
+            large_diff_warning: None,
+        },
         project_root: project_dir.path(),
         scope: "files:tracked.txt".to_string(),
         decision: ReviewDecision::Fail.as_str().to_string(),
