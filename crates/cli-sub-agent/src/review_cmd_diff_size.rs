@@ -345,15 +345,19 @@ fn diff_size_from_payload(diff: &[u8]) -> ReviewDiffSize {
     let diff_text = String::from_utf8_lossy(diff);
     let mut files = BTreeSet::new();
     let mut changed_lines = 0;
+    let mut in_hunk = false;
 
     for line in diff_text.lines() {
         if let Some(path) = line.strip_prefix("diff --git ") {
             files.insert(path.to_string());
+            in_hunk = false;
             continue;
         }
-        if (line.starts_with('+') && !line.starts_with("+++"))
-            || (line.starts_with('-') && !line.starts_with("---"))
-        {
+        if line.starts_with("@@") {
+            in_hunk = true;
+            continue;
+        }
+        if in_hunk && (line.starts_with('+') || line.starts_with('-')) {
             changed_lines += 1;
         }
     }
@@ -447,6 +451,29 @@ mod tests {
 
         assert_eq!(size.files, 2);
         assert_eq!(size.changed_lines, 5);
+        assert_eq!(size.bytes, diff.len());
+    }
+
+    #[test]
+    fn diff_size_from_payload_counts_hunk_content_that_looks_like_file_headers() {
+        let diff = concat!(
+            "diff --git a/operators.txt b/operators.txt\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/operators.txt\n",
+            "+++ b/operators.txt\n",
+            "@@ -1,3 +1,3 @@\n",
+            " unchanged\n",
+            "---removed operator line\n",
+            "+++added operator line\n",
+        );
+
+        let size = diff_size_from_payload(diff.as_bytes());
+
+        assert_eq!(size.files, 1);
+        assert_eq!(
+            size.changed_lines, 2,
+            "file headers must be ignored, but hunk content beginning with ++/-- must count"
+        );
         assert_eq!(size.bytes, diff.len());
     }
 
