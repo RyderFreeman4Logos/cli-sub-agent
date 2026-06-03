@@ -7,9 +7,6 @@ use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{ReviewDiffSize, ReviewVerdictArtifact, write_review_verdict};
 use tracing::{debug, warn};
 
-#[path = "review_cmd_diff_size_untracked.rs"]
-mod untracked_diff_size;
-
 const REVIEW_DIFF_SIZE_LINE_PREFIX: &str = "Diff size:";
 const REVIEW_DIFF_SIZE_HEADER_SECTION_IDS: &[&str] = &["summary", "details"];
 
@@ -325,14 +322,9 @@ fn collect_review_diff_payload(project_root: &Path, scope: &str) -> Option<Vec<u
 }
 
 fn compute_uncommitted_review_diff_size(project_root: &Path) -> Option<ReviewDiffSize> {
+    // Working-tree/untracked sizing is deferred to #1796; keep this path git-computed only.
     let payload = run_git(project_root, &["diff", "HEAD", "--no-color"])?;
-    let mut diff_size = diff_size_from_payload(&payload);
-    let mut untracked = untracked_diff_size::collect(project_root)?;
-    diff_size.files += untracked.files;
-    diff_size.changed_lines += untracked.changed_lines;
-    diff_size.bytes = diff_size.bytes.saturating_add(untracked.bytes);
-    diff_size.notes.append(&mut untracked.notes);
-    Some(diff_size)
+    Some(diff_size_from_payload(&payload))
 }
 
 fn collect_uncommitted_diff_payload(project_root: &Path) -> Option<Vec<u8>> {
@@ -486,19 +478,38 @@ mod tests {
     }
 
     #[test]
-    fn uncommitted_diff_size_counts_untracked_files_and_large_diff_warning() {
+    fn committed_range_diff_size_counts_only_committed_git_diff() {
+        let repo = setup_diff_size_git_repo();
+        run_git_command(repo.path(), &["branch", "base"]);
+        std::fs::write(repo.path().join("tracked.txt"), "baseline\ncommitted\n")
+            .expect("write committed change");
+        run_git_command(repo.path(), &["add", "tracked.txt"]);
+        run_git_command(repo.path(), &["commit", "-m", "change tracked file"]);
+        std::fs::write(repo.path().join("new.txt"), "untracked\ncontent\n")
+            .expect("write untracked file");
+
+        let size =
+            compute_review_diff_size(repo.path(), "range:base...HEAD").expect("compute diff size");
+
+        assert_eq!(size.files, 1);
+        assert_eq!(size.changed_lines, 1);
+        assert!(size.bytes > 0);
+        assert!(size.notes.is_empty());
+    }
+
+    #[test]
+    fn uncommitted_diff_size_ignores_untracked_files_without_warning() {
         let repo = setup_diff_size_git_repo();
         std::fs::write(repo.path().join("new.txt"), "one\ntwo\nthree\n")
             .expect("write untracked file");
 
         let size = compute_review_diff_size(repo.path(), "uncommitted").expect("compute diff size");
 
-        assert_eq!(size.files, 1);
-        assert_eq!(size.changed_lines, 3);
+        assert_eq!(size.files, 0);
+        assert_eq!(size.changed_lines, 0);
+        assert_eq!(size.bytes, 0);
         assert!(size.notes.is_empty());
-        let warning = large_diff_warning(&size, Some(2)).expect("untracked additions warn");
-        assert_eq!(warning.changed_lines, 3);
-        assert_eq!(warning.threshold, 2);
+        assert!(large_diff_warning(&size, Some(2)).is_none());
     }
 
     #[test]
