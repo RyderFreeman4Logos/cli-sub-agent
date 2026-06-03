@@ -65,6 +65,61 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
     findings
 }
 
+pub(in crate::review_cmd) struct FindingsSectionBody {
+    body: String,
+}
+
+impl FindingsSectionBody {
+    pub(in crate::review_cmd) fn as_str(&self) -> &str {
+        &self.body
+    }
+}
+
+pub(in crate::review_cmd) fn findings_section_bodies(text: &str) -> Vec<FindingsSectionBody> {
+    let mut bodies = Vec::new();
+    let mut current = None::<String>;
+    let mut in_code_fence = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if let Some(body) = current.as_mut() {
+                body.push_str(line);
+                body.push('\n');
+            }
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+
+        if !in_code_fence && is_findings_header(trimmed) {
+            if let Some(body) = current.take() {
+                bodies.push(FindingsSectionBody { body });
+            }
+            current = Some(String::new());
+            continue;
+        }
+
+        let Some(body) = current.as_mut() else {
+            continue;
+        };
+        if !in_code_fence && trimmed.starts_with('#') {
+            if let Some(body) = current.take() {
+                bodies.push(FindingsSectionBody { body });
+            }
+            continue;
+        }
+
+        body.push_str(line);
+        body.push('\n');
+    }
+
+    if let Some(body) = current {
+        bodies.push(FindingsSectionBody { body });
+    }
+
+    bodies
+}
+
 pub(in crate::review_cmd) fn severity_counts_from_review_findings(
     findings: &[ReviewFinding],
 ) -> BTreeMap<Severity, u32> {
@@ -152,19 +207,19 @@ fn parse_severity_prefixed_finding(
     allow_description_only: bool,
 ) -> Option<ParsedProseFinding> {
     let (label, rest) = body.split_once(':')?;
-    let severity = severity_from_label(label)?;
+    let severity = severity_from_label(label).or_else(|| leading_severity_from_title(label))?;
     let rest = rest.trim();
     if let Some((file_range, description)) = parse_leading_file_range(rest) {
         return Some(ParsedProseFinding {
             severity,
             file_range: Some(file_range),
-            description: non_empty_or_fallback(&description, rest),
+            description: non_empty_or_fallback(&description, body),
         });
     }
     allow_description_only.then(|| ParsedProseFinding {
         severity,
         file_range: None,
-        description: rest.to_string(),
+        description: severity_prefixed_description(label, rest),
     })
 }
 
@@ -178,11 +233,37 @@ fn parse_path_prefixed_finding(body: &str, severity: Severity) -> Option<ParsedP
 }
 
 fn parse_file_reference_line(line: &str) -> Option<ReviewFindingFileRange> {
+    let line = strip_unordered_list_prefix(line);
     let (label, rest) = line.split_once(':')?;
     if !label.trim().eq_ignore_ascii_case("file") {
         return None;
     }
     parse_leading_file_range(rest.trim()).map(|(range, _)| range)
+}
+
+fn strip_unordered_list_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if matches!(trimmed.as_bytes().first(), Some(b'-' | b'*')) {
+        trimmed[1..].trim_start()
+    } else {
+        trimmed
+    }
+}
+
+fn leading_severity_from_title(title: &str) -> Option<Severity> {
+    let first_word = title
+        .trim_start()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .find(|word| !word.is_empty())?;
+    severity_from_label(first_word)
+}
+
+fn severity_prefixed_description(label: &str, rest: &str) -> String {
+    if leading_severity_from_title(label).is_some() && severity_from_label(label).is_none() {
+        non_empty_or_fallback(&format!("{}: {}", label.trim(), rest), rest)
+    } else {
+        rest.to_string()
+    }
 }
 
 fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
@@ -223,8 +304,11 @@ fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
     }
 }
 
-fn is_findings_header(line: &str) -> bool {
+pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
     let normalized = line.trim_start_matches('#').trim();
+    let normalized = normalized
+        .split_once('(')
+        .map_or(normalized, |(heading, _)| heading.trim_end());
     normalized.eq_ignore_ascii_case("findings")
         || normalized.eq_ignore_ascii_case("review findings")
 }

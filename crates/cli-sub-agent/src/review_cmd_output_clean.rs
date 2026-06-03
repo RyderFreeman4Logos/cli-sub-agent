@@ -283,6 +283,7 @@ pub(super) fn contains_clean_phrase(output: &str) -> bool {
         "no issues were found",
         "no blocking issues",
         "no findings",
+        "none.",
         "\u{672a}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
         "\u{6ca1}\u{6709}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
         "\u{65e0}\u{963b}\u{585e}\u{95ee}\u{9898}",

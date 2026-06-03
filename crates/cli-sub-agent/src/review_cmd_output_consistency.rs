@@ -10,6 +10,8 @@ use super::artifacts::{has_blocking_severity, load_findings_toml_from_output};
 use super::prose_signals::{reconcile_counts_with_prose, review_prose_signals};
 use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
 
+const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
+
 pub(super) fn enforce_final_verdict_consistency(
     session_dir: &Path,
     artifact: &mut ReviewVerdictArtifact,
@@ -44,8 +46,18 @@ pub(super) fn enforce_final_verdict_consistency(
         prose_signals.blocking_summary || has_blocking_severity(&prose_signals.severity_counts);
     let has_empty_machine_findings =
         findings_file.findings.is_empty() && severity_counts_are_zero(&artifact.severity_counts);
+    let unparsed_findings_prose =
+        prose_signals.unclean_findings_sections && has_empty_machine_findings;
 
-    if artifact.decision == ReviewDecision::Pass && (resume_to_fix || blocking_prose) {
+    if unparsed_findings_prose {
+        artifact
+            .failure_reason
+            .get_or_insert_with(|| PROSE_FINDINGS_UNPARSED_REASON.to_string());
+    }
+
+    if artifact.decision == ReviewDecision::Pass
+        && (resume_to_fix || blocking_prose || unparsed_findings_prose)
+    {
         ensure_nonzero_fail_closed_count(&mut artifact.severity_counts);
         artifact.decision = ReviewDecision::Fail;
         artifact.verdict_legacy = "HAS_ISSUES".to_string();
