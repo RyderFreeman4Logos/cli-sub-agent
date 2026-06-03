@@ -199,6 +199,10 @@ fn retire_session_from_daemon_completion(
     packet: &DaemonCompletionPacket,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) {
+    if !matches!(session.phase, SessionPhase::Active) {
+        return;
+    }
+
     session.last_accessed = completed_at;
     session.termination_reason.get_or_insert_with(|| {
         if packet.exit_code == 0 {
@@ -207,11 +211,7 @@ fn retire_session_from_daemon_completion(
             "daemon_completion".to_string()
         }
     });
-    if matches!(
-        session.phase,
-        SessionPhase::Active | SessionPhase::Available
-    ) && let Err(err) = session.apply_phase_event(PhaseEvent::Retired)
-    {
+    if let Err(err) = session.apply_phase_event(PhaseEvent::Retired) {
         warn!(
             session = %session.meta_session_id,
             phase = ?session.phase,
