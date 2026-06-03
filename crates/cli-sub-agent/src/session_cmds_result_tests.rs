@@ -296,6 +296,45 @@ fn handle_session_result_reconciles_orphaned_active_session() {
 
 #[cfg(unix)]
 #[test]
+fn handle_session_result_uses_daemon_completion_outcome() {
+    let tmp = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = tmp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = tmp.path();
+
+    let session = create_session(project, Some("result-completion-packet"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 17\nstatus = \"failure\"\n",
+    )
+    .unwrap();
+
+    handle_session_result(
+        session_id.clone(),
+        false,
+        Some(project.to_string_lossy().into_owned()),
+        StructuredOutputOpts::default(),
+    )
+    .unwrap();
+
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("session result should synthesize from daemon completion");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 17);
+
+    let persisted = csa_session::load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, csa_session::SessionPhase::Retired);
+}
+
+#[cfg(unix)]
+#[test]
 fn handle_session_artifacts_reconciles_orphaned_active_session() {
     let tmp = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

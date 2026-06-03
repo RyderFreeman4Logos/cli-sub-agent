@@ -691,7 +691,7 @@ fn handle_session_wait_returns_pre_exec_failure_without_timeout_packet() {
 
 #[cfg(unix)]
 #[test]
-fn persist_daemon_completion_from_env_writes_packet_for_seeded_session() {
+fn persist_daemon_completion_from_env_finalizes_seeded_session() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -710,6 +710,20 @@ fn persist_daemon_completion_from_env_writes_packet_for_seeded_session() {
     let packet = std::fs::read_to_string(session_dir.join("daemon-completion.toml")).unwrap();
     assert!(packet.contains("exit_code = 17"));
     assert!(packet.contains("status = \"failure\""));
+
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("daemon completion should synthesize result.toml");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 17);
+
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_ne!(persisted.phase, SessionPhase::Active);
+    assert_eq!(persisted.phase, SessionPhase::Retired);
+    assert_eq!(
+        persisted.termination_reason.as_deref(),
+        Some("daemon_completion")
+    );
 }
 
 #[rustfmt::skip]

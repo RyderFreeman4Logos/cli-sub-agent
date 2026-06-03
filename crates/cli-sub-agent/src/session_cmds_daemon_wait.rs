@@ -260,6 +260,11 @@ fn check_session_stale_before_wait(
                 // fails to parse), let the main loop handle it rather than flagging
                 // as stale. The session completed normally; parse errors are handled
                 // downstream with better diagnostics.
+                if super::daemon_completion_exists(session_dir)
+                    && !session_has_terminal_process(session_dir)
+                {
+                    return Ok(());
+                }
                 match csa_session::load_result(project_root, session_id) {
                     Ok(Some(_)) => return Ok(()),
                     Err(_) => return Ok(()), // result file exists but unparseable

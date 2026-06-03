@@ -8,9 +8,13 @@ use csa_session::TokenUsage;
 use csa_session::state::ReviewSessionMeta;
 
 use crate::session_cmds::{
-    ensure_terminal_result_for_dead_active_session, format_file_size,
-    resolve_session_prefix_with_fallback, resolve_session_prefix_with_global_fallback,
+    ensure_terminal_result_for_dead_active_session, resolve_session_prefix_with_global_fallback,
 };
+
+#[path = "session_cmds_result_artifacts.rs"]
+mod artifacts;
+#[path = "session_cmds_result_tool_output.rs"]
+mod tool_output;
 
 #[derive(Debug, Clone)]
 struct TranscriptSummary {
@@ -96,6 +100,19 @@ pub(crate) fn handle_session_result(
         .unwrap_or(&project_root);
     let is_cross_project = resolved.foreign_project_root.is_some();
 
+    let daemon_completion_result =
+        match crate::session_cmds_daemon::finalize_daemon_completion_if_present(&session_dir) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to finalize daemon completion packet in session result"
+                );
+                None
+            }
+        };
+
     if let Err(err) = ensure_terminal_result_for_dead_active_session(
         effective_root,
         &resolved_id,
@@ -133,6 +150,7 @@ pub(crate) fn handle_session_result(
             }
         }
     };
+    let repaired_result = repaired_result.or(daemon_completion_result);
 
     // If structured output flags are active, handle them and return early
     if structured.is_active() {
@@ -633,119 +651,11 @@ pub(crate) fn display_all_sections(session_dir: &Path, session_id: &str, json: b
     Ok(())
 }
 
-pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> Result<()> {
-    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let resolved_id = resolved.session_id;
-    if let Err(err) = ensure_terminal_result_for_dead_active_session(
-        &project_root,
-        &resolved_id,
-        "session artifacts",
-    ) {
-        tracing::warn!(
-            session_id = %resolved_id,
-            error = %err,
-            "Failed to reconcile dead Active session in session artifacts"
-        );
-    }
-    let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
-    let _ = crate::session_observability::refresh_and_repair_result(&project_root, &resolved_id);
-    let output_dir = session_dir.join("output");
-
-    // Show structured output index if available
-    if let Some(index) = csa_session::load_output_index(&session_dir)? {
-        println!(
-            "Structured output ({} sections, ~{} tokens):",
-            index.sections.len(),
-            index.total_tokens
-        );
-        for section in &index.sections {
-            let size_str = if let Some(ref fp) = section.file_path {
-                let path = output_dir.join(fp);
-                match fs::metadata(&path) {
-                    Ok(meta) => format_file_size(meta.len()),
-                    Err(_) => "missing".to_string(),
-                }
-            } else {
-                "-".to_string()
-            };
-            println!(
-                "  {:<20}  {:<30}  ~{}tok  {}",
-                section.id, section.title, section.token_estimate, size_str
-            );
-        }
-        println!();
-    }
-
-    // List all files in output/ with sizes
-    if output_dir.is_dir() {
-        let mut entries: Vec<_> = fs::read_dir(&output_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-
-        if entries.is_empty() {
-            eprintln!("No artifacts for session '{resolved_id}'");
-        } else {
-            println!("Files:");
-            for entry in &entries {
-                let path = entry.path();
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                println!("  {:<40}  {}", name, format_file_size(size));
-            }
-        }
-    } else {
-        eprintln!("No artifacts for session '{resolved_id}'");
-    }
-
-    Ok(())
-}
-
 pub(crate) use crate::session_cmds_result_measure::handle_session_measure;
 #[cfg(test)]
 pub(crate) use crate::session_cmds_result_measure::{compute_token_measurement, format_number};
-
-/// Handle `csa session tool-output <session> [index] [--list]`.
-pub(crate) fn handle_session_tool_output(
-    session: String,
-    index: Option<u32>,
-    list: bool,
-    cd: Option<String>,
-) -> Result<()> {
-    use csa_session::tool_output_store::ToolOutputStore;
-
-    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let session_id = resolved.session_id;
-    let session_dir = csa_session::get_session_dir(&project_root, &session_id)?;
-
-    let store = ToolOutputStore::open_readonly(&session_dir);
-
-    if list || index.is_none() {
-        let manifest = store.read_manifest()?;
-        if manifest.entries.is_empty() {
-            println!("No compressed tool outputs for session {session_id}.");
-            return Ok(());
-        }
-        println!("Compressed tool outputs for session {session_id}:");
-        for entry in &manifest.entries {
-            println!(
-                "  [{:>3}] {} bytes -> {}",
-                entry.index, entry.original_bytes, entry.path
-            );
-        }
-        return Ok(());
-    }
-
-    let idx = index.expect("index required when not listing");
-    let content = store.load(idx)?;
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    std::io::Write::write_all(&mut handle, &content)?;
-    Ok(())
-}
+pub(crate) use artifacts::handle_session_artifacts;
+pub(crate) use tool_output::handle_session_tool_output;
 
 #[cfg(test)]
 #[path = "session_cmds_result_tests.rs"]

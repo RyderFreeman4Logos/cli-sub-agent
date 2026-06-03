@@ -77,9 +77,12 @@ fn handle_session_wait_retires_active_session_after_dead_failure_completion_pack
     .unwrap();
     let session_id = session.meta_session_id;
     let session_dir = get_session_dir(project, &session_id).unwrap();
+    let mut stale_session = load_session(project, &session_id).unwrap();
+    stale_session.last_accessed = chrono::Utc::now() - chrono::Duration::seconds(7_200);
+    save_session(&stale_session).unwrap();
     std::fs::write(
         session_dir.join("daemon-completion.toml"),
-        "exit_code = 1\nstatus = \"failure\"\n",
+        "exit_code = 17\nstatus = \"failure\"\n",
     )
     .unwrap();
 
@@ -96,12 +99,13 @@ fn handle_session_wait_retires_active_session_after_dead_failure_completion_pack
         .unwrap()
         .expect("wait should synthesize a terminal result for a dead active session");
     assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 17);
 
     let persisted = load_session(project, &session_id).unwrap();
     assert_eq!(persisted.phase, SessionPhase::Retired);
     assert_eq!(
         persisted.termination_reason.as_deref(),
-        Some("orphaned_process")
+        Some("daemon_completion")
     );
 }
 
