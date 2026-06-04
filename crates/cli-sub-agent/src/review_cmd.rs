@@ -161,15 +161,8 @@ pub(crate) async fn handle_review(
 
     let scope = derive_scope_for_project(&args, &project_root);
     let diff_size = diff_size::compute_review_diff_size(&project_root, &scope);
-    let large_diff_warning = diff_size.as_ref().and_then(|diff_size| {
-        diff_size::large_diff_warning(
-            diff_size,
-            diff_size::resolve_large_diff_warn_lines(config.as_ref(), &global_config),
-        )
-    });
-    if let Some(warning) = large_diff_warning {
-        diff_size::emit_large_diff_warning(warning);
-    }
+    let large_diff_warning =
+        diff_size::warn_if_large_diff(diff_size.as_ref(), config.as_ref(), &global_config);
     let mode = if args.fix {
         "review-and-fix"
     } else {
@@ -222,6 +215,8 @@ pub(crate) async fn handle_review(
         prompt.push_str("\n\n");
         prompt.push_str(summary);
     }
+
+    diff_size::append_cross_dimension_anchor(&mut prompt, diff_size.as_ref(), large_diff_warning);
 
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);

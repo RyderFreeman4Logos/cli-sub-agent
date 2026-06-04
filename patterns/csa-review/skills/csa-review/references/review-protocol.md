@@ -311,6 +311,44 @@ When executing, reason from attacker perspective and evaluate exploitability for
 
 High-impact security suspicion without concrete exploit path -> list under open_questions, not findings.
 
+## Step 3.5: Cross-Dimension Blocking Enumeration (breadth-first)
+
+Before you finalize a FAIL verdict, make ONE bounded breadth-first pass that
+enumerates the INDEPENDENT blocking (HIGH/CRITICAL/P1) findings currently latent
+ACROSS the standard dimensions (correctness, concurrency, security,
+contract/doc-sync, ordering, completeness) and report them TOGETHER as an
+enumerated list. Do NOT stop at the first blocking finding: K independent defects
+of DIFFERENT bug-classes that are all simultaneously inspectable in the SAME diff
+should surface in ONE round, because each extra round costs a full
+fix -> re-review -> diff re-ingestion cycle.
+
+Bounds (do NOT naively enumerate everything):
+
+1. **Diff-size gate.** This breadth-first enumeration is selected only for
+   small/medium diffs (at or below the existing large-diff threshold from #1645).
+   For LARGE diffs the orchestrator keeps the existing chunked/escalation review
+   path UNCHANGED — do not force cross-dimension breadth there, which would dilute
+   attention on an oversized diff (the regression #1645 guards against). The
+   orchestrator signals the selected mode by injecting (or omitting) a
+   `## Cross-dimension blocking enumeration` anchor into your prompt: when the
+   anchor is present, do the breadth-first enumeration; when it is absent, follow
+   the existing large-diff / chunked handling.
+2. **Per-dimension cap.** Report at most the single highest-severity blocking
+   finding per dimension (the top blocker per dimension) so the enumeration stays
+   within a bounded attention budget. Sibling sites of one finding stay folded
+   under the bounded same-class site sweep, not re-listed here.
+3. **Independently-latent only.** This targets defects already latent in the diff
+   under review. Findings genuinely INTRODUCED by a later fix legitimately surface
+   in a later round; this does NOT promise zero-round or single-round convergence.
+
+**Relationship to the bounded same-class site sweep.** The same-class site sweep
+(#1797) broadens ONE finding's bug-CLASS across all its sibling SITES — depth
+WITHIN a dimension. This cross-dimension blocking enumeration (#1841) broadens
+across DIFFERENT bug-classes / dimensions — breadth ACROSS dimensions. They are
+complementary, and you apply BOTH: sweep each confirmed blocker for sibling sites,
+AND enumerate the top blocker of each other dimension. Together they minimize the
+number of review rounds.
+
 ## Step 4: Generate Outputs (when review is clean)
 
 After the three-pass review, if there are **no P0 or P1 findings**, generate additional outputs:

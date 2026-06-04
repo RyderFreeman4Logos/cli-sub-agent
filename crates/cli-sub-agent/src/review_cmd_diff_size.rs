@@ -7,6 +7,12 @@ use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{ReviewDiffSize, ReviewVerdictArtifact, write_review_verdict};
 use tracing::{debug, warn};
 
+// #1841 cross-dimension breadth-first blocking enumeration lives in its own file
+// so this #1645 diff-size module stays within the per-module token budget.
+#[path = "review_cmd_enumeration_mode.rs"]
+mod enumeration_mode;
+pub(super) use enumeration_mode::append_cross_dimension_anchor;
+
 const REVIEW_DIFF_SIZE_LINE_PREFIX: &str = "Diff size:";
 const REVIEW_DIFF_SIZE_HEADER_SECTION_IDS: &[&str] = &["summary", "details"];
 
@@ -67,6 +73,28 @@ pub(super) fn large_diff_warning(
 
 pub(super) fn emit_large_diff_warning(warning: LargeDiffWarning) {
     eprintln!("{}", format_large_diff_warning(warning));
+}
+
+/// Resolve the #1645 large-diff warning for an already-sized review diff and emit
+/// it to the operator (stderr) when the diff exceeds the configured threshold.
+/// Returns the warning (when present) so the caller can still thread it into
+/// downstream review artifacts. Pure extraction of the former inline command-layer
+/// block; behavior is unchanged.
+pub(super) fn warn_if_large_diff(
+    diff_size: Option<&ReviewDiffSize>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Option<LargeDiffWarning> {
+    let warning = diff_size.and_then(|diff_size| {
+        large_diff_warning(
+            diff_size,
+            resolve_large_diff_warn_lines(project_config, global_config),
+        )
+    });
+    if let Some(warning) = warning {
+        emit_large_diff_warning(warning);
+    }
+    warning
 }
 
 pub(super) fn format_large_diff_warning(warning: LargeDiffWarning) -> String {
