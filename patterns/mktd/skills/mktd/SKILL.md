@@ -87,7 +87,7 @@ breaks prompt-guard propagation.
 5. **Phase 3 -- DEBATE** *(skipped in light mode)*: Run explicit `csa debate` (uses global `[debate]` config) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`. The red-team MUST enumerate every TODO-plan assumption and construct a counterexample scenario for each.
 6. **Phase 3.5 -- DEBATE VALIDATION** *(skipped in light mode)*: Hard-fail if required evidence headers, mapped verdict (`READY|REVISE`), raw verdict (`APPROVE|REVISE|REJECT|UNKNOWN`), or confidence are missing.
 7. **Phase 3b -- REVISE** *(skipped in light mode)*: Incorporate debate feedback and threat model findings. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
-8. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch> --language <resolved-language>`. In full mode, writes `${STEP_12_OUTPUT}` (revised TODO); in light mode, falls back to `${STEP_7_OUTPUT}` (draft TODO). Persists `spec.toml` from `${STEP_8_OUTPUT}`, then `csa todo save`. The save step returns the TODO path as `${STEP_13_OUTPUT}` and MUST validate non-empty checkbox tasks, `DONE WHEN` clauses, and language consistency.
+8. **Phase 4 -- SAVE**: Allocate the plan slot via `csa todo create --branch <branch> --language <resolved-language>` (returns the plan timestamp). The rendered TODO is `${STEP_12_OUTPUT}` (revised plan) in full mode, falling back to `${STEP_7_OUTPUT}` (draft plan) in light mode. Render the TODO, `spec.toml` (from `${STEP_8_OUTPUT}`), and any `epic-plan.toml` to session-output artifacts under `${CSA_SESSION_DIR}/output/mktd-save/`, then **validate those rendered artifacts BEFORE committing** (non-empty checkbox tasks, `DONE WHEN` clauses, spec criteria, language consistency) so an invalid plan never reaches the commit (round-5 ordering). Commit atomically with `csa todo persist -t <timestamp> --todo-file <TODO.md> --spec-file <spec.toml> [--epic-plan-file <epic-plan.toml>] "finalize: <feature>"`, which writes and commits under one TODO write lock and re-validates the core invariants fail-closed. The persist step returns the saved TODO path as `${STEP_13_OUTPUT}`.
 9. **Phase 4.25 -- PERSIST REFERENCES**: Persist RECON findings, threat model, debate evidence, and a consolidated `design.md` reference using `${STEP_13_OUTPUT}` as the saved TODO path anchor.
 10. **Phase 4.5 -- APPROVE**: Present to user in `${STEP_2_OUTPUT}` for APPROVE / MODIFY / REJECT.
 
@@ -114,7 +114,7 @@ context via `csa todo ref show <name>` without bloating their context window.
 
 - **Uses**: `debate` (Phase 3 adversarial review)
 - **Feeds into**: `mktsk` (converts approved TODO into executable Task entries)
-- **Lifecycle**: Plans managed by `csa todo` (create, show, save, find)
+- **Lifecycle**: Plans managed by `csa todo` (create, persist, show, find)
 - **References**: RECON/debate findings persisted via `csa todo ref add` for
   progressive disclosure during plan execution
 
@@ -130,7 +130,7 @@ context via `csa todo ref show <name>` without bloating their context window.
 8. *(full mode only)* Debate evidence packet validated (includes mapped verdict, raw verdict, and confidence).
 9. *(full mode only)* Debate Findings section captures adopted vs deferred points.
 10. *(full mode only)* TODO revised to incorporate debate feedback and threat model findings.
-11. TODO saved via `csa todo create` + `csa todo save` with branch and language association.
-12. Save gate validated task completeness (`- [ ] ...`, `DONE WHEN`) and language consistency.
+11. TODO saved via `csa todo create` + `csa todo persist` (artifact-file flow) with branch and language association.
+12. Pre-persist validation gate checked the rendered artifacts for task completeness (`- [ ] ...`, `DONE WHEN`), spec criteria, and language consistency BEFORE the commit; `csa todo persist` re-validated the core invariants fail-closed under the write lock.
 13. Design document and RECON references attempted via `csa todo ref add` (stored in `~/.local/state/cli-sub-agent/`, not git-tracked).
 14. User presented with plan for approval decision in resolved language.
