@@ -56,7 +56,7 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         false,
         &[],
         &[],
-        false, // cli_no_error_marker_scan (#1745)
+        None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
@@ -125,7 +125,7 @@ async fn run_writer_fails_fast_when_worktree_write_lock_is_held() {
         false,
         &[],
         &[],
-        false,
+        None, // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false,
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
@@ -199,7 +199,7 @@ async fn debate_session_is_not_blocked_by_worktree_write_lock() {
         false,
         &[],
         &[],
-        false,
+        None, // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false,
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )

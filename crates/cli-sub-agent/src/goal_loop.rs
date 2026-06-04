@@ -107,9 +107,10 @@ pub(crate) struct GoalRunRequest {
     pub(crate) tier: Option<String>,
     pub(crate) force_ignore_tier_setting: bool,
     pub(crate) no_fs_sandbox: bool,
-    /// CLI `--no-error-marker-scan`: disables the #1652 fatal-error-marker
-    /// silent-hang scan for this run, overriding config (#1745).
-    pub(crate) no_error_marker_scan: bool,
+    /// Resolved CLI override for the #1652 fatal-error-marker silent-hang scan
+    /// (#1745): `Some(true)` force-enables, `Some(false)` force-disables, `None`
+    /// defers to the `CSA_PATTERN_INTERNAL` marker default then config (#1847).
+    pub(crate) error_marker_scan_override: Option<bool>,
     /// CLI `--no-hook-bypass-scan`: disables post-run hook-bypass scanning for
     /// this run, overriding config.
     pub(crate) no_hook_bypass_scan: bool,
@@ -183,7 +184,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         request.tier,
         request.force_ignore_tier_setting,
         request.no_fs_sandbox,
-        request.no_error_marker_scan,
+        request.error_marker_scan_override,
         request.no_hook_bypass_scan,
         request.no_preflight,
         request.no_post_exec_gate,
@@ -347,7 +348,7 @@ async fn run_goal_iteration(
         request.tier.clone(),
         request.force_ignore_tier_setting,
         request.no_fs_sandbox,
-        request.no_error_marker_scan,
+        request.error_marker_scan_override,
         request.no_hook_bypass_scan,
         request.no_preflight,
         request.no_post_exec_gate,

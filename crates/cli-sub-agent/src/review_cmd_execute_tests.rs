@@ -74,15 +74,15 @@ printf 'tool mutation\\n' >> \"{}\"\n",
         },
         csa_process::StreamMode::BufferOnly,
         crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
-        None,  // initial_response_timeout_seconds
-        false, // force_override_user_config
-        false, // force_ignore_tier_setting
-        false, // no_failover
-        false, // no_fs_sandbox
-        false, // readonly_project_root
-        &[],   // extra_writable
-        &[],   // extra_readable,
-        true,  // no_error_marker_scan: default scan ON (#1745)
+        None,        // initial_response_timeout_seconds
+        false,       // force_override_user_config
+        false,       // force_ignore_tier_setting
+        false,       // no_failover
+        false,       // no_fs_sandbox
+        false,       // readonly_project_root
+        &[],         // extra_writable
+        &[],         // extra_readable,
+        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
     )
     .await
     .expect("review should succeed after reclassifying edit restriction");
@@ -186,7 +186,7 @@ printf '%s\\n' \
         false,
         &[],
         &[],
-        true, // no_error_marker_scan: default scan ON (#1745)
+        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
     )
     .await
     .expect("codex review should honor project target");
@@ -273,15 +273,15 @@ printf '%s\\n' \
         },
         csa_process::StreamMode::BufferOnly,
         crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
-        None,  // initial_response_timeout_seconds
-        false, // force_override_user_config
-        false, // force_ignore_tier_setting
-        false, // no_failover
-        false, // no_fs_sandbox
-        false, // readonly_project_root
-        &[],   // extra_writable
-        &[],   // extra_readable,
-        true,  // no_error_marker_scan: default scan ON (#1745)
+        None,        // initial_response_timeout_seconds
+        false,       // force_override_user_config
+        false,       // force_ignore_tier_setting
+        false,       // no_failover
+        false,       // no_fs_sandbox
+        false,       // readonly_project_root
+        &[],         // extra_writable
+        &[],         // extra_readable,
+        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
     )
     .await
     .expect("explicit review model spec should bypass tier enforcement");
@@ -468,7 +468,7 @@ fi\n",
         false,
         &[],
         &[],
-        true, // no_error_marker_scan: default scan ON (#1745)
+        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
     )
     .await
     .expect("gemini auth retry should succeed");
@@ -536,7 +536,7 @@ async fn execute_review_classifies_gemini_oauth_prompt_without_api_key() {
         false,
         &[],
         &[],
-        true, // no_error_marker_scan: default scan ON (#1745)
+        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
     )
     .await
     .expect("classified auth failure should return a result");
@@ -631,7 +631,7 @@ printf 'Opening authentication page\\nDo you want to continue? [Y/n]\\n'\n",
         true,
         &[],
         &[],
-        true, // no_error_marker_scan: default scan ON (#1745)
+        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
     )
     .await
     .expect("classified auth failure should still return a result");

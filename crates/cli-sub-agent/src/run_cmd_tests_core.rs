@@ -369,6 +369,45 @@ fn test_cli_no_error_marker_scan_flag_parses() {
 }
 
 #[test]
+fn test_cli_error_marker_scan_opt_in_flag_parses_and_conflicts() {
+    // #1847: opt-in `--error-marker-scan` force-enables the scan (overriding the
+    // CSA_PATTERN_INTERNAL default), defaults to false, and is mutually
+    // exclusive with `--no-error-marker-scan`.
+    let cli = try_parse_cli(&["csa", "run", "--error-marker-scan", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            error_marker_scan,
+            no_error_marker_scan,
+            ..
+        } => {
+            assert!(error_marker_scan);
+            assert!(!no_error_marker_scan);
+        }
+        _ => panic!("expected Run command"),
+    }
+
+    let cli_default = try_parse_cli(&["csa", "run", "prompt"]).unwrap();
+    match cli_default.command {
+        crate::cli::Commands::Run {
+            error_marker_scan, ..
+        } => assert!(!error_marker_scan),
+        _ => panic!("expected Run command"),
+    }
+
+    assert!(
+        try_parse_cli(&[
+            "csa",
+            "run",
+            "--error-marker-scan",
+            "--no-error-marker-scan",
+            "prompt",
+        ])
+        .is_err(),
+        "--error-marker-scan and --no-error-marker-scan must conflict"
+    );
+}
+
+#[test]
 fn test_cli_no_hook_bypass_scan_flag_parses() {
     // #1824: opt-out flag must parse on `csa run` and default to false.
     let cli = try_parse_cli(&["csa", "run", "--no-hook-bypass-scan", "prompt"]).unwrap();

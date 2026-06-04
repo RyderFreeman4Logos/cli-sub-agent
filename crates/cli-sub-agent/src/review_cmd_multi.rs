@@ -34,6 +34,22 @@ use csa_session::ReviewDiffSize;
 use csa_session::state::ReviewSessionMeta;
 use std::path::Path;
 
+impl ReviewArgs {
+    /// Resolve the explicit error-marker-scan override from the
+    /// `--error-marker-scan` / `--no-error-marker-scan` flag pair, or `None` to
+    /// defer to the `CSA_PATTERN_INTERNAL` marker then config (#1847).
+    ///
+    /// Defined in this binary-only module (not on the `cli_review` struct) so
+    /// `cli.rs`, which integration-test crates `#[path]`-include, stays free of
+    /// `crate::`-rooted references they cannot resolve.
+    pub(crate) fn error_marker_scan_override(&self) -> Option<bool> {
+        crate::error_marker_scan::override_from_flags(
+            self.error_marker_scan,
+            self.no_error_marker_scan,
+        )
+    }
+}
+
 pub(super) struct MultiReviewerReviewContext<'a> {
     pub args: &'a ReviewArgs,
     pub reviewers: usize,
@@ -125,7 +141,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let reviewer_build_jobs = ctx.build_jobs;
         let reviewer_fast_but_more_cost = ctx.args.fast_but_more_cost;
         let reviewer_no_fs_sandbox = ctx.args.no_fs_sandbox;
-        let reviewer_no_error_marker_scan = ctx.args.no_error_marker_scan;
+        let reviewer_error_marker_scan_override = ctx.args.error_marker_scan_override();
         let reviewer_extra_writable = ctx.args.extra_writable.clone();
         let reviewer_extra_readable = ctx.args.extra_readable.clone();
         // Keep every reviewer on the resolved tier when possible by binding
@@ -187,7 +203,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 readonly_project_root,
                 &reviewer_extra_writable,
                 &reviewer_extra_readable,
-                reviewer_no_error_marker_scan,
+                reviewer_error_marker_scan_override,
                 current_depth,
                 &startup_env,
             )

@@ -148,7 +148,12 @@ async fn spawn_bash(
     csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
     cmd.env("CSA_PROJECT_ROOT", project_root)
         .env("CSA_DEPTH", startup_env.next_depth_string())
-        .env("CSA_INTERNAL_INVOCATION", "1");
+        .env("CSA_INTERNAL_INVOCATION", "1")
+        // Every bash step of a weave pattern is pattern-internal: mark it so any
+        // `csa run`/`review`/`debate` it invokes (and their nested CSA children)
+        // default the fatal-error-marker scan OFF and cannot self-kill the
+        // pipeline on codex-fallback provider-error text (#1847).
+        .env(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY, "1");
     apply_startup_child_contract_env(&mut cmd, startup_env);
     cmd.current_dir(project_root)
         .stdout(std::process::Stdio::piped())
@@ -303,7 +308,7 @@ pub(super) async fn execute_csa_step(
             options.readonly_project_root,
             &[],   // extra_writable
             &[],   // extra_readable
-            false, // cli_no_error_marker_scan: plan has no CLI flag; defer to config (#1745)
+            None, // error_marker_scan_override: plan tool step has no CLI flag; defer to marker/config (#1745/#1847)
             false, // cli_no_hook_bypass_scan: plan has no CLI flag; defer to config
             options.startup_env,
         )

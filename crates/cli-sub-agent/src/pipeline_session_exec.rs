@@ -91,7 +91,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    cli_no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
@@ -315,6 +315,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         global_config,
         executor.tool_name(),
         startup_env.current_depth(),
+        startup_env.pattern_internal(),
     );
     crate::pipeline_env::apply_task_target_dir_guards(
         task_type,
@@ -413,12 +414,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     execute_options =
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
-    // Resolve the #1652 fatal-error-marker scan opt-out (#1745). Precedence:
-    // CLI `--no-error-marker-scan` (forces OFF) > config `[resources].error_marker_scan`
-    // (default-true) > built-in default (ON). Only the marker-based fatal classification
-    // is affected; idle/wall-clock timeouts still apply.
-    let error_marker_scan_enabled =
-        !cli_no_error_marker_scan && config.is_none_or(|cfg| cfg.resources.error_marker_scan);
+    // Resolve the #1652 fatal-error-marker scan default (#1745/#1847); precedence
+    // (CLI flag > CSA_PATTERN_INTERNAL marker > config) lives in the resolver.
+    let error_marker_scan_enabled = crate::error_marker_scan::resolve_error_marker_scan_enabled(
+        error_marker_scan_override,
+        startup_env.pattern_internal(),
+        config.map(|cfg| cfg.resources.error_marker_scan),
+    );
     execute_options = execute_options.with_error_marker_scan_enabled(error_marker_scan_enabled);
     let hook_bypass_scan_enabled = crate::run_cmd::resolve_hook_bypass_scan_enabled(
         cli_no_hook_bypass_scan,

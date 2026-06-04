@@ -48,8 +48,8 @@ pub(crate) struct FixLoopContext<'a> {
     pub build_jobs: Option<u32>,
     pub fast_but_more_cost: bool,
     pub no_fs_sandbox: bool,
-    /// Disable the #1652 scan for fix rounds (#1745).
-    pub no_error_marker_scan: bool,
+    /// #1652 scan override (#1745, #1847).
+    pub error_marker_scan_override: Option<bool>,
     pub extra_writable: &'a [PathBuf],
     pub extra_readable: &'a [PathBuf],
     pub timeout: Option<u64>,
@@ -122,7 +122,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             false, // fix pass must write — override readonly_project_root
             ctx.extra_writable,
             ctx.extra_readable,
-            ctx.no_error_marker_scan,
+            ctx.error_marker_scan_override,
             ctx.current_depth,
             ctx.startup_env,
         );

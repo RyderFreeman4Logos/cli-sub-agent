@@ -483,7 +483,8 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
 #[test]
 fn build_merged_env_injects_node_options_when_heap_limit_configured() {
     let cfg = test_config_with_node_heap_limit(Some(2048));
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code", 0);
+    let merged =
+        crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code", 0, false);
     assert_eq!(
         merged.get("NODE_OPTIONS"),
         Some(&"--max-old-space-size=2048".to_string())
@@ -499,7 +500,8 @@ fn build_merged_env_injects_node_options_when_heap_limit_configured() {
 fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
     let cfg = test_config_with_node_heap_limit(None);
     // Use a lightweight tool (opencode); heavyweight tools default node_heap_limit_mb to Some(2048).
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode", 0);
+    let merged =
+        crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode", 0, false);
 
     assert!(
         !merged.contains_key("NODE_OPTIONS"),
@@ -514,7 +516,8 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
         return;
     };
 
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode", 0);
+    let merged =
+        crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "opencode", 0, false);
 
     assert_eq!(
         merged.get("PATH"),
@@ -526,7 +529,8 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
 fn build_merged_env_disables_gemini_direct_launch_in_tests() {
     let cfg = test_config_with_node_heap_limit(None);
 
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "gemini-cli", 0);
+    let merged =
+        crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "gemini-cli", 0, false);
 
     assert_eq!(
         merged.get("CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH"),
@@ -540,8 +544,14 @@ fn build_merged_env_appends_node_options_when_existing_value_present() {
     let mut extra_env = HashMap::new();
     extra_env.insert("NODE_OPTIONS".to_string(), "--trace-warnings".to_string());
 
-    let merged =
-        crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), None, "claude-code", 0);
+    let merged = crate::pipeline_env::build_merged_env(
+        Some(&extra_env),
+        Some(&cfg),
+        None,
+        "claude-code",
+        0,
+        false,
+    );
 
     assert_eq!(
         merged.get("NODE_OPTIONS"),
@@ -580,8 +590,14 @@ fn build_merged_env_scrubs_stale_contract_then_sets_fresh_invocation_env() {
         ("KEEP_ME".to_string(), "value".to_string()),
     ]);
 
-    let merged =
-        crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), None, "opencode", 4);
+    let merged = crate::pipeline_env::build_merged_env(
+        Some(&extra_env),
+        Some(&cfg),
+        None,
+        "opencode",
+        4,
+        false,
+    );
 
     assert_eq!(
         merged
@@ -609,6 +625,34 @@ fn build_merged_env_scrubs_stale_contract_then_sets_fresh_invocation_env() {
             "stale subtree-contract key {key} must not survive build_merged_env"
         );
     }
+}
+
+#[test]
+fn build_merged_env_propagates_pattern_internal_marker_to_leaf_tool() {
+    let cfg = test_config_with_node_heap_limit(None);
+
+    // pattern_internal = true: the leaf tool (and any nested `csa` it spawns)
+    // must inherit CSA_PATTERN_INTERNAL=1 so the fatal-error-marker scan stays
+    // OFF down the whole subtree (#1847). The key is NOT a scrubbed subtree
+    // contract key, so it survives the transport env filter.
+    let marked =
+        crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code", 0, true);
+    assert_eq!(
+        marked
+            .get(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY)
+            .map(String::as_str),
+        Some("1"),
+        "pattern-internal session must propagate CSA_PATTERN_INTERNAL=1 to the leaf tool"
+    );
+
+    // pattern_internal = false: an ordinary interactive session must NOT leak
+    // the marker, so its leaf tool keeps the default scan-ON behavior.
+    let unmarked =
+        crate::pipeline_env::build_merged_env(None, Some(&cfg), None, "claude-code", 0, false);
+    assert!(
+        !unmarked.contains_key(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY),
+        "non-pattern-internal session must not emit CSA_PATTERN_INTERNAL"
+    );
 }
 
 // --- enforce_tier regression tests ---

@@ -215,13 +215,15 @@ pub enum Commands {
         #[arg(long)]
         no_stream_stdout: bool,
 
-        /// Disable the fatal-error-marker silent-hang scan for this session. Use
-        /// ONLY when developing CSA's own error/quota/failover detection code,
-        /// whose source and test fixtures legitimately contain provider error
-        /// markers (#1745). The idle-timeout and wall-clock timeout still apply.
-        /// Default: scan enabled.
+        /// Disable the #1652 fatal-error-marker scan (for CSA code/fixtures that
+        /// carry provider markers, #1745). Default on; OFF under
+        /// CSA_PATTERN_INTERNAL (#1847).
         #[arg(long)]
         no_error_marker_scan: bool,
+
+        /// Force-enable the scan despite CSA_PATTERN_INTERNAL (#1847).
+        #[arg(long, conflicts_with = "no_error_marker_scan")]
+        error_marker_scan: bool,
 
         /// Disable hook-bypass scanning. Default: enabled.
         #[arg(long)]

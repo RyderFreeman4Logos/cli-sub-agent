@@ -130,7 +130,7 @@ pub(super) async fn run_persistent_with_timeout(
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
@@ -165,7 +165,7 @@ pub(super) async fn run_persistent_with_timeout(
             no_fs_sandbox,
             extra_writable,
             extra_readable,
-            no_error_marker_scan,
+            error_marker_scan_override,
             no_hook_bypass_scan,
             startup_env,
         ),
@@ -206,7 +206,7 @@ pub(super) async fn run_persistent_without_timeout(
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
@@ -239,7 +239,7 @@ pub(super) async fn run_persistent_without_timeout(
         no_fs_sandbox,
         extra_writable,
         extra_readable,
-        no_error_marker_scan,
+        error_marker_scan_override,
         no_hook_bypass_scan,
         startup_env,
     )
@@ -276,7 +276,7 @@ async fn execute_persistent(
     no_fs_sandbox: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
@@ -326,7 +326,7 @@ async fn execute_persistent(
         false, // readonly_project_root: `csa run` allows writes
         extra_writable,
         extra_readable,
-        no_error_marker_scan,
+        error_marker_scan_override,
         no_hook_bypass_scan,
         startup_env,
     )

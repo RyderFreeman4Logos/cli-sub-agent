@@ -374,3 +374,33 @@ fn spawn_bash_env_removes_absent_session_identity_contract_keys() {
         );
     }
 }
+
+/// #1847 case (i): every weave `tool = "bash"` step spawned by `csa plan run`
+/// must expose `CSA_PATTERN_INTERNAL=1` to its shell, so any nested `csa`
+/// run/review/debate it invokes defaults the fatal-error-marker scan OFF and
+/// cannot self-kill the pipeline on codex-fallback provider-error text. The
+/// marker is set unconditionally by `spawn_bash`, independent of ambient env.
+#[tokio::test]
+async fn spawn_bash_step_exposes_pattern_internal_marker() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let project_root = temp.path();
+    let workflow_path = project_root.join("workflow.toml");
+    let env_vars: HashMap<String, String> = HashMap::new();
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+
+    let output = spawn_bash(
+        "printf '%s' \"${CSA_PATTERN_INTERNAL:-MISSING}\"",
+        &env_vars,
+        project_root,
+        &workflow_path,
+        &startup_env,
+    )
+    .await
+    .expect("bash step should spawn");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout, "1",
+        "weave bash step must see CSA_PATTERN_INTERNAL=1 (#1847)"
+    );
+}

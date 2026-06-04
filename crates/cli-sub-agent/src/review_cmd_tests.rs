@@ -430,6 +430,7 @@ fn default_review_args() -> ReviewArgs {
         stream_stdout: false,
         no_stream_stdout: false,
         no_error_marker_scan: false,
+        error_marker_scan: false,
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
