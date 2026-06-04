@@ -290,10 +290,31 @@ token count.
 
 **Selection logic:** select a tier first, then iterate its models in order and
 return the first enabled tool. If a tool preference is present through
-`--tool`, `[review].tool`, or `[debate].tool`, preferred tools are tried in the
-order listed, then the rest of the tier remains available as fallback in tier
-order. Use `--tier <name>` as the canonical selector whenever `[tiers]` is
-non-empty.
+`--tool`, `[review].tool`, `[debate].tool`, or the global
+`[preferences].tool_priority`, preferred tools are tried in the order listed,
+then the rest of the tier remains available as fallback in tier order. Use
+`--tier <name>` as the canonical selector whenever `[tiers]` is non-empty.
+
+**Routing precedence (within a tiered project):**
+
+1. `--tier <name>` (CLI) selects which tier is used. Nothing below can change
+   the chosen tier.
+2. Inside that tier, the candidate order is the tier's `models` order, then
+   *reordered* so that tools preferred by `--tool`, `[review].tool`,
+   `[debate].tool`, and `[preferences].tool_priority` are tried first.
+3. This reorder is a **soft preference, not a whitelist**: it never drops a tier
+   model and never selects a tool outside the tier. Every tier model stays in
+   the fallback chain, so if a preferred tool errors or hits quota, failover
+   advances through the remaining tier candidates.
+4. `[tier_mapping]` (via `--hint-difficulty` / prompt frontmatter) only applies
+   when no explicit `--tier` is given; direct `--model-spec` bypass requires the
+   `[tier_policy].allow_force_bypass` escape hatch.
+
+`[preferences].tool_priority` therefore reorders a tier's candidates (e.g.
+moving `gemini-cli` to the front) but does **not** override the tier's declared
+candidate set; this reordering behavior is intentional and unchanged (#1848). To
+make a specific model run first regardless of `tool_priority`, place it first in
+the tier's `models` list and select that tier explicitly.
 
 ### `[tier_mapping]` -- Task to Tier Mapping
 
