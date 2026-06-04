@@ -23,26 +23,24 @@ pub(super) fn project_config_tool_lists(
 
 /// Render the `=== Project Config ===` lines.
 ///
-/// `runtime_config` is the EFFECTIVE (merged project + global) config when
-/// available. The `Enabled:`/`Disabled:` summary is derived from it so it
-/// matches the runtime enablement gate the per-tool availability blocks already
-/// use (`is_tool_enabled` on the merged config). A tool disabled only in global
-/// config is invisible to the project-only `config`, so without this the summary
-/// would list a globally-disabled tool as enabled (#1752 residual / #1836).
-/// When the effective config is unavailable (invalid or defaults), this falls
-/// back to the project config so the summary is still best-effort populated.
-pub(super) fn render_project_config_lines(
-    status: &DoctorProjectConfigStatus,
-    runtime_config: Option<&ProjectConfig>,
-) -> Vec<String> {
+/// The `Enabled:`/`Disabled:` summary reflects the RAW `.csa/config.toml`
+/// project config ONLY — never the effective (merged project + global) config.
+/// This section reports what the project file itself declares, so it must not
+/// silently switch to the merged source: a tool disabled only in GLOBAL config
+/// stays Enabled here (the project file does not disable it), and labeling that
+/// merged state as "Project Config" would misrepresent the project file.
+/// The runtime enablement gate (merged config, the predicate `csa run` enforces)
+/// is surfaced separately by the per-tool `=== Tool Availability ===` blocks
+/// (`Config enabled:`), keeping the raw and effective axes distinctly labeled
+/// (#1752 / #1836).
+pub(super) fn render_project_config_lines(status: &DoctorProjectConfigStatus) -> Vec<String> {
     match status {
         DoctorProjectConfigStatus::Missing => vec![
             "Config:      .csa/config.toml (missing)".to_string(),
             "             Run 'csa init' to create configuration".to_string(),
         ],
         DoctorProjectConfigStatus::Valid(config) => {
-            let enablement_source = runtime_config.unwrap_or(config.as_ref());
-            let (enabled, disabled) = project_config_tool_lists(enablement_source);
+            let (enabled, disabled) = project_config_tool_lists(config);
             let mut lines = vec!["Config:      .csa/config.toml (valid)".to_string()];
 
             if !enabled.is_empty() {
