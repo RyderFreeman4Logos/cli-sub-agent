@@ -694,9 +694,16 @@ pub(crate) async fn execute_review_with_tier_filter(
             status_reason,
             forced_decision: None,
             routed_to,
-            primary_failure: (!failures.is_empty())
-                .then(|| chain_failure_reasons(&failures))
-                .flatten(),
+            // #1852: reaching here means THIS attempt's review SUCCEEDED. The
+            // earlier `failures` are the tools we failed over FROM, not a
+            // terminal failure of the review — recording them as
+            // `primary_failure` mislabels a success-via-fallback verdict as
+            // auth/quota-unavailable and (via `requires_fail_closed_verdict`)
+            // drags the verdict toward fail-closed. The failover provenance is
+            // already preserved in the persisted `fallback_chain`, `routed_to`,
+            // and `fallback_reason`. Only the all-candidates-failed return
+            // (above) carries `chain_failure_reasons` as the terminal class.
+            primary_failure: None,
             failure_reason: None,
         });
     }

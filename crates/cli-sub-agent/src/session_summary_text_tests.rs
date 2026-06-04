@@ -1,4 +1,4 @@
-use super::{human_session_summary, is_json_event_envelope};
+use super::{enrich_review_summary, human_session_summary, is_json_event_envelope};
 use std::fs;
 use tempfile::tempdir;
 
@@ -75,6 +75,69 @@ fn empty_summary_markdown_falls_through_to_raw_prose() {
     assert_eq!(
         human_session_summary(temp.path(), "raw prose").as_deref(),
         Some("raw prose")
+    );
+}
+
+#[test]
+fn enriches_bare_fail_verdict_with_backtick_high_finding() {
+    let temp = tempdir().expect("tempdir should be created");
+    csa_session::persist_structured_output(
+        temp.path(),
+        "<!-- CSA:SECTION:details -->\n1. `[HIGH]` Untracked-file line counting can block prompt assembly on special files.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    assert_eq!(
+        enrich_review_summary(temp.path(), "FAIL"),
+        "FAIL — [HIGH] Untracked-file line counting can block prompt assembly on special files"
+    );
+}
+
+#[test]
+fn enriches_with_highest_severity_finding_when_multiple() {
+    let temp = tempdir().expect("tempdir should be created");
+    csa_session::persist_structured_output(
+        temp.path(),
+        "<!-- CSA:SECTION:details -->\n1. `[MEDIUM]` minor nit in logging.\n2. `[CRITICAL][correctness]` data loss on crash.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    assert_eq!(
+        enrich_review_summary(temp.path(), "FAIL"),
+        "FAIL — [CRITICAL] data loss on crash"
+    );
+}
+
+#[test]
+fn does_not_enrich_passing_verdict_even_with_stale_findings() {
+    let temp = tempdir().expect("tempdir should be created");
+    csa_session::persist_structured_output(
+        temp.path(),
+        "<!-- CSA:SECTION:details -->\n1. `[HIGH]` historical finding from an earlier fix round.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    assert_eq!(enrich_review_summary(temp.path(), "PASS"), "PASS");
+}
+
+#[test]
+fn fails_open_to_bare_verdict_when_no_legible_finding() {
+    let temp = tempdir().expect("tempdir should be created");
+    csa_session::persist_structured_output(
+        temp.path(),
+        "<!-- CSA:SECTION:details -->\nNo machine-readable findings were emitted by the reviewer.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist structured output");
+
+    assert_eq!(enrich_review_summary(temp.path(), "FAIL"), "FAIL");
+}
+
+#[test]
+fn leaves_non_verdict_prose_summary_unchanged() {
+    let temp = tempdir().expect("tempdir should be created");
+    assert_eq!(
+        enrich_review_summary(temp.path(), "Implemented the feature and added tests."),
+        "Implemented the feature and added tests."
     );
 }
 
