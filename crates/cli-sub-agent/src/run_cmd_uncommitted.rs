@@ -205,8 +205,24 @@ const MAX_LINE_SCAN_BYTES: usize = 1 << 20;
 /// `\n` bytes, stopping after [`MAX_LINE_SCAN_BYTES`]; a final line lacking a
 /// trailing newline still counts. Fail-open: any IO error (including a missing
 /// file) yields `0` so a transient read failure cannot abort the guard.
+///
+/// Only regular files are opened. `path` comes straight from an untracked
+/// worktree enumeration ([`untracked_non_ignored_lines`]), which can legitimately
+/// surface symlinks, FIFOs, sockets, or device nodes. `File::open` follows
+/// symlinks and blocks indefinitely on a FIFO (and can hang or error on other
+/// special files), so the path is first classified with `symlink_metadata` (which
+/// does NOT follow symlinks); anything that is not a regular file is skipped
+/// (counted as `0`) without ever being opened. Mirrors the classify-before-touch
+/// pattern in [`crate::edit_restriction_guard`]'s `capture_path_state`.
 fn count_file_lines(path: &Path) -> usize {
     use std::io::Read;
+
+    // Classify WITHOUT following symlinks and WITHOUT opening: only a regular file
+    // is safe to hand to `File::open` here. A stat error (missing/unreadable) or
+    // any non-regular type (symlink, FIFO, socket, device) fails open to `0`.
+    if !std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file()) {
+        return 0;
+    }
 
     let Ok(file) = std::fs::File::open(path) else {
         return 0;
@@ -503,6 +519,71 @@ mod tests {
         assert_eq!(count_file_lines(&empty), 0);
 
         assert_eq!(count_file_lines(&temp.path().join("missing.txt")), 0);
+    }
+
+    /// Create a FIFO (named pipe) at `path`. Unix-only; used to prove the
+    /// regular-file gate skips special files instead of blocking on `File::open`.
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let c_path =
+            std::ffi::CString::new(path.as_os_str().as_bytes()).expect("fifo path has no NUL byte");
+        // SAFETY: `c_path` is a valid NUL-terminated path that outlives the call;
+        // mode 0o600 is a standard FIFO permission. The return code is checked.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo({}) failed: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    #[test]
+    fn count_file_lines_skips_non_regular_paths_without_blocking() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        // (a) A regular file is still counted normally.
+        let regular = root.join("regular.rs");
+        std::fs::write(&regular, "a\nb\nc\n").unwrap();
+        assert_eq!(count_file_lines(&regular), 3);
+
+        // (b) A symlink is non-regular: it MUST be skipped (0), not FOLLOWED to its
+        // regular target (which would count 3). Proves classification uses
+        // symlink_metadata rather than following the link.
+        #[cfg(unix)]
+        {
+            let link = root.join("link.rs");
+            std::os::unix::fs::symlink(&regular, &link).unwrap();
+            assert_eq!(
+                count_file_lines(&link),
+                0,
+                "symlink must be skipped, not followed"
+            );
+        }
+
+        // (c) A FIFO makes a blocking `File::open` hang forever pre-fix. Probe on a
+        // worker thread so a regression surfaces as a bounded timeout failure
+        // instead of an indefinite CI hang.
+        #[cfg(unix)]
+        {
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            let fifo = root.join("pipe");
+            make_fifo(&fifo);
+            let probe = fifo.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(count_file_lines(&probe));
+            });
+            let counted = rx.recv_timeout(Duration::from_secs(5)).expect(
+                "count_file_lines blocked on a FIFO — regression: regular-file gate missing",
+            );
+            assert_eq!(counted, 0, "FIFO must be skipped, not opened");
+        }
     }
 
     #[test]

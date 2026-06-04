@@ -138,8 +138,22 @@ const REVIEW_CHECKLIST_READ_LIMIT_BYTES: u64 = REVIEW_CHECKLIST_MAX_CHARS as u64
 /// `limit`-th byte falls inside a multibyte character) is repaired by
 /// `String::from_utf8_lossy` rather than raised as a fatal error. Returns `None`
 /// (fail-open) when the file is missing or unreadable.
+///
+/// Only regular files are opened. The sole caller ([`discover_review_checklist`])
+/// passes a worktree-supplied path (`.csa/review-checklist.md`); `File::open`
+/// follows symlinks and blocks indefinitely on a FIFO (and can hang or error on
+/// other special files), so the path is first classified with `symlink_metadata`
+/// (which does NOT follow symlinks) and anything that is not a regular file yields
+/// `None` without being opened. Mirrors `edit_restriction_guard::capture_path_state`.
 fn read_bounded_utf8(path: &Path, limit: u64) -> Option<String> {
     use std::io::Read;
+
+    // Classify WITHOUT following symlinks and WITHOUT opening: a non-regular path
+    // (symlink, FIFO, socket, device) is skipped (fail-open `None`) so a special
+    // file planted in the worktree cannot wedge prompt assembly via `File::open`.
+    if !std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file()) {
+        return None;
+    }
 
     let file = std::fs::File::open(path).ok()?;
     let mut buf = Vec::new();
