@@ -70,6 +70,112 @@ fn daemon_child_injects_preassigned_session_into_startup_env() {
 }
 
 #[test]
+fn establish_foreground_plan_session_mints_session_when_absent() {
+    // #1851: a top-level `--foreground` / `--resume` plan run carries no session
+    // identity in its startup snapshot. Establishing the foreground session MUST
+    // mint one so spawn_bash exports CSA_SESSION_DIR / CSA_SESSION_ID to every
+    // workflow bash step (the mktd Save step reads `${CSA_SESSION_DIR:?...}`).
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let state_home = temp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("state home should be created");
+    let _state_guard = crate::test_env_lock::ScopedTestEnvVar::set("XDG_STATE_HOME", &state_home);
+
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let established =
+        establish_foreground_plan_session(&startup_env, temp.path(), "plan: workflow.toml")
+            .expect("foreground session should establish");
+
+    let minted = established
+        .minted_session_id
+        .as_deref()
+        .expect("a fresh foreground run must mint a session");
+    assert_eq!(established.startup_env.session_id(), Some(minted));
+    assert!(
+        established.startup_env.session_dir().is_some(),
+        "minted session must carry a session dir"
+    );
+
+    // Assert via the exact channel spawn_bash uses to build the bash-step env
+    // (`apply_startup_child_contract_env` -> `to_csa_child_contract_env_vars`).
+    let contract: std::collections::HashMap<String, String> = established
+        .startup_env
+        .to_csa_child_contract_env_vars()
+        .into_iter()
+        .collect();
+    assert!(
+        contract.contains_key(csa_core::env::CSA_SESSION_DIR_ENV_KEY),
+        "workflow bash steps must receive CSA_SESSION_DIR"
+    );
+    assert!(
+        contract.contains_key(csa_core::env::CSA_SESSION_ID_ENV_KEY),
+        "workflow bash steps must receive CSA_SESSION_ID"
+    );
+}
+
+#[test]
+fn establish_foreground_plan_session_derives_dir_from_inherited_id() {
+    // A nested foreground invocation whose parent exported CSA_SESSION_ID but
+    // (defensively) not CSA_SESSION_DIR: derive the canonical dir from the id
+    // without minting a new session.
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let session_id = "01INHERITEDID00000000000000";
+    let startup_env =
+        crate::startup_env::StartupSubtreeEnv::from_values(std::collections::HashMap::from([(
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            session_id.to_string(),
+        )]));
+
+    let established =
+        establish_foreground_plan_session(&startup_env, temp.path(), "plan: workflow.toml")
+            .expect("foreground session should establish");
+
+    assert!(established.minted_session_id.is_none());
+    assert_eq!(established.startup_env.session_id(), Some(session_id));
+    let expected_dir = csa_session::get_session_dir(temp.path(), session_id)
+        .expect("session dir should resolve")
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(
+        established.startup_env.session_dir(),
+        Some(expected_dir.as_str())
+    );
+}
+
+#[test]
+fn establish_foreground_plan_session_preserves_inherited_identity() {
+    // A nested foreground invocation whose parent exported the full contract
+    // (id + dir): reuse it untouched, mint nothing.
+    let startup_env =
+        crate::startup_env::StartupSubtreeEnv::from_values(std::collections::HashMap::from([
+            (
+                csa_core::env::CSA_SESSION_ID_ENV_KEY,
+                "01PARENTID0000000000000000".to_string(),
+            ),
+            (
+                csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+                "/repo/parent-session".to_string(),
+            ),
+        ]));
+
+    let established = establish_foreground_plan_session(
+        &startup_env,
+        std::path::Path::new("/repo"),
+        "plan: workflow.toml",
+    )
+    .expect("foreground session should establish");
+
+    assert!(established.minted_session_id.is_none());
+    assert_eq!(
+        established.startup_env.session_id(),
+        Some("01PARENTID0000000000000000")
+    );
+    assert_eq!(
+        established.startup_env.session_dir(),
+        Some("/repo/parent-session")
+    );
+}
+
+#[test]
 fn forwarded_args_strip_through_plan_run() {
     let argv = vec![
         "csa".to_string(),
