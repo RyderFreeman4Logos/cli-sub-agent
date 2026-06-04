@@ -278,6 +278,10 @@ fn display_result_text(
     if let Some(summary) =
         crate::session_summary_text::human_session_summary(session_dir, &envelope.summary)
     {
+        // #1852: enrich a bare failing verdict (e.g. "FAIL") with the
+        // highest-severity finding's grade + title so the one-line Summary
+        // explains why the review failed, not merely that it did.
+        let summary = crate::session_summary_text::enrich_review_summary(session_dir, &summary);
         println!("Summary: {summary}");
     }
     if !envelope.artifacts.is_empty() {
