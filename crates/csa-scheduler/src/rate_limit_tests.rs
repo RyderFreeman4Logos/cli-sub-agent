@@ -427,6 +427,75 @@ fn test_gemini_api_key_not_found_json_400_advances_to_next_model() {
 }
 
 #[test]
+fn test_gemini_api_key_invalid_reason_is_auth_unavailable_bypasses_init_window() {
+    // #1848: Google's actual rejected-key 400 carries the structured
+    // `reason: "API_KEY_INVALID"` and message "API key not valid. Please pass a
+    // valid API key." — NOT the "API Key not found" phrasing already covered.
+    // It must classify as auth_unavailable (failover-eligible regardless of the
+    // 30s init-failure window) so a MID-RUN key/OAuth exhaustion advances to the
+    // next tier candidate instead of aborting the step.
+    let stderr = r#"Error talking to Gemini API in ModelRouterService.route: _ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}"#;
+    let detected = detect_rate_limit(
+        "gemini-cli",
+        stderr,
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    )
+    .expect("Gemini API_KEY_INVALID 400 should classify");
+    assert_eq!(detected.matched_pattern, "auth_unavailable");
+    assert_eq!(detected.reason, "auth_unavailable");
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
+    assert!(
+        !requires_init_failure_window(&detected),
+        "API_KEY_INVALID is an auth signal and must bypass the init-failure window so a \
+         mid-run failure still fails over (#1848)"
+    );
+}
+
+#[test]
+fn test_gemini_api_key_not_valid_message_only_is_auth_unavailable() {
+    // The human-readable Google message alone (without the structured reason
+    // token) must also classify — gemini-cli sometimes surfaces only the message.
+    let detected = detect_rate_limit(
+        "gemini-cli",
+        "Gemini request failed: API key not valid. Please pass a valid API key.",
+        "",
+        1,
+        None,
+    )
+    .expect("'API key not valid' message should classify");
+    assert_eq!(detected.matched_pattern, "auth_unavailable");
+    assert_eq!(detected.reason, "auth_unavailable");
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
+    assert!(!requires_init_failure_window(&detected));
+}
+
+#[test]
+fn test_gemini_generic_400_without_key_marker_stays_http_400_init_gated() {
+    // Regression guard (#1736 over-broadening): a generic 400 that does NOT carry
+    // an auth/key-exhaustion marker must stay classed `HTTP 400` and remain
+    // init-window-gated, so a genuine malformed-request 400 raised mid-run still
+    // surfaces as an error instead of being silently masked by failover.
+    let detected = detect_rate_limit(
+        "gemini-cli",
+        "Error: request failed with status: 400 Bad Request (malformed request payload)",
+        "",
+        1,
+        None,
+    )
+    .expect("generic 400 should still classify as HTTP 400");
+    assert_eq!(detected.reason, "HTTP 400");
+    assert_ne!(detected.matched_pattern, "auth_unavailable");
+    assert!(
+        requires_init_failure_window(&detected),
+        "a generic non-auth 400 must remain init-window-gated so it is not failover-masked mid-run"
+    );
+}
+
+#[test]
 fn test_http_403_advances_to_next_model() {
     let detected =
         detect_rate_limit("codex", "HTTP 403 Forbidden", "", 1, None).expect("403 should classify");

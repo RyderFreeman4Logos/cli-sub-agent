@@ -320,6 +320,28 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 advance_to_next_model: true,
                 quota_exhausted: false,
             },
+            // Google's canonical rejected-key error is "API key not valid.
+            // Please pass a valid API key." carrying the structured
+            // `reason: "API_KEY_INVALID"` — distinct wording from the
+            // "API Key not found" / "invalid api key" phrasings above, which do
+            // not substring-match it. Class it `auth_unavailable` (not the
+            // generic `HTTP 400` the status detector would assign) so a key /
+            // OAuth-exhaustion 400 raised MID-RUN stays failover-eligible past
+            // the init-failure window instead of aborting the tier step (#1848).
+            // `quota_exhausted = false`: an auth rejection is not permanent quota
+            // exhaustion, so it never triggers the self-kill path (#1736).
+            FailoverPattern {
+                pattern: "api_key_invalid",
+                reason: "auth_unavailable",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
+                pattern: "api key not valid",
+                reason: "auth_unavailable",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
             FailoverPattern {
                 pattern: "http 403",
                 reason: "HTTP 403",
