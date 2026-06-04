@@ -3,10 +3,22 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::warn;
 
+/// Fire the `TodoSave` hook for a completed save/persist.
+///
+/// `version` is the saved-version count for THIS save and MUST be supplied by
+/// the caller (the value `docs/hooks.md` documents as "Number of saved versions
+/// after this save"). The caller is responsible for computing it at the correct
+/// moment: `csa todo persist` computes it INSIDE the held write lock (right
+/// after its commit) so a concurrent TODO writer that commits another version
+/// after the lock is released cannot make this hook report the later count
+/// (#1822 round-6 concurrency finding). This helper deliberately does NOT
+/// recompute `version` from mutable git history, because doing so after the
+/// lock is released reintroduces exactly that race.
 pub(crate) fn emit_todo_save_hook(
     project_root: &Path,
     todo_root: &Path,
     plan_id: &str,
+    version: usize,
     message: &str,
 ) {
     let hooks_config = load_hooks_config(
@@ -17,9 +29,6 @@ pub(crate) fn emit_todo_save_hook(
         global_hooks_path().as_deref(),
         None,
     );
-    let version = csa_todo::git::list_versions(todo_root, plan_id)
-        .map(|versions| versions.len())
-        .unwrap_or(1);
     let mut hook_vars = HashMap::new();
     hook_vars.insert("plan_id".to_string(), plan_id.to_string());
     hook_vars.insert(

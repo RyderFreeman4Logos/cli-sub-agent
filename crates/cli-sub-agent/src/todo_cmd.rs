@@ -124,10 +124,21 @@ pub(crate) fn handle_save(
     match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
         Some(hash) => {
             eprintln!("Saved {ts} ({hash})");
+            // DEFERRED (#1839): `csa todo save` still commits OUTSIDE the TODO
+            // write lock, so its hook version is a post-commit recompute that
+            // can race a concurrent writer. A correct fix must first move this
+            // commit under the lock (the scope of #1839); until then, preserve
+            // the existing recompute behavior EXACTLY — just supply it to the
+            // now-parameterized hook helper instead of letting the helper
+            // recompute internally.
+            let version = csa_todo::git::list_versions(manager.todos_dir(), &ts)
+                .map(|versions| versions.len())
+                .unwrap_or(1);
             crate::todo_hooks::emit_todo_save_hook(
                 &project_root,
                 manager.todos_dir(),
                 &ts,
+                version,
                 &commit_msg,
             );
         }

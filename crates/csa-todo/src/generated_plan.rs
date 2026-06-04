@@ -250,4 +250,78 @@ mod tests {
             "changed files must include the persisted TODO.md"
         );
     }
+
+    /// Round-6 (#1822) regression: the TodoSave hook version for `csa todo
+    /// persist` is computed INSIDE the held write lock (right after the commit)
+    /// and returned from the publish step, so a concurrent TODO writer that
+    /// commits another version AFTER the lock releases cannot change the version
+    /// this save reports. Proven by capturing the publish-returned version, then
+    /// committing a later version and showing a fresh recompute observes the
+    /// bumped count while the captured under-lock value is unchanged. Linux-gated
+    /// to match the sibling lock-probe test.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn persist_generated_plan_with_returns_version_computed_under_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+        crate::git::ensure_git_init(manager.todos_dir()).expect("init todos git");
+        let plan = manager
+            .create("Version under lock", Some("fix/version-under-lock"))
+            .expect("create plan");
+        let spec = sample_spec(&plan.timestamp);
+        // First committed version of TODO.md (the freshly created template).
+        crate::git::save(manager.todos_dir(), &plan.timestamp, "create plan")
+            .expect("save initial")
+            .expect("initial commit");
+
+        let todos_dir = manager.todos_dir().to_path_buf();
+        let ts = plan.timestamp.clone();
+        let (_result, captured_version) = manager
+            .persist_generated_plan_with(
+                &plan.timestamp,
+                GeneratedPlanPersistRequest {
+                    todo_content:
+                        "# Version under lock\n\n## Tasks\n\n- [ ] Probe version.\n  DONE WHEN: probed.\n",
+                    spec: &spec,
+                    epic_plan: None,
+                },
+                // Mirror the production persist closure: commit, then count THIS
+                // save's versions while the write lock is still held.
+                |result| -> Result<usize> {
+                    let files: Vec<&str> =
+                        result.changed_files.iter().map(String::as_str).collect();
+                    crate::git::save_files(&todos_dir, &ts, &files, "persist probe")?;
+                    Ok(crate::git::list_versions(&todos_dir, &ts)?.len())
+                },
+            )
+            .expect("persist with publish");
+
+        // create + persist == the 2nd committed TODO.md version.
+        assert_eq!(captured_version, 2, "version captured inside the held lock");
+
+        // Simulate a concurrent writer winning the lock right after release and
+        // committing another TODO.md version. A post-release recompute would now
+        // observe 3; the captured under-lock value must remain 2.
+        std::fs::write(
+            plan.todo_md_path(),
+            "# Version under lock\n\n## Tasks\n\n- [ ] Probe version again.\n  DONE WHEN: re-probed.\n",
+        )
+        .expect("write later version");
+        crate::git::save(manager.todos_dir(), &plan.timestamp, "concurrent save")
+            .expect("save later")
+            .expect("later commit");
+        let post_release_recompute =
+            crate::git::list_versions(manager.todos_dir(), &plan.timestamp)
+                .expect("list versions")
+                .len();
+
+        assert_eq!(
+            post_release_recompute, 3,
+            "a later concurrent save bumps a fresh recompute"
+        );
+        assert_ne!(
+            captured_version, post_release_recompute,
+            "the under-lock version must not equal a post-release recompute"
+        );
+    }
 }
