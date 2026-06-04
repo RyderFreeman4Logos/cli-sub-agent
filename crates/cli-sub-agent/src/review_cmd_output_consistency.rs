@@ -41,11 +41,11 @@ pub(super) fn enforce_final_verdict_consistency(
         &prose_signals.severity_counts,
     );
 
+    let prose_grade = highest_prose_severity_grade(session_dir);
+
     let resume_to_fix = has_resume_to_fix_suggestion(session_dir)?;
     let blocking_prose =
         prose_signals.blocking_summary || has_blocking_severity(&prose_signals.severity_counts);
-    let has_empty_machine_findings =
-        findings_file.findings.is_empty() && severity_counts_are_zero(&artifact.severity_counts);
     let parsed_findings_prose = prose_signals.parsed_findings_sections;
     let unparsed_findings_prose = prose_signals.unparseable_findings_sections;
 
@@ -58,24 +58,94 @@ pub(super) fn enforce_final_verdict_consistency(
     if artifact.decision == ReviewDecision::Pass
         && (resume_to_fix || blocking_prose || parsed_findings_prose || unparsed_findings_prose)
     {
-        ensure_nonzero_fail_closed_count(&mut artifact.severity_counts);
         artifact.decision = ReviewDecision::Fail;
         artifact.verdict_legacy = "HAS_ISSUES".to_string();
     }
 
-    if artifact.decision == ReviewDecision::Fail && has_empty_machine_findings {
-        ensure_nonzero_fail_closed_count(&mut artifact.severity_counts);
+    // #1852: a Fail verdict must carry a severity count that reflects the
+    // reviewer's stated prose GRADE. The structured findings can be empty (a
+    // failed-over/degraded reviewer whose machine-readable block never
+    // persisted) or under-grade the prose (a real `[HIGH]` whose
+    // backtick-wrapped tag the structured finding parsers skip). Grade the
+    // fail-closed placeholder by the highest legible prose severity — defaulting
+    // to MEDIUM only when no grade is legible — and never downgrade an existing
+    // higher count.
+    if artifact.decision == ReviewDecision::Fail {
+        ensure_fail_closed_grade(&mut artifact.severity_counts, prose_grade);
     }
 
     Ok(())
 }
 
-fn ensure_nonzero_fail_closed_count(
+/// Ensure a fail-closed verdict's severity counts reflect the reviewer's prose
+/// GRADE. With zero counts, inject one placeholder at `prose_grade` (or MEDIUM
+/// when no grade is legible). With non-zero counts whose highest graded entry is
+/// below `prose_grade`, add the prose grade so a real `[HIGH]` is never reported
+/// as a mergeable MEDIUM (#1852). Never downgrades and never inflates a matching
+/// or already-higher existing grade.
+fn ensure_fail_closed_grade(
     severity_counts: &mut std::collections::BTreeMap<Severity, u32>,
+    prose_grade: Option<Severity>,
 ) {
     if severity_counts_are_zero(severity_counts) {
-        *severity_counts.entry(Severity::Medium).or_insert(0) += 1;
+        let severity = prose_grade.unwrap_or(Severity::Medium);
+        *severity_counts.entry(severity).or_insert(0) += 1;
+        return;
     }
+    let Some(grade) = prose_grade else {
+        return;
+    };
+    let already_at_or_above = severity_counts
+        .iter()
+        .any(|(severity, count)| *count > 0 && *severity >= grade);
+    if !already_at_or_above {
+        *severity_counts.entry(grade).or_insert(0) += 1;
+    }
+}
+
+/// Highest reviewer-assigned severity GRADE legible in the persisted review
+/// sections (`summary`/`details`), tolerant of markdown inline-code backticks
+/// around the tag (e.g. `` `[HIGH]` ``). The structured finding parsers require
+/// the bracket to start the body and therefore skip backtick-wrapped tags, so
+/// the fail-closed grader consults this to avoid under-grading a real HIGH whose
+/// machine-readable findings failed to parse (#1852). Returns `None` when no
+/// bracketed severity tag is present. Best-effort: an unreadable section index
+/// yields `None` (callers fall back to MEDIUM), never an error.
+fn highest_prose_severity_grade(session_dir: &Path) -> Option<Severity> {
+    let sections = csa_session::read_all_sections(session_dir).ok()?;
+    let mut best: Option<Severity> = None;
+    for (_, content) in sections {
+        let mut in_code_fence = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_code_fence = !in_code_fence;
+                continue;
+            }
+            if in_code_fence {
+                continue;
+            }
+            for severity in bracketed_severities_in_line(trimmed) {
+                best = Some(match best {
+                    Some(current) => current.max(severity),
+                    None => severity,
+                });
+            }
+        }
+    }
+    best
+}
+
+/// Every bracketed severity label on a line, mapping `[HIGH]`/`[p1]`/... to a
+/// [`Severity`]. Scans the `[label]` delimiters directly so adjacent markdown
+/// backticks (`` `[HIGH]` ``) do not hide the tag. Non-severity brackets (e.g.
+/// `[security/correctness]`) yield nothing.
+fn bracketed_severities_in_line(line: &str) -> impl Iterator<Item = Severity> + '_ {
+    line.match_indices('[').filter_map(|(open, _)| {
+        let rest = line.get(open + 1..)?;
+        let close = rest.find(']')?;
+        crate::review_cmd::prose_findings::severity_from_label(rest.get(..close)?)
+    })
 }
 
 fn has_resume_to_fix_suggestion(session_dir: &Path) -> Result<bool, anyhow::Error> {
