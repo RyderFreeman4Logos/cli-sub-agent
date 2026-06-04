@@ -77,6 +77,13 @@ impl TodoManager {
             if let Some(epic_plan) = request.epic_plan {
                 epic_plan.validate()?;
             }
+            // Fail-closed gate (#1820/#1822 hard-gate contract): reject generated
+            // content that violates the plan's hard invariants BEFORE any file
+            // write or commit. The mktd workflow validates the rendered artifacts
+            // before calling persist, but this guards EVERY caller (e.g. a direct
+            // `csa todo persist`) so an invalid plan can never enter the todos git
+            // history via the `publish` commit closure below.
+            validate_generated_plan_content(request.todo_content, request.spec)?;
 
             let mut plan = self.load_inner(timestamp)?;
             let spec_content =
@@ -117,10 +124,39 @@ impl TodoManager {
     }
 }
 
+/// Reject generated plan content that violates the hard invariants every
+/// persisted TODO plan must satisfy, evaluated BEFORE any file write or commit:
+///
+/// - at least one non-empty open checkbox task (`- [ ] <text>`),
+/// - a `DONE WHEN` completion clause, and
+/// - at least one spec criterion (so `csa todo show --spec` renders a non-empty
+///   criteria list — the struct-level equivalent of the workflow's former
+///   post-commit render check).
+///
+/// Returns an error so the caller's commit step never runs on invalid content.
+fn validate_generated_plan_content(todo_content: &str, spec: &SpecDocument) -> Result<()> {
+    let has_checkbox_task = todo_content.lines().any(|line| {
+        line.strip_prefix("- [ ] ")
+            .is_some_and(|rest| !rest.is_empty())
+    });
+    if !has_checkbox_task {
+        anyhow::bail!("generated TODO has no non-empty checkbox task (`- [ ] <task>`)");
+    }
+    if !todo_content.contains("DONE WHEN") {
+        anyhow::bail!("generated TODO has no `DONE WHEN` completion clause");
+    }
+    if spec.criteria.is_empty() {
+        anyhow::bail!(
+            "generated spec has no criteria; `csa todo show --spec` would render an empty plan"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LOCK_FILE;
+    use crate::{CriterionKind, CriterionStatus, LOCK_FILE, SpecCriterion};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     fn sample_spec(plan_ulid: &str) -> SpecDocument {
@@ -128,8 +164,34 @@ mod tests {
             schema_version: 1,
             plan_ulid: plan_ulid.to_string(),
             summary: "lock-scope probe".to_string(),
-            criteria: Vec::new(),
+            criteria: vec![SpecCriterion {
+                kind: CriterionKind::Check,
+                id: "check-lock-scope".to_string(),
+                description: "Publish runs under the held write lock.".to_string(),
+                status: CriterionStatus::Pending,
+            }],
         }
+    }
+
+    #[test]
+    fn validate_generated_plan_content_rejects_missing_invariants() {
+        let spec = sample_spec("01JABCDEF0123456789ABCDEFG");
+        // No checkbox task → rejected.
+        assert!(validate_generated_plan_content("# Plan\n\nDONE WHEN: x\n", &spec).is_err());
+        // No `DONE WHEN` clause → rejected.
+        assert!(validate_generated_plan_content("# Plan\n\n- [ ] do thing\n", &spec).is_err());
+        // No spec criteria → rejected (would render an empty plan).
+        let mut empty = sample_spec("01JABCDEF0123456789ABCDEFG");
+        empty.criteria.clear();
+        assert!(
+            validate_generated_plan_content("# Plan\n\n- [ ] do thing\n  DONE WHEN: y\n", &empty)
+                .is_err()
+        );
+        // All invariants satisfied → accepted.
+        assert!(
+            validate_generated_plan_content("# Plan\n\n- [ ] do thing\n  DONE WHEN: y\n", &spec)
+                .is_ok()
+        );
     }
 
     /// Proves the publish closure runs INSIDE the held TODO write lock: a second,

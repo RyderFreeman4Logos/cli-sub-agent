@@ -126,6 +126,34 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
                 "{name} must not write generated artifacts directly into todo state before persist: found {forbidden}"
             );
         }
+
+        // Round-5 hard-gate ordering (#1820/#1822): the artifact validation MUST
+        // run BEFORE `csa todo persist` commits, so an invalid plan can never
+        // enter the todos git history even if a later step aborts.
+        let persist_idx = content
+            .find(r#"csa todo persist -t "${TODO_TS}""#)
+            .unwrap_or_else(|| panic!("{name} missing csa todo persist"));
+        let validate_idx = content
+            .find(r#"grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}""#)
+            .unwrap_or_else(|| panic!("{name} must validate the TODO artifact before persist"));
+        assert!(
+            validate_idx < persist_idx,
+            "{name} must validate artifacts BEFORE csa todo persist (commit), not after"
+        );
+
+        for forbidden_postcommit in [
+            // Post-commit content validation is forbidden: it cannot gate the
+            // commit. These checks moved before persist (artifacts) or into
+            // `csa todo persist` itself (spec-criteria render gate).
+            r#"grep -qE '^- \[ \] .+' "${TODO_PATH}""#,
+            r#"csa todo show -t "${TODO_TS}" --spec"#,
+            "saved TODO has no non-empty checkbox tasks",
+        ] {
+            assert!(
+                !content.contains(forbidden_postcommit),
+                "{name} must not validate the persisted plan AFTER the commit: found {forbidden_postcommit}"
+            );
+        }
     }
 }
 

@@ -685,34 +685,8 @@ FINAL_TODO=$(printf '%s\n' "${FINAL_TODO}" | awk '
   /^<!-- CSA:ADR:END -->$/ { in_adr=0; next }
   !in_adr { print }
 ')
-printf '%s\n' "${FINAL_TODO}" | grep -qE '^- \[ \] .+' || { echo "TODO has no non-empty checkbox tasks" >&2; exit 1; }
-printf '%s\n' "${FINAL_TODO}" | grep -q 'DONE WHEN:' || { echo "TODO has no DONE WHEN clauses" >&2; exit 1; }
 [[ -n "${STEP_8_OUTPUT:-}" ]] || { echo "STEP_8_OUTPUT is empty — Step 8 must output spec.toml content" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^schema_version = 1$' || { echo "STEP_8_OUTPUT missing schema_version = 1" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^plan_ulid = "__PLAN_ID__"$' || { echo "STEP_8_OUTPUT missing __PLAN_ID__ placeholder" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^summary = "' || { echo "STEP_8_OUTPUT missing summary" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^\[\[criteria\]\]$' || { echo "STEP_8_OUTPUT has no criteria entries" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | rg -q '^kind = "(scenario|property|check)"$' || { echo "STEP_8_OUTPUT has invalid criterion kinds" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^id = "' || { echo "STEP_8_OUTPUT missing criterion id" >&2; exit 1; }
-printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^description = "' || { echo "STEP_8_OUTPUT missing criterion description" >&2; exit 1; }
-SUMMARY_LINE=$(printf '%s\n' "${STEP_8_OUTPUT}" | sed -n 's/^summary = "\(.*\)"$/\1/p' | head -n1)
-printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "STEP_8_OUTPUT summary must be one Chinese line" >&2; exit 1; }
 RESOLVED_LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
-if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
-  TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
-  MIN_HAN="${TASK_COUNT}"
-  if [ "${MIN_HAN}" -lt 2 ]; then MIN_HAN=2; fi
-  if [ "${MIN_HAN}" -gt 30 ]; then MIN_HAN=30; fi
-  HAN_COUNT_DRAFT=$(printf '%s\n' "${FINAL_TODO}" | rg -o '[\p{Han}]' | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "TODO language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
-elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
-  TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
-  MIN_CJK="${TASK_COUNT}"
-  if [ "${MIN_CJK}" -lt 2 ]; then MIN_CJK=2; fi
-  if [ "${MIN_CJK}" -gt 30 ]; then MIN_CJK=30; fi
-  CJK_COUNT_DRAFT=$(printf '%s\n' "${FINAL_TODO}" | rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' | wc -l | tr -d '[:space:]')
-  [[ "${CJK_COUNT_DRAFT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
-fi
 CURRENT_BRANCH=$(git branch --show-current) || { echo "detect branch failed" >&2; exit 1; }
 LANG_ARGS=()
 if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
@@ -737,39 +711,44 @@ SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_ARTIFACT}" || { echo "write spec artifact failed" >&2; exit 1; }
 [[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
 [[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
-TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}") || { echo "csa todo persist failed" >&2; exit 1; }
-SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
-[[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }
-[[ -s "${SPEC_PATH}" ]] || { echo "saved spec is empty" >&2; exit 1; }
-if [[ -n "${EPIC_PLAN:-}" ]]; then
-  csa todo epic validate -t "${TODO_TS}" 2>&1 || { echo "epic-plan.toml validation failed" >&2; exit 1; }
-  echo "Epic plan saved and validated" >&2
-fi
-grep -qE '^- \[ \] .+' "${TODO_PATH}" || { echo "saved TODO has no non-empty checkbox tasks" >&2; exit 1; }
-grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "saved TODO has no DONE WHEN clauses" >&2; exit 1; }
-grep -q '^schema_version = 1$' "${SPEC_PATH}" || { echo "saved spec missing schema_version = 1" >&2; exit 1; }
-grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_PATH}" || { echo "saved spec plan_ulid mismatch" >&2; exit 1; }
-grep -q '^summary = "' "${SPEC_PATH}" || { echo "saved spec missing summary" >&2; exit 1; }
-grep -q '^\[\[criteria\]\]$' "${SPEC_PATH}" || { echo "saved spec has no criteria entries" >&2; exit 1; }
+# Hard-gate: validate the RENDERED artifacts BEFORE `csa todo persist` commits
+# them. An invalid plan must NEVER reach the persist/commit step (#1820/#1822
+# hard-gate contract; round-5 ordering fix). `csa todo persist` ALSO re-checks
+# the core invariants fail-closed inside its locked commit (defense-in-depth)
+# — including the spec-criteria check that replaces the former post-commit
+# `csa todo show --spec` render gate — so NO content validation runs after the
+# commit.
+grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}" || { echo "TODO artifact has no non-empty checkbox tasks" >&2; exit 1; }
+grep -q 'DONE WHEN:' "${TODO_ARTIFACT}" || { echo "TODO artifact has no DONE WHEN clauses" >&2; exit 1; }
+grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}" || { echo "spec artifact missing schema_version = 1" >&2; exit 1; }
+grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_ARTIFACT}" || { echo "spec artifact plan_ulid unresolved or mismatched" >&2; exit 1; }
+grep -q '^summary = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing summary" >&2; exit 1; }
+grep -q '^\[\[criteria\]\]$' "${SPEC_ARTIFACT}" || { echo "spec artifact has no criteria entries" >&2; exit 1; }
+rg -q '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}" || { echo "spec artifact has invalid criterion kinds" >&2; exit 1; }
+grep -q '^id = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing criterion id" >&2; exit 1; }
+grep -q '^description = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing criterion description" >&2; exit 1; }
+SUMMARY_LINE=$(sed -n 's/^summary = "\(.*\)"$/\1/p' "${SPEC_ARTIFACT}" | head -n1)
+printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "spec artifact summary must be one Chinese line" >&2; exit 1; }
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
-  HAN_COUNT_SAVED=$(rg -o '[\p{Han}]' "${TODO_PATH}" | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT_SAVED:-0}" -ge "${MIN_HAN:-2}" ]] || { echo "saved TODO language mismatch: expected Han-script content (Han chars >= ${MIN_HAN:-2})" >&2; exit 1; }
+  TASK_COUNT=$(grep -cE '^- \[ \] .+' "${TODO_ARTIFACT}")
+  MIN_HAN="${TASK_COUNT}"
+  if [ "${MIN_HAN}" -lt 2 ]; then MIN_HAN=2; fi
+  if [ "${MIN_HAN}" -gt 30 ]; then MIN_HAN=30; fi
+  HAN_COUNT=$(rg -o '[\p{Han}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')
+  [[ "${HAN_COUNT:-0}" -ge "${MIN_HAN}" ]] || { echo "TODO artifact language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
 elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
-  CJK_COUNT_SAVED=$(rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' "${TODO_PATH}" | wc -l | tr -d '[:space:]')
-  [[ "${CJK_COUNT_SAVED:-0}" -ge "${MIN_CJK:-2}" ]] || { echo "saved TODO language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK:-2})" >&2; exit 1; }
+  TASK_COUNT=$(grep -cE '^- \[ \] .+' "${TODO_ARTIFACT}")
+  MIN_CJK="${TASK_COUNT}"
+  if [ "${MIN_CJK}" -lt 2 ]; then MIN_CJK=2; fi
+  if [ "${MIN_CJK}" -gt 30 ]; then MIN_CJK=30; fi
+  CJK_COUNT=$(rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')
+  [[ "${CJK_COUNT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO artifact language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
 fi
-# Validate language metadata consistency: if metadata.language is set,
-# verify TODO content matches (e.g., Chinese plan should have Chinese descriptions)
-if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
-  if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
-    HAN_META_CHECK=$(rg -o '[\p{Han}]' "${TODO_PATH}" | wc -l | tr -d '[:space:]')
-    [[ "${HAN_META_CHECK:-0}" -ge 2 ]] || { echo "language metadata mismatch: plan language is ${RESOLVED_LANGUAGE} but content lacks Han characters" >&2; exit 1; }
-  fi
-fi
-SPEC_RENDERED=$(csa todo show -t "${TODO_TS}" --spec) || { echo "csa todo show --spec failed" >&2; exit 1; }
-[[ "${SPEC_RENDERED}" != "No spec found for this plan" ]] || { echo "spec.toml was not persisted" >&2; exit 1; }
-printf '%s\n' "${SPEC_RENDERED}" | grep -q '^Criteria:$' || { echo "csa todo show --spec missing criteria section" >&2; exit 1; }
-printf '%s\n' "${SPEC_RENDERED}" | grep -q '^- \[pending\] ' || { echo "csa todo show --spec did not render pending criteria" >&2; exit 1; }
+# Artifacts validated → safe to persist. `csa todo persist` writes + commits
+# atomically under one TODO write lock and re-validates the core invariants
+# (checkbox task, DONE WHEN, spec criteria, epic DAG) before committing.
+TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}") || { echo "csa todo persist failed" >&2; exit 1; }
+[[ -n "${TODO_PATH:-}" ]] || { echo "csa todo persist did not return a TODO path" >&2; exit 1; }
 csa todo show -t "${TODO_TS}" --path
 ```
 
