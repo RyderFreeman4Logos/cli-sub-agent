@@ -7,14 +7,17 @@ use crate::process_tree_cpu_ticks;
 
 #[path = "tool_liveness_fatal_error.rs"]
 mod fatal_error;
-use fatal_error::provider_error_signal;
 #[cfg(test)]
-use fatal_error::{build_fatal_error_regex, has_fatal_error_signal_in_channels};
+use fatal_error::build_fatal_error_regex;
+use fatal_error::provider_error_signal;
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
 const DAEMON_PID_FILE: &str = "daemon.pid";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
+// Only referenced by tests now that the fatal-marker scan is scoped to the stderr
+// transport stream (#1830); model/assistant `output.log` is no longer scanned.
+#[cfg(test)]
 const OUTPUT_LOG_FILE: &str = "output.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
 const FATAL_ERROR_MARKERS_FILE: &str = ".fatal-error-markers";

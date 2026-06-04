@@ -1,15 +1,11 @@
 use regex::{Regex, RegexBuilder};
 use std::fs::{self, File};
-use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::Command;
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::OnceLock;
 
 use super::ProviderErrorKind;
-use super::{FATAL_ERROR_MARKERS_FILE, OUTPUT_LOG_FILE, STDERR_LOG_FILE};
+use super::{FATAL_ERROR_MARKERS_FILE, STDERR_LOG_FILE};
 
 const FATAL_ERROR_TAIL_BYTES: u64 = 4096;
 
@@ -149,55 +145,40 @@ fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Scan only the genuine backend transport / provider-error stream for fatal markers.
+///
+/// The fatal-marker scan is scoped to `stderr.log` — the backend's real error
+/// channel. It never inspects model/assistant OUTPUT (`output.log`) or raw tmux pane
+/// text, because those carry model-authored content that can legitimately contain
+/// marker-like strings (an agent quoting `rate_limit_exceeded`, narrating `HTTP 429`,
+/// etc.); scanning them lets assistant output self-kill its own session (#1830). The
+/// failed-turn quota path in `pipeline_execute.rs` applies the same discipline by
+/// inspecting only the transport error chain.
+///
+/// Note: this scoping does NOT retire the #1847 `CSA_PATTERN_INTERNAL` interim
+/// suppression, which additionally depends on #1738 (codex provider-error stream
+/// separation).
 pub(super) fn provider_error_signal(session_dir: &Path) -> Option<ProviderErrorKind> {
-    let tmux_pane = capture_tmux_pane(session_dir);
-    provider_error_signal_in_channels(session_dir, tmux_pane.as_deref())
-}
-
-#[cfg(test)]
-pub(super) fn has_fatal_error_signal_in_channels(
-    session_dir: &Path,
-    tmux_pane: Option<&str>,
-) -> bool {
-    provider_error_signal_in_channels(session_dir, tmux_pane).is_some()
-}
-
-fn provider_error_signal_in_channels(
-    session_dir: &Path,
-    tmux_pane: Option<&str>,
-) -> Option<ProviderErrorKind> {
     let regexes = fatal_error_regexes_for_session(session_dir);
     let stderr_tail = read_file_tail(&session_dir.join(STDERR_LOG_FILE)).ok();
-    let output_tail = read_file_tail(&session_dir.join(OUTPUT_LOG_FILE)).ok();
 
-    if matches_provider_error(
-        &regexes.permanent,
-        stderr_tail.as_deref(),
-        output_tail.as_deref(),
-        tmux_pane,
-    ) {
+    if matches_provider_error(&regexes.permanent, stderr_tail.as_deref()) {
         return Some(ProviderErrorKind::Permanent);
     }
-    matches_provider_error(
-        &regexes.transient,
-        stderr_tail.as_deref(),
-        output_tail.as_deref(),
-        tmux_pane,
-    )
-    .then_some(ProviderErrorKind::Transient)
+    matches_provider_error(&regexes.transient, stderr_tail.as_deref())
+        .then_some(ProviderErrorKind::Transient)
 }
 
-fn matches_provider_error(
-    regexes: &FatalErrorChannelRegexes,
-    stderr_tail: Option<&str>,
-    output_tail: Option<&str>,
-    tmux_pane: Option<&str>,
-) -> bool {
+fn matches_provider_error(regexes: &FatalErrorChannelRegexes, stderr_tail: Option<&str>) -> bool {
+    // Both the `all_channel` and `stderr_only` marker sets match against the stderr
+    // transport stream only. The historical split (tier-1 provider markers vs broad
+    // HTTP/status markers) now differs only in source-marker classification, not in
+    // channel: model-output channels (`output.log`, tmux pane) are no longer scanned
+    // at all (#1830).
     stderr_tail.is_some_and(|tail| {
         matches_fatal_error(&regexes.all_channel, tail)
             || matches_fatal_error(&regexes.stderr_only, tail)
-    }) || output_tail.is_some_and(|tail| matches_fatal_error(&regexes.all_channel, tail))
-        || tmux_pane.is_some_and(|pane| matches_fatal_error(&regexes.all_channel, pane))
+    })
 }
 
 fn matches_fatal_error(regex: &Option<Regex>, text: &str) -> bool {
@@ -265,45 +246,4 @@ fn read_file_tail(path: &Path) -> std::io::Result<String> {
     let mut buf = Vec::with_capacity(tail_len as usize);
     file.take(tail_len).read_to_end(&mut buf)?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn capture_tmux_pane(session_dir: &Path) -> Option<String> {
-    static TMUX_AVAILABLE: AtomicBool = AtomicBool::new(true);
-    if !TMUX_AVAILABLE.load(Ordering::Relaxed) {
-        return None;
-    }
-
-    let session_id = session_dir.file_name()?.to_str()?;
-    let session_name = format!("csa-{session_id}");
-
-    if let Ok(handle) = tokio::runtime::Handle::try_current()
-        && matches!(
-            handle.runtime_flavor(),
-            tokio::runtime::RuntimeFlavor::MultiThread
-        )
-    {
-        return tokio::task::block_in_place(|| {
-            capture_tmux_pane_blocking(&session_name, &TMUX_AVAILABLE)
-        });
-    }
-
-    capture_tmux_pane_blocking(&session_name, &TMUX_AVAILABLE)
-}
-
-fn capture_tmux_pane_blocking(session_name: &str, tmux_available: &AtomicBool) -> Option<String> {
-    let output = match Command::new("tmux")
-        .args(["capture-pane", "-t", session_name, "-p", "-S", "-200"])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            tmux_available.store(false, Ordering::Relaxed);
-            return None;
-        }
-        Err(_) => return None,
-    };
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
