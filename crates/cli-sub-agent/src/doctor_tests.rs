@@ -406,7 +406,7 @@ transport = "stdio"
     );
 
     let status = inspect_doctor_project_config_from(td.path());
-    let rendered = render_project_config_lines(&status).join("\n");
+    let rendered = render_project_config_lines(&status, None).join("\n");
 
     assert!(
         matches!(status, DoctorProjectConfigStatus::Invalid(_)),
@@ -501,7 +501,7 @@ transport = "auto"
     );
 
     let status = inspect_doctor_project_config_from(td.path());
-    let rendered = render_project_config_lines(&status).join("\n");
+    let rendered = render_project_config_lines(&status, None).join("\n");
 
     assert!(
         matches!(status, DoctorProjectConfigStatus::Valid(_)),
@@ -510,6 +510,59 @@ transport = "auto"
     assert!(
         rendered.contains("Config:      .csa/config.toml (valid)"),
         "doctor should keep the project config display valid when user config is broken: {rendered}"
+    );
+}
+
+#[test]
+fn project_config_summary_reflects_runtime_enablement_gate() {
+    // The project config does NOT disable claude-code (unconfigured => enabled
+    // by default), but the EFFECTIVE (merged) config does — the real-world case
+    // of a global `[tools.claude-code].enabled = false`. The Enabled/Disabled
+    // summary must reflect the runtime gate (matching the per-tool blocks), so
+    // claude-code appears under Disabled and never under Enabled (#1752
+    // residual / #1836).
+    let project_config = project_config_with_codex_transport(TransportKind::Cli);
+    let status = DoctorProjectConfigStatus::Valid(Box::new(project_config));
+    let effective = project_config_with_disabled_tool("claude-code", TransportKind::Cli);
+
+    let rendered = render_project_config_lines(&status, Some(&effective)).join("\n");
+
+    let enabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Enabled:"))
+        .unwrap_or_default();
+    let disabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Disabled:"))
+        .unwrap_or_default();
+
+    assert!(
+        !enabled_line.contains("claude-code"),
+        "runtime-disabled tool must not appear in the Enabled summary: {rendered}"
+    );
+    assert!(
+        disabled_line.contains("claude-code"),
+        "runtime-disabled tool must appear in the Disabled summary: {rendered}"
+    );
+}
+
+#[test]
+fn project_config_summary_falls_back_to_project_config_without_runtime() {
+    // When the effective config is unavailable (None), the summary falls back to
+    // the project config so it is still populated. claude-code is unconfigured
+    // here, so it defaults to enabled.
+    let project_config = project_config_with_codex_transport(TransportKind::Cli);
+    let status = DoctorProjectConfigStatus::Valid(Box::new(project_config));
+
+    let rendered = render_project_config_lines(&status, None).join("\n");
+
+    let enabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Enabled:"))
+        .unwrap_or_default();
+    assert!(
+        enabled_line.contains("claude-code"),
+        "without a runtime config, the default-enabled tool stays in Enabled: {rendered}"
     );
 }
 

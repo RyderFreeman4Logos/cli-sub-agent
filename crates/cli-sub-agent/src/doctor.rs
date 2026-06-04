@@ -188,7 +188,10 @@ async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
     println!();
 
     println!("=== Project Config ===");
-    print_project_config(&project_config_status);
+    print_project_config(
+        &project_config_status,
+        effective_config_status.runtime_config(),
+    );
     println!();
 
     if matches!(
@@ -351,8 +354,15 @@ fn print_state_dir() {
 }
 
 /// Print project config status.
-fn print_project_config(status: &DoctorProjectConfigStatus) {
-    for line in render_project_config_lines(status) {
+///
+/// `runtime_config` is the effective (merged) config; the Enabled/Disabled
+/// summary is derived from it so it matches the runtime enablement gate used by
+/// the per-tool availability blocks (#1752 residual / #1836).
+fn print_project_config(
+    status: &DoctorProjectConfigStatus,
+    runtime_config: Option<&ProjectConfig>,
+) {
+    for line in render_project_config_lines(status, runtime_config) {
         println!("{line}");
     }
 }
