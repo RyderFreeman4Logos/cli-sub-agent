@@ -14,6 +14,7 @@ const CSA_SKILL_MODE_EXECUTOR: &str = "executor";
 const EXECUTOR_SAFE_CSA_COMMAND_PREFIXES: &[&[&str]] = &[
     &["todo", "create"],
     &["todo", "save"],
+    &["todo", "persist"],
     &["todo", "attest"],
     &["todo", "ref", "add"],
     &["todo", "ref", "list"],
@@ -171,6 +172,9 @@ mod tests {
         for prefix in [
             &["todo", "create"][..],
             &["todo", "save"][..],
+            // Regression (#1822 round-3): `csa todo persist` must be allowed in
+            // executor mode so mktd Step 13 can persist generated plans.
+            &["todo", "persist"][..],
             &["todo", "ref", "add"][..],
             &["todo", "ref", "list"][..],
             &["todo", "ref", "show"][..],
