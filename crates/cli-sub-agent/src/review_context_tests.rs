@@ -533,3 +533,121 @@ fn discover_review_checklist_truncates_oversized_content() {
     assert!(checklist.contains("WARNING: review checklist truncated"));
     assert!(!checklist.starts_with('\n'));
 }
+
+#[test]
+fn read_bounded_utf8_caps_bytes_read_from_oversized_file() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("huge.md");
+    // A > 1 MiB file: a true bounded read must NOT materialize all of it.
+    let huge = "a".repeat(2 * 1024 * 1024);
+    std::fs::write(&path, &huge).unwrap();
+
+    let content = super::read_bounded_utf8(&path, REVIEW_CHECKLIST_READ_LIMIT_BYTES)
+        .expect("readable file yields Some");
+
+    // ASCII decodes 1:1, so the decoded length equals the bytes pulled from disk:
+    // it is capped at the limit and is far smaller than the multi-MiB file.
+    assert!(
+        content.len() as u64 <= REVIEW_CHECKLIST_READ_LIMIT_BYTES,
+        "bounded read materialized {} bytes, exceeds limit {REVIEW_CHECKLIST_READ_LIMIT_BYTES}",
+        content.len()
+    );
+    assert!((content.len() as u64) < huge.len() as u64);
+}
+
+#[test]
+fn read_bounded_utf8_is_none_for_missing_file() {
+    let temp = tempdir().unwrap();
+    let missing = temp.path().join("does-not-exist.md");
+    assert!(super::read_bounded_utf8(&missing, 4096).is_none());
+}
+
+/// Create a FIFO (named pipe) at `path`. Unix-only; proves the regular-file gate
+/// skips special files instead of blocking on `File::open`.
+#[cfg(unix)]
+fn make_fifo(path: &std::path::Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path =
+        std::ffi::CString::new(path.as_os_str().as_bytes()).expect("fifo path has no NUL byte");
+    // SAFETY: `c_path` is a valid NUL-terminated path that outlives the call; mode
+    // 0o600 is a standard FIFO permission. The return code is checked.
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    assert_eq!(
+        rc,
+        0,
+        "mkfifo({}) failed: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+}
+
+#[test]
+fn read_bounded_utf8_skips_non_regular_paths() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+
+    // A regular file is still read.
+    let regular = root.join("checklist.md");
+    std::fs::write(&regular, "- [ ] item\n").unwrap();
+    assert!(
+        super::read_bounded_utf8(&regular, REVIEW_CHECKLIST_READ_LIMIT_BYTES).is_some(),
+        "regular file must still be read"
+    );
+
+    // A symlink is non-regular: it MUST yield None (skipped, not followed to its
+    // readable regular target).
+    #[cfg(unix)]
+    {
+        let link = root.join("link.md");
+        std::os::unix::fs::symlink(&regular, &link).unwrap();
+        assert!(
+            super::read_bounded_utf8(&link, REVIEW_CHECKLIST_READ_LIMIT_BYTES).is_none(),
+            "symlink must be skipped, not followed"
+        );
+    }
+
+    // A FIFO would block `File::open` forever pre-fix. Probe on a worker thread so
+    // a regression fails within a bounded timeout instead of hanging CI.
+    #[cfg(unix)]
+    {
+        let fifo = root.join("pipe.md");
+        make_fifo(&fifo);
+        let probe = fifo.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(super::read_bounded_utf8(
+                &probe,
+                REVIEW_CHECKLIST_READ_LIMIT_BYTES,
+            ));
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("read_bounded_utf8 blocked on a FIFO — regression: regular-file gate missing");
+        assert!(result.is_none(), "FIFO must be skipped, not opened");
+    }
+}
+
+#[test]
+fn discover_review_checklist_bounds_read_of_oversized_file() {
+    let temp = tempdir().unwrap();
+    let csa_dir = temp.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+
+    // > 1 MiB checklist with newlines so truncation cuts on a line boundary.
+    let line = "- [ ] a review item long enough to fill realistic space\n";
+    let huge = line.repeat((1024 * 1024 / line.len()) + 64);
+    assert!(huge.len() > 1024 * 1024);
+    std::fs::write(csa_dir.join("review-checklist.md"), &huge).unwrap();
+
+    let checklist =
+        discover_review_checklist(temp.path()).expect("oversized file still yields Some");
+
+    // The injected string is bounded to the character budget (plus the short
+    // truncation-warning comment), never the multi-MiB file size.
+    assert!(
+        checklist.len() <= REVIEW_CHECKLIST_MAX_CHARS + 128,
+        "injected checklist len {} exceeds the character budget",
+        checklist.len()
+    );
+    assert!(checklist.contains("WARNING: review checklist truncated"));
+}
