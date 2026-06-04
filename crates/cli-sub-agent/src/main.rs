@@ -112,6 +112,7 @@ mod todo_cmd;
 mod todo_dispatch_cmd;
 mod todo_epic_cmd;
 mod todo_errors_cmd;
+mod todo_hooks;
 mod todo_persist_cmd;
 mod todo_ref_cmd;
 mod tool_version;

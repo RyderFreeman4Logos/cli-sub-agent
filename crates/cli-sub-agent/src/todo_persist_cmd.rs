@@ -60,7 +60,15 @@ pub(crate) fn handle_persist(
     let commit_msg =
         message.unwrap_or_else(|| format!("persist: {}", persisted.plan.metadata.title));
     match csa_todo::git::save_files(manager.todos_dir(), &timestamp, &file_refs, &commit_msg)? {
-        Some(hash) => eprintln!("Persisted plan '{timestamp}' ({hash})"),
+        Some(hash) => {
+            eprintln!("Persisted plan '{timestamp}' ({hash})");
+            crate::todo_hooks::emit_todo_save_hook(
+                &project_root,
+                manager.todos_dir(),
+                &timestamp,
+                &commit_msg,
+            );
+        }
         None => eprintln!("Persisted plan '{timestamp}' (no git changes)"),
     }
     println!("{}", persisted.plan.todo_md_path().display());
