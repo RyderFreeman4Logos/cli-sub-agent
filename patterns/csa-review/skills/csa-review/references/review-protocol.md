@@ -12,6 +12,29 @@
 > Write review artifacts to `$CSA_SESSION_DIR/reviewer-{N}/` (for example:
 > `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` and `$CSA_SESSION_DIR/reviewer-{N}/review-report.md`).
 
+<!-- CSA:REVIEW_DIMENSIONS:START -->
+## Review Dimensions (canonical checklist)
+
+> SINGLE SOURCE OF TRUTH. The block between the `CSA:REVIEW_DIMENSIONS` markers is
+> consumed by BOTH the reviewer (this protocol) and the review-aware writer guard
+> injected into `csa run --sa-mode false` writer sessions (issue #1842). The writer
+> self-reviews against these exact dimensions before committing, so converging in
+> one review round means clearing this list first. A drift test in the
+> `cli-sub-agent` crate (`pipeline_session_exec_review_guard`) fails if these
+> markers or any dimension cannot be extracted, so the two consumers cannot
+> silently diverge (rule 027 spirit). Edit the dimensions here and both sides
+> update together — never duplicate this list elsewhere.
+
+- **Correctness & regressions**: logic errors, broken invariants, and behavior the task did not intend to change.
+- **Error handling**: missing or wrong error paths; no `unwrap`/`expect`/panic on fallible or untrusted input in library code.
+- **Test coverage**: new and changed behavior is tested; insufficient tests are first-class findings (`test-gap`).
+- **Security**: auth/authz bypass, crypto misuse, injection/deserialization/path-traversal/SSRF, DoS (unbounded CPU/memory/IO), and non-constant-time secret handling.
+- **AGENTS.md compliance**: discover root-to-leaf AGENTS.md for each changed path and cite the violated rule ID; MUST/FORBIDDEN/security rules escalate priority.
+- **Spec / plan alignment**: when TODO.md/spec.toml context is provided, the diff fulfills the stated intent, respects boundary constraints, and satisfies each completion criterion.
+- **Deslop (anti-redundancy)**: no narration comments, defensive over-handling, excessive nesting, redundant type annotations, duplicated logic, or premature abstraction.
+- **Language-specific**: apply the framework-aware dimensions below for the changed files' language (Rust: `unsafe` soundness with `// SAFETY:`, lifetime/ownership correctness, panic-free library paths, serde compatibility, concurrent-writer and compensating-transaction races).
+<!-- CSA:REVIEW_DIMENSIONS:END -->
+
 ## Step 1: Read Project Context
 
 First, read CLAUDE.md at the project root to understand:

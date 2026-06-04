@@ -37,6 +37,10 @@ mod session_exec_metadata;
 mod session_exec_pre_exec;
 #[path = "pipeline_session_exec_prompt_guard.rs"]
 mod session_exec_prompt_guard;
+#[path = "pipeline_session_exec_prompt_inject.rs"]
+mod session_exec_prompt_inject;
+#[path = "pipeline_session_exec_review_guard.rs"]
+mod session_exec_review_guard;
 #[path = "pipeline_session_exec_tool_state.rs"]
 mod session_exec_tool_state;
 #[path = "pipeline_session_exec_write_guard.rs"]
@@ -363,15 +367,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         &mut prompt_assembly,
         startup_env.current_depth(),
     );
-    // Inject structured output section markers when enabled in config.
-    let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);
-    if let Some(instructions) =
-        csa_executor::structured_output_instructions(structured_output_enabled)
-    {
-        info!("Injecting structured output instructions into prompt");
-        prompt_assembly.add_static_or_append_dynamic(instructions);
-    }
-    let effective_prompt = prompt_assembly.finish();
+    let effective_prompt = session_exec_prompt_inject::finalize_effective_prompt(
+        prompt_assembly,
+        task_type,
+        is_first_turn,
+        project_root,
+        config,
+    );
     // Resolve sandbox configuration from project config and enforcement mode.
     let liveness_dead_seconds = resolve_liveness_dead_seconds(config);
     let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(

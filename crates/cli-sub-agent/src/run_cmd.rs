@@ -36,7 +36,9 @@ pub(crate) use policy::{
     extract_executed_shell_commands, resolve_hook_bypass_scan_enabled,
 };
 pub(crate) use shell::detect_no_verify_commit_commands;
-pub(crate) use uncommitted::{format_uncommitted_warning, is_writer_session};
+pub(crate) use uncommitted::{
+    format_uncommitted_warning, is_writer_session, working_tree_changed_lines,
+};
 
 #[cfg(test)]
 pub(crate) use crate::pipeline::promote_idle_timeout_for_explicit_wall_timeout;

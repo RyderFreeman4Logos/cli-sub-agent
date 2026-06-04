@@ -144,6 +144,18 @@ pub(crate) fn format_uncommitted_warning(changes: &csa_session::UncommittedChang
     )
 }
 
+/// Total working-tree changed lines (insertions + deletions) relative to `HEAD`.
+///
+/// Returns `0` when `project_root` is not a git worktree or the tree is clean.
+/// Used by the review-aware writer guard (#1842) to size-gate prompt injection
+/// for resume sessions (a substantial in-progress diff warrants the full
+/// per-dimension checklist; a trivial one does not).
+pub(crate) fn working_tree_changed_lines(project_root: &Path) -> usize {
+    collect_uncommitted_changes(project_root)
+        .map(|changes| changes.insertions.saturating_add(changes.deletions) as usize)
+        .unwrap_or(0)
+}
+
 fn collect_uncommitted_changes(project_root: &Path) -> Option<csa_session::UncommittedChanges> {
     if !super::git::is_git_worktree(project_root) {
         return None;
