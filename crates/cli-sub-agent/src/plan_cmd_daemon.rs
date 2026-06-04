@@ -176,7 +176,45 @@ pub(crate) async fn dispatch_plan_run(
         unreachable!("plan daemon spawn returned without exiting");
     }
 
-    plan_cmd::handle_plan_run(plan_args).await?;
+    // Foreground path (nested invocation, `--foreground`, `--resume`, or
+    // `--chunked`): unlike the daemon-child path, nothing here has wired a
+    // session identity into `startup_env`, so `spawn_bash` would omit
+    // CSA_SESSION_DIR / CSA_SESSION_ID from every workflow bash step. A
+    // top-level `--foreground` or `--resume` mktd run then dies in its Save
+    // step on `${CSA_SESSION_DIR:?...}` (#1851). `--dry-run` only prints the
+    // compiled plan and runs no bash steps, so it needs no session scratch dir
+    // and must stay side-effect free.
+    let mut plan_args = plan_args;
+    let foreground_session = if plan_args.dry_run {
+        None
+    } else {
+        let project_root = determine_project_root(plan_args.cd.as_deref())?;
+        let established = establish_foreground_plan_session(
+            &plan_args.startup_env,
+            &project_root,
+            &describe_plan_run(&plan_args),
+        )?;
+        plan_args.startup_env = established.startup_env;
+        established
+            .minted_session_id
+            .map(|session_id| (project_root, session_id))
+    };
+
+    let run_result = plan_cmd::handle_plan_run(plan_args).await;
+
+    // Retire only a session this path minted; an inherited (nested) session is
+    // owned by the parent and must outlive this call.
+    if let Some((project_root, session_id)) = foreground_session
+        && let Err(err) = retire_plan_session(&project_root, &session_id)
+    {
+        warn!(
+            session_id = %session_id,
+            error = %err,
+            "Failed to retire foreground plan session",
+        );
+    }
+    run_result?;
+
     crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
         input.sa_mode_active,
         current_depth,
@@ -373,6 +411,68 @@ fn inject_plan_daemon_session_into_startup_env(
     Ok(())
 }
 
+/// Result of ensuring the foreground `csa plan run` path has a session identity
+/// to thread into its workflow bash steps.
+///
+/// `minted_session_id` is `Some` only when this path created a brand-new
+/// placeholder plan session (the top-level `--foreground` / `--resume` case);
+/// the caller is then responsible for retiring it once the run completes. When
+/// the startup snapshot already carried a session (a nested invocation), the
+/// existing identity is reused untouched and `minted_session_id` is `None`.
+struct ForegroundPlanSession {
+    startup_env: StartupSubtreeEnv,
+    minted_session_id: Option<String>,
+}
+
+/// Guarantee the foreground plan run carries a session identity (id + dir) in
+/// `startup_env` so `spawn_bash` exports CSA_SESSION_ID / CSA_SESSION_DIR to
+/// every workflow bash step (#1851). The daemon-child path already does this via
+/// [`inject_plan_daemon_session_into_startup_env`]; the foreground path had no
+/// equivalent, leaving bash steps without CSA_SESSION_DIR.
+///
+/// Three cases, cheapest first:
+/// - both id and dir already present (nested invocation whose parent exported
+///   the full contract): reuse untouched, mint nothing.
+/// - id present but dir missing: derive the canonical dir from the id without
+///   creating a new session.
+/// - neither present (top-level `--foreground` / `--resume`): mint a fresh
+///   placeholder plan session and report its id for later retirement.
+fn establish_foreground_plan_session(
+    startup_env: &StartupSubtreeEnv,
+    project_root: &Path,
+    description: &str,
+) -> Result<ForegroundPlanSession> {
+    if startup_env.session_id().is_some() && startup_env.session_dir().is_some() {
+        return Ok(ForegroundPlanSession {
+            startup_env: startup_env.clone(),
+            minted_session_id: None,
+        });
+    }
+
+    if let Some(session_id) = startup_env.session_id() {
+        let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+        let startup_env = startup_env
+            .clone()
+            .with_current_session(session_id, session_dir.display().to_string());
+        return Ok(ForegroundPlanSession {
+            startup_env,
+            minted_session_id: None,
+        });
+    }
+
+    let session_id = csa_session::new_session_id();
+    let session_root = csa_session::get_session_root(project_root)?;
+    let session_dir = session_root.join("sessions").join(&session_id);
+    persist_placeholder_plan_session(project_root, &session_dir, &session_id, description)?;
+    let startup_env = startup_env
+        .clone()
+        .with_current_session(&session_id, session_dir.display().to_string());
+    Ok(ForegroundPlanSession {
+        startup_env,
+        minted_session_id: Some(session_id),
+    })
+}
+
 fn describe_plan_run(args: &PlanRunArgs) -> String {
     if let Some(name) = &args.pattern {
         format!("plan: {name}")
@@ -513,102 +613,9 @@ fn nested_session_env_present(startup_env: &StartupSubtreeEnv) -> bool {
     })
 }
 
-/// Build daemon-child args from the parent's argv.
-///
-/// `argv` looks like `["csa", ...global, "plan", "run", ...rest]`. We strip
-/// everything up through `plan run`, drop the `--foreground` opt-out (the
-/// child is the actual worker, not a re-spawn that should opt out again),
-/// and forward the remainder. The daemon spawner re-injects
-/// `--daemon-child --session-id <ID>` between `run` and the rest.
-///
-/// Filter contract: `--foreground` is the ONLY token stripped here, and
-/// only because (a) clap parsed it as a top-level boolean flag with no
-/// value-position semantics, and (b) it's a parent-only opt-out the daemon
-/// child must not see. The filter stops at the first `--` so any literal
-/// `--foreground` that appears AFTER a `--` positional separator (e.g. a
-/// future workflow argument that happens to share the spelling) is left
-/// untouched. DO NOT add other flag strips here without preserving this
-/// `--`-aware behavior — naive `*a != "--xxx"` filters break value-position
-/// usage and `--`-escaped positionals.
-fn build_forwarded_plan_args(all_args: &[String]) -> Vec<String> {
-    let plan_pos = all_args.iter().position(|a| a == "plan");
-    let Some(plan_pos) = plan_pos else {
-        return Vec::new();
-    };
-    // Skip `plan` and the immediately-following `run` verb.
-    let after_plan = plan_pos + 1;
-    let after_run = all_args
-        .iter()
-        .enumerate()
-        .skip(after_plan)
-        .find(|(_, a)| *a == "run")
-        .map(|(idx, _)| idx + 1)
-        .unwrap_or(after_plan);
-
-    let mut forwarded = Vec::with_capacity(all_args.len().saturating_sub(after_run));
-    let mut past_double_dash = false;
-    for token in all_args.iter().skip(after_run) {
-        if past_double_dash {
-            forwarded.push(token.clone());
-            continue;
-        }
-        if token == "--" {
-            past_double_dash = true;
-            forwarded.push(token.clone());
-            continue;
-        }
-        if token == "--foreground" {
-            continue;
-        }
-        forwarded.push(token.clone());
-    }
-    forwarded
-}
-
-/// Build daemon-child forwarded args for the `--issue` path.
-///
-/// Starts from the normal [`build_forwarded_plan_args`] output, drops the
-/// already-resolved `--issue <N>` / `--issue=<N>` token(s), and appends the
-/// fetched issue body as `--var FEATURE_INPUT=<body>`. This lets the daemon
-/// child consume the pre-fetched body instead of re-running `gh issue view`,
-/// so the issue is fetched exactly once (in the parent).
-///
-/// Like [`build_forwarded_plan_args`], the `--issue` strip is `--`-aware: a
-/// literal `--issue`/`--issue=` token appearing AFTER a `--` positional
-/// separator is a workflow argument and is preserved intact.
-fn forwarded_args_with_feature_input(feature_input: &str) -> Vec<String> {
-    let argv: Vec<String> = std::env::args().collect();
-    let base = build_forwarded_plan_args(&argv);
-    let mut forwarded = Vec::with_capacity(base.len() + 2);
-    let mut post_double_dash = Vec::new();
-    let mut tokens = base.into_iter();
-    let mut past_double_dash = false;
-    while let Some(token) = tokens.next() {
-        if past_double_dash {
-            post_double_dash.push(token);
-            continue;
-        }
-        match token.as_str() {
-            "--" => {
-                past_double_dash = true;
-            }
-            // Space form `--issue <N>`: drop the flag and its value token.
-            "--issue" => {
-                tokens.next();
-            }
-            // Equals form `--issue=<N>`: drop the single token.
-            t if t.starts_with("--issue=") => {}
-            _ => forwarded.push(token),
-        }
-    }
-    forwarded.push("--var".to_string());
-    forwarded.push(format!("{FEATURE_INPUT_VAR}={feature_input}"));
-    if past_double_dash {
-        forwarded.push("--".to_string());
-        forwarded.extend(post_double_dash);
-    }
-    forwarded
-}
+#[path = "plan_cmd_daemon_forwarding.rs"]
+mod forwarding;
+pub(crate) use forwarding::{build_forwarded_plan_args, forwarded_args_with_feature_input};
 
 #[cfg(test)]
 #[path = "plan_cmd_daemon_tests.rs"]
