@@ -27,7 +27,8 @@
 //!   layer (`PromptAssembly::append_dynamic_block`), never the cached static
 //!   block, so a per-project checklist cannot poison the cross-project cache.
 //! - **C (bounded read):** the embedded dimensions are extracted and capped; the
-//!   project checklist reuses [`discover_review_checklist`]'s 4000-char bound.
+//!   project checklist goes through [`discover_review_checklist`], which performs a
+//!   TRUE bounded read (caps bytes pulled from disk) before truncating.
 //! - **D (atomic write):** this guard performs NO sidecar/metadata write — it only
 //!   returns prompt text — so no write-atomicity concern applies.
 //! - **E (single dimension source):** `review-protocol.md` is the canonical source;
@@ -225,7 +226,8 @@ pub(super) fn build_review_writer_guard(
                 return Some(BRIEF_GUARD.to_string());
             };
             let dimensions = cap_chars(dimensions, MAX_INJECTED_CHARS);
-            // discover_review_checklist already bounds the read at 4000 chars (#1842 C).
+            // discover_review_checklist performs a bounded read (caps bytes pulled
+            // from disk) then truncates to the 4000-char budget (#1842 C).
             let project_checklist = discover_review_checklist(project_root);
             Some(render_full_guard(dimensions, project_checklist.as_deref()))
         }

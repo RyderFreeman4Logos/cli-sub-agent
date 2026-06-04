@@ -533,3 +533,56 @@ fn discover_review_checklist_truncates_oversized_content() {
     assert!(checklist.contains("WARNING: review checklist truncated"));
     assert!(!checklist.starts_with('\n'));
 }
+
+#[test]
+fn read_bounded_utf8_caps_bytes_read_from_oversized_file() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("huge.md");
+    // A > 1 MiB file: a true bounded read must NOT materialize all of it.
+    let huge = "a".repeat(2 * 1024 * 1024);
+    std::fs::write(&path, &huge).unwrap();
+
+    let content = super::read_bounded_utf8(&path, REVIEW_CHECKLIST_READ_LIMIT_BYTES)
+        .expect("readable file yields Some");
+
+    // ASCII decodes 1:1, so the decoded length equals the bytes pulled from disk:
+    // it is capped at the limit and is far smaller than the multi-MiB file.
+    assert!(
+        content.len() as u64 <= REVIEW_CHECKLIST_READ_LIMIT_BYTES,
+        "bounded read materialized {} bytes, exceeds limit {REVIEW_CHECKLIST_READ_LIMIT_BYTES}",
+        content.len()
+    );
+    assert!((content.len() as u64) < huge.len() as u64);
+}
+
+#[test]
+fn read_bounded_utf8_is_none_for_missing_file() {
+    let temp = tempdir().unwrap();
+    let missing = temp.path().join("does-not-exist.md");
+    assert!(super::read_bounded_utf8(&missing, 4096).is_none());
+}
+
+#[test]
+fn discover_review_checklist_bounds_read_of_oversized_file() {
+    let temp = tempdir().unwrap();
+    let csa_dir = temp.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+
+    // > 1 MiB checklist with newlines so truncation cuts on a line boundary.
+    let line = "- [ ] a review item long enough to fill realistic space\n";
+    let huge = line.repeat((1024 * 1024 / line.len()) + 64);
+    assert!(huge.len() > 1024 * 1024);
+    std::fs::write(csa_dir.join("review-checklist.md"), &huge).unwrap();
+
+    let checklist =
+        discover_review_checklist(temp.path()).expect("oversized file still yields Some");
+
+    // The injected string is bounded to the character budget (plus the short
+    // truncation-warning comment), never the multi-MiB file size.
+    assert!(
+        checklist.len() <= REVIEW_CHECKLIST_MAX_CHARS + 128,
+        "injected checklist len {} exceeds the character budget",
+        checklist.len()
+    );
+    assert!(checklist.contains("WARNING: review checklist truncated"));
+}

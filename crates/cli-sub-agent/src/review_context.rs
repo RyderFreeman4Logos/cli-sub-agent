@@ -120,13 +120,42 @@ fn has_extension(path: &Path, expected: &str) -> bool {
 /// Files exceeding this are truncated with a warning.
 const REVIEW_CHECKLIST_MAX_CHARS: usize = 4000;
 
+/// Hard cap on bytes pulled from the checklist file before truncation (#1842
+/// constraint C). A UTF-8 scalar value is at most 4 bytes, so reading
+/// `REVIEW_CHECKLIST_MAX_CHARS * 4` bytes always covers the full character budget
+/// regardless of encoding (ASCII or multibyte) while preventing an oversized or
+/// malicious checklist from being fully materialized in memory on the
+/// prompt-assembly path (a local memory-DoS guard). For any file whose content is
+/// within the character budget the bounded read returns byte-identical content to
+/// an unbounded read.
+const REVIEW_CHECKLIST_READ_LIMIT_BYTES: u64 = REVIEW_CHECKLIST_MAX_CHARS as u64 * 4;
+
+/// Read at most `limit` bytes from `path`, decoding them as UTF-8 lossily.
+///
+/// This is a TRUE bounded read: at most `limit` bytes are pulled from disk
+/// regardless of the file's on-disk size, so an arbitrarily large file can never
+/// be fully materialized in memory. A byte cut that lands mid-codepoint (e.g. the
+/// `limit`-th byte falls inside a multibyte character) is repaired by
+/// `String::from_utf8_lossy` rather than raised as a fatal error. Returns `None`
+/// (fail-open) when the file is missing or unreadable.
+fn read_bounded_utf8(path: &Path, limit: u64) -> Option<String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take(limit).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Discover project-specific review checklist from `.csa/review-checklist.md`.
 ///
-/// Returns `None` if the file does not exist or is empty.
-/// Truncates content with a warning comment if it exceeds [`REVIEW_CHECKLIST_MAX_CHARS`].
+/// Returns `None` if the file does not exist or is empty. The file is read with a
+/// bounded read ([`REVIEW_CHECKLIST_READ_LIMIT_BYTES`]) so an oversized checklist
+/// cannot be fully materialized in memory (#1842 constraint C); content is then
+/// truncated with a warning comment if it exceeds [`REVIEW_CHECKLIST_MAX_CHARS`].
 pub(crate) fn discover_review_checklist(project_root: &Path) -> Option<String> {
     let checklist_path = project_root.join(".csa").join("review-checklist.md");
-    let content = std::fs::read_to_string(&checklist_path).ok()?;
+    let content = read_bounded_utf8(&checklist_path, REVIEW_CHECKLIST_READ_LIMIT_BYTES)?;
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
