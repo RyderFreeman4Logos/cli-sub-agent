@@ -413,4 +413,90 @@ mod tests {
         assert!(guard.contains("SELF-REVIEW BEFORE COMMIT"));
         assert!(guard.contains("NO GOLD-PLATING"));
     }
+
+    fn run_git(root: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git command should execute");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Throwaway git repo with one commit so `HEAD` exists; hooks and GPG signing
+    /// disabled to stay hermetic regardless of the host's global git config.
+    fn init_repo_with_commit() -> tempfile::TempDir {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        run_git(root, &["init", "-q"]);
+        run_git(root, &["config", "user.email", "test@example.com"]);
+        run_git(root, &["config", "user.name", "Test User"]);
+        run_git(root, &["config", "commit.gpgsign", "false"]);
+        run_git(
+            root,
+            &["config", "core.hooksPath", "/nonexistent-csa-hooks"],
+        );
+        std::fs::write(root.join("seed.txt"), "seed\n").expect("write seed");
+        run_git(root, &["add", "seed.txt"]);
+        run_git(root, &["commit", "-q", "-m", "initial"]);
+        temp
+    }
+
+    /// #1842 size-gating bug fix: a RESUME writer whose only uncommitted work is
+    /// substantial UNTRACKED files (invisible to `git diff HEAD`) must still
+    /// receive the FULL per-dimension guard, not the brief one.
+    #[test]
+    fn build_guard_full_for_resume_with_substantial_untracked_work() {
+        let temp = init_repo_with_commit();
+        let root = temp.path();
+        let body: String = (0..40).map(|i| format!("fn f{i}() {{}}\n")).collect();
+        std::fs::write(root.join("added.rs"), body).unwrap();
+
+        let guard = build_review_writer_guard(false, Some("run"), false, root)
+            .expect("resume writer with substantial untracked work must receive a guard");
+        assert!(
+            guard.contains("<review-dimensions>"),
+            "substantial untracked-only work must get the FULL guard, got: {guard}"
+        );
+    }
+
+    #[test]
+    fn build_guard_brief_for_resume_with_trivial_untracked_work() {
+        let temp = init_repo_with_commit();
+        let root = temp.path();
+        std::fs::write(root.join("tiny.txt"), "one line\n").unwrap();
+
+        let guard = build_review_writer_guard(false, Some("run"), false, root)
+            .expect("resume writer must receive a guard");
+        assert!(
+            !guard.contains("<review-dimensions>") && guard.contains("kind=\"brief\""),
+            "trivial untracked work must get the BRIEF guard, got: {guard}"
+        );
+    }
+
+    /// Ignored files must not inflate the size measure into the FULL guard.
+    #[test]
+    fn build_guard_brief_when_only_gitignored_files_present() {
+        let temp = init_repo_with_commit();
+        let root = temp.path();
+        std::fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        run_git(root, &["add", ".gitignore"]);
+        run_git(root, &["commit", "-q", "-m", "add gitignore"]);
+
+        let big: String = (0..300).map(|i| format!("log {i}\n")).collect();
+        std::fs::write(root.join("huge.log"), big).unwrap();
+
+        let guard = build_review_writer_guard(false, Some("run"), false, root)
+            .expect("resume writer must receive a guard");
+        assert!(
+            !guard.contains("<review-dimensions>") && guard.contains("kind=\"brief\""),
+            "ignored files must not trigger the FULL guard, got: {guard}"
+        );
+    }
 }
