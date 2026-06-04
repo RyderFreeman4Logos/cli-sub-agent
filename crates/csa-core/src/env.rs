@@ -25,6 +25,26 @@ pub const CSA_PARENT_SESSION_ENV_KEY: &str = "CSA_PARENT_SESSION";
 /// Marker that a nested execution command was spawned by CSA itself.
 pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
 
+/// Marker that a CSA command runs INSIDE a weave pattern pipeline (`csa plan
+/// run`).
+///
+/// `csa plan run` sets this to `"1"` on every `tool = "bash"` workflow step, and
+/// it is inherited by every nested CSA process spawned from inside that subtree
+/// (depth 0 → 1 → 2 …). When present (truthy), `csa run`/`review`/`debate`
+/// DEFAULT the #1652 fatal-error-marker silent-hang scan to DISABLED: a
+/// codex-fallback step legitimately multiplexes provider-error text into the
+/// tool output stream (#1738/#1830) and would otherwise self-kill and abort the
+/// whole pipeline (#1847). An explicit `--error-marker-scan` /
+/// `--no-error-marker-scan` CLI flag still overrides this default.
+///
+/// Intentionally NOT part of [`STARTUP_SUBTREE_ENV_KEYS`]: suppressing a
+/// heuristic early-kill is benign (idle-timeout and wall-clock timeout remain),
+/// so the marker needs no spoof-resistance, and keeping it out of the scrubbed
+/// contract is what lets it ride `build_merged_env` to leaf tools without being
+/// stripped at the transport boundary. It propagates explicitly instead (plan
+/// bash steps, `to_child_env_vars`, and the merged leaf-tool env).
+pub const CSA_PATTERN_INTERNAL_ENV_KEY: &str = "CSA_PATTERN_INTERNAL";
+
 /// Subtree model-pin env vars that propagate a pinned SA subtree to nested
 /// workers.
 ///

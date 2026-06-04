@@ -689,7 +689,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         false, // readonly_project_root
         &[],   // extra_writable
         &[],   // extra_readable,
-        false, // cli_no_error_marker_scan (#1745)
+        None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )
@@ -767,7 +767,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         false, // readonly_project_root
         &[],   // extra_writable
         &[],   // extra_readable,
-        false, // cli_no_error_marker_scan (#1745)
+        None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     )

@@ -184,9 +184,16 @@ pub struct ReviewArgs {
     /// ONLY when developing CSA's own error/quota/failover detection code,
     /// whose source and test fixtures legitimately contain provider error
     /// markers (#1745). The idle-timeout and wall-clock timeout still apply.
-    /// Default: scan enabled.
+    /// Default: scan enabled (disabled by default under CSA_PATTERN_INTERNAL,
+    /// i.e. for pattern-internal `csa plan run` bash steps, #1847).
     #[arg(long)]
     pub no_error_marker_scan: bool,
+
+    /// Force-enable the fatal-error-marker scan even when CSA_PATTERN_INTERNAL
+    /// would otherwise disable it (#1847). Overrides the marker-derived
+    /// default; mutually exclusive with --no-error-marker-scan.
+    #[arg(long, conflicts_with = "no_error_marker_scan")]
+    pub error_marker_scan: bool,
 
     /// Continue without csa-review pattern (warn instead of hard error)
     #[arg(long)]
@@ -488,9 +495,17 @@ pub struct DebateArgs {
 
     /// Disable the fatal-error-marker silent-hang scan for this session. Use
     /// when debate prose legitimately contains provider error markers. The
-    /// idle-timeout and wall-clock timeout still apply. Default: scan enabled.
+    /// idle-timeout and wall-clock timeout still apply. Default: scan enabled
+    /// (disabled by default under CSA_PATTERN_INTERNAL, i.e. for pattern-internal
+    /// `csa plan run` bash steps, #1847).
     #[arg(long)]
     pub no_error_marker_scan: bool,
+
+    /// Force-enable the fatal-error-marker scan even when CSA_PATTERN_INTERNAL
+    /// would otherwise disable it (#1847). Overrides the marker-derived
+    /// default; mutually exclusive with --no-error-marker-scan.
+    #[arg(long, conflicts_with = "no_error_marker_scan")]
+    pub error_marker_scan: bool,
 
     /// Working directory
     #[arg(long)]

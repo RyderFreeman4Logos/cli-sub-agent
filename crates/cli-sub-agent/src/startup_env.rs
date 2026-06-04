@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use csa_core::env::{
     CSA_DEPTH_ENV_KEY, CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_INTERNAL_INVOCATION_ENV_KEY,
     CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY, CSA_PARENT_SESSION_DIR_ENV_KEY,
-    CSA_PARENT_SESSION_ENV_KEY, CSA_PROJECT_ROOT_ENV_KEY, CSA_SESSION_DIR_ENV_KEY,
-    CSA_SESSION_ID_ENV_KEY, STARTUP_SUBTREE_ENV_KEYS,
+    CSA_PARENT_SESSION_ENV_KEY, CSA_PATTERN_INTERNAL_ENV_KEY, CSA_PROJECT_ROOT_ENV_KEY,
+    CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY, STARTUP_SUBTREE_ENV_KEYS,
 };
 
 const CSA_CHILD_CONTRACT_ENV_KEYS: &[&str] = &[
@@ -26,6 +26,7 @@ pub(crate) struct StartupSubtreeEnv {
     parent_session: Option<String>,
     parent_session_dir: Option<String>,
     internal_invocation: bool,
+    pattern_internal: bool,
     model_spec: Option<String>,
     force_ignore_tier_setting: bool,
     no_failover: bool,
@@ -36,6 +37,7 @@ pub(crate) struct StartupSubtreeEnv {
     raw_parent_session: Option<String>,
     raw_parent_session_dir: Option<String>,
     raw_internal_invocation: Option<String>,
+    raw_pattern_internal: Option<String>,
     raw_model_spec: Option<String>,
     raw_force_ignore_tier_setting: Option<String>,
     raw_no_failover: Option<String>,
@@ -50,6 +52,7 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
     parent_session: None,
     parent_session_dir: None,
     internal_invocation: false,
+    pattern_internal: false,
     model_spec: None,
     force_ignore_tier_setting: false,
     no_failover: false,
@@ -60,6 +63,7 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
     raw_parent_session: None,
     raw_parent_session_dir: None,
     raw_internal_invocation: None,
+    raw_pattern_internal: None,
     raw_model_spec: None,
     raw_force_ignore_tier_setting: None,
     raw_no_failover: None,
@@ -67,7 +71,13 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
 
 impl StartupSubtreeEnv {
     pub(crate) fn capture_from_process_env() -> Self {
-        let values = capture_startup_env_values(|key| std::env::var(key).ok());
+        let mut values = capture_startup_env_values(|key| std::env::var(key).ok());
+        // CSA_PATTERN_INTERNAL is captured but, unlike the subtree contract, is
+        // NOT scrubbed at child boundaries (see csa_core::env), so it lives
+        // outside STARTUP_SUBTREE_ENV_KEYS — read it explicitly here (#1847).
+        if let Ok(value) = std::env::var(CSA_PATTERN_INTERNAL_ENV_KEY) {
+            values.insert(CSA_PATTERN_INTERNAL_ENV_KEY, value);
+        }
         Self::from_values(values)
     }
 
@@ -79,6 +89,7 @@ impl StartupSubtreeEnv {
         let raw_parent_session = values.get(CSA_PARENT_SESSION_ENV_KEY).cloned();
         let raw_parent_session_dir = values.get(CSA_PARENT_SESSION_DIR_ENV_KEY).cloned();
         let raw_internal_invocation = values.get(CSA_INTERNAL_INVOCATION_ENV_KEY).cloned();
+        let raw_pattern_internal = values.get(CSA_PATTERN_INTERNAL_ENV_KEY).cloned();
         let raw_model_spec = values.get(CSA_MODEL_SPEC_ENV_KEY).cloned();
         let raw_force_ignore_tier_setting =
             values.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY).cloned();
@@ -89,6 +100,9 @@ impl StartupSubtreeEnv {
             .and_then(|raw| raw.parse::<u32>().ok())
             .unwrap_or(0);
         let internal_invocation = raw_internal_invocation
+            .as_ref()
+            .is_some_and(|value| is_truthy_env_value(value));
+        let pattern_internal = raw_pattern_internal
             .as_ref()
             .is_some_and(|value| is_truthy_env_value(value));
         let force_ignore_tier_setting = raw_force_ignore_tier_setting
@@ -106,6 +120,7 @@ impl StartupSubtreeEnv {
             parent_session: non_empty(raw_parent_session.as_ref()),
             parent_session_dir: non_empty(raw_parent_session_dir.as_ref()),
             internal_invocation,
+            pattern_internal,
             model_spec: non_empty(raw_model_spec.as_ref()),
             force_ignore_tier_setting,
             no_failover,
@@ -116,6 +131,7 @@ impl StartupSubtreeEnv {
             raw_parent_session,
             raw_parent_session_dir,
             raw_internal_invocation,
+            raw_pattern_internal,
             raw_model_spec,
             raw_force_ignore_tier_setting,
             raw_no_failover,
@@ -164,6 +180,11 @@ impl StartupSubtreeEnv {
             CSA_INTERNAL_INVOCATION_ENV_KEY,
             &self.raw_internal_invocation,
         );
+        // Re-emit the pattern-internal marker (normalized) so every descendant
+        // CSA process inherits the scan-default suppression (#1847).
+        if self.pattern_internal {
+            vars.push((CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string()));
+        }
         vars
     }
 
@@ -227,6 +248,12 @@ impl StartupSubtreeEnv {
 
     pub(crate) fn internal_invocation(&self) -> bool {
         self.internal_invocation
+    }
+
+    /// Whether this CSA process runs inside a weave pattern pipeline, i.e. it
+    /// inherited `CSA_PATTERN_INTERNAL` (truthy) from `csa plan run` (#1847).
+    pub(crate) fn pattern_internal(&self) -> bool {
+        self.pattern_internal
     }
 
     pub(crate) fn model_spec(&self) -> Option<&str> {
@@ -341,6 +368,94 @@ mod tests {
         );
         assert!(!startup.force_ignore_tier_setting());
         assert!(!startup.no_failover());
+    }
+
+    #[test]
+    fn pattern_internal_marker_is_captured_and_reemitted_to_children() {
+        // A CSA process that inherited CSA_PATTERN_INTERNAL re-emits it to its
+        // own children, so by induction the marker reaches depth>=2 nested CSA
+        // sessions (#1847).
+        let startup = StartupSubtreeEnv::from_values(HashMap::from([
+            (CSA_DEPTH_ENV_KEY, "1".to_string()),
+            (CSA_PATTERN_INTERNAL_ENV_KEY, "1".to_string()),
+        ]));
+
+        assert!(startup.pattern_internal());
+        assert!(
+            startup
+                .to_child_env_vars()
+                .contains(&(CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string())),
+            "captured pattern-internal marker must propagate to the child env"
+        );
+    }
+
+    #[test]
+    fn pattern_internal_marker_absent_is_not_emitted() {
+        // Interactive callers (no marker) must NOT propagate it (#1847 (iii)).
+        let startup =
+            StartupSubtreeEnv::from_values(HashMap::from([(CSA_DEPTH_ENV_KEY, "0".to_string())]));
+
+        assert!(!startup.pattern_internal());
+        assert!(
+            !startup
+                .to_child_env_vars()
+                .iter()
+                .any(|(key, _)| key == CSA_PATTERN_INTERNAL_ENV_KEY)
+        );
+    }
+
+    #[test]
+    fn pattern_internal_marker_survives_two_nested_csa_hops() {
+        // Canonical #1847 depth-2 chain: `csa plan run` sets the marker in the
+        // bash step env -> `csa run --skill mktd` (depth 1) -> `csa debate`
+        // (depth 2). Compose the capture->re-emit cycle twice and assert the
+        // marker still reaches the depth-2 grandchild, justifying mktd dropping
+        // its redundant per-step `--no-error-marker-scan`. The depth-1 base case
+        // (plan-run bash step exposing the marker) is covered by
+        // `spawn_bash_step_exposes_pattern_internal_marker` in plan_cmd_exec.
+
+        // A child only learns the marker if its parent actually emitted it, so
+        // each hop's inheritance genuinely depends on the prior re-emission.
+        fn captured_from_parent(
+            parent_child_env: &[(String, String)],
+            depth: &str,
+        ) -> HashMap<&'static str, String> {
+            let mut values = HashMap::from([(CSA_DEPTH_ENV_KEY, depth.to_string())]);
+            if parent_child_env
+                .iter()
+                .any(|(key, value)| key == CSA_PATTERN_INTERNAL_ENV_KEY && value == "1")
+            {
+                values.insert(CSA_PATTERN_INTERNAL_ENV_KEY, "1".to_string());
+            }
+            values
+        }
+
+        // Depth 1: `csa run --skill mktd` inherits the marker from the plan-run
+        // bash step env, then re-emits it to the mktd worker it spawns.
+        let depth1 = StartupSubtreeEnv::from_values(HashMap::from([
+            (CSA_DEPTH_ENV_KEY, "1".to_string()),
+            (CSA_PATTERN_INTERNAL_ENV_KEY, "1".to_string()),
+        ]));
+        let depth1_child_env = depth1.to_child_env_vars();
+        assert!(
+            depth1_child_env.contains(&(CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string())),
+            "depth-1 csa process must re-emit the marker to its child"
+        );
+
+        // Depth 2: `csa debate`, spawned from inside mktd, captures that
+        // re-emitted env and must still see the marker (and keep propagating).
+        let depth2 = StartupSubtreeEnv::from_values(captured_from_parent(&depth1_child_env, "2"));
+        assert_eq!(depth2.current_depth(), 2);
+        assert!(
+            depth2.pattern_internal(),
+            "depth-2 csa debate must inherit the pattern-internal marker"
+        );
+        assert!(
+            depth2
+                .to_child_env_vars()
+                .contains(&(CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string())),
+            "marker must keep propagating beyond depth 2"
+        );
     }
 
     #[test]

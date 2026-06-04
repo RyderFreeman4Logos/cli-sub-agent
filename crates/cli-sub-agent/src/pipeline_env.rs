@@ -17,6 +17,7 @@ pub(crate) fn build_merged_env(
     global_config: Option<&csa_config::GlobalConfig>,
     tool_name: &str,
     current_depth: u32,
+    pattern_internal: bool,
 ) -> HashMap<String, String> {
     let suppress = config
         .map(|c| c.should_suppress_notify(tool_name))
@@ -69,6 +70,16 @@ pub(crate) fn build_merged_env(
         csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(),
         "1".to_string(),
     );
+    // Propagate the pattern-internal marker to the leaf tool (and thence to any
+    // nested `csa` it spawns) when this session is itself pattern-internal. The
+    // key is NOT in the scrubbed subtree contract, so it survives the transport
+    // env filter rather than being stripped (#1847).
+    if pattern_internal {
+        merged_env.insert(
+            csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY.to_string(),
+            "1".to_string(),
+        );
+    }
 
     merged_env
 }

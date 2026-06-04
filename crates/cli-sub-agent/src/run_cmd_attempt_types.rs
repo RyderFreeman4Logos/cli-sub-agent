@@ -65,10 +65,11 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub(crate) task_needs_edit: Option<bool>,
     pub(crate) no_fs_sandbox: bool,
-    /// CLI `--no-error-marker-scan`: when `true`, disables the #1652
-    /// fatal-error-marker silent-hang scan for this run, overriding config
-    /// (#1745). Idle/wall-clock timeouts still apply.
-    pub(crate) no_error_marker_scan: bool,
+    /// Resolved CLI override for the #1652 fatal-error-marker silent-hang scan
+    /// (#1745): `Some(true)` force-enables, `Some(false)` force-disables, `None`
+    /// defers to the `CSA_PATTERN_INTERNAL` marker default then config (#1847).
+    /// Idle/wall-clock timeouts still apply.
+    pub(crate) error_marker_scan_override: Option<bool>,
     /// CLI `--no-hook-bypass-scan`: disables post-run hook-bypass scanning for
     /// this run, overriding config.
     pub(crate) no_hook_bypass_scan: bool,

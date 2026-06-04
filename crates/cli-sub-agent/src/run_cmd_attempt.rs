@@ -437,7 +437,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.no_fs_sandbox,
                     &request.extra_writable,
                     &request.extra_readable,
-                    request.no_error_marker_scan,
+                    request.error_marker_scan_override,
                     request.no_hook_bypass_scan,
                     request.startup_env,
                 )
@@ -484,7 +484,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 request.no_fs_sandbox,
                 &request.extra_writable,
                 &request.extra_readable,
-                request.no_error_marker_scan,
+                request.error_marker_scan_override,
                 request.no_hook_bypass_scan,
                 request.startup_env,
             )

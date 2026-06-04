@@ -259,7 +259,7 @@ pub(super) async fn handle_run_tool(
             false, // readonly_project_root
             &[],   // extra_writable
             &[],   // extra_readable
-            false, // cli_no_error_marker_scan: no CLI flag here; defer to config (#1745)
+            None, // error_marker_scan_override: no CLI flag here; defer to marker/config (#1745/#1847)
             false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
             startup_env,
         )

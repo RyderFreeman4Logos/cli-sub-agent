@@ -154,7 +154,7 @@ pub(crate) async fn execute_review(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
 ) -> Result<ReviewExecutionOutcome> {
     let startup_env = StartupSubtreeEnv::default();
     execute_review_with_tier_filter(
@@ -186,7 +186,7 @@ pub(crate) async fn execute_review(
         readonly_project_root,
         extra_writable,
         extra_readable,
-        no_error_marker_scan,
+        error_marker_scan_override,
         0,
         &startup_env,
     )
@@ -223,7 +223,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     current_depth: u32,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<ReviewExecutionOutcome> {
@@ -349,7 +349,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             readonly_project_root,
             extra_writable,
             extra_readable,
-            no_error_marker_scan,
+            error_marker_scan_override,
             startup_env,
         )
         .await
@@ -511,7 +511,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     readonly_project_root,
                     extra_writable,
                     extra_readable,
-                    no_error_marker_scan,
+                    error_marker_scan_override,
                     startup_env,
                 )
                 .await
@@ -732,7 +732,7 @@ async fn execute_review_once(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     crate::pipeline::execute_with_session_and_meta_with_parent_source(
@@ -764,7 +764,7 @@ async fn execute_review_once(
         readonly_project_root,
         extra_writable,
         extra_readable,
-        no_error_marker_scan,
+        error_marker_scan_override,
         false, // cli_no_hook_bypass_scan: review has no CLI flag; defer to config
         startup_env,
     )
@@ -792,7 +792,7 @@ async fn execute_review_once_with_artifact_guard(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let invocation_started_at = Utc::now();
@@ -816,7 +816,7 @@ async fn execute_review_once_with_artifact_guard(
         readonly_project_root,
         extra_writable,
         extra_readable,
-        no_error_marker_scan,
+        error_marker_scan_override,
         startup_env,
     )
     .await

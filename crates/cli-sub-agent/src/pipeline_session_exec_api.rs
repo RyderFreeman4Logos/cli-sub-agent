@@ -43,7 +43,7 @@ pub(crate) async fn execute_with_session(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    cli_no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<ExecutionResult> {
@@ -74,7 +74,7 @@ pub(crate) async fn execute_with_session(
         readonly_project_root,
         extra_writable,
         extra_readable,
-        cli_no_error_marker_scan,
+        error_marker_scan_override,
         cli_no_hook_bypass_scan,
         startup_env,
     )
@@ -111,7 +111,7 @@ pub(crate) async fn execute_with_session_and_meta(
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
-    cli_no_error_marker_scan: bool,
+    error_marker_scan_override: Option<bool>,
     cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
@@ -144,7 +144,7 @@ pub(crate) async fn execute_with_session_and_meta(
         readonly_project_root,
         extra_writable,
         extra_readable,
-        cli_no_error_marker_scan,
+        error_marker_scan_override,
         cli_no_hook_bypass_scan,
         startup_env,
     )

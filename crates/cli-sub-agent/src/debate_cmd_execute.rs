@@ -26,6 +26,22 @@ use super::{
     DebateFinalizeContext, DebateMode, finalize_debate_outcome, with_readonly_session_env,
 };
 
+impl DebateArgs {
+    /// Resolve the explicit error-marker-scan override from the
+    /// `--error-marker-scan` / `--no-error-marker-scan` flag pair, or `None` to
+    /// defer to the `CSA_PATTERN_INTERNAL` marker then config (#1847).
+    ///
+    /// Defined in this binary-only module (not on the `cli_review` struct) so
+    /// `cli.rs`, which integration-test crates `#[path]`-include, stays free of
+    /// `crate::`-rooted references they cannot resolve.
+    pub(crate) fn error_marker_scan_override(&self) -> Option<bool> {
+        crate::error_marker_scan::override_from_flags(
+            self.error_marker_scan,
+            self.no_error_marker_scan,
+        )
+    }
+}
+
 pub(crate) struct DebateExecutionRequest<'a> {
     pub(crate) args: &'a DebateArgs,
     pub(crate) output_format: OutputFormat,
@@ -158,7 +174,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 request.readonly_project_root,
                 &request.args.extra_writable,
                 &request.args.extra_readable,
-                request.args.no_error_marker_scan,
+                request.args.error_marker_scan_override(),
                 false, // cli_no_hook_bypass_scan: debate has no CLI flag; defer to config
                 request.startup_env,
             );

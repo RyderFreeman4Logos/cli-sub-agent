@@ -352,7 +352,7 @@ pub(crate) async fn handle_review(
             readonly_project_root,
             &args.extra_writable,
             &args.extra_readable,
-            args.no_error_marker_scan,
+            args.error_marker_scan_override(),
             current_depth,
             startup_env,
         );
@@ -539,7 +539,7 @@ pub(crate) async fn handle_review(
             build_jobs: args.build_jobs,
             fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,
-            no_error_marker_scan: args.no_error_marker_scan,
+            error_marker_scan_override: args.error_marker_scan_override(),
             extra_writable: &args.extra_writable,
             extra_readable: &args.extra_readable,
             timeout: args.timeout,

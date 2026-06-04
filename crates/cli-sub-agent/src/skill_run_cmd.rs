@@ -94,7 +94,10 @@ pub(crate) async fn handle_skill_run(
         tier: None,
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
-        no_error_marker_scan: false,
+        // Defer to the CSA_PATTERN_INTERNAL marker / config: a skill run spawned
+        // by a pattern-internal `csa plan run` bash step inherits the marker and
+        // disables the scan by default (#1847).
+        error_marker_scan_override: None,
         no_hook_bypass_scan: false,
         no_preflight: false,
         no_post_exec_gate: false,

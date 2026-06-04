@@ -20,6 +20,7 @@ mod difficulty_routing;
 mod doctor;
 mod edit_restriction_guard;
 mod error_hints;
+mod error_marker_scan;
 mod error_report;
 mod eval_cmd;
 mod executor_csa_guard;
@@ -273,6 +274,7 @@ async fn run() -> Result<()> {
             stream_stdout,
             no_stream_stdout,
             no_error_marker_scan,
+            error_marker_scan,
             no_hook_bypass_scan,
             no_preflight,
             no_post_exec_gate,
@@ -376,7 +378,10 @@ async fn run() -> Result<()> {
                 tier,
                 force_ignore_tier_setting,
                 no_fs_sandbox,
-                no_error_marker_scan,
+                error_marker_scan_override: crate::error_marker_scan::override_from_flags(
+                    error_marker_scan,
+                    no_error_marker_scan,
+                ),
                 no_hook_bypass_scan,
                 no_preflight,
                 no_post_exec_gate,
