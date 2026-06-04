@@ -328,7 +328,10 @@ fn sidecar_broad_http_marker_ignores_unconfigured_status_code() {
 }
 
 #[test]
-fn sidecar_keeps_tier1_markers_all_channel() {
+fn sidecar_tier1_markers_scoped_to_stderr() {
+    // #1830: tier-1 provider markers are scanned ONLY on the stderr transport stream.
+    // The same marker present only in model/assistant output (`output.log`) must not
+    // trip the scanner; on stderr it still fast-fails.
     let tmp = tempfile::tempdir().expect("tempdir");
     write_fatal_error_markers(
         tmp.path(),
@@ -345,9 +348,21 @@ fn sidecar_keeps_tier1_markers_all_channel() {
     )
     .expect("write output");
 
-    let signals = ToolLiveness::probe(tmp.path());
+    assert!(
+        !ToolLiveness::probe(tmp.path()).fatal_error,
+        "tier-1 marker in model output must not trip the scanner"
+    );
 
-    assert!(signals.fatal_error);
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "provider envelope: rate_limit_exceeded\n",
+    )
+    .expect("write stderr");
+
+    assert!(
+        ToolLiveness::probe(tmp.path()).fatal_error,
+        "tier-1 marker on the stderr transport stream must still fast-fail"
+    );
 }
 
 #[test]
@@ -361,17 +376,18 @@ fn matches_custom_markers_with_non_word_edges() {
 }
 
 #[test]
-fn fatal_error_signal_scopes_tmux_pane_to_tier1_markers() {
+fn fatal_error_signal_excludes_model_output_channel() {
+    // #1830: marker-like strings present only in model/assistant output (`output.log`,
+    // and likewise the no-longer-scanned tmux pane) must NOT register as a provider
+    // error — that text is model-authored, not a genuine transport failure.
     let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(OUTPUT_LOG_FILE),
+        "agent quoted HTTP 429 while reading API docs; provider envelope: quota exceeded\n",
+    )
+    .expect("write output");
 
-    assert!(!has_fatal_error_signal_in_channels(
-        tmp.path(),
-        Some("agent quoted HTTP 429 while reading API docs")
-    ));
-    assert!(has_fatal_error_signal_in_channels(
-        tmp.path(),
-        Some("provider envelope: quota exceeded")
-    ));
+    assert!(!ToolLiveness::probe(tmp.path()).fatal_error);
 }
 
 #[test]
@@ -389,7 +405,9 @@ fn probe_detects_broad_http_marker_in_stderr_tail() {
 }
 
 #[test]
-fn probe_detects_tier1_provider_marker_in_output_log() {
+fn probe_ignores_tier1_provider_marker_in_output_log() {
+    // #1830: a tier-1 provider marker that appears only in model/assistant output is
+    // not a genuine transport error and must not trip the fatal-error scanner.
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(
         tmp.path().join(OUTPUT_LOG_FILE),
@@ -399,7 +417,7 @@ fn probe_detects_tier1_provider_marker_in_output_log() {
 
     let signals = ToolLiveness::probe(tmp.path());
 
-    assert!(signals.fatal_error);
+    assert!(!signals.fatal_error);
 }
 
 #[test]
@@ -407,11 +425,12 @@ fn probe_uses_custom_fatal_error_marker_sidecar() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_fatal_error_markers(tmp.path(), &["custom backend died".to_string()])
         .expect("write markers");
+    // Custom sidecar markers are matched on the stderr transport stream (#1830).
     fs::write(
-        tmp.path().join(OUTPUT_LOG_FILE),
-        "agent ui shows: custom backend died\n",
+        tmp.path().join(STDERR_LOG_FILE),
+        "transport error: custom backend died\n",
     )
-    .expect("write output");
+    .expect("write stderr");
 
     let signals = ToolLiveness::probe(tmp.path());
 
@@ -424,10 +443,10 @@ fn probe_reloads_custom_fatal_error_marker_sidecar() {
     write_fatal_error_markers(tmp.path(), &["custom backend died".to_string()])
         .expect("write markers");
     fs::write(
-        tmp.path().join(OUTPUT_LOG_FILE),
-        "agent ui shows: custom backend died\n",
+        tmp.path().join(STDERR_LOG_FILE),
+        "transport error: custom backend died\n",
     )
-    .expect("write output");
+    .expect("write stderr");
 
     assert!(ToolLiveness::probe(tmp.path()).fatal_error);
 
@@ -437,10 +456,10 @@ fn probe_reloads_custom_fatal_error_marker_sidecar() {
     assert!(!ToolLiveness::probe(tmp.path()).fatal_error);
 
     fs::write(
-        tmp.path().join(OUTPUT_LOG_FILE),
-        "agent ui shows: different marker\n",
+        tmp.path().join(STDERR_LOG_FILE),
+        "transport error: different marker\n",
     )
-    .expect("rewrite output");
+    .expect("rewrite stderr");
 
     assert!(ToolLiveness::probe(tmp.path()).fatal_error);
 }

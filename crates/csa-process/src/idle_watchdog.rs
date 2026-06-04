@@ -142,7 +142,9 @@ pub(crate) fn should_terminate_for_initial_response_with_state(
             .then_some(IdleTerminationReason::Idle);
     }
 
-    // #1745 stopgap opt-out; proper fix = scope marker scan to backend-transport stream only (#182)
+    // #1745 opt-out kill-switch. The marker scan is now scoped to the stderr
+    // transport stream (#1830 / #182), so model/assistant output can no longer
+    // self-trip it; the opt-out is retained as a defense-in-depth backstop.
     if error_marker_scan_enabled && let Some(dir) = session_dir {
         let now = Instant::now();
         let should_poll = state
@@ -244,7 +246,9 @@ pub(crate) fn should_terminate_for_idle_with_state(
         return None;
     }
 
-    // #1745 stopgap opt-out; proper fix = scope marker scan to backend-transport stream only (#182)
+    // #1745 opt-out kill-switch. The marker scan is now scoped to the stderr
+    // transport stream (#1830 / #182), so model/assistant output can no longer
+    // self-trip it; the opt-out is retained as a defense-in-depth backstop.
     if error_marker_scan_enabled && idle_for >= FATAL_ERROR_PROGRESS_GRACE {
         if let Some(reason) = provider_error_termination(
             signals.provider_error,
