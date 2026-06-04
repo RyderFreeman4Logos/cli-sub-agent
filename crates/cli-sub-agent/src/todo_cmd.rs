@@ -118,22 +118,33 @@ pub(crate) fn handle_save(
     let manager = TodoManager::new(&project_root)?;
     let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
     let plan = manager.load(&ts)?;
-    manager.ensure_attestation(&ts)?;
 
+    // Serialize the attestation write, the git commit, the saved-version count,
+    // and the hook-trigger decision inside ONE hold of the TODO write lock:
+    // ensure_attestation_with runs the commit closure under the held lock, so a
+    // concurrent TODO writer cannot replace the attested plan files between the
+    // attestation and the commit (TOCTOU lost-update / wrong-snapshot hook -- the
+    // #1839 `csa todo save` analog of the #1822 `csa todo persist` fix). The
+    // closure stages + commits (git::save keeps the documented blanket
+    // `git add -A` of the save command), counts this commit's saved versions, and
+    // returns the commit hash + version; the TodoSave hook fires from those
+    // captured values AFTER the lock is released, so an arbitrary user hook
+    // command cannot deadlock on the held lock, yet the version still reflects
+    // exactly this save (not a count a concurrent writer bumped post-release).
+    let todos_dir = manager.todos_dir();
     let commit_msg = message.unwrap_or_else(|| format!("update: {}", plan.metadata.title));
-    match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
-        Some(hash) => {
-            eprintln!("Saved {ts} ({hash})");
-            // DEFERRED (#1839): `csa todo save` still commits OUTSIDE the TODO
-            // write lock, so its hook version is a post-commit recompute that
-            // can race a concurrent writer. A correct fix must first move this
-            // commit under the lock (the scope of #1839); until then, preserve
-            // the existing recompute behavior EXACTLY — just supply it to the
-            // now-parameterized hook helper instead of letting the helper
-            // recompute internally.
-            let version = csa_todo::git::list_versions(manager.todos_dir(), &ts)
+    let (_attestation, (commit_hash, version)) =
+        manager.ensure_attestation_with(&ts, |_| -> Result<(Option<String>, usize)> {
+            let hash = csa_todo::git::save(todos_dir, &ts, &commit_msg)?;
+            let version = csa_todo::git::list_versions(todos_dir, &ts)
                 .map(|versions| versions.len())
                 .unwrap_or(1);
+            Ok((hash, version))
+        })?;
+
+    match commit_hash {
+        Some(hash) => {
+            eprintln!("Saved {ts} ({hash})");
             crate::todo_hooks::emit_todo_save_hook(
                 &project_root,
                 manager.todos_dir(),

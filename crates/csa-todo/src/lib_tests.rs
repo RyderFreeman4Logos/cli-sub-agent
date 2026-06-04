@@ -580,4 +580,45 @@ fn test_language_field_skip_serializing_if_none() {
     );
 }
 
+/// Proves the publish closure runs INSIDE the held TODO write lock: a second,
+/// independent acquisition of the same lock must fail while the closure runs.
+/// flock(2) treats distinct open file descriptions as separate holders even
+/// within one process, so the non-blocking probe is denied while the outer lock
+/// is held. Linux-gated because the cross-fd flock semantics this relies on are
+/// guaranteed there. Mirrors the #1822 persist-path lock-scope test for the
+/// #1839 `csa todo save` fix.
+#[cfg(target_os = "linux")]
+#[test]
+fn ensure_attestation_with_runs_publish_under_write_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+    let plan = manager
+        .create("Lock scope probe", Some("fix/lock-scope-probe"))
+        .unwrap();
+    let lock_path = manager.todos_dir().join(LOCK_FILE);
+    let publish_ran = AtomicBool::new(false);
+
+    let (_attestation, lock_was_held) = manager
+        .ensure_attestation_with(&plan.timestamp, |_| {
+            publish_ran.store(true, Ordering::SeqCst);
+            // A competing write-lock acquisition must be denied while this
+            // publish closure runs, proving it executes under the held lock.
+            let probe_file = std::fs::OpenOptions::new().write(true).open(&lock_path)?;
+            let mut probe = fd_lock::RwLock::new(probe_file);
+            Ok(probe.try_write().is_err())
+        })
+        .unwrap();
+
+    assert!(
+        publish_ran.load(Ordering::SeqCst),
+        "publish closure must be invoked"
+    );
+    assert!(
+        lock_was_held,
+        "the write lock must be held while the publish/commit step runs"
+    );
+}
+
 include!("lib_ext_tests.rs");

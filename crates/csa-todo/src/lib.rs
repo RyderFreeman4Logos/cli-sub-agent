@@ -35,6 +35,7 @@ pub use generated_plan::{GeneratedPlanPersistRequest, GeneratedPlanPersistResult
 pub use reference::{ReferenceFile, ReferenceIndex, ReferenceSource};
 pub use spec::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 
+mod attestation;
 pub mod epic_plan;
 mod generated_plan;
 pub mod reference;
@@ -292,23 +293,6 @@ impl TodoManager {
             let plan = self.load_inner(timestamp)?;
             let content = read_todo_content(&plan)?;
             self.write_attestation_for_content(&plan, &content)
-        })
-    }
-
-    /// Store an attestation when one is missing or no longer matches TODO.md.
-    pub fn ensure_attestation(&self, timestamp: &str) -> Result<TodoAttestation> {
-        self.with_write_lock(|| {
-            let plan = self.load_inner(timestamp)?;
-            let content = read_todo_content(&plan)?;
-            let actual_hash = hash_todo_content(&content);
-
-            if let Some(attestation) = self.read_attestation(&plan)?
-                && attestation.hash == actual_hash
-            {
-                return Ok(attestation);
-            }
-
-            self.write_attestation(&plan, actual_hash)
         })
     }
 
