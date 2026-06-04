@@ -11,11 +11,10 @@ pub(super) fn acquire_or_persist_failure(
     project_root: &Path,
     session: &mut MetaSessionState,
     tool_name: &str,
-    task_type: Option<&str>,
     readonly_project_root: bool,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
 ) -> Result<Option<WorktreeWriteLock>> {
-    acquire_if_needed(project_root, session, task_type, readonly_project_root).map_err(|err| {
+    acquire_if_needed(project_root, session, readonly_project_root).map_err(|err| {
         persist_pipeline_pre_exec_failure(
             project_root,
             session,
@@ -30,10 +29,9 @@ pub(super) fn acquire_or_persist_failure(
 pub(super) fn acquire_if_needed(
     project_root: &Path,
     session: &MetaSessionState,
-    task_type: Option<&str>,
     readonly_project_root: bool,
 ) -> Result<Option<WorktreeWriteLock>> {
-    if !is_write_session(task_type, readonly_project_root) {
+    if !session_mutates_worktree(readonly_project_root) {
         return Ok(None);
     }
 
@@ -47,8 +45,21 @@ pub(super) fn acquire_if_needed(
     .map(Some)
 }
 
-fn is_write_session(task_type: Option<&str>, readonly_project_root: bool) -> bool {
-    matches!(task_type, Some("run")) && !readonly_project_root
+/// Whether this session can mutate the shared git worktree and therefore must
+/// serialize against other writers via the per-worktree write lock (#1672).
+///
+/// The mutation signal is `readonly_project_root == false`: any session whose
+/// project root is NOT mounted read-only can write to the shared `.git`/working
+/// tree, regardless of its session-type classification. Keying on the session
+/// type (e.g. only `csa run`) silently excluded `csa review --fix` and
+/// `csa debate` write-modes — which set `readonly_project_root = false` yet are
+/// classified as `reviewer_sub_session`/`debate` — letting them race a
+/// concurrent writer and clobber a commit (#1828). Deriving the predicate from
+/// `readonly_project_root` also covers future write-capable session kinds
+/// automatically. Pure read-only review/debate (`readonly_project_root == true`)
+/// acquires no lock and never contends.
+fn session_mutates_worktree(readonly_project_root: bool) -> bool {
+    !readonly_project_root
 }
 
 fn resolve_worktree_lock_root(project_root: &Path) -> Result<PathBuf> {
@@ -143,11 +154,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_lock_predicate_only_matches_writable_run_sessions() {
-        assert!(is_write_session(Some("run"), false));
-        assert!(!is_write_session(Some("run"), true));
-        assert!(!is_write_session(Some("reviewer_sub_session"), false));
-        assert!(!is_write_session(Some("debate"), false));
-        assert!(!is_write_session(None, false));
+    fn worktree_mutation_predicate_keys_on_readonly_not_session_type() {
+        // Any writable session mutates the shared worktree and must take the
+        // lock, regardless of session-type classification (#1828). This covers
+        // `csa run` write sessions, `csa review --fix`, and `csa debate`
+        // write-modes alike — session-type coverage is asserted end-to-end in
+        // `pipeline_tests_locking`.
+        assert!(session_mutates_worktree(false));
+        // A read-only sandbox cannot mutate the worktree → no lock, no
+        // contention.
+        assert!(!session_mutates_worktree(true));
     }
 }

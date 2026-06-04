@@ -126,7 +126,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         project_root,
         &mut session,
         executor.tool_name(),
-        task_type,
         readonly_project_root,
         &mut cleanup_guard,
     )?;
