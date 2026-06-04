@@ -124,38 +124,23 @@ pub(crate) fn handle_save(
     match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
         Some(hash) => {
             eprintln!("Saved {ts} ({hash})");
-
-            // TodoSave hook: fires after successful save (best-effort)
-            let hooks_config = load_hooks_config(
-                csa_session::get_session_root(&project_root)
-                    .ok()
-                    .map(|r| r.join("hooks.toml"))
-                    .as_deref(),
-                global_hooks_path().as_deref(),
-                None,
-            );
+            // DEFERRED (#1839): `csa todo save` still commits OUTSIDE the TODO
+            // write lock, so its hook version is a post-commit recompute that
+            // can race a concurrent writer. A correct fix must first move this
+            // commit under the lock (the scope of #1839); until then, preserve
+            // the existing recompute behavior EXACTLY — just supply it to the
+            // now-parameterized hook helper instead of letting the helper
+            // recompute internally.
             let version = csa_todo::git::list_versions(manager.todos_dir(), &ts)
-                .map(|v| v.len())
+                .map(|versions| versions.len())
                 .unwrap_or(1);
-            let mut hook_vars = std::collections::HashMap::new();
-            hook_vars.insert("plan_id".to_string(), ts.clone());
-            hook_vars.insert(
-                "plan_dir".to_string(),
-                manager.todos_dir().join(&ts).display().to_string(),
+            crate::todo_hooks::emit_todo_save_hook(
+                &project_root,
+                manager.todos_dir(),
+                &ts,
+                version,
+                &commit_msg,
             );
-            hook_vars.insert(
-                "todo_root".to_string(),
-                manager.todos_dir().display().to_string(),
-            );
-            hook_vars.insert(
-                "project_root".to_string(),
-                project_root.display().to_string(),
-            );
-            hook_vars.insert("version".to_string(), version.to_string());
-            hook_vars.insert("message".to_string(), commit_msg);
-            if let Err(e) = run_hooks_for_event(HookEvent::TodoSave, &hooks_config, &hook_vars) {
-                warn!("TodoSave hook failed: {}", e);
-            }
         }
         None => eprintln!("No changes to save for plan '{ts}'."),
     }

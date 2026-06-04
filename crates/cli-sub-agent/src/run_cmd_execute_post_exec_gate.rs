@@ -56,6 +56,7 @@ pub(super) struct PostExecGateApplyOptions<'a> {
     pub(super) changed_paths: Option<&'a [String]>,
     pub(super) extra_env: Option<HashMap<String, String>>,
     pub(super) no_post_exec_gate: bool,
+    pub(super) planning_only: bool,
 }
 
 fn is_post_exec_gate_exempt_prompt(prompt_text: &str) -> bool {
@@ -162,6 +163,45 @@ fn git_worktree_has_status_changes(project_root: &Path) -> Result<bool> {
     }
 
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+/// Whether the project worktree has dirty TRACKED changes (unstaged or staged
+/// modifications to files git already tracks).
+///
+/// Untracked files are intentionally excluded: a correct planning-only run
+/// (e.g. `--skill mktd`) writes its artifacts to the session output directory
+/// outside the repo tree (#1820), so a genuine plan-only run leaves the tracked
+/// tree clean. Keying on tracked changes avoids false-positives on generated /
+/// session-output scratch that would regress #1819's plan-only gate skip.
+///
+/// Fails closed: a git command that runs but reports a non-zero / unknown state
+/// is treated as dirty so the caller runs the verification gate rather than
+/// skipping on an unknown state (rule 009). Only an outright git-spawn failure
+/// propagates as an error.
+fn project_worktree_has_dirty_tracked_changes(project_root: &Path) -> Result<bool> {
+    let quiet_diff_signals_changes = |args: &[&str]| -> Result<bool> {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .with_context(|| {
+                format!(
+                    "failed to inspect git tracked changes for post-exec gate in {}",
+                    project_root.display()
+                )
+            })?;
+        // `git diff --quiet` exits 0 when clean, 1 when differences exist, and
+        // >1 on error; any non-zero exit is treated as dirty so the caller
+        // fails closed toward running the gate rather than skipping unverified.
+        Ok(!status.success())
+    };
+
+    // Unstaged tracked modifications, then staged (index) tracked modifications.
+    Ok(quiet_diff_signals_changes(&["diff", "--quiet"])?
+        || quiet_diff_signals_changes(&["diff", "--cached", "--quiet"])?)
 }
 
 fn classify_post_exec_gate_worktree(
@@ -363,6 +403,43 @@ where
             crate::run_cmd_post::record_post_exec_gate_skipped_by_flag(project_root, session_id);
         }
         return Ok(());
+    }
+    if options.planning_only {
+        // A planning-mode run (e.g. `--skill mktd`) writes its artifacts to the
+        // session output directory outside the repo tree (#1820), so a genuine
+        // plan-only run leaves the TRACKED worktree clean. The gate skip is
+        // therefore conditioned on EFFECT, not just the skill name.
+        match project_worktree_has_dirty_tracked_changes(project_root) {
+            // Clean tracked tree: a real plan-only run. Skip the code commit
+            // gate, preserving #1819's intent that such a session is not failed
+            // by `just pre-commit` / check-chinese.
+            Ok(false) => return Ok(()),
+            // Dirty tracked changes: the run unexpectedly edited tracked source.
+            // Record the anomaly and fall through to verify the edits via the
+            // configured gate instead of skipping them unverified.
+            Ok(true) => {
+                if let Some(session_id) = session_id {
+                    crate::run_cmd_post::record_post_exec_gate_planning_dirty_override(
+                        project_root,
+                        session_id,
+                    );
+                }
+            }
+            // Fail closed (rule 009): the worktree state is unknown, so never
+            // skip. Surface it as a gate failure so orchestrators reading
+            // result.toml never observe a false success, then propagate.
+            Err(err) => {
+                if let Some(session_id) = session_id {
+                    crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
+                        project_root,
+                        session_id,
+                        &format!("could not inspect worktree for planning-mode gate: {err}"),
+                        false,
+                    );
+                }
+                return Err(err);
+            }
+        }
     }
 
     let gate_outcome = match maybe_run_post_exec_gate_with_runner(

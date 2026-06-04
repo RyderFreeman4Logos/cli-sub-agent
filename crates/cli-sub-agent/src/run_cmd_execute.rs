@@ -636,6 +636,7 @@ pub(crate) async fn handle_run(
                 changed_paths: changed_paths.as_deref(),
                 extra_env: post_exec_gate_env,
                 no_post_exec_gate,
+                planning_only: skill.as_deref() == Some("mktd"),
             },
             execute_post_exec_gate_command,
         )

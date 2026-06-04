@@ -246,7 +246,7 @@ pre-commit:
 # Requires: ripgrep (rg)
 check-chinese:
     @echo "Checking for Chinese characters..."
-    @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**' --glob '!.claude/rules/**' --glob '!.agents/**' --glob '!CLAUDE.md' --glob '!GEMINI.md'
+    @! ./scripts/check-chinese.sh
 
 # Format code and re-stage only .rs files that were already staged before fmt.
 # Abort first when any staged Rust file also has unstaged hunks.

@@ -42,6 +42,32 @@ pub enum TodoCommands {
         cd: Option<String>,
     },
 
+    /// Atomically persist generated TODO/spec artifacts and commit the plan
+    Persist {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: String,
+
+        /// File containing final TODO.md content
+        #[arg(long)]
+        todo_file: String,
+
+        /// File containing final spec.toml content
+        #[arg(long)]
+        spec_file: String,
+
+        /// File containing final epic-plan.toml content
+        #[arg(long)]
+        epic_plan_file: Option<String>,
+
+        /// Commit message
+        message: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
     /// Recompute and store the TODO.md attestation hash
     Attest {
         /// Timestamp of the TODO plan (default: latest)

@@ -85,6 +85,79 @@ fn mktd_light_mode_skips_recon_dimensions() {
 }
 
 #[test]
+fn mktd_save_step_uses_session_output_artifacts_and_persist() {
+    let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let save_step = plan
+        .steps
+        .iter()
+        .find(|step| step.id == 13)
+        .expect("missing mktd save step");
+    let pattern = std::fs::read_to_string(workspace_root().join("patterns/mktd/PATTERN.md"))
+        .expect("read mktd pattern");
+
+    for (name, content) in [
+        ("PATTERN.md", pattern.as_str()),
+        ("workflow.toml Step 13", save_step.prompt.as_str()),
+    ] {
+        for required in [
+            r#"SAVE_DIR="${CSA_SESSION_DIR:?CSA_SESSION_DIR must be set}/output/mktd-save""#,
+            r#"TODO_ARTIFACT="${SAVE_DIR}/TODO.md""#,
+            r#"SPEC_ARTIFACT="${SAVE_DIR}/spec.toml""#,
+            r#"csa todo persist -t "${TODO_TS}""#,
+            r#"--todo-file "${TODO_ARTIFACT}""#,
+            r#"--spec-file "${SPEC_ARTIFACT}""#,
+        ] {
+            assert!(
+                content.contains(required),
+                "{name} must route mktd save artifacts through session output and todo persist: missing {required}"
+            );
+        }
+
+        for forbidden in [
+            r#"> "${TODO_PATH}""#,
+            r#"> "${SPEC_PATH}""#,
+            r#"> "${EPIC_PATH}""#,
+            "csa todo save -t",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{name} must not write generated artifacts directly into todo state before persist: found {forbidden}"
+            );
+        }
+
+        // Round-5 hard-gate ordering (#1820/#1822): the artifact validation MUST
+        // run BEFORE `csa todo persist` commits, so an invalid plan can never
+        // enter the todos git history even if a later step aborts.
+        let persist_idx = content
+            .find(r#"csa todo persist -t "${TODO_TS}""#)
+            .unwrap_or_else(|| panic!("{name} missing csa todo persist"));
+        let validate_idx = content
+            .find(r#"grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}""#)
+            .unwrap_or_else(|| panic!("{name} must validate the TODO artifact before persist"));
+        assert!(
+            validate_idx < persist_idx,
+            "{name} must validate artifacts BEFORE csa todo persist (commit), not after"
+        );
+
+        for forbidden_postcommit in [
+            // Post-commit content validation is forbidden: it cannot gate the
+            // commit. These checks moved before persist (artifacts) or into
+            // `csa todo persist` itself (spec-criteria render gate).
+            r#"grep -qE '^- \[ \] .+' "${TODO_PATH}""#,
+            r#"csa todo show -t "${TODO_TS}" --spec"#,
+            "saved TODO has no non-empty checkbox tasks",
+        ] {
+            assert!(
+                !content.contains(forbidden_postcommit),
+                "{name} must not validate the persisted plan AFTER the commit: found {forbidden_postcommit}"
+            );
+        }
+    }
+}
+
+#[test]
 fn pr_bot_debate_audit_reads_step12_output_and_prompt_has_comment_context() {
     let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();
