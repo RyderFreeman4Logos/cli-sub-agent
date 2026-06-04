@@ -222,6 +222,23 @@ pub(crate) fn record_post_exec_gate_skipped_by_flag(project_root: &Path, session
     );
 }
 
+/// Record that a planning-mode run (e.g. `--skill mktd`) unexpectedly left dirty
+/// tracked changes, so the post-exec gate is being run to verify them instead of
+/// being skipped by the planning-only fast path. Surfaces the anomaly both in
+/// logs and on the persisted result for audit.
+pub(crate) fn record_post_exec_gate_planning_dirty_override(project_root: &Path, session_id: &str) {
+    warn!(
+        session = %session_id,
+        "planning-mode run left dirty tracked changes; running post-exec gate to verify them"
+    );
+    record_post_exec_gate_success_warning(
+        project_root,
+        session_id,
+        false,
+        "planning-mode run left dirty tracked changes; post-exec gate run to verify them",
+    );
+}
+
 fn record_post_exec_gate_success_warning(
     project_root: &Path,
     session_id: &str,

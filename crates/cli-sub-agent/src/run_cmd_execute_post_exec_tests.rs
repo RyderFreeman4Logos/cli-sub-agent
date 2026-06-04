@@ -571,16 +571,71 @@ async fn post_exec_gate_timeout_dirty_is_fatal() {
 }
 
 #[tokio::test]
-async fn post_exec_gate_skips_planning_only_session_without_overwriting_success() {
+async fn post_exec_gate_runs_planning_only_session_when_tracked_source_is_dirty() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     let session_id = create_session_at_current_head(project_dir.path());
+    // A planning-mode (`--skill mktd`) run is expected to leave the tracked tree
+    // clean; here it unexpectedly dirties tracked source. The gate MUST run to
+    // verify the edit rather than being skipped by skill name alone (review
+    // round 9 regression guard for #1819).
     std::fs::write(
         project_dir.path().join("tracked.txt"),
-        "planning artifact\n",
+        "unexpected source edit\n",
     )
     .unwrap();
+    write_success_result_for(project_dir.path(), &session_id);
+
+    let calls = Arc::new(Mutex::new(0usize));
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    apply_post_exec_gate_after_success_with_runner(
+        project_dir.path(),
+        "Produce an mktd plan",
+        Some(&session_id),
+        Some(&config),
+        planning_post_exec_options(),
+        {
+            let calls = Arc::clone(&calls);
+            move |_command, _cwd, _timeout_seconds, _extra_env| {
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    *calls.lock().unwrap() += 1;
+                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                })
+            }
+        },
+    )
+    .await
+    .expect("planning-only run with dirty tracked source should run the gate");
+
+    assert_eq!(
+        *calls.lock().unwrap(),
+        1,
+        "dirty tracked source must trigger the gate even in planning mode"
+    );
+    let result = persisted_result(project_dir.path(), &session_id);
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("left dirty tracked changes")),
+        "planning-dirty override warning should be persisted: {:?}",
+        result.warnings
+    );
+}
+
+#[tokio::test]
+async fn post_exec_gate_skips_planning_only_session_when_tracked_tree_is_clean() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_at_current_head(project_dir.path());
+    // Genuine plan-only run: artifacts go to session output, the tracked tree
+    // stays clean. #1819's intent — such a run must NOT be failed by the code
+    // commit gate (`just pre-commit` / check-chinese).
     write_success_result_for(project_dir.path(), &session_id);
 
     let config = project_config_with_gate(PostExecGateConfig::default());
@@ -592,17 +647,22 @@ async fn post_exec_gate_skips_planning_only_session_without_overwriting_success(
         planning_post_exec_options(),
         |_command, _cwd, _timeout_seconds, _extra_env| {
             Box::pin(async move {
-                panic!("runner must not execute for planning-only sessions");
+                panic!("runner must not execute for a clean planning-only session");
             })
         },
     )
     .await
-    .expect("planning-only session should not run code gate");
+    .expect("clean planning-only session should not run code gate");
 
     let result = persisted_result(project_dir.path(), &session_id);
     assert_eq!(result.status, "success");
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.summary, "task completed");
+    assert!(
+        result.warnings.is_empty(),
+        "clean planning-only run must not record an override warning: {:?}",
+        result.warnings
+    );
 }
 
 #[tokio::test]
