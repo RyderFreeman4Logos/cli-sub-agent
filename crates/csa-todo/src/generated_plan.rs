@@ -128,22 +128,59 @@ impl TodoManager {
 /// persisted TODO plan must satisfy, evaluated BEFORE any file write or commit:
 ///
 /// - at least one non-empty open checkbox task (`- [ ] <text>`),
-/// - a `DONE WHEN` completion clause, and
+/// - **every** open checkbox task carries its OWN mechanically-verifiable
+///   `DONE WHEN:` completion clause (AGENTS.md Meta 005), and
 /// - at least one spec criterion (so `csa todo show --spec` renders a non-empty
 ///   criteria list — the struct-level equivalent of the workflow's former
 ///   post-commit render check).
 ///
+/// The `DONE WHEN:` check is **per-task**, not a single global mention: a plan
+/// is rejected when ANY open task block lacks a clause, even if another task
+/// carries one. The clause requires the colon followed by non-empty criteria
+/// text, so a bare keyword mention in a subject (e.g.
+/// `- [ ] Document DONE WHEN policy.`) does NOT satisfy the gate, and a clause
+/// that lives on a *completed* (`- [x]`) task line cannot satisfy a sibling open
+/// task. Completed tasks are exempt; only open tasks require a clause.
+///
 /// Returns an error so the caller's commit step never runs on invalid content.
 fn validate_generated_plan_content(todo_content: &str, spec: &SpecDocument) -> Result<()> {
-    let has_checkbox_task = todo_content.lines().any(|line| {
-        line.strip_prefix("- [ ] ")
-            .is_some_and(|rest| !rest.is_empty())
-    });
-    if !has_checkbox_task {
+    let lines: Vec<&str> = todo_content.lines().collect();
+    let mut open_task_count = 0usize;
+    let mut missing_clause: Vec<&str> = Vec::new();
+
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(subject) = open_task_subject(lines[i]) else {
+            i += 1;
+            continue;
+        };
+        open_task_count += 1;
+        // The task owns its checkbox line plus every following line up to — but
+        // not including — the next checkbox (open OR completed) or section
+        // heading. This isolates each open task's clause from its neighbours so
+        // one task's `DONE WHEN:` can never cover another's gap.
+        let start = i;
+        i += 1;
+        while i < lines.len() && !is_task_block_boundary(lines[i]) {
+            i += 1;
+        }
+        let has_clause = lines[start..i]
+            .iter()
+            .any(|line| done_when_criteria(line).is_some());
+        if !has_clause {
+            missing_clause.push(subject);
+        }
+    }
+
+    if open_task_count == 0 {
         anyhow::bail!("generated TODO has no non-empty checkbox task (`- [ ] <task>`)");
     }
-    if !todo_content.contains("DONE WHEN") {
-        anyhow::bail!("generated TODO has no `DONE WHEN` completion clause");
+    if !missing_clause.is_empty() {
+        anyhow::bail!(
+            "generated TODO has open task(s) without a mechanically-verifiable `DONE WHEN:` \
+             completion clause: {}",
+            missing_clause.join("; ")
+        );
     }
     if spec.criteria.is_empty() {
         anyhow::bail!(
@@ -151,6 +188,34 @@ fn validate_generated_plan_content(todo_content: &str, spec: &SpecDocument) -> R
         );
     }
     Ok(())
+}
+
+/// The subject text of an OPEN checkbox line (`- [ ] <subject>`), or `None` when
+/// the line is not a non-empty open checkbox. Matches the column-0, unordered
+/// `- [ ]` task format the mktd plan template renders and the workflow gate
+/// checks (`^- \[ \] .+`).
+fn open_task_subject(line: &str) -> Option<&str> {
+    line.strip_prefix("- [ ] ").filter(|rest| !rest.is_empty())
+}
+
+/// True when `line` opens a new task-block boundary: any checkbox marker (open
+/// or completed) or a Markdown section heading. Used to delimit one open task's
+/// owned lines from the next.
+fn is_task_block_boundary(line: &str) -> bool {
+    line.starts_with("- [ ]")
+        || line.starts_with("- [x]")
+        || line.starts_with("- [X]")
+        || line.starts_with('#')
+}
+
+/// The non-empty criteria text following a `DONE WHEN:` clause on `line`, or
+/// `None` when the line has no clause or only empty/whitespace text after the
+/// colon. The required colon means a bare keyword mention (e.g.
+/// `... DONE WHEN policy.`) is deliberately NOT treated as a clause.
+fn done_when_criteria(line: &str) -> Option<&str> {
+    line.split_once("DONE WHEN:")
+        .map(|(_, rest)| rest.trim())
+        .filter(|rest| !rest.is_empty())
 }
 
 #[cfg(test)]
@@ -191,6 +256,66 @@ mod tests {
         assert!(
             validate_generated_plan_content("# Plan\n\n- [ ] do thing\n  DONE WHEN: y\n", &spec)
                 .is_ok()
+        );
+    }
+
+    /// Round-8 (#1822) regression: the `DONE WHEN:` gate is PER-TASK, not a
+    /// single global mention. Proves the two reviewer-named false-pass cases are
+    /// rejected (a bare subject mention without a clause; a multi-task plan where
+    /// only one open task carries a clause) while every genuinely-valid clause
+    /// placement still passes.
+    #[test]
+    fn validate_generated_plan_content_requires_per_task_done_when() {
+        let spec = sample_spec("01JABCDEF0123456789ABCDEFG");
+
+        // REJECT: the only open task merely MENTIONS the keywords in its subject
+        // with no `DONE WHEN:` clause (no colon, no criteria).
+        assert!(
+            validate_generated_plan_content("# Plan\n\n- [ ] Document DONE WHEN policy.\n", &spec)
+                .is_err(),
+            "a subject that only mentions the keywords (no clause) must be rejected"
+        );
+
+        // REJECT: multi-task plan where one open task has a clause but another
+        // does not — the global check would wrongly pass on the first clause.
+        let mixed =
+            "# Plan\n\n## Tasks\n\n- [ ] Task one.\n  DONE WHEN: one is done.\n\n- [ ] Task two.\n";
+        assert!(
+            validate_generated_plan_content(mixed, &spec).is_err(),
+            "any open task lacking a clause must reject the plan, even if a sibling has one"
+        );
+
+        // REJECT: a `DONE WHEN:` clause living on a COMPLETED task line must not
+        // satisfy a sibling OPEN task that has no clause of its own.
+        let clause_on_completed = "# Plan\n\n- [x] Done. DONE WHEN: only this completed line carries a clause.\n- [ ] Open task without its own clause.\n";
+        assert!(
+            validate_generated_plan_content(clause_on_completed, &spec).is_err(),
+            "a clause on a completed task must not cover an open task's gap"
+        );
+
+        // ACCEPT: every open task has a clause on an indented FOLLOWING line.
+        let following_line = "# Plan\n\n- [ ] Task one.\n  DONE WHEN: one is done.\n\n- [ ] Task two.\n  DONE WHEN: two is done.\n";
+        assert!(
+            validate_generated_plan_content(following_line, &spec).is_ok(),
+            "following-line clauses on every open task must be accepted"
+        );
+
+        // ACCEPT: the clause sits on the checkbox SUBJECT line itself.
+        assert!(
+            validate_generated_plan_content(
+                "# Plan\n\n- [ ] Implement X. DONE WHEN: tests pass.\n",
+                &spec
+            )
+            .is_ok(),
+            "a clause on the checkbox subject line must be accepted"
+        );
+
+        // ACCEPT: completed tasks without clauses are exempt; the lone open task
+        // carries its own clause.
+        let with_completed = "# Plan\n\n- [x] Already done, no clause needed.\n- [ ] Still open.\n  DONE WHEN: it is mechanically verifiable.\n";
+        assert!(
+            validate_generated_plan_content(with_completed, &spec).is_ok(),
+            "completed tasks are exempt; only open tasks require a clause"
         );
     }
 

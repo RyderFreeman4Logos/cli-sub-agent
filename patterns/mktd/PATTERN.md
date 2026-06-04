@@ -719,7 +719,24 @@ printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_ARTIFACT}" || { echo "write spec artif
 # `csa todo show --spec` render gate — so NO content validation runs after the
 # commit.
 grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}" || { echo "TODO artifact has no non-empty checkbox tasks" >&2; exit 1; }
-grep -q 'DONE WHEN:' "${TODO_ARTIFACT}" || { echo "TODO artifact has no DONE WHEN clauses" >&2; exit 1; }
+# Per-task gate: EVERY open checkbox task must carry its OWN mechanically
+# verifiable `DONE WHEN:` clause (AGENTS.md Meta 005). A single global match is
+# insufficient — a bare keyword mention in a subject, or one task's clause, must
+# not cover another open task's gap. `csa todo persist` re-applies the same
+# per-task check fail-closed under the write lock (defense-in-depth).
+awk '
+function flush() { if (in_open == 1 && has_clause == 0) bad = 1; in_open = 0; has_clause = 0 }
+function scan(text,   pos, rest) {
+  pos = index(text, "DONE WHEN:")
+  if (pos > 0) { rest = substr(text, pos + 10); sub(/^[ \t]+/, "", rest); if (length(rest) > 0) has_clause = 1 }
+}
+{
+  is_open = ($0 ~ /^- \[ \] .+/)
+  if ($0 ~ /^- \[[ xX]\]/ || $0 ~ /^#/) { flush(); if (is_open == 1) { in_open = 1; scan($0) }; next }
+  if (in_open == 1) scan($0)
+}
+END { flush(); exit (bad + 0) }
+' "${TODO_ARTIFACT}" || { echo "TODO artifact has an open task without a mechanically-verifiable DONE WHEN: clause" >&2; exit 1; }
 grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}" || { echo "spec artifact missing schema_version = 1" >&2; exit 1; }
 grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_ARTIFACT}" || { echo "spec artifact plan_ulid unresolved or mismatched" >&2; exit 1; }
 grep -q '^summary = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing summary" >&2; exit 1; }
