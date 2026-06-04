@@ -205,7 +205,13 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         result.routed_to.as_deref(),
         Some("codex/openai/gpt-5.4/high")
     );
-    assert_eq!(result.primary_failure.as_deref(), Some("QUOTA_EXHAUSTED"));
+    // #1852: a SUCCESSFUL failover leaves `primary_failure` unset — the review
+    // succeeded, so the failed-over-from quota error is not a terminal failure.
+    // Its provenance is preserved in the persisted fallback chain below.
+    assert!(
+        result.primary_failure.is_none(),
+        "successful fallback must not record the failed-over-from error as primary_failure"
+    );
 
     let meta = ReviewSessionMeta {
         session_id: result.execution.meta_session_id.clone(),
@@ -341,9 +347,12 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
     assert_ne!(result.forced_decision, Some(ReviewDecision::Unavailable));
     assert_eq!(result.executed_tool, ToolName::Codex);
     assert_eq!(result.routed_to.as_deref(), Some("codex/openai/gpt-5/high"));
-    assert_eq!(
-        result.primary_failure.as_deref(),
-        Some("codex_429_retry_exhausted")
+    // #1852: the second codex variant SUCCEEDED, so the exhausted first variant
+    // is failover provenance (kept in result.toml below), not a terminal
+    // `primary_failure`.
+    assert!(
+        result.primary_failure.is_none(),
+        "successful fallback must not record the failed-over-from error as primary_failure"
     );
 
     let codex_invocations = std::fs::read_to_string(&codex_invocation_log).unwrap();
@@ -387,9 +396,11 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         artifact.routed_to.as_deref(),
         Some("codex/openai/gpt-5/high")
     );
-    assert_eq!(
-        artifact.primary_failure.as_deref(),
-        Some("codex_429_retry_exhausted")
+    // #1852: persisted verdict mirrors the success-via-fallback provenance —
+    // routing metadata is kept, primary_failure is cleared.
+    assert!(
+        artifact.primary_failure.is_none(),
+        "persisted verdict of a successful fallback must not carry primary_failure"
     );
 
     let result_toml = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();

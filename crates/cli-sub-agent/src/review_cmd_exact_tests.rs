@@ -807,7 +807,13 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         result.routed_to.as_deref(),
         Some("codex/openai/gpt-5.4/high")
     );
-    assert_eq!(result.primary_failure.as_deref(), Some("QUOTA_EXHAUSTED"));
+    // #1852: codex fallback SUCCEEDED, so the failed-over-from gemini quota
+    // error is provenance (kept in routed_to/result.toml), not a terminal
+    // primary_failure.
+    assert!(
+        result.primary_failure.is_none(),
+        "successful fallback must not record the failed-over-from error as primary_failure"
+    );
 
     let meta = ReviewSessionMeta {
         session_id: result.execution.meta_session_id.clone(),
