@@ -257,7 +257,14 @@ fn resolve_debate_session_exit_code(
     if artifact_exit_code == crate::verdict_exit_code::INFRASTRUCTURE_FAILURE_EXIT_CODE {
         return artifact_exit_code;
     }
-    if !completed_debate_with_verdict {
+    // A completed debate that produced a recognized verdict — whether parsed
+    // explicitly from the assistant turn or the default REVISE synthesized for a
+    // completed-but-unverdicted run — is a successful consultation. Its polarity
+    // is conveyed solely through `output/debate-verdict.json`; only the opt-in
+    // `--fail-on-*` flags turn an unfavorable verdict into a non-zero exit
+    // (#1850, residual of #1759). An UNAVAILABLE/unknown outcome (all tier
+    // models failed) is NOT a verdict, so it keeps the artifact exit code.
+    if !completed_debate_with_verdict && !debate_token_is_recognized_verdict(summary) {
         return artifact_exit_code;
     }
     if fail_on_revise && debate_token_matches(summary, "REVISE") {
@@ -267,6 +274,16 @@ fn resolve_debate_session_exit_code(
         return 1;
     }
     0
+}
+
+/// A debate summary token is a recognized verdict when it names one of the three
+/// adjudication outcomes (APPROVE/REVISE/REJECT). UNAVAILABLE and other tokens
+/// returned when the debate could not conclude are deliberately excluded so the
+/// all-tier-failure path keeps its infrastructure-failure exit code.
+fn debate_token_is_recognized_verdict(summary: &DebateSummary) -> bool {
+    debate_token_matches(summary, "APPROVE")
+        || debate_token_matches(summary, "REVISE")
+        || debate_token_matches(summary, "REJECT")
 }
 
 fn debate_token_matches(summary: &DebateSummary, expected: &str) -> bool {
