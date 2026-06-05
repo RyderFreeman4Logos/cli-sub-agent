@@ -22,6 +22,8 @@ pub(crate) struct AutoReviewerRequest<'a> {
     pub(crate) requested_reviewers: usize,
     pub(crate) explicit_reviewer_count: bool,
     pub(crate) single: bool,
+    pub(crate) fix: bool,
+    pub(crate) session_present: bool,
     pub(crate) scope_is_range: bool,
     pub(crate) large_diff_auto_escalation: bool,
     pub(crate) explicit_tool: Option<ToolName>,
@@ -163,6 +165,8 @@ pub(crate) fn resolve_auto_reviewer_selection(
     if request.requested_reviewers != 1
         || request.explicit_reviewer_count
         || request.single
+        || request.fix
+        || request.session_present
         || !(request.scope_is_range || request.large_diff_auto_escalation)
         || request.explicit_tool.is_some()
         || request.explicit_model_spec.is_some()
@@ -233,6 +237,8 @@ pub(crate) fn resolve_effective_reviewer_selection_for_args(
         requested_reviewers: args.requested_reviewers() as usize,
         explicit_reviewer_count: args.reviewers.is_some(),
         single: args.single,
+        fix: args.fix,
+        session_present: args.session.is_some(),
         scope_is_range: args.range.is_some(),
         large_diff_auto_escalation,
         explicit_tool: super::prior_rounds::explicit_review_tool(args),

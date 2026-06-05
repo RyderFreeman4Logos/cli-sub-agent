@@ -140,6 +140,8 @@ fn auto_reviewer_selection_skips_single_tool_tier() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: true,
         large_diff_auto_escalation: false,
         explicit_tool: None,
@@ -168,6 +170,8 @@ fn auto_reviewer_selection_uses_all_distinct_tier_tools_up_to_cap() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: true,
         large_diff_auto_escalation: false,
         explicit_tool: None,
@@ -200,6 +204,8 @@ fn large_diff_auto_escalation_selects_heterogeneous_reviewers_for_non_range_scop
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: false,
         large_diff_auto_escalation: true,
         explicit_tool: None,
@@ -217,6 +223,44 @@ fn large_diff_auto_escalation_selects_heterogeneous_reviewers_for_non_range_scop
         selection.selected_tools,
         vec![ToolName::Codex, ToolName::GeminiCli]
     );
+}
+
+fn assert_large_diff_auto_escalation_stays_single_reviewer(fix: bool, session_present: bool) {
+    let (_env_lock, _available_guard) = assume_review_tools_available();
+    let config = project_config_with_tier(&[
+        "codex/openai/gpt-5.4/high",
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+    ]);
+    let global = GlobalConfig::default();
+
+    let selection = resolve_effective_reviewer_selection(&AutoReviewerRequest {
+        requested_reviewers: 1,
+        explicit_reviewer_count: false,
+        single: false,
+        fix,
+        session_present,
+        scope_is_range: false,
+        large_diff_auto_escalation: true,
+        explicit_tool: None,
+        explicit_model_spec: None,
+        primary_tool: ToolName::Codex,
+        resolved_tier_name: Some("quality"),
+        config: Some(&config),
+        global_config: &global,
+    });
+
+    assert_eq!(selection.reviewers, 1);
+    assert!(selection.selected_tools.is_none());
+}
+
+#[test]
+fn large_diff_auto_escalation_keeps_fix_on_single_reviewer_path() {
+    assert_large_diff_auto_escalation_stays_single_reviewer(true, false);
+}
+
+#[test]
+fn large_diff_auto_escalation_keeps_session_on_single_reviewer_path() {
+    assert_large_diff_auto_escalation_stays_single_reviewer(false, true);
 }
 
 #[test]
@@ -265,6 +309,8 @@ fn assert_auto_execution_uses_selected_heterogeneous_roster(large_diff_auto_esca
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: !large_diff_auto_escalation,
         large_diff_auto_escalation,
         explicit_tool: None,
@@ -317,6 +363,8 @@ fn auto_reviewer_selection_respects_single_flag() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: true,
+        fix: false,
+        session_present: false,
         scope_is_range: true,
         large_diff_auto_escalation: true,
         explicit_tool: None,
@@ -343,6 +391,8 @@ fn auto_reviewer_selection_respects_explicit_reviewer_override() {
         requested_reviewers: 1,
         explicit_reviewer_count: true,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: true,
         large_diff_auto_escalation: true,
         explicit_tool: None,
@@ -370,6 +420,8 @@ fn large_diff_auto_escalation_respects_explicit_reviewer_count() {
         requested_reviewers: 2,
         explicit_reviewer_count: true,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: false,
         large_diff_auto_escalation: true,
         explicit_tool: None,
@@ -397,6 +449,8 @@ fn auto_reviewer_selection_respects_explicit_model_spec_override() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: true,
         large_diff_auto_escalation: true,
         explicit_tool: None,
@@ -423,6 +477,8 @@ fn auto_reviewer_selection_respects_explicit_tool_override() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: true,
         large_diff_auto_escalation: true,
         explicit_tool: Some(ToolName::Codex),
@@ -449,6 +505,8 @@ fn large_diff_auto_escalation_requires_two_model_families() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: false,
         large_diff_auto_escalation: true,
         explicit_tool: None,
@@ -475,6 +533,8 @@ fn auto_reviewer_selection_skips_non_range_scope() {
         requested_reviewers: 1,
         explicit_reviewer_count: false,
         single: false,
+        fix: false,
+        session_present: false,
         scope_is_range: false,
         large_diff_auto_escalation: false,
         explicit_tool: None,
