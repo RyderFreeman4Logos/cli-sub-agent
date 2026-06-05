@@ -350,7 +350,11 @@ fn print_state_dir() {
     }
 }
 
-/// Print project config status.
+/// Print the `=== Project Config ===` section.
+///
+/// This renders the RAW `.csa/config.toml` project config only; the effective
+/// (merged) runtime enablement gate is reported by the per-tool
+/// `=== Tool Availability ===` blocks instead (#1752 / #1836).
 fn print_project_config(status: &DoctorProjectConfigStatus) {
     for line in render_project_config_lines(status) {
         println!("{line}");

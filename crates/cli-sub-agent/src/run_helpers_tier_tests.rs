@@ -312,6 +312,118 @@ fn resolve_tool_from_tier_returns_none_when_all_disabled() {
     assert!(result.is_none());
 }
 
+// --- resolve_preferred_tool_from_tier (explicit --tool pin) tests ---
+
+#[test]
+fn resolve_preferred_tool_from_tier_fails_fast_on_disabled_pinned_candidate() {
+    let _tool_availability = assume_tier_tools_available();
+    // claude-code IS a tier candidate but is disabled in config; gemini-cli is
+    // the enabled tier default. An explicit `--tool claude-code` pin must error
+    // instead of silently falling through to gemini-cli (#1836). Resolution is
+    // upstream of failover, so this fail-fast fires regardless of --no-failover.
+    let cfg = config_with_tier(
+        "tier-4-critical",
+        vec![
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "claude-code/anthropic/default/xhigh",
+        ],
+        &["gemini-cli"], // claude-code disabled
+    );
+    let preference_order = vec!["claude-code".to_string()];
+    let result = super::resolve_preferred_tool_from_tier(
+        "tier-4-critical",
+        &cfg,
+        None,
+        &preference_order,
+        &[],
+    );
+    let err = result.expect_err("disabled pinned tier candidate must fail fast");
+    let msg = err.to_string();
+    assert!(msg.contains("--tool claude-code requested"), "{msg}");
+    assert!(msg.contains("[tools.claude-code].enabled = false"), "{msg}");
+    assert!(
+        msg.contains("enable it") && msg.contains("choose an enabled tool"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn resolve_preferred_tool_from_tier_soft_reorders_enabled_candidate() {
+    let _tool_availability = assume_tier_tools_available();
+    // gemini-cli is the tier default, but the user pins the ENABLED candidate
+    // codex; the soft-reorder must surface codex without error (#1749 preserved,
+    // regression guard — the disabled fail-fast must not catch enabled pins).
+    let cfg = config_with_tier(
+        "tier-4-critical",
+        vec![
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "codex/openai/gpt-5.5/xhigh",
+        ],
+        &["gemini-cli", "codex"],
+    );
+    let preference_order = vec!["codex".to_string()];
+    let resolution = super::resolve_preferred_tool_from_tier(
+        "tier-4-critical",
+        &cfg,
+        None,
+        &preference_order,
+        &[],
+    )
+    .expect("enabled pinned candidate must resolve via soft-reorder");
+    assert_eq!(resolution.tool, ToolName::Codex);
+    assert_eq!(resolution.model_spec, "codex/openai/gpt-5.5/xhigh");
+}
+
+#[test]
+fn resolve_preferred_tool_from_tier_non_candidate_proceeds_without_error() {
+    let _tool_availability = assume_tier_tools_available();
+    // opencode is enabled but NOT a tier candidate. The pin is ignored with a
+    // warning and resolution proceeds with the tier default (#1791 preserved).
+    // The disabled fail-fast (#1836) must NOT fire here — opencode is absent
+    // from the tier, not disabled within it.
+    let cfg = config_with_tier(
+        "tier-4-critical",
+        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
+        &["gemini-cli", "opencode"],
+    );
+    let preference_order = vec!["opencode".to_string()];
+    let resolution = super::resolve_preferred_tool_from_tier(
+        "tier-4-critical",
+        &cfg,
+        None,
+        &preference_order,
+        &[],
+    )
+    .expect("non-candidate pin must proceed with tier default, not error");
+    assert_eq!(resolution.tool, ToolName::GeminiCli);
+}
+
+/// End-to-end wiring guard: the `csa run` resolution entry point routes an
+/// explicit `--tool <disabled candidate>` + `--tier` through the fail-fast
+/// (#1836), proving the silent fall-through to the tier default is closed.
+#[test]
+fn resolve_tool_and_model_fails_fast_on_disabled_pinned_tier_candidate() {
+    let _tool_availability = assume_tier_tools_available();
+    let cfg = config_with_tier(
+        "tier-4-critical",
+        vec![
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "claude-code/anthropic/default/xhigh",
+        ],
+        &["gemini-cli"], // claude-code disabled
+    );
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::ClaudeCode),
+        tier: Some("tier-4-critical"),
+        config: Some(&cfg),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    });
+    let err = result.expect_err("disabled pinned tool under a tier must fail fast");
+    let msg = err.to_string();
+    assert!(msg.contains("--tool claude-code requested"), "{msg}");
+    assert!(msg.contains("[tools.claude-code].enabled = false"), "{msg}");
+}
+
 // --- Phase 2: tier enforcement tests ---
 
 /// When tiers are configured, direct --tool without an active tier is blocked.

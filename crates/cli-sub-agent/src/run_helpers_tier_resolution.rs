@@ -132,6 +132,20 @@ pub(crate) fn collect_preferred_tier_models(
     ordered
 }
 
+/// Resolve a tool/model from `tier_name`, honoring an explicitly-pinned `--tool`
+/// preference (`preference_order`) as a SOFT reorder of the tier's ENABLED
+/// candidates (#1749).
+///
+/// This function is only ever reached with an explicit user `--tool` pin: the
+/// `run`, `review`, and `debate` paths each route config-derived preferences
+/// through [`resolve_tool_from_tier`] instead and only call this helper when the
+/// caller named a tool on the command line. Because the preference is an
+/// explicit pin, a pin naming a configured-but-DISABLED tier candidate
+/// (`[tools.<name>].enabled = false`) cannot be honored and FAILS FAST (#1836)
+/// rather than silently substituting the tier default — a silent substitution
+/// would also violate the `--no-failover` contract by running a different tool
+/// than the one pinned. A pin naming a tool that is simply NOT a tier candidate
+/// keeps the pre-existing warn-and-proceed behavior (#1791).
 pub(crate) fn resolve_preferred_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
@@ -142,7 +156,35 @@ pub(crate) fn resolve_preferred_tool_from_tier(
     if !config.tiers.contains_key(tier_name) {
         anyhow::bail!("Tier '{}' not found.", tier_name);
     }
-    let available = collect_available_tier_models(tier_name, config, skip_specs);
+    let (available, excluded) = evaluate_tier_models(tier_name, config, skip_specs);
+
+    // #1836: an explicit `--tool` pin that names a tier candidate which is
+    // disabled in config must fail fast. Honoring the pin is impossible (the
+    // tool is gated off), so error instead of falling through to the tier
+    // default — that fall-through ran a different, enabled tool than the one
+    // named, breaking the `--no-failover` contract. Enabled candidates (handled
+    // by the soft-reorder below, #1749) and non-candidates (warn-and-proceed,
+    // #1791) are deliberately left untouched.
+    for preferred_tool in preference_order {
+        let is_enabled_candidate = available
+            .iter()
+            .any(|resolution| resolution.tool.as_str() == preferred_tool.as_str());
+        if is_enabled_candidate {
+            continue;
+        }
+        let is_disabled_candidate = excluded.iter().any(|exclusion| {
+            exclusion.kind == FailoverSkipKind::Disabled
+                && exclusion
+                    .tool
+                    .is_some_and(|tool| tool.as_str() == preferred_tool.as_str())
+        });
+        if is_disabled_candidate {
+            anyhow::bail!(
+                "--tool {preferred_tool} requested but [tools.{preferred_tool}].enabled = false; \
+                 enable it (config) or choose an enabled tool"
+            );
+        }
+    }
 
     for preferred_tool in preference_order {
         if let Some(warning) =

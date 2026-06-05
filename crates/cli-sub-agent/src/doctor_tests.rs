@@ -514,6 +514,110 @@ transport = "auto"
 }
 
 #[test]
+fn project_config_summary_reflects_raw_project_config_not_global_disable() {
+    // The `=== Project Config ===` summary must report the RAW `.csa/config.toml`
+    // project config ONLY, never the effective (merged) config. Real-world case
+    // from #1836: a tool disabled solely in GLOBAL config
+    // (`[tools.claude-code].enabled = false`) is unconfigured at the project
+    // layer, so it stays Enabled under the project header — labeling that merged
+    // state as "Project Config" would misrepresent the project file. The runtime
+    // enablement gate (merged config) instead lives on the EFFECTIVE surface that
+    // `=== Tool Availability ===` renders, asserted below via the merged config
+    // (#1752 residual / #1836).
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let td = tempfile::tempdir().expect("tempdir");
+    let config_root = td.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    // GLOBAL (user) config disables claude-code; the project file does not.
+    let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
+    std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
+        .expect("create user config dir");
+    std::fs::write(
+        &user_config_path,
+        r#"
+[tools.claude-code]
+enabled = false
+"#,
+    )
+    .expect("write user config");
+
+    // Project `.csa/config.toml` leaves claude-code unconfigured (=> enabled by
+    // default at the project layer).
+    write_project_config(
+        td.path(),
+        r#"
+[tools.codex]
+enabled = true
+"#,
+    );
+
+    // RAW project surface: claude-code stays Enabled, never Disabled.
+    let project_status = inspect_doctor_project_config_from(td.path());
+    let rendered = render_project_config_lines(&project_status).join("\n");
+    let enabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Enabled:"))
+        .unwrap_or_default();
+    let disabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Disabled:"))
+        .unwrap_or_default();
+    assert!(
+        matches!(project_status, DoctorProjectConfigStatus::Valid(_)),
+        "project config should parse as valid: {rendered}"
+    );
+    assert!(
+        enabled_line.contains("claude-code"),
+        "a tool disabled only in global config must stay Enabled in the raw project summary: {rendered}"
+    );
+    assert!(
+        !disabled_line.contains("claude-code"),
+        "a global-only-disabled tool must NOT appear as Disabled under the project header: {rendered}"
+    );
+
+    // EFFECTIVE surface: the merged gate (what `csa run` enforces and the
+    // `=== Tool Availability ===` blocks render) does report claude-code disabled.
+    let effective_status = inspect_doctor_effective_config_from(td.path());
+    let effective = effective_status
+        .runtime_config()
+        .expect("merged config should be valid");
+    assert!(
+        !effective.is_tool_enabled("claude-code"),
+        "the effective (merged) gate must reflect the global disable"
+    );
+}
+
+#[test]
+fn project_config_summary_shows_project_disabled_tool_as_disabled() {
+    // Complementary direction: a tool disabled IN the project file itself is
+    // genuine raw project state, so it MUST appear under Disabled in the summary.
+    let project_config = project_config_with_disabled_tool("claude-code", TransportKind::Cli);
+    let status = DoctorProjectConfigStatus::Valid(Box::new(project_config));
+
+    let rendered = render_project_config_lines(&status).join("\n");
+    let enabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Enabled:"))
+        .unwrap_or_default();
+    let disabled_line = rendered
+        .lines()
+        .find(|line| line.starts_with("Disabled:"))
+        .unwrap_or_default();
+
+    assert!(
+        disabled_line.contains("claude-code"),
+        "a tool disabled in the project file must appear under Disabled in the raw summary: {rendered}"
+    );
+    assert!(
+        !enabled_line.contains("claude-code"),
+        "a project-disabled tool must not also appear under Enabled: {rendered}"
+    );
+}
+
+#[test]
 fn doctor_text_reports_invalid_effective_config() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let td = tempfile::tempdir().expect("tempdir");

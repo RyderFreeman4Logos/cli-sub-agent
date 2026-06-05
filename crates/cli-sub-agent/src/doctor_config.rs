@@ -21,6 +21,18 @@ pub(super) fn project_config_tool_lists(
     (enabled, disabled)
 }
 
+/// Render the `=== Project Config ===` lines.
+///
+/// The `Enabled:`/`Disabled:` summary reflects the RAW `.csa/config.toml`
+/// project config ONLY — never the effective (merged project + global) config.
+/// This section reports what the project file itself declares, so it must not
+/// silently switch to the merged source: a tool disabled only in GLOBAL config
+/// stays Enabled here (the project file does not disable it), and labeling that
+/// merged state as "Project Config" would misrepresent the project file.
+/// The runtime enablement gate (merged config, the predicate `csa run` enforces)
+/// is surfaced separately by the per-tool `=== Tool Availability ===` blocks
+/// (`Config enabled:`), keeping the raw and effective axes distinctly labeled
+/// (#1752 / #1836).
 pub(super) fn render_project_config_lines(status: &DoctorProjectConfigStatus) -> Vec<String> {
     match status {
         DoctorProjectConfigStatus::Missing => vec![
