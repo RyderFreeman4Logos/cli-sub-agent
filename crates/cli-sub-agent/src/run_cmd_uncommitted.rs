@@ -166,89 +166,26 @@ pub(crate) fn working_tree_changed_lines(project_root: &Path) -> usize {
     tracked.saturating_add(untracked_non_ignored_lines(project_root))
 }
 
-/// Sum of line counts across untracked, non-ignored files.
+/// Sum of line counts across untracked, non-ignored files, delegating to the
+/// shared bounded scanner in [`crate::untracked_size`] so this writer guard and
+/// the `csa review` diff-size report (#1818) share one enumeration
+/// (`git ls-files --others --exclude-standard`) and one bounded per-file line
+/// counter rather than duplicating either.
 ///
-/// `git ls-files --others --exclude-standard` enumerates files git is neither
-/// tracking nor ignoring, so build artifacts and `.gitignore`d paths never
-/// inflate the size measure, and the index/worktree are never mutated. `--others`
-/// excludes anything already in the index (including intent-to-add entries, which
-/// `git diff HEAD` already counts), so there is no double-counting with the
-/// tracked diff. Fail-open: returns `0` when `project_root` is not a git worktree
-/// or git fails.
+/// The per-file read is bounded (streamed through a fixed buffer, never slurped)
+/// and the number of files scanned is capped at
+/// [`crate::untracked_size::MAX_UNTRACKED_FILES`]; beyond the cap the running
+/// total is already far above `TRIVIAL_DIFF_MAX_LINES`, so the
+/// trivial-vs-substantial outcome the guard cares about is unchanged. Non-regular
+/// entries (symlinks, FIFOs, sockets, devices) and unreadable files contribute
+/// `0`. Returns `0` when `project_root` is not a git worktree or git fails
+/// (fail-open), matching the rest of the guard.
 fn untracked_non_ignored_lines(project_root: &Path) -> usize {
-    if !super::git::is_git_worktree(project_root) {
-        return 0;
-    }
-    let Some(listing) = run_git_capture(
-        project_root,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    ) else {
-        return 0;
-    };
-    listing
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(|rel| count_file_lines(&project_root.join(rel)))
+    crate::untracked_size::list_untracked(project_root)
+        .paths
+        .iter()
+        .map(|path| crate::untracked_size::count_file_lines(path))
         .sum()
-}
-
-/// Per-file byte ceiling when counting untracked-file lines. The gate only
-/// distinguishes trivial (`<= TRIVIAL_DIFF_MAX_LINES`) from substantial, so
-/// scanning past ~1 MiB of a single file cannot change the outcome; the ceiling
-/// keeps a pathological large non-ignored file from forcing an unbounded read
-/// (bounded-read discipline, mirroring the guard's other reads).
-const MAX_LINE_SCAN_BYTES: usize = 1 << 20;
-
-/// Count newline-delimited lines in `path` with bounded memory and IO.
-///
-/// Streams the file through a fixed buffer (never loading it whole) counting
-/// `\n` bytes, stopping after [`MAX_LINE_SCAN_BYTES`]; a final line lacking a
-/// trailing newline still counts. Fail-open: any IO error (including a missing
-/// file) yields `0` so a transient read failure cannot abort the guard.
-///
-/// Only regular files are opened. `path` comes straight from an untracked
-/// worktree enumeration ([`untracked_non_ignored_lines`]), which can legitimately
-/// surface symlinks, FIFOs, sockets, or device nodes. `File::open` follows
-/// symlinks and blocks indefinitely on a FIFO (and can hang or error on other
-/// special files), so the path is first classified with `symlink_metadata` (which
-/// does NOT follow symlinks); anything that is not a regular file is skipped
-/// (counted as `0`) without ever being opened. Mirrors the classify-before-touch
-/// pattern in [`crate::edit_restriction_guard`]'s `capture_path_state`.
-fn count_file_lines(path: &Path) -> usize {
-    use std::io::Read;
-
-    // Classify WITHOUT following symlinks and WITHOUT opening: only a regular file
-    // is safe to hand to `File::open` here. A stat error (missing/unreadable) or
-    // any non-regular type (symlink, FIFO, socket, device) fails open to `0`.
-    if !std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file()) {
-        return 0;
-    }
-
-    let Ok(file) = std::fs::File::open(path) else {
-        return 0;
-    };
-    let mut reader = std::io::BufReader::new(file);
-    let mut buf = [0u8; 16 * 1024];
-    let mut newlines = 0usize;
-    let mut scanned = 0usize;
-    let mut last_byte = None;
-    while scanned < MAX_LINE_SCAN_BYTES {
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                newlines += buf[..n].iter().filter(|&&b| b == b'\n').count();
-                last_byte = Some(buf[n - 1]);
-                scanned = scanned.saturating_add(n);
-            }
-            Err(_) => return 0,
-        }
-    }
-    // A non-empty file whose final scanned byte is not a newline has a trailing
-    // partial line; an empty file (`None`) or one ending in `\n` does not.
-    match last_byte {
-        Some(b) if b != b'\n' => newlines.saturating_add(1),
-        _ => newlines,
-    }
 }
 
 fn collect_uncommitted_changes(project_root: &Path) -> Option<csa_session::UncommittedChanges> {
@@ -502,89 +439,6 @@ mod tests {
         run_git(root, &["add", "seed.txt"]);
         run_git(root, &["commit", "-q", "-m", "initial"]);
         temp
-    }
-
-    #[test]
-    fn count_file_lines_handles_trailing_newline_partial_line_and_missing() {
-        let temp = tempfile::tempdir().unwrap();
-        let with_nl = temp.path().join("with_nl.txt");
-        std::fs::write(&with_nl, "x\ny\nz\n").unwrap();
-        assert_eq!(count_file_lines(&with_nl), 3);
-
-        let no_nl = temp.path().join("no_nl.txt");
-        std::fs::write(&no_nl, "x\ny\nz").unwrap();
-        assert_eq!(count_file_lines(&no_nl), 3);
-
-        let empty = temp.path().join("empty.txt");
-        std::fs::write(&empty, "").unwrap();
-        assert_eq!(count_file_lines(&empty), 0);
-
-        assert_eq!(count_file_lines(&temp.path().join("missing.txt")), 0);
-    }
-
-    /// Create a FIFO (named pipe) at `path`. Unix-only; used to prove the
-    /// regular-file gate skips special files instead of blocking on `File::open`.
-    #[cfg(unix)]
-    fn make_fifo(path: &Path) {
-        use std::os::unix::ffi::OsStrExt;
-        let c_path =
-            std::ffi::CString::new(path.as_os_str().as_bytes()).expect("fifo path has no NUL byte");
-        // SAFETY: `c_path` is a valid NUL-terminated path that outlives the call;
-        // mode 0o600 is a standard FIFO permission. The return code is checked.
-        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-        assert_eq!(
-            rc,
-            0,
-            "mkfifo({}) failed: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        );
-    }
-
-    #[test]
-    fn count_file_lines_skips_non_regular_paths_without_blocking() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
-
-        // (a) A regular file is still counted normally.
-        let regular = root.join("regular.rs");
-        std::fs::write(&regular, "a\nb\nc\n").unwrap();
-        assert_eq!(count_file_lines(&regular), 3);
-
-        // (b) A symlink is non-regular: it MUST be skipped (0), not FOLLOWED to its
-        // regular target (which would count 3). Proves classification uses
-        // symlink_metadata rather than following the link.
-        #[cfg(unix)]
-        {
-            let link = root.join("link.rs");
-            std::os::unix::fs::symlink(&regular, &link).unwrap();
-            assert_eq!(
-                count_file_lines(&link),
-                0,
-                "symlink must be skipped, not followed"
-            );
-        }
-
-        // (c) A FIFO makes a blocking `File::open` hang forever pre-fix. Probe on a
-        // worker thread so a regression surfaces as a bounded timeout failure
-        // instead of an indefinite CI hang.
-        #[cfg(unix)]
-        {
-            use std::sync::mpsc;
-            use std::time::Duration;
-
-            let fifo = root.join("pipe");
-            make_fifo(&fifo);
-            let probe = fifo.clone();
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(count_file_lines(&probe));
-            });
-            let counted = rx.recv_timeout(Duration::from_secs(5)).expect(
-                "count_file_lines blocked on a FIFO — regression: regular-file gate missing",
-            );
-            assert_eq!(counted, 0, "FIFO must be skipped, not opened");
-        }
     }
 
     #[test]
