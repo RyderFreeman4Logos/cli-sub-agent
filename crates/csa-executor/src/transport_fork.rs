@@ -442,6 +442,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let now = Utc::now();
         let result = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "Tests passed".to_string(),

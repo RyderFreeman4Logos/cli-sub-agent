@@ -118,6 +118,7 @@ pub(super) fn maybe_synthesize_missing_review_result(
         .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
         .and_then(|ctx| ctx.0);
     let fallback_result = SessionResult {
+        post_exec_gate: None,
         status: status.to_string(),
         exit_code,
         summary,

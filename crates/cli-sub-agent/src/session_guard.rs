@@ -82,6 +82,7 @@ pub(crate) fn write_pre_exec_error_result(
 ) {
     let now = chrono::Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "failure".to_string(),
         exit_code: 1,
         summary: format!("pre-exec: {error}"),

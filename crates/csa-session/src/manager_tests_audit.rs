@@ -3,6 +3,7 @@ fn test_save_result_persists_manager_fields_sidecar() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
     let result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "Test completed".to_string(),

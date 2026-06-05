@@ -705,6 +705,7 @@ mod tests {
             project_root,
             &session.meta_session_id,
             &SessionResult {
+                post_exec_gate: None,
                 status: "success".to_string(),
                 exit_code: 0,
                 summary: "completed".to_string(),

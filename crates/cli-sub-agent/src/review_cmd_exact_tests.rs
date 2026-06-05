@@ -207,6 +207,7 @@ fn exact_test_codex_agent_message(text: &str) -> String {
 fn exact_test_wait_result(exit_code: i32, summary: &str) -> csa_session::SessionResult {
     let now = chrono::Utc::now();
     csa_session::SessionResult {
+        post_exec_gate: None,
         status: csa_session::SessionResult::status_from_exit_code(exit_code),
         exit_code,
         summary: summary.to_string(),

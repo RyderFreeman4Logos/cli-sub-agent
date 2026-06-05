@@ -39,6 +39,7 @@ pub(crate) fn create_debate_dry_run_session(
 
     let now = Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: SessionResult::status_from_exit_code(0),
         exit_code: 0,
         summary: "debate dry-run complete: AI invocation skipped".to_string(),

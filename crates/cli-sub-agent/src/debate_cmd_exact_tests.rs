@@ -66,6 +66,7 @@ fn setup_unrelated_debate_session(
         project_root,
         &unrelated.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "original unrelated summary".to_string(),
@@ -119,6 +120,7 @@ fn seed_debate_result(
         project_root,
         &session.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: status.to_string(),
             exit_code,
             summary: summary.to_string(),
@@ -632,6 +634,7 @@ fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
         project_root,
         &session.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "failure".to_string(),
             exit_code: 1,
             summary: "tool exited non-zero".to_string(),
@@ -715,6 +718,7 @@ fn debate_finalize_persists_categorized_fallback_chain_for_multi_skip() {
         project_root,
         &session.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "failure".to_string(),
             exit_code: 1,
             summary: "tool exited non-zero".to_string(),
@@ -824,6 +828,7 @@ fn debate_finalize_persists_build_time_exclusions_without_runtime_failures() {
         project_root,
         &session.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "failure".to_string(),
             exit_code: 1,
             summary: "tool exited non-zero".to_string(),
@@ -915,6 +920,7 @@ fn debate_finalize_non_success_omits_after_final_disabled_tier_spec() {
         project_root,
         &session.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "failure".to_string(),
             exit_code: 1,
             summary: "tool exited non-zero".to_string(),

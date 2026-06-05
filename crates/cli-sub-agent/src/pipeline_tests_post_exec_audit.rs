@@ -106,6 +106,7 @@ fn should_not_audit_repo_tracked_writes_for_sa_mode_false_writer_run() {
 #[test]
 fn apply_repo_write_audit_to_result_populates_manager_sidecar_sections() {
     let mut session_result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "ok".to_string(),
@@ -427,6 +428,7 @@ fn audit_failure_does_not_fail_execution() {
         fork_call_timestamps: Vec::new(),
     };
     let mut session_result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "ok".to_string(),
@@ -555,6 +557,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         fork_call_timestamps: Vec::new(),
     };
     let mut session_result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "ok".to_string(),
@@ -662,6 +665,7 @@ fn writer_run_does_not_emit_repo_write_audit_artifact() {
         fork_call_timestamps: Vec::new(),
     };
     let mut session_result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "ok".to_string(),
@@ -770,6 +774,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         fork_call_timestamps: Vec::new(),
     };
     let mut session_result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "ok".to_string(),

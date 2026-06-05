@@ -65,6 +65,7 @@ fn compact_summary_includes_usage_and_review_verdict() {
     .expect("review meta should be written");
     let now = Utc::now();
     let result = csa_session::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: r#"{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":25}}"#.to_string(),
@@ -106,6 +107,7 @@ fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
     .expect("review verdict should be written");
     let now = Utc::now();
     let result = csa_session::SessionResult {
+        post_exec_gate: None,
         status: "failed".to_string(),
         exit_code: 1,
         summary: "review unavailable".to_string(),
@@ -163,6 +165,7 @@ fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
     .expect("review verdict should be written");
     let now = Utc::now();
     let result = csa_session::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "review complete".to_string(),
@@ -193,6 +196,7 @@ fn compact_summary_includes_writer_uncommitted_warning() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let now = Utc::now();
     let result = csa_session::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "done".to_string(),
@@ -238,6 +242,7 @@ fn compact_summary_does_not_print_pass_when_result_failed() {
     .expect("review verdict should be written");
     let now = Utc::now();
     let result = csa_session::SessionResult {
+        post_exec_gate: None,
         status: "failed".to_string(),
         exit_code: 137,
         summary: "fatal backend error: process killed".to_string(),
@@ -301,6 +306,7 @@ fn compact_summary_does_not_print_pass_for_failed_fix_convergence() {
     .expect("review meta should be written");
     let now = Utc::now();
     let result = csa_session::SessionResult {
+        post_exec_gate: None,
         status: "failed".to_string(),
         exit_code: 1,
         summary: "fix did not converge".to_string(),

@@ -59,6 +59,7 @@ fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
         create_session(project_root, Some("test"), None, Some("codex")).expect("create session");
     let now = chrono::Utc::now();
     let existing = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "already persisted".to_string(),
@@ -372,6 +373,7 @@ async fn process_execution_result_respects_vcs_auto_snapshot_gate_for_colocated_
 fn codex_exec_initial_stall_summary_forces_failure_status_in_result_toml() {
     let now = chrono::Utc::now();
     let mut result = SessionResult {
+        post_exec_gate: None,
         status: SessionResult::status_from_exit_code(137),
         exit_code: 137,
         summary: "codex_exec_initial_stall: no stdout within 300s (effort=high, retry_attempted=true, original_effort=xhigh)".to_string(),

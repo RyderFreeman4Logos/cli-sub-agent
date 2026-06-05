@@ -319,6 +319,7 @@ mod tests {
 
         let now = Utc::now();
         let turn_1_result = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "turn 1".to_string(),
@@ -468,6 +469,7 @@ mod tests {
 
         let now = Utc::now();
         let runtime_result = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "runtime summary".to_string(),

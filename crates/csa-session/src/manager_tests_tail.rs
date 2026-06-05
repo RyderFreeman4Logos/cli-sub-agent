@@ -31,6 +31,7 @@ fn test_save_and_load_result() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
     let result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "Test completed".to_string(),
@@ -86,6 +87,7 @@ fn test_save_session_and_result_preserve_legacy_symlink_root() {
     save_session_in(&legacy_raw_root, &state).unwrap();
 
     let result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "saved to legacy raw root".to_string(),
@@ -151,6 +153,7 @@ name = "gemini-cli"
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -221,6 +224,7 @@ artifacts = [1, 2]
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -286,6 +290,7 @@ name = "gemini-cli"
 
     let now = chrono::Utc::now();
     let first_runtime = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "first run".to_string(),
@@ -314,6 +319,7 @@ name = "gemini-cli"
     .unwrap();
 
     let second_runtime = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "second run".to_string(),
@@ -378,6 +384,7 @@ done = false
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "run".to_string(),
@@ -414,6 +421,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
     let now = chrono::Utc::now();
 
     let old_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "old run".to_string(),
@@ -442,6 +450,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
     .unwrap();
 
     let new_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "failure".to_string(),
         exit_code: 1,
         summary: "new run".to_string(),

@@ -649,6 +649,7 @@ fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
         project_root,
         &session.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "<!-- CSA:SECTION:summary:END -->".to_string(),

@@ -357,6 +357,7 @@ pub(crate) async fn handle_plan_run_daemon_child(
     };
 
     let session_result = SessionResult {
+        post_exec_gate: None,
         status,
         exit_code,
         summary,

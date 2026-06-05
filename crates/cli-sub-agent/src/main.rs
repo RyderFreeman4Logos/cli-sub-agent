@@ -76,6 +76,8 @@ mod run_cmd_daemon;
 mod run_cmd_fork;
 mod run_cmd_model_pin;
 mod run_cmd_post;
+mod run_cmd_post_exec_gate_capture;
+mod run_cmd_post_gate_report;
 mod run_cmd_preflight;
 mod run_cmd_tool_selection;
 mod run_helpers;

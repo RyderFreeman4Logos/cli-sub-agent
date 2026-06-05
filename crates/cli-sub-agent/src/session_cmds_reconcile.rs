@@ -406,6 +406,7 @@ where
         diagnostics
     );
     let fallback = SessionResult {
+        post_exec_gate: None,
         status: "failure".to_string(),
         exit_code: 1,
         summary: crate::pipeline_post_exec::build_fallback_result_summary(

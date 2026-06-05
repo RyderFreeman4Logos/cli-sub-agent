@@ -9,6 +9,7 @@ fn test_save_result_preserves_existing_contract_result_artifact_when_output_resu
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -64,6 +65,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
 
     let now = chrono::Utc::now();
     let initial_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "initial summary".to_string(),
@@ -154,6 +156,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
 
     let now = chrono::Utc::now();
     let populated_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -230,6 +233,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
 
     let now = chrono::Utc::now();
     let populated_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),

@@ -134,6 +134,7 @@ fn missing_current_sizes_do_not_count_as_reconcile_progress() {
 fn make_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
     let now = Utc::now();
     csa_session::SessionResult {
+        post_exec_gate: None,
         status: status.to_string(),
         exit_code,
         summary: "summary".to_string(),
