@@ -295,3 +295,116 @@ fn dev2merge_plan_step_has_brief_specificity_heuristic() {
         "file:line regex must match Rust, TOML, and Markdown paths"
     );
 }
+
+// #1843 ─────────────────────────────────────────────────────────────────────
+//
+// Step 7 (`Plan with mktd`) must validate DONE WHEN *per task*, not via a single
+// global mention. This is the 4th sibling of the #1822 per-task conversion (the
+// other three: csa-todo `validate_generated_plan_content`, mktd `workflow.toml`,
+// mktd `PATTERN.md`). A global `grep -q 'DONE WHEN'` passes a multi-task plan
+// where only one open task carries a clause; the per-task awk rejects it.
+#[test]
+fn dev2merge_plan_step_done_when_gate_is_per_task() {
+    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let prompt = &plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Plan with mktd")
+        .expect("missing dev2merge plan step")
+        .prompt;
+
+    assert!(
+        !prompt.contains("grep -q 'DONE WHEN'"),
+        "Step 7 must NOT use the weak global `grep -q 'DONE WHEN'` check (#1843)"
+    );
+    assert!(
+        prompt.contains("index(text, \"DONE WHEN:\")") && prompt.contains("is_open"),
+        "Step 7 must use the per-task awk DONE WHEN gate (#1843)"
+    );
+}
+
+// #1843 behavioral check: the extracted awk gate must reject any open task that
+// lacks its own `DONE WHEN:` clause — including the empty `- [ ] ` placeholder
+// `csa todo create` leaves on the branch when mktd fails before persist — and
+// accept a plan where every open task carries one. Unix-only: relies on `awk`.
+#[cfg(unix)]
+#[test]
+fn dev2merge_done_when_awk_gate_enforces_per_task() {
+    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let prompt = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Plan with mktd")
+        .expect("missing dev2merge plan step")
+        .prompt
+        .clone();
+    // Extract the exact awk program bash hands to `awk` (the bytes between
+    // `awk '` and `' "${TODO_PATH}"`), so this exercises the real gate.
+    let awk_program = prompt
+        .split("awk '")
+        .nth(1)
+        .and_then(|rest| rest.split("' \"${TODO_PATH}\"").next())
+        .expect("Step 7 must invoke `awk '<program>' \"${TODO_PATH}\"`");
+
+    let run = |todo: &str| -> i32 {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("awk")
+            .arg(awk_program)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("awk must be available on unix test hosts");
+        child
+            .stdin
+            .take()
+            .expect("awk stdin")
+            .write_all(todo.as_bytes())
+            .expect("write todo to awk stdin");
+        child.wait().expect("await awk").code().unwrap_or(1)
+    };
+
+    // Accept: every open task carries its own clause (following-line and same-line).
+    assert_eq!(
+        run("# Plan\n- [ ] a\n  DONE WHEN: tests pass\n- [ ] b DONE WHEN: lint clean\n"),
+        0,
+        "fully per-task plan must pass"
+    );
+    // Reject: a single open task with no clause.
+    assert_ne!(
+        run("# Plan\n- [ ] do thing\n"),
+        0,
+        "open task missing DONE WHEN must fail"
+    );
+    // Reject: multi-task plan where only one task carries a clause — the per-task
+    // gain a global `grep -q 'DONE WHEN'` would miss.
+    assert_ne!(
+        run("# Plan\n- [ ] a\n  DONE WHEN: x\n- [ ] b\n"),
+        0,
+        "partial per-task coverage must fail"
+    );
+    // Reject: a bare keyword mention in a subject is not a clause (#1822 case).
+    assert_ne!(
+        run("# Plan\n- [ ] Document DONE WHEN policy.\n"),
+        0,
+        "bare `DONE WHEN` subject mention without a colon clause must fail"
+    );
+    // Reject: a clause on a completed task must not cover a sibling open task.
+    assert_ne!(
+        run("# Plan\n- [x] done\n  DONE WHEN: x\n- [ ] open\n"),
+        0,
+        "completed-task clause must not satisfy an open task"
+    );
+    // Reject: the empty `- [ ] ` placeholder `csa todo create` writes — preserves
+    // the rejection the prior global check gave when mktd fails before persist.
+    assert_ne!(
+        run("# TODO: feature\n\n## Tasks\n\n- [ ] \n"),
+        0,
+        "empty csa-todo-create scaffold must fail (no regression vs global check)"
+    );
+}
