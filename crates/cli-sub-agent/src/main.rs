@@ -120,6 +120,7 @@ mod todo_persist_cmd;
 mod todo_ref_cmd;
 mod tool_version;
 mod triage_cmd;
+mod untracked_size;
 mod verdict_exit_code;
 mod verify_cmd;
 mod xurl_cmd;
