@@ -396,36 +396,51 @@ pub(crate) async fn build_and_validate_executor(
         );
         anyhow::bail!("{e}");
     }
-    ensure_tool_runtime_prerequisites(executor.tool_name()).await?;
-
     Ok(executor)
 }
 
-async fn ensure_tool_runtime_prerequisites(tool_name: &str) -> Result<()> {
+async fn ensure_tool_runtime_prerequisites(
+    tool_name: &str,
+    filesystem_capability: csa_resource::FilesystemCapability,
+) -> Result<()> {
     if tool_name != "codex" {
+        return Ok(());
+    }
+    if !matches!(
+        filesystem_capability,
+        csa_resource::FilesystemCapability::Bwrap
+    ) {
         return Ok(());
     }
     if std::env::var("CSA_SKIP_BWRAP_PREFLIGHT").ok().as_deref() == Some("1") {
         return Ok(());
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        let has_bwrap = tokio::process::Command::new("which")
-            .arg("bwrap")
-            .output()
-            .await
-            .map(|out| out.status.success())
-            .unwrap_or(false);
-        if !has_bwrap {
-            anyhow::bail!(
-                "codex preflight failed: required runtime dependency 'bwrap' (bubblewrap) is missing.\n\
-                 Install bubblewrap first, then re-run the command."
-            );
-        }
+    let has_bwrap = tokio::process::Command::new("which")
+        .arg("bwrap")
+        .output()
+        .await
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !has_bwrap {
+        anyhow::bail!(
+            "codex preflight failed: required runtime dependency 'bwrap' (bubblewrap) is missing.\n\
+             Install bubblewrap first, then re-run the command."
+        );
     }
 
     Ok(())
+}
+
+fn resolved_filesystem_capability(
+    execute_options: &csa_executor::ExecuteOptions,
+) -> csa_resource::FilesystemCapability {
+    execute_options
+        .sandbox
+        .as_ref()
+        .map_or(csa_resource::FilesystemCapability::None, |ctx| {
+            ctx.isolation_plan.filesystem
+        })
 }
 
 /// Acquire global concurrency slot for the executor.

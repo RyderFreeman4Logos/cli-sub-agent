@@ -403,6 +403,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             ));
         }
     };
+    super::ensure_tool_runtime_prerequisites(
+        executor.tool_name(),
+        super::resolved_filesystem_capability(&execute_options),
+    )
+    .await?;
     let spool_max_mb = config
         .map(|cfg| cfg.session.resolved_spool_max_mb())
         .unwrap_or((csa_process::DEFAULT_SPOOL_MAX_BYTES / (1024 * 1024)) as u32);

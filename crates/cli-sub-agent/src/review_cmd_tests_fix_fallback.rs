@@ -8,10 +8,6 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
 
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
-    if which::which("bwrap").is_err() {
-        eprintln!("skipping: bwrap not installed (CI gap, see #987)");
-        return;
-    }
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let opencode_count_path = project_dir.path().join("opencode-count.txt");

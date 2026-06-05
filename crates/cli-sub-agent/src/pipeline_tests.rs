@@ -696,6 +696,32 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
     }
 }
 
+#[tokio::test]
+async fn codex_bwrap_preflight_follows_filesystem_capability() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let empty_path = tempfile::tempdir().unwrap();
+    let _path_guard = crate::test_env_lock::ScopedEnvVarRestore::set("PATH", empty_path.path());
+    let _skip_guard = crate::test_env_lock::ScopedEnvVarRestore::unset("CSA_SKIP_BWRAP_PREFLIGHT");
+
+    let disabled =
+        ensure_tool_runtime_prerequisites("codex", csa_resource::FilesystemCapability::None).await;
+    assert!(
+        disabled.is_ok(),
+        "codex preflight must not require bwrap when filesystem sandboxing is disabled"
+    );
+
+    let enabled =
+        ensure_tool_runtime_prerequisites("codex", csa_resource::FilesystemCapability::Bwrap).await;
+    assert!(
+        enabled.is_err(),
+        "codex preflight must require bwrap when bwrap filesystem sandboxing is enabled"
+    );
+    assert!(
+        enabled.unwrap_err().to_string().contains("bwrap"),
+        "enabled bwrap preflight error should name the missing dependency"
+    );
+}
+
 /// When `enforce_tier=true`, passing a model spec not in the tier whitelist
 /// must produce a tier-related error.
 #[tokio::test]
