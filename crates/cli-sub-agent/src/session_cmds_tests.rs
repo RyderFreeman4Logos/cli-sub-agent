@@ -61,6 +61,69 @@ fn session_clean_preserves_active_session() {
     assert!(loaded.tools.is_empty());
 }
 
+fn session_dir_entries(session_dir: &std::path::Path) -> Vec<String> {
+    let mut entries = std::fs::read_dir(session_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+fn create_corrupt_session_state(
+    project: &std::path::Path,
+) -> (String, std::path::PathBuf, std::path::PathBuf, Vec<u8>) {
+    let session = create_session(project, Some("corrupt"), None, None).unwrap();
+    let session_dir = get_session_dir(project, &session.meta_session_id).unwrap();
+    let state_path = session_dir.join("state.toml");
+    let corrupt_state = b"not valid toml = [".to_vec();
+    std::fs::write(&state_path, &corrupt_state).unwrap();
+    (
+        session.meta_session_id,
+        session_dir,
+        state_path,
+        corrupt_state,
+    )
+}
+
+#[test]
+fn session_clean_dry_run_preserves_corrupt_state_without_recovery() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (_, session_dir, state_path, corrupt_state) = create_corrupt_session_state(&project);
+    let entries_before = session_dir_entries(&session_dir);
+
+    handle_session_clean(0, true, None, Some(project.to_string_lossy().to_string()))
+        .expect("session clean dry-run should not require corrupt-state recovery");
+
+    assert_eq!(session_dir_entries(&session_dir), entries_before);
+    assert_eq!(std::fs::read(&state_path).unwrap(), corrupt_state);
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn session_clean_recovers_corrupt_state_when_not_dry_run() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (session_id, session_dir, state_path, corrupt_state) =
+        create_corrupt_session_state(&project);
+
+    handle_session_clean(0, false, None, Some(project.to_string_lossy().to_string()))
+        .expect("session clean execution should recover corrupt state");
+
+    assert!(session_dir.join("state.toml.corrupt").exists());
+    assert_ne!(std::fs::read(&state_path).unwrap(), corrupt_state);
+    let recovered = load_session(&project, &session_id).unwrap();
+    assert_eq!(
+        recovered.description.as_deref(),
+        Some("(recovered from corrupt state)")
+    );
+}
+
 fn make_result(status: &str, exit_code: i32) -> SessionResult {
     let now = Utc::now();
     SessionResult {

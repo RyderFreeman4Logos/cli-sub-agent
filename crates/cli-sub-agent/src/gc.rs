@@ -8,7 +8,7 @@ use csa_core::types::OutputFormat;
 use csa_resource::cleanup_orphan_scopes;
 use csa_session::{
     MetaSessionState, SessionPhase, delete_session, get_session_dir, get_session_root,
-    list_sessions, save_session_in,
+    list_sessions, list_sessions_readonly, save_session_in,
 };
 
 mod auto_gc;
@@ -119,7 +119,11 @@ pub(crate) fn handle_gc(
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd)?;
     let session_root = get_session_root(&project_root)?;
-    let sessions = list_sessions(&project_root, None)?;
+    let sessions = if dry_run {
+        list_sessions_readonly(&project_root, None)?
+    } else {
+        list_sessions(&project_root, None)?
+    };
     let gc_config = GcConfig::load_for_project(&project_root)?;
     let now = chrono::Utc::now();
     let runtime_reap_max_age_days =
@@ -248,7 +252,11 @@ pub(crate) fn handle_gc(
     let session_root = csa_session::get_session_root(&project_root)?;
     let rotation_path = session_root.join("rotation.toml");
     if rotation_path.exists() {
-        let remaining = list_sessions(&project_root, None)?;
+        let remaining = if dry_run {
+            list_sessions_readonly(&project_root, None)?
+        } else {
+            list_sessions(&project_root, None)?
+        };
         if remaining.is_empty() {
             if dry_run {
                 eprintln!("[dry-run] Would remove rotation state: {rotation_path:?}");

@@ -516,6 +516,100 @@ fn test_gc_global_preserves_active_empty_tools_session() {
     );
 }
 
+fn session_dir_entries(session_dir: &std::path::Path) -> Vec<String> {
+    let mut entries = fs::read_dir(session_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+fn create_corrupt_session_state(
+    project_root: &std::path::Path,
+) -> (String, std::path::PathBuf, std::path::PathBuf, Vec<u8>) {
+    let session = csa_session::create_session(project_root, Some("corrupt"), None, None).unwrap();
+    let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).unwrap();
+    let state_path = session_dir.join("state.toml");
+    let corrupt_state = b"not valid toml = [".to_vec();
+    fs::write(&state_path, &corrupt_state).unwrap();
+    (
+        session.meta_session_id,
+        session_dir,
+        state_path,
+        corrupt_state,
+    )
+}
+
+#[test]
+fn test_handle_gc_dry_run_preserves_corrupt_state_without_recovery() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let (_, session_dir, state_path, corrupt_state) = create_corrupt_session_state(&project_root);
+    let entries_before = session_dir_entries(&session_dir);
+
+    handle_gc(
+        true,
+        Some(0),
+        false,
+        OutputFormat::Text,
+        None,
+        Some(project_root.to_string_lossy().as_ref()),
+    )
+    .expect("gc dry-run should not require corrupt-state recovery");
+
+    assert_eq!(session_dir_entries(&session_dir), entries_before);
+    assert_eq!(fs::read(&state_path).unwrap(), corrupt_state);
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn test_handle_gc_global_dry_run_preserves_corrupt_state_without_recovery() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let (_, session_dir, state_path, corrupt_state) = create_corrupt_session_state(&project_root);
+    let entries_before = session_dir_entries(&session_dir);
+
+    handle_gc_global(true, Some(0), false, OutputFormat::Text, None)
+        .expect("global gc dry-run should not require corrupt-state recovery");
+
+    assert_eq!(session_dir_entries(&session_dir), entries_before);
+    assert_eq!(fs::read(&state_path).unwrap(), corrupt_state);
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn test_handle_gc_recovers_corrupt_state_when_not_dry_run() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let (session_id, session_dir, state_path, corrupt_state) =
+        create_corrupt_session_state(&project_root);
+
+    handle_gc(
+        false,
+        Some(0),
+        false,
+        OutputFormat::Text,
+        None,
+        Some(project_root.to_string_lossy().as_ref()),
+    )
+    .expect("gc execution should recover corrupt state");
+
+    assert!(session_dir.join("state.toml.corrupt").exists());
+    assert_ne!(fs::read(&state_path).unwrap(), corrupt_state);
+    let recovered = csa_session::load_session(&project_root, &session_id).unwrap();
+    assert_eq!(
+        recovered.description.as_deref(),
+        Some("(recovered from corrupt state)")
+    );
+}
+
 // --- Retirement logic tests ---
 
 /// Verify that the retirement guard accepts Active and Available phases.

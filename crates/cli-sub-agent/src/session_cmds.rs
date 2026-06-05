@@ -438,7 +438,11 @@ pub(crate) fn handle_session_clean(
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
-    let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
+    let sessions = if dry_run {
+        csa_session::list_sessions_readonly(&project_root, tool_filter.as_deref())?
+    } else {
+        list_sessions(&project_root, tool_filter.as_deref())?
+    };
     let now = chrono::Utc::now();
     let mut removed = 0;
     let liveness_probe_mode = crate::gc::LivenessProbeMode::for_dry_run(dry_run);

@@ -453,20 +453,44 @@ pub fn list_sessions(
     list_sessions_in(&base_dir, tool_filter)
 }
 
+/// Read-only variant of [`list_sessions`] (skips corrupt-state recovery).
+pub fn list_sessions_readonly(
+    project_path: &Path,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let base_dir = resolve_read_base_dir(project_path, None)?;
+    list_sessions_in_readonly(&base_dir, tool_filter)
+}
+
 /// Internal implementation: list sessions with optional filter
 pub(crate) fn list_sessions_in(
     base_dir: &Path,
     tool_filter: Option<&[&str]>,
 ) -> Result<Vec<MetaSessionState>> {
     let all_sessions = list_all_sessions_in(base_dir)?;
+    Ok(filter_sessions_by_tool(all_sessions, tool_filter))
+}
 
+/// Read-only internal implementation: list sessions with optional filter.
+pub(crate) fn list_sessions_in_readonly(
+    base_dir: &Path,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let all_sessions = list_all_sessions_in_readonly(base_dir)?;
+    Ok(filter_sessions_by_tool(all_sessions, tool_filter))
+}
+
+fn filter_sessions_by_tool(
+    all_sessions: Vec<MetaSessionState>,
+    tool_filter: Option<&[&str]>,
+) -> Vec<MetaSessionState> {
     if let Some(tools) = tool_filter {
-        Ok(all_sessions
+        all_sessions
             .into_iter()
             .filter(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)))
-            .collect())
+            .collect()
     } else {
-        Ok(all_sessions)
+        all_sessions
     }
 }
 
