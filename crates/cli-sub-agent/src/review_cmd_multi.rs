@@ -53,6 +53,7 @@ impl ReviewArgs {
 pub(super) struct MultiReviewerReviewContext<'a> {
     pub args: &'a ReviewArgs,
     pub reviewers: usize,
+    pub selected_reviewer_tools: Option<Vec<ToolName>>,
     pub tool: ToolName,
     pub prompt: &'a str,
     pub scope: &'a str,
@@ -88,6 +89,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
     let consensus_strategy = parse_consensus_strategy(&ctx.args.consensus)?;
     let reviewer_pool = resolve_multi_reviewer_pool(
         ctx.reviewers,
+        ctx.selected_reviewer_tools.as_deref(),
         explicit_review_tool(ctx.args),
         ctx.tool,
         ctx.resolved_tier_name.as_deref(),

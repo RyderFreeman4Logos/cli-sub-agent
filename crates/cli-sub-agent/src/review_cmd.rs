@@ -99,7 +99,7 @@ use resolve::{
 };
 use result_handling::resolve_single_review_result;
 #[rustfmt::skip]
-use reviewers::{ AutoReviewerRequest, resolve_effective_reviewer_count };
+use reviewers::resolve_effective_reviewer_selection_for_args;
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
@@ -302,20 +302,15 @@ pub(crate) async fn handle_review(
 
     let readonly_project_root = global_config.review.readonly_sandbox.unwrap_or(false);
 
-    let requested_reviewers = args.requested_reviewers() as usize;
-    let reviewers = resolve_effective_reviewer_count(&AutoReviewerRequest {
-        requested_reviewers,
-        explicit_reviewer_count: args.reviewers.is_some(),
-        single: args.single,
-        scope_is_range: args.range.is_some(),
-        large_diff_auto_escalation: large_warn.is_some(),
-        explicit_tool: explicit_review_tool(&args),
-        explicit_model_spec: args.model_spec.as_deref(),
-        primary_tool: tool,
-        resolved_tier_name: resolved_tier_name.as_deref(),
-        config: config.as_ref(),
-        global_config: &global_config,
-    });
+    let reviewer_selection = resolve_effective_reviewer_selection_for_args(
+        &args,
+        large_warn.is_some(),
+        tool,
+        resolved_tier_name.as_deref(),
+        config.as_ref(),
+        &global_config,
+    );
+    let reviewers = reviewer_selection.reviewers;
 
     if reviewers == 1 {
         let review_future = execute_review_with_tier_filter(
@@ -584,6 +579,7 @@ pub(crate) async fn handle_review(
     multi::run_multi_reviewer_review(multi::MultiReviewerReviewContext {
         args: &args,
         reviewers,
+        selected_reviewer_tools: reviewer_selection.selected_tools,
         tool,
         prompt: &prompt,
         scope: &scope,
