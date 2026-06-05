@@ -207,6 +207,18 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: false,
             },
             FailoverPattern {
+                pattern: "manual authorization is required",
+                reason: "auth_unavailable",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
+                pattern: "please run the gemini cli in an interactive terminal to log in",
+                reason: "auth_unavailable",
+                advance_to_next_model: true,
+                quota_exhausted: false,
+            },
+            FailoverPattern {
                 pattern: "monthly spending cap",
                 reason: "QUOTA_EXHAUSTED",
                 advance_to_next_model: true,
