@@ -5,9 +5,7 @@ use anyhow::Result;
 use csa_session::{ReviewFinding, Severity};
 
 use super::clean_detection::{contains_clean_phrase, detect_prose_clean_conclusion};
-use super::text::{
-    contains_blocking_issue_signal, severity_counts_from_text, zero_severity_counts,
-};
+use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
     FindingsSectionParse, classify_findings_section_body,
     extract_review_findings_from_prose_with_default, findings_section_bodies,
@@ -104,8 +102,7 @@ fn record_review_prose_signal(
     signals.unparseable_findings_sections |= unparseable_findings_sections;
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
-    let mut counts = severity_counts_from_review_findings(&findings);
-    reconcile_counts_max(&mut counts, &severity_counts_from_text(content));
+    let counts = severity_counts_from_review_findings(&findings);
     merge_severity_counts_add(&mut signals.severity_counts, &counts);
     signals.findings.extend(findings);
 }
@@ -155,11 +152,4 @@ pub(super) fn reconcile_counts_with_prose(
         *count = (*count).max(*prose_count);
     }
     structured_counts
-}
-
-fn reconcile_counts_max(target: &mut BTreeMap<Severity, u32>, source: &BTreeMap<Severity, u32>) {
-    for (severity, source_count) in source {
-        let target_count = target.entry(severity.clone()).or_insert(0);
-        *target_count = (*target_count).max(*source_count);
-    }
 }
