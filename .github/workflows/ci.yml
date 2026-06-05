@@ -158,10 +158,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install nextest
         uses: taiki-e/install-action@f1d55f103dfbf9be3d3cf757ce9e198778ba8687
+      - name: Install bubblewrap
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Run workspace tests (default features)
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --no-fail-fast
       - name: Run workspace tests (all features)
-        run: cargo nextest run --workspace --all-features
+        run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Run cli-sub-agent e2e tests
         if: matrix.os == 'ubuntu-latest'
-        run: cargo nextest run --package cli-sub-agent --test e2e --all-features
+        run: cargo nextest run --package cli-sub-agent --test e2e --all-features --no-fail-fast

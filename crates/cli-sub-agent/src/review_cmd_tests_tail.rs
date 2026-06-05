@@ -733,6 +733,13 @@ fn install_pattern(project_root: &Path, name: &str) {
 async fn handle_review_fix_clean_initial_persists_no_fix_attempt() {
     use std::os::unix::fs::PermissionsExt;
 
+    if which::which("bwrap").is_err() {
+        eprintln!(
+            "SKIP handle_review_fix_clean_initial_persists_no_fix_attempt: bwrap (bubblewrap) not available"
+        );
+        return;
+    }
+
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
