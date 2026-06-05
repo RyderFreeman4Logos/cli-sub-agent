@@ -11,7 +11,7 @@ const USER_RESULT_FILE_NAME: &str = "user-result.toml";
 pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
 pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
 pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
-const RUNTIME_RESULT_KEYS: [&str; 13] = [
+const RUNTIME_RESULT_KEYS: [&str; 14] = [
     "status",
     "exit_code",
     "summary",
@@ -25,6 +25,7 @@ const RUNTIME_RESULT_KEYS: [&str; 13] = [
     "artifacts",
     "fallback_chain",
     "peak_memory_mb",
+    "post_exec_gate",
 ];
 
 #[path = "manager_result_spillover.rs"]
@@ -368,6 +369,7 @@ fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
         "status" | "summary" | "tool" | "started_at" | "completed_at" => value.is_str(),
         "exit_code" | "events_count" => value.is_integer(),
         "artifacts" => artifacts_value_matches_runtime_schema(value),
+        "post_exec_gate" => value.is_table(),
         _ => false,
     }
 }

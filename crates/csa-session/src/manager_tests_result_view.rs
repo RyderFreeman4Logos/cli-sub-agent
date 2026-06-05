@@ -721,3 +721,110 @@ fn test_fallback_chain_not_retained_after_save_without_fallback() {
         "second save without fallback_chain must clear the stale entry from result.toml"
     );
 }
+
+#[test]
+fn test_post_exec_gate_not_retained_after_save_without_gate() {
+    // Regression (#1726 round-2): post_exec_gate was added with
+    // skip_serializing_if but omitted from RUNTIME_RESULT_KEYS, so a later
+    // merge-preserving save with post_exec_gate=None left the previous
+    // [post_exec_gate] table in result.toml — a successful session kept falsely
+    // reporting a gate failure. The fix mirrors the fallback_chain guard above:
+    // add the key to RUNTIME_RESULT_KEYS (strips the stale table) and recognize
+    // its table shape in value_matches_runtime_schema (so a runtime gate
+    // envelope is not misclassified as a custom user result and snapshotted).
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let result_path = session_dir.join(crate::result::RESULT_FILE_NAME);
+    let now = chrono::Utc::now();
+
+    let make_result = |post_exec_gate, summary: &str| crate::result::SessionResult {
+        post_exec_gate,
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: summary.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: vec![],
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    // First save: a failed-gate result carrying a [post_exec_gate] table.
+    let report = crate::post_exec_gate_report::PostExecGateReport::from_redacted_gate_output(
+        "just pre-commit",
+        100,
+        "FAIL [   0.005s] pkg::a\nerror: Recipe `test` failed on line 1 with exit code 100",
+    );
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &make_result(Some(report.clone()), "gate failed"),
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
+
+    // The table is physically present in the persisted result.toml.
+    let after_first_raw = std::fs::read_to_string(&result_path).unwrap();
+    assert!(
+        after_first_raw.contains("post_exec_gate"),
+        "first save must persist the [post_exec_gate] table: {after_first_raw}"
+    );
+    let after_first = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after_first.post_exec_gate,
+        Some(report),
+        "first save must round-trip the gate report"
+    );
+
+    // Second save: a later clean run with no gate failure, updating an unrelated
+    // runtime field.
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &make_result(None, "clean run"),
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
+
+    // The stale [post_exec_gate] table must NOT survive the merge-preserving save.
+    let after_second_raw = std::fs::read_to_string(&result_path).unwrap();
+    assert!(
+        !after_second_raw.contains("post_exec_gate"),
+        "second save without a gate failure must clear the stale [post_exec_gate] table: {after_second_raw}"
+    );
+    let after_second = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        after_second.post_exec_gate.is_none(),
+        "second save without a gate failure must clear the stale gate report"
+    );
+    // Cleanup is scoped to post_exec_gate: the unrelated runtime field from the
+    // second save still round-trips.
+    assert_eq!(
+        after_second.summary, "clean run",
+        "unrelated runtime fields must survive the post_exec_gate cleanup"
+    );
+    // value_matches_runtime_schema must recognize the runtime [post_exec_gate]
+    // table so the prior envelope is not misclassified as a custom user result.
+    // Without that arm the second save would snapshot it to user-result.toml.
+    assert!(
+        !session_dir
+            .join(manager_result::LEGACY_USER_RESULT_ARTIFACT_PATH)
+            .exists(),
+        "a runtime [post_exec_gate] envelope must not be snapshotted as a custom user result"
+    );
+}
