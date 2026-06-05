@@ -181,7 +181,10 @@ pub(crate) fn write_review_gate_marker(
     }
 }
 
-/// Write a gate marker when `verdict == "CLEAN"`.  No-op for any other verdict.
+/// Write a gate marker when `verdict == "CLEAN"`.
+///
+/// Any other final verdict invalidates the marker for the current branch/head so
+/// a stale clean marker cannot outlive a later failing review publication.
 pub(crate) fn maybe_write_gate_marker_for_clean(
     project_root: &Path,
     head_sha: &str,
@@ -191,6 +194,7 @@ pub(crate) fn maybe_write_gate_marker_for_clean(
     review_mode: Option<&str>,
 ) {
     if verdict != "CLEAN" {
+        remove_review_gate_marker_for_head(project_root, head_sha, first_session_id);
         return;
     }
     if let Some(sid) = first_session_id {
@@ -228,6 +232,45 @@ pub(crate) fn maybe_write_review_gate_marker(
         scope,
         review_mode,
     );
+}
+
+/// Remove the review-gate marker for the current branch and supplied HEAD SHA.
+///
+/// Best-effort: missing markers are fine; other deletion failures are logged.
+pub(crate) fn remove_review_gate_marker_for_head(
+    project_root: &Path,
+    head_sha: &str,
+    session_id: Option<&str>,
+) {
+    if head_sha.is_empty() {
+        return;
+    }
+    let backend = csa_session::create_vcs_backend(project_root);
+    let branch = match backend.identity(project_root) {
+        Ok(identity) => identity.ref_name.unwrap_or_default(),
+        Err(error) => {
+            warn!(
+                session_id = session_id.unwrap_or("unknown"),
+                error = %error,
+                "Cannot resolve VCS identity"
+            );
+            return;
+        }
+    };
+    if branch.is_empty() {
+        return;
+    }
+    let marker_path = marker_path(project_root, &branch, head_sha);
+    if let Err(error) = fs::remove_file(&marker_path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            session_id = session_id.unwrap_or("unknown"),
+            path = %marker_path.display(),
+            error = %error,
+            "Cannot remove review-gate marker"
+        );
+    }
 }
 
 /// Remove stale review-gate markers.

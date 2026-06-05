@@ -26,6 +26,10 @@ use super::diff_size::{
 };
 use super::output::ReviewerOutcome;
 
+#[path = "review_cmd_parent_verdict.rs"]
+mod parent_verdict;
+use parent_verdict::write_parent_review_verdict;
+
 pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) project_root: &'a Path,
     pub(super) reviewers: usize,
@@ -468,29 +472,6 @@ fn review_artifact_finding_to_findings_toml(finding: &Finding) -> ReviewFinding 
         suggested_test_scenario: None,
         description: format!("{}: {}", finding.rule_id, finding.summary),
     }
-}
-
-fn write_parent_review_verdict(
-    session_dir: &Path,
-    session_id: &str,
-    severity_count_findings: &[Finding],
-    decision: ReviewDecision,
-    verdict_legacy: &str,
-    diff_report: ReviewDiffReport<'_>,
-    review_mode: Option<&str>,
-) -> Result<()> {
-    let mut verdict = ReviewVerdictArtifact::from_parts(
-        session_id.to_string(),
-        decision,
-        verdict_legacy.to_string(),
-        severity_count_findings,
-        Vec::new(),
-    );
-    verdict.review_mode = review_mode.map(str::to_string);
-    verdict.diff_size = diff_report.diff_size.cloned();
-    apply_large_diff_warning(&mut verdict, diff_report.large_diff_warning);
-    write_review_verdict(session_dir, &verdict)
-        .context("failed to write parent output/review-verdict.json")
 }
 
 fn parent_artifact_for_decision(

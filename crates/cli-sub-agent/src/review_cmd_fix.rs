@@ -521,40 +521,20 @@ fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionM
 }
 
 fn remove_review_gate_marker_for_head(project_root: &Path, review_meta: &ReviewSessionMeta) {
-    remove_review_gate_marker(project_root, &review_meta.session_id, &review_meta.head_sha);
+    crate::review_gate::remove_review_gate_marker_for_head(
+        project_root,
+        &review_meta.head_sha,
+        Some(&review_meta.session_id),
+    );
 }
 
 fn remove_review_gate_marker_for_current_head(project_root: &Path, session_id: &str) {
     let head_sha = csa_session::detect_git_head(project_root).unwrap_or_default();
-    remove_review_gate_marker(project_root, session_id, &head_sha);
-}
-
-fn remove_review_gate_marker(project_root: &Path, session_id: &str, head_sha: &str) {
-    if head_sha.is_empty() {
-        return;
-    }
-    let backend = csa_session::create_vcs_backend(project_root);
-    let branch = match backend.identity(project_root) {
-        Ok(identity) => identity.ref_name.unwrap_or_default(),
-        Err(error) => {
-            warn!(
-                session_id, error = %error, "Cannot resolve VCS identity"
-            );
-            return;
-        }
-    };
-    if branch.is_empty() {
-        return;
-    }
-    let marker_path = crate::review_gate::marker_path(project_root, &branch, head_sha);
-    if let Err(error) = fs::remove_file(&marker_path)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            session_id, path = %marker_path.display(), error = %error,
-            "Cannot remove review-gate marker"
-        );
-    }
+    crate::review_gate::remove_review_gate_marker_for_head(
+        project_root,
+        &head_sha,
+        Some(session_id),
+    );
 }
 
 #[cfg(test)]

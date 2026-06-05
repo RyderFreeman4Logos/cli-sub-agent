@@ -96,7 +96,7 @@ fn synthesized_failure_summary_includes_post_mortem_diagnostics() {
     let session_dir = get_session_dir(project, &session_id).unwrap();
     fs::write(
         session_dir.join("daemon-completion.toml"),
-        "exit_code = 137\nstatus = \"failure\"\n",
+        "exit_code = 137\nstatus = failure\n",
     )
     .unwrap();
     fs::write(session_dir.join("daemon.pid"), "424242 1\n").unwrap();

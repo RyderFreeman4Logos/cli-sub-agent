@@ -330,6 +330,7 @@ fn test_apply_codex_exec_initial_stall_summary_renders_reason_for_result_toml() 
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        post_exec_gate: None,
         manager_fields: Default::default(),
     };
     let toml = toml::to_string_pretty(&result).expect("serialize session result");

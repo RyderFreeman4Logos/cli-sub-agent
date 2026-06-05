@@ -137,10 +137,10 @@ pub fn parse_failing_step(output: &str) -> Option<String> {
 /// char boundary) — "whichever is smaller". The unbounded output is expected to
 /// be persisted to [`GATE_FAILURE_LOG_REL_PATH`] separately.
 pub fn bound_output_tail(full: &str) -> String {
-    let lines: Vec<&str> = full.lines().collect();
+    let lines: Vec<&str> = full.split_inclusive('\n').collect();
     let start = lines.len().saturating_sub(GATE_OUTPUT_TAIL_MAX_LINES);
     let tail_by_lines = match lines.get(start..) {
-        Some(slice) => slice.join("\n"),
+        Some(slice) => slice.concat(),
         None => String::new(),
     };
 

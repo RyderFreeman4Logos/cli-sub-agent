@@ -1455,6 +1455,77 @@ fn check_verdict_red_team_marker_fast_path_enforces_mode() {
 }
 
 #[test]
+fn check_verdict_red_team_marker_removed_when_later_single_review_fails() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let project = setup_git_repo();
+    let state_home = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", state_home.path());
+    run_git(project.path(), &["checkout", "-b", "feature"]);
+
+    let branch = run_git(project.path(), &["branch", "--show-current"]);
+    let head_sha = csa_session::detect_git_head(project.path()).unwrap();
+    let clean_id = write_review_session(
+        project.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    set_review_mode(project.path(), &clean_id, Some("red-team"));
+    set_review_timestamp(project.path(), &clean_id, 1_000);
+    crate::review_gate::write_review_gate_marker(
+        project.path(),
+        &branch,
+        &head_sha,
+        &clean_id,
+        REQUIRED_FULL_DIFF_SCOPE,
+        Some("red-team"),
+    );
+
+    let failing_id = write_review_session(
+        project.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Fail,
+        "HAS_ISSUES",
+    );
+    set_review_mode(project.path(), &failing_id, Some("red-team"));
+    set_review_timestamp(project.path(), &failing_id, 2_000);
+    let failing_dir = csa_session::get_session_dir(project.path(), &failing_id).unwrap();
+    let mut failing_meta = read_review_meta(&failing_dir)
+        .unwrap()
+        .expect("review meta should exist");
+    failing_meta.failure_reason = Some("review_failed".to_string());
+    let exit = super::super::flow::persist_review_sidecars_if_session_exists(
+        project.path(),
+        &failing_meta,
+        Some(&failing_id),
+    )
+    .expect("single-review sidecar finalization should return an exit code");
+    assert_eq!(exit, 1);
+    assert!(
+        crate::review_gate::read_review_gate_marker(project.path(), &branch, &head_sha).is_none(),
+        "a later failing same-mode finalization must remove the stale clean marker"
+    );
+
+    let found = check_review_verdict_for_target(
+        project.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap();
+    assert!(
+        found.is_none(),
+        "a later failing red-team verdict must block instead of reusing the old clean marker"
+    );
+}
+
+#[test]
 fn check_verdict_red_team_required_rejects_legacy_marker() {
     let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
     let temp = TempDir::new().unwrap();
