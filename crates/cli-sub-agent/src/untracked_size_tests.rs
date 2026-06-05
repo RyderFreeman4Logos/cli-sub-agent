@@ -310,3 +310,86 @@ fn untracked_diff_size_empty_for_non_git_dir() {
     assert_eq!(size.bytes, 0);
     assert!(size.notes.is_empty());
 }
+
+// --- Enumeration-boundary tests -------------------------------------------
+//
+// The `untracked_diff_size_truncates_beyond_file_cap` test above proves the
+// *report* is bounded, but it cannot prove the enumeration STOPS EARLY rather
+// than collecting every path and truncating afterward. These exercise
+// `read_nul_delimited_capped` directly — the streaming core — so a regression
+// back to "buffer everything, then `.take(cap)`" fails a test.
+
+#[test]
+fn nul_parser_stops_early_without_draining_the_stream() {
+    // Far more NUL-delimited entries than the cap. Fixed-width names (10 bytes +
+    // a NUL = 11 bytes each) keep the consumed-byte arithmetic exact.
+    let cap = MAX_UNTRACKED_FILES;
+    let entries = cap * 50;
+    let mut input = Vec::new();
+    for i in 0..entries {
+        input.extend_from_slice(format!("f{i:09}").as_bytes());
+        input.push(0u8);
+    }
+    let total_len = input.len();
+    let mut cursor = std::io::Cursor::new(input);
+
+    let (paths, truncated) = read_nul_delimited_capped(&mut cursor, cap);
+
+    assert_eq!(paths.len(), cap, "enumeration must yield exactly the cap");
+    assert!(
+        truncated,
+        "more entries than the cap must set the truncated flag"
+    );
+    // The parser must NOT have read the whole stream: it consumes only the `cap`
+    // entries plus the single probe entry that proves truncation. A `Cursor`'s
+    // position is the exact byte offset consumed (no `BufReader` read-ahead), so
+    // this asserts early-stop, not merely post-collection truncation.
+    let consumed = cursor.position() as usize;
+    assert!(
+        consumed < total_len / 10,
+        "early stop expected: consumed {consumed} of {total_len} bytes (no full drain)"
+    );
+}
+
+#[test]
+fn nul_parser_exactly_cap_entries_is_not_truncated() {
+    // Exactly `cap` entries must NOT report truncation: the +1 probe hits EOF.
+    let mut input = Vec::new();
+    for i in 0..3 {
+        input.extend_from_slice(format!("p{i}").as_bytes());
+        input.push(0u8);
+    }
+    let mut cursor = std::io::Cursor::new(input);
+
+    let (paths, truncated) = read_nul_delimited_capped(&mut cursor, 3);
+
+    assert_eq!(paths, vec!["p0", "p1", "p2"]);
+    assert!(!truncated, "exactly cap entries is not truncation");
+}
+
+#[test]
+fn nul_parser_below_cap_returns_all_entries() {
+    let mut input = Vec::new();
+    for i in 0..4 {
+        input.extend_from_slice(format!("p{i}").as_bytes());
+        input.push(0u8);
+    }
+    let mut cursor = std::io::Cursor::new(input);
+
+    let (paths, truncated) = read_nul_delimited_capped(&mut cursor, 100);
+
+    assert_eq!(paths, vec!["p0", "p1", "p2", "p3"]);
+    assert!(!truncated);
+}
+
+#[test]
+fn nul_parser_skips_empty_and_tolerates_unterminated_tail() {
+    // "a\0\0b": the empty middle entry is skipped; the final "b" has no trailing
+    // NUL (git -z always terminates, but the parser must not drop the tail).
+    let mut cursor = std::io::Cursor::new(b"a\0\0b".to_vec());
+
+    let (paths, truncated) = read_nul_delimited_capped(&mut cursor, 100);
+
+    assert_eq!(paths, vec!["a", "b"]);
+    assert!(!truncated);
+}

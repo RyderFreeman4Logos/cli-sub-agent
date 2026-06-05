@@ -182,8 +182,8 @@ pub(crate) fn working_tree_changed_lines(project_root: &Path) -> usize {
 /// (fail-open), matching the rest of the guard.
 fn untracked_non_ignored_lines(project_root: &Path) -> usize {
     crate::untracked_size::list_untracked(project_root)
+        .paths
         .iter()
-        .take(crate::untracked_size::MAX_UNTRACKED_FILES)
         .map(|path| crate::untracked_size::count_file_lines(path))
         .sum()
 }

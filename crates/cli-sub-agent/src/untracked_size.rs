@@ -17,8 +17,9 @@
 //! number of files scanned is itself capped. Any single unreadable/race-deleted
 //! file is tolerated (skipped), never fatal.
 
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Per-file byte ceiling. A regular file larger than this is recorded as
 /// "large, not line-counted" (its byte size only) instead of being read, so a
@@ -64,7 +65,6 @@ pub(crate) struct UntrackedDiffSize {
 /// (git failure is fail-open, never fatal).
 pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
     let listing = list_untracked(project_root);
-    let total = listing.len();
 
     let mut out = UntrackedDiffSize {
         files: 0,
@@ -75,7 +75,7 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
     let mut capped_files = 0usize;
     let mut uncounted_files = 0usize; // large + binary: sized but not line-counted
 
-    for path in listing.iter().take(MAX_UNTRACKED_FILES) {
+    for path in &listing.paths {
         match classify_untracked_file(path) {
             FileClass::Text {
                 lines,
@@ -98,8 +98,6 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
         }
     }
 
-    let scanned = total.min(MAX_UNTRACKED_FILES);
-    let truncated = total.saturating_sub(scanned);
     if uncounted_files > 0 {
         out.notes.push(format!(
             "{uncounted_files} untracked file(s) not line-counted (binary or > {} MiB); changed-line total is a lower bound",
@@ -111,9 +109,9 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
             "{capped_files} untracked file(s) line-counted up to {MAX_LINES_PER_FILE} lines (capped); changed-line total is a lower bound"
         ));
     }
-    if truncated > 0 {
+    if listing.truncated {
         out.notes.push(format!(
-            "untracked scan truncated: sized first {MAX_UNTRACKED_FILES} of {total} untracked files; totals are a lower bound"
+            "untracked scan truncated: sized the first {MAX_UNTRACKED_FILES} untracked files (the working tree has more, not enumerated); totals are a lower bound"
         ));
     }
     out
@@ -146,26 +144,106 @@ pub(crate) fn count_file_lines(path: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// Untracked, non-ignored working-tree paths under `project_root`, absolute.
+/// A bounded enumeration of untracked, non-ignored working-tree paths.
+///
+/// `paths` holds at most [`MAX_UNTRACKED_FILES`] absolute paths; `truncated` is
+/// set when the working tree held more and enumeration stopped early, so the
+/// surplus files were never listed, allocated, or sized.
+pub(crate) struct UntrackedListing {
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) truncated: bool,
+}
+
+/// Untracked, non-ignored working-tree paths under `project_root`, absolute and
+/// hard-capped at [`MAX_UNTRACKED_FILES`].
 ///
 /// `git ls-files --others --exclude-standard` lists files git is neither
 /// tracking nor ignoring, so `.gitignore`d paths and indexed entries (including
 /// intent-to-add, which `git diff HEAD` already counts) are excluded — no
-/// double-counting and no inflation from build artifacts. `-z` keeps paths with
-/// embedded newlines intact. Fail-open: returns an empty vec when `project_root`
-/// is not a git worktree or git fails.
-pub(crate) fn list_untracked(project_root: &Path) -> Vec<PathBuf> {
-    let Some(output) = run_git_stdout(
-        project_root,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    ) else {
-        return Vec::new();
+/// double-counting and no inflation from build artifacts. `-z` NUL-delimits the
+/// paths so embedded newlines stay intact.
+///
+/// The enumeration is streamed, not buffered: git's stdout is read one
+/// NUL-delimited path at a time and, once the cap is reached, the read handle is
+/// dropped and the `git ls-files` child is killed and reaped so it stops walking
+/// an arbitrarily large (attacker- or accident-shaped) tree. Peak memory and the
+/// returned `Vec` are therefore bounded to ~the cap regardless of how many
+/// untracked files exist — the cap is enforced *during* enumeration, never after
+/// a full collection. Fail-open: returns an empty, untruncated listing when
+/// `project_root` is not a git worktree or git cannot be spawned.
+pub(crate) fn list_untracked(project_root: &Path) -> UntrackedListing {
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return UntrackedListing {
+            paths: Vec::new(),
+            truncated: false,
+        };
     };
-    output
-        .split('\0')
-        .filter(|entry| !entry.is_empty())
-        .map(|rel| project_root.join(rel))
-        .collect()
+    let Some(stdout) = child.stdout.take() else {
+        // Unreachable with `Stdio::piped()`, but never leave a child unreaped.
+        let _ = child.kill();
+        let _ = child.wait();
+        return UntrackedListing {
+            paths: Vec::new(),
+            truncated: false,
+        };
+    };
+
+    // Parse up to the cap, then drop the read end (closing the pipe) before
+    // terminating git. Git's exit status is intentionally NOT inspected: on
+    // truncation we kill it on purpose, so a "killed" status is expected and the
+    // paths already collected stay valid.
+    let (rels, truncated) =
+        read_nul_delimited_capped(std::io::BufReader::new(stdout), MAX_UNTRACKED_FILES);
+    let _ = child.kill(); // benign if git already exited on its own
+    let _ = child.wait(); // reap to avoid a zombie
+
+    UntrackedListing {
+        paths: rels.into_iter().map(|rel| project_root.join(rel)).collect(),
+        truncated,
+    }
+}
+
+/// Read up to `cap` NUL-delimited entries from `reader`, one at a time, so a
+/// caller streaming from a subprocess can stop the producer before it emits an
+/// unbounded amount. Empty entries are skipped (defensive: `git ls-files -z`
+/// does not emit them). Entries are decoded lossily because git can surface
+/// non-UTF-8 paths — matching the previous whole-output `from_utf8_lossy`.
+///
+/// Returns the collected entries and whether the cap was reached with at least
+/// one more entry pending (`truncated`). At most `cap + 1` entries are consumed:
+/// the one-entry probe distinguishes "exactly `cap` entries" (not truncated)
+/// from "more than `cap`" (truncated) without draining the remaining stream, so
+/// an arbitrarily large input is never fully read. A mid-stream read error ends
+/// the scan fail-open with whatever was collected.
+fn read_nul_delimited_capped<R: BufRead>(mut reader: R, cap: usize) -> (Vec<String>, bool) {
+    let mut entries = Vec::new();
+    let mut segment = Vec::new();
+    loop {
+        segment.clear();
+        match reader.read_until(0u8, &mut segment) {
+            Ok(0) => return (entries, false), // EOF: at most `cap` entries ⇒ not truncated
+            Ok(_) => {}
+            Err(_) => return (entries, false), // fail-open with what we have
+        }
+        if segment.last() == Some(&0u8) {
+            segment.pop(); // strip the NUL terminator
+        }
+        if segment.is_empty() {
+            continue;
+        }
+        if entries.len() == cap {
+            return (entries, true); // this is the (cap + 1)-th entry: truncate here
+        }
+        entries.push(String::from_utf8_lossy(&segment).into_owned());
+    }
 }
 
 /// Per-file outcome of [`classify_untracked_file`].
@@ -291,19 +369,6 @@ fn scan_file_bounded(file: std::fs::File, line_cap: usize) -> Option<BoundedScan
         hit_line_cap,
         saw_nul,
     })
-}
-
-fn run_git_stdout(project_root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(args)
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(test)]
