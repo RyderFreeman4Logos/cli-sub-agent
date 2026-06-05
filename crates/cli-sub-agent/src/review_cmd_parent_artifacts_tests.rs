@@ -167,6 +167,20 @@ fn issue_1657_unavailable_reviewer_plus_clean_reviewer_passes() {
 }
 
 #[test]
+fn issue_1815_unavailable_auto_escalated_co_reviewer_plus_clean_reviewer_passes() {
+    let outcomes = vec![
+        reviewer_outcome(0, ToolName::Codex, crate::review_consensus::CLEAN, None),
+        reviewer_outcome(1, ToolName::GeminiCli, UNAVAILABLE, Some("quota exhausted")),
+    ];
+
+    let verdict =
+        parent_verdict_for_outcomes(&outcomes, crate::review_consensus::HAS_ISSUES, false);
+
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, crate::review_consensus::CLEAN);
+}
+
+#[test]
 fn issue_1657_unavailable_reviewer_plus_blocking_reviewer_fails() {
     let outcomes = vec![
         reviewer_outcome(0, ToolName::GeminiCli, UNAVAILABLE, Some("quota exhausted")),
