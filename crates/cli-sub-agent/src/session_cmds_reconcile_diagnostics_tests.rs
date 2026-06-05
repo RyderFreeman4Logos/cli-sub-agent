@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_env_lock::TEST_ENV_LOCK;
-use csa_session::{create_session, get_session_dir, load_result};
+use csa_session::{create_session, get_session_dir, load_result, load_session};
 use std::fs;
 use tokio::sync::OwnedMutexGuard;
 
@@ -94,6 +94,8 @@ fn synthesized_failure_summary_includes_post_mortem_diagnostics() {
     let session = create_session(project, Some("diagnostic-synthesis"), None, None).unwrap();
     let session_id = session.meta_session_id.clone();
     let session_dir = get_session_dir(project, &session_id).unwrap();
+    // Malformed TOML is intentional: strict packet parsing must fail so synthesis runs,
+    // while lenient diagnostics still surface the exit_code hint.
     fs::write(
         session_dir.join("daemon-completion.toml"),
         "exit_code = 137\nstatus = failure\n",
@@ -145,5 +147,61 @@ fn synthesized_failure_summary_includes_post_mortem_diagnostics() {
         result
             .summary
             .contains("acp_last_event={\"event\":\"last\"}")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_completion_packet_present_finalizes_dead_active_session() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session =
+        create_session(project, Some("diagnostic-daemon-completion"), None, None).unwrap();
+    let session_id = session.meta_session_id.clone();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 137\nstatus = \"failure\"\n",
+    )
+    .unwrap();
+    fs::write(session_dir.join("daemon.pid"), "424242 1\n").unwrap();
+    fs::write(
+        session_dir.join("stderr.log"),
+        "ACP transport failed: server shut down unexpectedly\nout of memory\n",
+    )
+    .unwrap();
+    fs::write(
+        session_dir.join("output.log"),
+        "[csa-heartbeat] ACP prompt still running: elapsed=44s idle=15s\n",
+    )
+    .unwrap();
+    fs::create_dir_all(session_dir.join("output")).unwrap();
+    fs::write(
+        session_dir.join("output").join("acp-events.jsonl"),
+        "{\"event\":\"last\"}\n",
+    )
+    .unwrap();
+    backdate_tree(&session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session wait")
+            .unwrap();
+
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::DaemonCompletionFinalized
+    );
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("daemon completion result");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 137);
+    assert!(result.summary.contains("daemon completion recorded"));
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(
+        persisted.termination_reason.as_deref(),
+        Some("daemon_completion")
     );
 }
