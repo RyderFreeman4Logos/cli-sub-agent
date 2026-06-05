@@ -161,6 +161,7 @@ pub(crate) async fn process_execution_result(
     // Write structured result
     let execution_end_time = chrono::Utc::now();
     let mut session_result = SessionResult {
+        post_exec_gate: None,
         status: SessionResult::status_from_exit_code(result.exit_code),
         exit_code: result.exit_code,
         summary: result.summary.clone(),

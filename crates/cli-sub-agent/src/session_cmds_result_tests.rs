@@ -512,6 +512,7 @@ fn handle_session_artifacts_prefers_daemon_completion_packet() {
 fn build_result_json_payload_includes_review_iterations() {
     let now = chrono::Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "review completed".to_string(),
@@ -571,6 +572,7 @@ fn build_result_json_payload_includes_result_sidecars() {
     let now = chrono::Utc::now();
     let result = SessionResultView {
         envelope: SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "review completed".to_string(),
@@ -619,6 +621,7 @@ fn build_result_json_payload_redacts_result_sidecars() {
     let now = chrono::Utc::now();
     let result = SessionResultView {
         envelope: SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "review completed".to_string(),

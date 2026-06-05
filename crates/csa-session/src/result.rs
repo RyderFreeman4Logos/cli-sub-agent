@@ -235,6 +235,15 @@ pub struct SessionResult {
     /// committing. Omitted for clean sessions and read-only session kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncommitted_changes: Option<UncommittedChanges>,
+    /// Structured detail of a failed post-exec verification gate (#1726).
+    /// Present ONLY when the gate (e.g. `just pre-commit`) failed, so an SA
+    /// orchestrator can diagnose the failing step/test from `result.toml`
+    /// without reading the raw transcript. The bounded tail lives here; the full
+    /// gate output is written to `output/gate-failure.log`. `serde(default)` +
+    /// `skip_serializing_if` keeps the table absent on success and lets
+    /// pre-existing `result.toml` files (without it) still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_exec_gate: Option<crate::post_exec_gate_report::PostExecGateReport>,
     /// Manager-facing data loaded from `output/result.toml` sidecars at read time.
     /// This is intentionally read-only metadata and is never serialized back into
     /// the runtime `result.toml` envelope.
@@ -264,6 +273,7 @@ mod tests {
     fn test_session_result_toml_roundtrip() {
         let now = Utc::now();
         let result = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "All tests passed".to_string(),
@@ -300,6 +310,7 @@ mod tests {
     fn test_session_result_empty_optional_fields_omitted() {
         let now = Utc::now();
         let result = SessionResult {
+            post_exec_gate: None,
             status: "failure".to_string(),
             exit_code: 1,
             summary: "Build failed".to_string(),
@@ -344,6 +355,7 @@ mod tests {
     fn test_session_result_uncommitted_changes_roundtrip() {
         let now = Utc::now();
         let result = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "Done".to_string(),
@@ -400,6 +412,90 @@ artifacts = ["output/a.txt", "output/b.txt"]
         assert_eq!(loaded.artifacts[1].path, "output/b.txt");
     }
 
+    #[test]
+    fn test_result_without_post_exec_gate_deserializes_to_none() {
+        // Backward compat (#1726): pre-existing result.toml files have no
+        // [post_exec_gate] table; they must still deserialize, with the field None.
+        let raw = r#"
+status = "success"
+exit_code = 0
+summary = "ok"
+tool = "codex"
+started_at = "2026-01-01T00:00:00Z"
+completed_at = "2026-01-01T00:00:00Z"
+"#;
+        let loaded: SessionResult = toml::from_str(raw).expect("Deserialize should succeed");
+        assert!(loaded.post_exec_gate.is_none());
+    }
+
+    #[test]
+    fn test_successful_result_omits_post_exec_gate_table() {
+        // A successful (post_exec_gate = None) result must serialize WITHOUT a
+        // [post_exec_gate] table, so successful sessions emit no spurious table.
+        let now = Utc::now();
+        let result = SessionResult {
+            post_exec_gate: None,
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "ok".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            uncommitted_changes: None,
+            manager_fields: Default::default(),
+        };
+        let toml_str = toml::to_string_pretty(&result).expect("serialize");
+        assert!(
+            !toml_str.contains("post_exec_gate"),
+            "successful result must not serialize a [post_exec_gate] table: {toml_str}"
+        );
+    }
+
+    #[test]
+    fn test_result_with_post_exec_gate_table_roundtrips() {
+        // A failed-gate result round-trips its [post_exec_gate] table intact.
+        let now = Utc::now();
+        let report = crate::post_exec_gate_report::PostExecGateReport::from_redacted_gate_output(
+            "just pre-commit",
+            100,
+            "FAIL [   0.005s] pkg::a\nerror: Recipe `test` failed on line 1 with exit code 100",
+        );
+        let result = SessionResult {
+            post_exec_gate: Some(report.clone()),
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "POST-EXEC GATE FAILED (exit=100, step=just test)".to_string(),
+            tool: "codex".to_string(),
+            original_tool: None,
+            fallback_tool: None,
+            fallback_reason: None,
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+            fallback_chain: None,
+            gate_timeout: false,
+            warnings: Vec::new(),
+            raw_process_exit_code: None,
+            uncommitted_changes: None,
+            manager_fields: Default::default(),
+        };
+        let toml_str = toml::to_string_pretty(&result).expect("serialize");
+        let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
+        assert_eq!(loaded.post_exec_gate, Some(report));
+    }
+
     // ── status_from_exit_code ──────────────────────────────────────
 
     #[test]
@@ -435,6 +531,7 @@ artifacts = ["output/a.txt", "output/b.txt"]
 
         let now = Utc::now();
         let result = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "Done".to_string(),

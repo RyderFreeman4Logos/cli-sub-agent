@@ -61,6 +61,7 @@ impl SessionTestEnv {
 fn make_result(status: &str, exit_code: i32) -> SessionResult {
     let now = Utc::now();
     SessionResult {
+        post_exec_gate: None,
         status: status.to_string(),
         exit_code,
         summary: "summary".to_string(),
@@ -499,6 +500,7 @@ fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
     .unwrap();
 
     let real_result = toml::to_string_pretty(&csa_session::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "real terminal result".to_string(),
@@ -562,6 +564,7 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
         project,
         &session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "real terminal result".to_string(),

@@ -13,6 +13,7 @@ fn test_soft_fork_full_parent_session() {
     // Write result.toml
     let now = Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "All tests passed".to_string(),
@@ -65,6 +66,7 @@ fn test_soft_fork_truncation_on_large_summary() {
     // Create result.toml
     let now = Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "ok".to_string(),
@@ -131,6 +133,7 @@ fn test_soft_fork_result_only_no_output() {
 
     let now = Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "failure".to_string(),
         exit_code: 1,
         summary: "Build failed with 3 errors".to_string(),

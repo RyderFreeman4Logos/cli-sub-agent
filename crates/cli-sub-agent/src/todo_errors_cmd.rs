@@ -224,6 +224,7 @@ mod tests {
             .single()
             .expect("valid test timestamp");
         SessionResult {
+            post_exec_gate: None,
             status: status.to_string(),
             exit_code,
             summary: summary.to_string(),

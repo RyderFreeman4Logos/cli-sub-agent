@@ -110,6 +110,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
     let artifacts = collect_fallback_result_artifacts(project_root, &session.meta_session_id);
     let completed_at = chrono::Utc::now();
     let fallback_result = SessionResult {
+        post_exec_gate: None,
         status: "failure".to_string(),
         exit_code: 1,
         summary,

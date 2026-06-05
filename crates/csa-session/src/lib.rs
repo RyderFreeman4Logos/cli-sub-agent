@@ -14,6 +14,7 @@ pub mod manager;
 pub mod metadata;
 pub mod output_parser;
 pub mod output_section;
+pub mod post_exec_gate_report;
 mod process_tree_memory;
 pub mod redact;
 pub mod result;
@@ -71,6 +72,10 @@ pub use output_parser::{
 pub use output_section::{
     ChangedFile, FileAction, OutputIndex, OutputSection, RETURN_PACKET_MAX_SUMMARY_CHARS,
     RETURN_PACKET_SECTION_ID, ReturnPacket, ReturnPacketRef, ReturnStatus,
+};
+pub use post_exec_gate_report::{
+    GATE_FAILURE_LOG_REL_PATH, GATE_OUTPUT_TAIL_MAX_BYTES, GATE_OUTPUT_TAIL_MAX_LINES,
+    PostExecGateReport, bound_output_tail, parse_failing_step, parse_nextest_failing_tests,
 };
 pub use process_tree_memory::{SessionTreeMemorySampler, session_tree_rss_mb};
 pub use redact::{redact_event, redact_text_content};

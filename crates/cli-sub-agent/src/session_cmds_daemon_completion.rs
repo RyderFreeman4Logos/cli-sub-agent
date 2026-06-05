@@ -151,6 +151,7 @@ pub(crate) fn daemon_completion_result(
     );
 
     SessionResult {
+        post_exec_gate: None,
         status: packet.status.clone(),
         exit_code: packet.exit_code,
         summary: crate::pipeline_post_exec::build_fallback_result_summary(
@@ -303,6 +304,7 @@ mod tests {
 
         let now = chrono::Utc::now();
         let existing = SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "existing compact result".to_string(),

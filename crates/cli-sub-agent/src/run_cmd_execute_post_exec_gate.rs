@@ -3,16 +3,61 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use csa_config::ProjectConfig;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::process::Command;
+use tokio::task::JoinHandle;
+
+/// Outcome of running the post-exec gate command, including the combined
+/// stdout+stderr captured for structured failure surfacing (#1726). The output
+/// is always tee'd to the parent's stdout/stderr too, so the raw transcript
+/// (`full.md`) is unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PostExecGateCommandOutcome {
+    pub(super) exit: PostExecGateCommandExit,
+    pub(super) captured_output: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PostExecGateCommandOutcome {
+pub(super) enum PostExecGateCommandExit {
     Exited(Option<i32>),
     TimedOut,
+}
+
+/// Test-only constructors. Production builds the struct literal directly (the
+/// real runner threads an arbitrary exit AND captured output through at once),
+/// so these convenience constructors are only used by the synthetic runners in
+/// the test submodule.
+#[cfg(test)]
+impl PostExecGateCommandOutcome {
+    /// Outcome with no captured output (test helper / synthetic runners).
+    pub(super) fn exited(code: Option<i32>) -> Self {
+        Self {
+            exit: PostExecGateCommandExit::Exited(code),
+            captured_output: String::new(),
+        }
+    }
+
+    /// Outcome carrying captured gate output (used by the real runner and by
+    /// tests that exercise the structured surfacing path).
+    pub(super) fn exited_with(code: Option<i32>, output: impl Into<String>) -> Self {
+        Self {
+            exit: PostExecGateCommandExit::Exited(code),
+            captured_output: output.into(),
+        }
+    }
+
+    /// Timeout outcome with no captured output (test helper).
+    pub(super) fn timed_out() -> Self {
+        Self {
+            exit: PostExecGateCommandExit::TimedOut,
+            captured_output: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +71,10 @@ pub(super) enum PostExecGateOutcome {
 pub(super) struct PostExecGateFailure {
     kind: PostExecGateFailureKind,
     diagnostic: String,
+    /// The gate command that failed (e.g. `"just pre-commit"`).
+    gate_command: String,
+    /// Combined captured stdout+stderr of the gate command (pre-redaction).
+    captured_output: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,9 +97,49 @@ impl PostExecGateFailure {
     fn is_timeout(&self) -> bool {
         matches!(self.kind, PostExecGateFailureKind::TimedOut)
     }
+
+    /// Real exit code for the structured report: a signal-kill (no code) maps to
+    /// `-1`; a timeout maps to `124` (conventional timeout exit code).
+    fn report_exit_code(&self) -> i32 {
+        match self.kind {
+            PostExecGateFailureKind::Exited(Some(code)) => code,
+            PostExecGateFailureKind::Exited(None) => -1,
+            PostExecGateFailureKind::TimedOut => 124,
+        }
+    }
 }
 
 type PostExecGateFuture = Pin<Box<dyn Future<Output = Result<PostExecGateCommandOutcome>> + Send>>;
+
+/// Read `reader` to EOF, re-emitting each chunk to the parent's `sink` (so the
+/// raw transcript stays intact) while appending it to the shared `captured`
+/// buffer for structured failure surfacing (#1726).
+fn tee_gate_stream<R, W>(reader: R, sink: W, captured: Arc<Mutex<Vec<u8>>>) -> JoinHandle<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    tokio::spawn(async move {
+        let mut reader = reader;
+        let mut sink = sink;
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let bytes = &chunk[..n];
+                    let _ = sink.write_all(bytes).await;
+                    let _ = sink.flush().await;
+                    if let Ok(mut guard) = captured.lock() {
+                        guard.extend_from_slice(bytes);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
 
 pub(super) struct PostExecGateApplyOptions<'a> {
     pub(super) changed_paths: Option<&'a [String]>,
@@ -255,8 +344,11 @@ pub(super) fn execute_post_exec_gate_command(
         cmd.arg("-c")
             .arg(&command)
             .current_dir(&project_root)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            // Capture stdout/stderr so a failure can be surfaced structurally
+            // (#1726); the tee tasks below re-emit every chunk to the parent's
+            // stdout/stderr, so the raw transcript (`full.md`) is unchanged.
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(extra_env) = extra_env {
             cmd.envs(extra_env);
         }
@@ -275,37 +367,70 @@ pub(super) fn execute_post_exec_gate_command(
         })?;
         let child_pid = child.id();
 
-        match tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await {
-            Ok(wait_result) => {
-                let status = wait_result.with_context(|| {
-                    format!(
-                        "failed while waiting for post-exec gate command `{command}` in {}",
-                        project_root.display()
-                    )
-                })?;
-                Ok(PostExecGateCommandOutcome::Exited(status.code()))
-            }
-            Err(_) => {
-                #[cfg(unix)]
-                {
-                    if let Some(pid) = child_pid {
-                        // SAFETY: kill() is async-signal-safe. Negative PID targets the process group.
-                        unsafe {
-                            libc::kill(-(pid as i32), libc::SIGKILL);
+        // Tee both streams: re-emit to the parent while accumulating a combined
+        // copy for the structured failure report.
+        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let stdout_pump = child
+            .stdout
+            .take()
+            .map(|reader| tee_gate_stream(reader, tokio::io::stdout(), Arc::clone(&captured)));
+        let stderr_pump = child
+            .stderr
+            .take()
+            .map(|reader| tee_gate_stream(reader, tokio::io::stderr(), Arc::clone(&captured)));
+
+        let exit =
+            match tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await {
+                Ok(wait_result) => {
+                    let status = wait_result.with_context(|| {
+                        format!(
+                            "failed while waiting for post-exec gate command `{command}` in {}",
+                            project_root.display()
+                        )
+                    })?;
+                    PostExecGateCommandExit::Exited(status.code())
+                }
+                Err(_) => {
+                    #[cfg(unix)]
+                    {
+                        if let Some(pid) = child_pid {
+                            // SAFETY: kill() is async-signal-safe. Negative PID targets the process group.
+                            unsafe {
+                                libc::kill(-(pid as i32), libc::SIGKILL);
+                            }
+                        } else {
+                            let _ = child.start_kill();
                         }
-                    } else {
+                    }
+                    #[cfg(not(unix))]
+                    {
                         let _ = child.start_kill();
                     }
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = child.start_kill();
-                }
 
-                let _ = child.wait().await;
-                Ok(PostExecGateCommandOutcome::TimedOut)
-            }
+                    let _ = child.wait().await;
+                    PostExecGateCommandExit::TimedOut
+                }
+            };
+
+        // Drain the tee tasks to EOF before reading the buffer. Killing the
+        // process group (or normal exit) closes the child's pipe write ends, so
+        // both reads reach EOF and the joins complete.
+        if let Some(pump) = stdout_pump {
+            let _ = pump.await;
         }
+        if let Some(pump) = stderr_pump {
+            let _ = pump.await;
+        }
+
+        let captured_output = captured
+            .lock()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+
+        Ok(PostExecGateCommandOutcome {
+            exit,
+            captured_output,
+        })
     })
 }
 
@@ -339,16 +464,17 @@ where
     }
 
     let branch = super::run_context::current_branch_name(project_root);
-    match runner(
+    let outcome = runner(
         &gate_config.command,
         project_root,
         gate_config.timeout_seconds,
         extra_env,
     )
-    .await?
-    {
-        PostExecGateCommandOutcome::Exited(Some(0)) => Ok(PostExecGateOutcome::Passed),
-        PostExecGateCommandOutcome::Exited(code) => {
+    .await?;
+    let captured_output = outcome.captured_output;
+    match outcome.exit {
+        PostExecGateCommandExit::Exited(Some(0)) => Ok(PostExecGateOutcome::Passed),
+        PostExecGateCommandExit::Exited(code) => {
             Ok(PostExecGateOutcome::Failed(PostExecGateFailure {
                 kind: PostExecGateFailureKind::Exited(code),
                 diagnostic: format!(
@@ -364,26 +490,28 @@ where
                     session_id.unwrap_or("(ephemeral)"),
                     branch,
                 ),
+                gate_command: gate_config.command.clone(),
+                captured_output,
             }))
         }
-        PostExecGateCommandOutcome::TimedOut => {
-            Ok(PostExecGateOutcome::Failed(PostExecGateFailure {
-                kind: PostExecGateFailureKind::TimedOut,
-                diagnostic: format!(
-                    "csa: post-exec gate timed out after {} seconds.\n\
+        PostExecGateCommandExit::TimedOut => Ok(PostExecGateOutcome::Failed(PostExecGateFailure {
+            kind: PostExecGateFailureKind::TimedOut,
+            diagnostic: format!(
+                "csa: post-exec gate timed out after {} seconds.\n\
                      gate command: {}\n\
                      cwd: {}\n\
                      employee session: {}\n\
                      branch: {}\n\
                      next step: inspect the gate output above, fix the issue, and re-run the dispatch manually. v1 gate does NOT auto-retry.",
-                    gate_config.timeout_seconds,
-                    gate_config.command,
-                    project_root.display(),
-                    session_id.unwrap_or("(ephemeral)"),
-                    branch,
-                ),
-            }))
-        }
+                gate_config.timeout_seconds,
+                gate_config.command,
+                project_root.display(),
+                session_id.unwrap_or("(ephemeral)"),
+                branch,
+            ),
+            gate_command: gate_config.command.clone(),
+            captured_output,
+        })),
     }
 }
 
@@ -493,12 +621,23 @@ where
             }
         }
         PostExecGateOutcome::Failed(failure) => {
+            // Primary surfacing path (#1726): a gate that ran and exited nonzero.
+            // Persist the full (redacted) output to `output/gate-failure.log`, a
+            // bounded `[post_exec_gate]` table to result.toml, and a banner that
+            // makes the employee's pre-gate self-report read as superseded — so
+            // an orchestrator that cannot read the raw transcript can still
+            // diagnose the failure. (Timeout and infra-error paths above keep the
+            // existing simple overwrite; their verdicts are already
+            // non-contradictory and carry no structured gate output to surface.)
             if let Some(session_id) = session_id {
-                crate::run_cmd_post::overwrite_result_as_post_exec_gate_failure(
-                    project_root,
-                    session_id,
-                    &format!("post-exec gate failed: {}", failure.diagnostic),
-                    false,
+                crate::run_cmd_post_gate_report::persist_gate_failure_detail(
+                    crate::run_cmd_post_gate_report::GateFailureDetail {
+                        project_root,
+                        session_id,
+                        gate_command: &failure.gate_command,
+                        exit_code: failure.report_exit_code(),
+                        captured_output: &failure.captured_output,
+                    },
                 );
             }
             Err(failure.into_error())

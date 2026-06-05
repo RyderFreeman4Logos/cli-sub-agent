@@ -45,6 +45,7 @@ fn truncate_with_ellipsis_handles_emoji_without_panic() {
 fn make_result(status: &str, exit_code: i32) -> SessionResult {
     let now = Utc::now();
     SessionResult {
+        post_exec_gate: None,
         status: status.to_string(),
         exit_code,
         summary: "summary".to_string(),

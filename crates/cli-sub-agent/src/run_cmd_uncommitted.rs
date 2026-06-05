@@ -447,6 +447,7 @@ mod tests {
     fn session_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
         let now = chrono::Utc::now();
         csa_session::SessionResult {
+            post_exec_gate: None,
             status: status.to_string(),
             exit_code,
             summary: "done".to_string(),

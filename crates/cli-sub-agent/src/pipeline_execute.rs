@@ -202,6 +202,7 @@ pub(crate) async fn execute_transport_with_signal(
                 )
             });
             let result = SessionResult {
+                post_exec_gate: None,
                 status: "failure".to_string(),
                 exit_code: 1,
                 summary: summary.clone(),
@@ -331,6 +332,7 @@ fn record_session_termination(
     let mut updated_session = session.clone();
     updated_session.termination_reason = Some(termination_reason.to_string());
     let updated_result = SessionResult {
+        post_exec_gate: None,
         status: status.to_string(),
         exit_code,
         summary: summary.to_string(),

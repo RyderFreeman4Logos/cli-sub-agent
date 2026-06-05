@@ -6,6 +6,7 @@ use tempfile::tempdir;
 fn write_success_result_for(project_root: &Path, session_id: &str) {
     let now = chrono::Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "task completed".to_string(),

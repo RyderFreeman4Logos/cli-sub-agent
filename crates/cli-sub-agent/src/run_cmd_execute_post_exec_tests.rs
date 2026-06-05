@@ -1,18 +1,34 @@
 use super::{
-    PostExecGateApplyOptions, PostExecGateCommandOutcome, PostExecGateOutcome,
-    apply_post_exec_gate_after_success_with_runner, execute_post_exec_gate_command,
-    maybe_run_post_exec_gate_with_runner,
+    PostExecGateApplyOptions, PostExecGateCommandExit, PostExecGateCommandOutcome,
+    PostExecGateOutcome, apply_post_exec_gate_after_success_with_runner,
+    execute_post_exec_gate_command, maybe_run_post_exec_gate_with_runner,
 };
 use crate::cli::{Cli, Commands};
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use clap::Parser;
 use csa_config::{PostExecGateConfig, ProjectConfig, ProjectMeta, ResourcesConfig, RunConfig};
-use csa_session::{SessionResult, create_session_fresh, load_result, save_result};
+use csa_session::{
+    GATE_FAILURE_LOG_REL_PATH, SessionResult, create_session_fresh, get_session_dir, load_result,
+    save_result,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
+
+/// Representative `just pre-commit` failure output: a `cargo nextest` test
+/// failure under a failing `just test` recipe. Used to exercise the structured
+/// surfacing path (#1726) — parsed into `failing_step` + `failing_tests`.
+const SAMPLE_GATE_FAILURE_OUTPUT: &str = "\
+    Compiling cli-sub-agent v0.1.0
+running cargo nextest run --workspace --all-features
+        PASS [   0.004s] csa-session result::tests::roundtrips
+        FAIL [   0.005s] csa-session post_exec_gate_report::tests::parses
+        FAIL [   1.200s] cli-sub-agent run_cmd::tests::gate_surfaces
+   Summary [   1.234s] 3 tests run: 1 passed, 2 failed
+error: Recipe `test` failed on line 42 with exit code 100
+error: Recipe `pre-commit` failed on line 3 with exit code 100";
 
 fn project_config_with_gate(gate: PostExecGateConfig) -> ProjectConfig {
     ProjectConfig {
@@ -93,6 +109,7 @@ fn create_session_at_current_head(project_root: &Path) -> String {
 fn write_success_result_for(project_root: &Path, session_id: &str) {
     let now = chrono::Utc::now();
     let result = SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "task completed".to_string(),
@@ -145,6 +162,84 @@ fn planning_post_exec_options() -> PostExecGateApplyOptions<'static> {
     }
 }
 
+/// Seed the session's `output/summary.md` + `output/details.md` with an employee
+/// "success" self-report, mimicking what `persist_structured_output` writes
+/// BEFORE the gate runs. Used to prove the gate-failure banner supersedes it.
+fn seed_employee_success_sections(project_root: &Path, session_id: &str) {
+    let output_dir = get_session_dir(project_root, session_id)
+        .expect("session dir")
+        .join("output");
+    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    std::fs::write(
+        output_dir.join("summary.md"),
+        "## Summary\n\nAll changes implemented and committed. Everything is clean. ✅\n",
+    )
+    .expect("write summary.md");
+    std::fs::write(
+        output_dir.join("details.md"),
+        "## Details\n\nThe task succeeded; all tests pass locally.\n",
+    )
+    .expect("write details.md");
+}
+
+/// Assert the #1726 structured-surfacing artifacts after a nonzero-exit gate
+/// failure: a non-contradictory `result.toml` summary, a populated
+/// `[post_exec_gate]` table, the full `gate-failure.log`, and the banner
+/// prepended to `summary.md`.
+fn assert_gate_failure_surfaced(project_root: &Path, session_id: &str, result: &SessionResult) {
+    // result.toml: authoritative gate verdict overrides the employee self-report.
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(!result.gate_timeout);
+    assert!(
+        result.warnings.is_empty(),
+        "no success warning on fatal exit: {:?}",
+        result.warnings
+    );
+    assert!(
+        result.summary.starts_with("POST-EXEC GATE FAILED"),
+        "summary must lead with the gate verdict, got: {}",
+        result.summary
+    );
+
+    // [post_exec_gate] table with the parsed failing step + tests.
+    let report = result
+        .post_exec_gate
+        .as_ref()
+        .expect("post_exec_gate table present on gate failure");
+    assert_eq!(report.exit_code, 100);
+    assert_eq!(report.gate_command, "just pre-commit");
+    assert_eq!(report.failing_step.as_deref(), Some("just test"));
+    assert!(
+        report
+            .failing_tests
+            .iter()
+            .any(|t| t.contains("post_exec_gate_report::tests::parses")),
+        "failing tests parsed from nextest output: {:?}",
+        report.failing_tests
+    );
+    assert!(!report.output_tail.is_empty());
+    assert_eq!(report.log_path, GATE_FAILURE_LOG_REL_PATH);
+
+    // gate-failure.log: the full, unbounded gate output.
+    let session_dir = get_session_dir(project_root, session_id).expect("session dir");
+    let log = std::fs::read_to_string(session_dir.join(GATE_FAILURE_LOG_REL_PATH))
+        .expect("gate-failure.log written");
+    assert!(log.contains("FAIL ["), "log holds the full gate output");
+    assert!(log.contains("Recipe `test` failed"));
+
+    // summary.md leads with the banner; the employee "clean" claim is superseded.
+    let summary_md =
+        std::fs::read_to_string(session_dir.join("output/summary.md")).expect("summary.md present");
+    assert!(
+        summary_md
+            .trim_start()
+            .starts_with("> ⚠️ **POST-EXEC GATE FAILED"),
+        "summary.md must lead with the gate-failure banner, got: {summary_md}"
+    );
+    assert!(summary_md.contains("SUPERSEDED"));
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn execute_post_exec_gate_strips_inherited_csa_env() {
@@ -169,7 +264,7 @@ async fn execute_post_exec_gate_strips_inherited_csa_env() {
     .await
     .expect("post-exec gate command should run");
 
-    assert_eq!(outcome, PostExecGateCommandOutcome::Exited(Some(0)));
+    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
 }
 
 #[tokio::test]
@@ -190,7 +285,7 @@ async fn execute_post_exec_gate_applies_build_jobs_env() {
     .await
     .expect("post-exec gate command should run");
 
-    assert_eq!(outcome, PostExecGateCommandOutcome::Exited(Some(0)));
+    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
 }
 
 #[tokio::test]
@@ -217,7 +312,7 @@ async fn post_exec_gate_passes_when_command_succeeds() {
                 let cwd = cwd.to_path_buf();
                 Box::pin(async move {
                     calls.lock().unwrap().push((command, cwd, timeout_seconds));
-                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                    Ok(PostExecGateCommandOutcome::exited(Some(0)))
                 })
             }
         },
@@ -252,7 +347,7 @@ async fn post_exec_gate_failure_returns_structured_diagnostic() {
         None,
         None,
         |_command, _cwd, _timeout_seconds, _extra_env| {
-            Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
+            Box::pin(async { Ok(PostExecGateCommandOutcome::exited(Some(3))) })
         },
     )
     .await
@@ -388,7 +483,7 @@ async fn post_exec_gate_runs_when_changed_paths_are_non_empty() {
                 let cwd = cwd.to_path_buf();
                 Box::pin(async move {
                     calls.lock().unwrap().push((command, cwd, timeout_seconds));
-                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                    Ok(PostExecGateCommandOutcome::exited(Some(0)))
                 })
             }
         },
@@ -408,6 +503,9 @@ async fn post_exec_gate_nonzero_committed_clean_is_fatal() {
     let session_id = create_session_at_current_head(project_dir.path());
     commit_tracked_change(project_dir.path());
     write_success_result_for(project_dir.path(), &session_id);
+    // Employee wrote a "clean ✅" self-report before the gate ran; the gate
+    // failure must supersede it (#1726).
+    seed_employee_success_sections(project_dir.path(), &session_id);
 
     let config = project_config_with_gate(PostExecGateConfig::default());
     let err = apply_post_exec_gate_after_success_with_runner(
@@ -417,7 +515,12 @@ async fn post_exec_gate_nonzero_committed_clean_is_fatal() {
         Some(&config),
         post_exec_options(false),
         |_command, _cwd, _timeout_seconds, _extra_env| {
-            Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
+            Box::pin(async {
+                Ok(PostExecGateCommandOutcome::exited_with(
+                    Some(100),
+                    SAMPLE_GATE_FAILURE_OUTPUT,
+                ))
+            })
         },
     )
     .await
@@ -425,14 +528,7 @@ async fn post_exec_gate_nonzero_committed_clean_is_fatal() {
 
     assert!(err.to_string().contains("post-exec gate failed"));
     let result = persisted_result(project_dir.path(), &session_id);
-    assert_eq!(result.status, "failure");
-    assert_eq!(result.exit_code, 1);
-    assert!(!result.gate_timeout);
-    assert!(
-        result.warnings.is_empty(),
-        "no success warning on fatal exit"
-    );
-    assert!(result.summary.contains("post-exec gate failed"));
+    assert_gate_failure_surfaced(project_dir.path(), &session_id, &result);
 }
 
 #[tokio::test]
@@ -443,6 +539,8 @@ async fn post_exec_gate_nonzero_dirty_is_fatal() {
     let session_id = create_session_at_current_head(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").unwrap();
     write_success_result_for(project_dir.path(), &session_id);
+    // No employee sections seeded: exercises the branch that CREATES summary.md
+    // with the banner when the employee emitted none.
 
     let config = project_config_with_gate(PostExecGateConfig::default());
     apply_post_exec_gate_after_success_with_runner(
@@ -452,17 +550,19 @@ async fn post_exec_gate_nonzero_dirty_is_fatal() {
         Some(&config),
         post_exec_options(false),
         |_command, _cwd, _timeout_seconds, _extra_env| {
-            Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(3))) })
+            Box::pin(async {
+                Ok(PostExecGateCommandOutcome::exited_with(
+                    Some(100),
+                    SAMPLE_GATE_FAILURE_OUTPUT,
+                ))
+            })
         },
     )
     .await
     .expect_err("nonzero gate exit is fatal for dirty work");
 
     let result = persisted_result(project_dir.path(), &session_id);
-    assert_eq!(result.status, "failure");
-    assert_eq!(result.exit_code, 1);
-    assert!(!result.gate_timeout);
-    assert!(result.summary.contains("post-exec gate failed"));
+    assert_gate_failure_surfaced(project_dir.path(), &session_id, &result);
 }
 
 #[tokio::test]
@@ -516,7 +616,7 @@ async fn post_exec_gate_timeout_committed_clean_is_advisory() {
         Some(&config),
         post_exec_options(false),
         |_command, _cwd, _timeout_seconds, _extra_env| {
-            Box::pin(async { Ok(PostExecGateCommandOutcome::TimedOut) })
+            Box::pin(async { Ok(PostExecGateCommandOutcome::timed_out()) })
         },
     )
     .await
@@ -554,7 +654,7 @@ async fn post_exec_gate_timeout_dirty_is_fatal() {
         Some(&config),
         post_exec_options(false),
         |_command, _cwd, _timeout_seconds, _extra_env| {
-            Box::pin(async { Ok(PostExecGateCommandOutcome::TimedOut) })
+            Box::pin(async { Ok(PostExecGateCommandOutcome::timed_out()) })
         },
     )
     .await
@@ -601,7 +701,7 @@ async fn post_exec_gate_runs_planning_only_session_when_tracked_source_is_dirty(
                 let calls = Arc::clone(&calls);
                 Box::pin(async move {
                     *calls.lock().unwrap() += 1;
-                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                    Ok(PostExecGateCommandOutcome::exited(Some(0)))
                 })
             }
         },
@@ -684,7 +784,7 @@ async fn post_exec_gate_success_passes_both_cleanliness_states() {
             Some(&config),
             post_exec_options(false),
             |_command, _cwd, _timeout_seconds, _extra_env| {
-                Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(0))) })
+                Box::pin(async { Ok(PostExecGateCommandOutcome::exited(Some(0))) })
             },
         )
         .await
@@ -695,6 +795,20 @@ async fn post_exec_gate_success_passes_both_cleanliness_states() {
         assert_eq!(clean_result.exit_code, 0);
         assert!(!clean_result.gate_timeout);
         assert!(clean_result.warnings.is_empty());
+        // #1726: the success path emits no structured failure artifacts and
+        // leaves the employee summary untouched.
+        assert!(
+            clean_result.post_exec_gate.is_none(),
+            "success path must not emit a [post_exec_gate] table"
+        );
+        assert_eq!(clean_result.summary, "task completed");
+        assert!(
+            !get_session_dir(clean_dir.path(), &clean_session_id)
+                .expect("session dir")
+                .join(GATE_FAILURE_LOG_REL_PATH)
+                .exists(),
+            "success path must not write gate-failure.log"
+        );
     }
 
     {
@@ -712,7 +826,7 @@ async fn post_exec_gate_success_passes_both_cleanliness_states() {
             Some(&config),
             post_exec_options(false),
             |_command, _cwd, _timeout_seconds, _extra_env| {
-                Box::pin(async { Ok(PostExecGateCommandOutcome::Exited(Some(0))) })
+                Box::pin(async { Ok(PostExecGateCommandOutcome::exited(Some(0))) })
             },
         )
         .await
@@ -723,6 +837,17 @@ async fn post_exec_gate_success_passes_both_cleanliness_states() {
         assert_eq!(dirty_result.exit_code, 0);
         assert!(!dirty_result.gate_timeout);
         assert!(dirty_result.warnings.is_empty());
+        assert!(
+            dirty_result.post_exec_gate.is_none(),
+            "success path must not emit a [post_exec_gate] table"
+        );
+        assert!(
+            !get_session_dir(dirty_dir.path(), &dirty_session_id)
+                .expect("session dir")
+                .join(GATE_FAILURE_LOG_REL_PATH)
+                .exists(),
+            "success path must not write gate-failure.log"
+        );
     }
 }
 
@@ -797,7 +922,7 @@ async fn post_exec_gate_runs_when_session_introduced_changes() {
                 let cwd = cwd.to_path_buf();
                 Box::pin(async move {
                     calls.lock().unwrap().push((command, cwd, timeout_seconds));
-                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                    Ok(PostExecGateCommandOutcome::exited(Some(0)))
                 })
             }
         },
@@ -837,7 +962,7 @@ async fn post_exec_gate_runs_when_session_committed_changes() {
                 let cwd = cwd.to_path_buf();
                 Box::pin(async move {
                     calls.lock().unwrap().push((command, cwd, timeout_seconds));
-                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                    Ok(PostExecGateCommandOutcome::exited(Some(0)))
                 })
             }
         },
@@ -877,7 +1002,7 @@ async fn post_exec_gate_runs_when_untracked_source_exists_without_changed_paths(
                 let cwd = cwd.to_path_buf();
                 Box::pin(async move {
                     calls.lock().unwrap().push((command, cwd, timeout_seconds));
-                    Ok(PostExecGateCommandOutcome::Exited(Some(0)))
+                    Ok(PostExecGateCommandOutcome::exited(Some(0)))
                 })
             }
         },

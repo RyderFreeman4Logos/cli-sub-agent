@@ -52,6 +52,7 @@ fn test_load_result_view_ignores_orphaned_manager_sidecar() {
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -113,6 +114,7 @@ fn test_load_result_merges_manager_sidecar_sections_into_runtime_result() {
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -236,6 +238,7 @@ fn test_manager_sidecar_roundtrip_preserves_full_sa_schema() {
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -390,6 +393,7 @@ fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -431,6 +435,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
     let now = chrono::Utc::now();
 
     let populated_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -512,6 +517,7 @@ fn test_clear_manager_sidecar_removes_existing_sidecar() {
     let now = chrono::Utc::now();
 
     let populated_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -568,6 +574,7 @@ fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
 
     let now = chrono::Utc::now();
     let runtime_result = crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "runtime summary".to_string(),
@@ -650,6 +657,7 @@ fn test_fallback_chain_not_retained_after_save_without_fallback() {
     let now = chrono::Utc::now();
 
     let make_result = |fallback_chain| crate::result::SessionResult {
+        post_exec_gate: None,
         status: "success".to_string(),
         exit_code: 0,
         summary: "done".to_string(),

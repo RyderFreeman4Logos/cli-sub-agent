@@ -62,6 +62,7 @@ fn debate_tier_all_fail_does_not_overwrite_unrelated_latest_session() {
         project_root,
         &unrelated.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "original unrelated summary".to_string(),
@@ -199,6 +200,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
         project_root,
         &unrelated.meta_session_id,
         &csa_session::SessionResult {
+            post_exec_gate: None,
             status: "success".to_string(),
             exit_code: 0,
             summary: "original unrelated summary".to_string(),

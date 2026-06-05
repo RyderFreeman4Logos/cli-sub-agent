@@ -277,7 +277,10 @@ fn record_post_exec_gate_success_warning(
 
 /// Retire a session after post-exec gate failure to prevent it from remaining in Active state.
 /// This ensures that `csa session wait` will not poll indefinitely for a dead session.
-fn retire_session_after_gate_failure(project_root: &Path, session_id: &str) -> anyhow::Result<()> {
+pub(crate) fn retire_session_after_gate_failure(
+    project_root: &Path,
+    session_id: &str,
+) -> anyhow::Result<()> {
     match load_session(project_root, session_id) {
         Ok(mut session) => {
             let phase_result = session.phase.transition(&PhaseEvent::Retired);
