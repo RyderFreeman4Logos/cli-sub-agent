@@ -181,6 +181,13 @@ pub struct ReviewSessionMeta {
     pub decision: String,
     /// Legacy verdict string (CLEAN, HAS_ISSUES, etc.) for backward compatibility.
     pub verdict: String,
+    /// Review mode that produced this verdict ("standard" or "red-team").
+    ///
+    /// Absent for legacy sessions written before review-mode auditing (#1817).
+    /// The merge gate uses this to enforce that a final adversarial review ran
+    /// when `--check-verdict` is invoked with `--red-team` / `--review-mode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_mode: Option<String>,
     /// Optional machine-readable reason when the review result is not a real verdict
     /// (for example, an auth/setup failure that prevented the review from running).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -356,140 +363,12 @@ pub struct ToolState {
     pub token_usage: Option<TokenUsage>,
 }
 
-/// Token usage tracking for AI tool execution
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TokenUsage {
-    /// Input tokens consumed
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-
-    /// Output tokens generated
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-
-    /// Total tokens (input + output)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
-
-    /// Estimated cost in USD
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_cost_usd: Option<f64>,
-
-    /// Cache-read input tokens (Anthropic prompt caching).
-    ///
-    /// When present, this is the portion of `input_tokens` served from the
-    /// provider's prompt cache. Older sessions and non-Claude tools may not
-    /// populate this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-}
-
-impl TokenUsage {
-    /// Ratio of cache-read input tokens to total input tokens (`cache_read / input_tokens`).
-    ///
-    /// Returns `None` when either field is missing or when `input_tokens` is
-    /// zero (no meaningful denominator).
-    pub fn cache_hit_ratio(&self) -> Option<f64> {
-        let cache_read = self.cache_read_input_tokens? as f64;
-        let total_input = self.input_tokens? as f64;
-        if total_input == 0.0 {
-            return None;
-        }
-        Some(cache_read / total_input)
-    }
-}
-
-/// Token budget for session-level resource governance.
-///
-/// Tracks how many tokens were allocated (from tier or config) and how many
-/// have been consumed. Soft threshold triggers a warning; hard threshold
-/// blocks further execution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TokenBudget {
-    /// Total tokens allocated for this session (from tier config).
-    pub allocated: u64,
-
-    /// Tokens consumed so far.
-    #[serde(default)]
-    pub used: u64,
-
-    /// Percentage threshold for soft warning (default 75).
-    #[serde(default = "default_soft_threshold_pct")]
-    pub soft_threshold_pct: u32,
-
-    /// Percentage threshold for hard block (default 100).
-    #[serde(default = "default_hard_threshold_pct")]
-    pub hard_threshold_pct: u32,
-
-    /// Optional max turns limit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_turns: Option<u32>,
-}
-
-fn default_soft_threshold_pct() -> u32 {
-    75
-}
-
-fn default_hard_threshold_pct() -> u32 {
-    100
-}
-
-impl TokenBudget {
-    /// Create a new budget with the given allocation.
-    pub fn new(allocated: u64) -> Self {
-        Self {
-            allocated,
-            used: 0,
-            soft_threshold_pct: default_soft_threshold_pct(),
-            hard_threshold_pct: default_hard_threshold_pct(),
-            max_turns: None,
-        }
-    }
-
-    /// Remaining tokens before hard threshold.
-    pub fn remaining(&self) -> u64 {
-        let hard_limit = self.hard_limit();
-        hard_limit.saturating_sub(self.used)
-    }
-
-    /// The absolute token count for the hard threshold.
-    pub fn hard_limit(&self) -> u64 {
-        (self.allocated as u128 * self.hard_threshold_pct as u128 / 100) as u64
-    }
-
-    /// The absolute token count for the soft warning threshold.
-    pub fn soft_limit(&self) -> u64 {
-        (self.allocated as u128 * self.soft_threshold_pct as u128 / 100) as u64
-    }
-
-    /// Usage percentage (0-100+).
-    pub fn usage_pct(&self) -> u32 {
-        if self.allocated == 0 {
-            return 0;
-        }
-        ((self.used as u128 * 100) / self.allocated as u128) as u32
-    }
-
-    /// Whether the soft warning threshold has been crossed.
-    pub fn is_soft_exceeded(&self) -> bool {
-        self.used >= self.soft_limit()
-    }
-
-    /// Whether the hard block threshold has been crossed.
-    pub fn is_hard_exceeded(&self) -> bool {
-        self.used >= self.hard_limit()
-    }
-
-    /// Record token usage from an execution turn.
-    pub fn record_usage(&mut self, tokens: u64) {
-        self.used = self.used.saturating_add(tokens);
-    }
-
-    /// Whether the max turns limit has been reached.
-    pub fn is_turns_exceeded(&self, turn_count: u32) -> bool {
-        self.max_turns.is_some_and(|max| turn_count >= max)
-    }
-}
+// Token usage/budget accounting lives in a sibling module to keep this file
+// under the per-module token budget; re-exported so `state::{TokenUsage,
+// TokenBudget}` and the crate facade paths stay stable.
+#[path = "state_token_budget.rs"]
+mod token_budget;
+pub use token_budget::{TokenBudget, TokenUsage};
 
 /// Context compaction status tracking
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

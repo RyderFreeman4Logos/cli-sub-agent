@@ -32,6 +32,7 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
         .filter(|sha| !sha.trim().is_empty())
         .context("failed to resolve current HEAD SHA for review verdict check")?;
     let required_scope = required_check_verdict_scope(args);
+    let required_mode = required_check_verdict_mode(args);
 
     let diff_fingerprint = super::execute::compute_diff_fingerprint(project_root, &required_scope);
 
@@ -43,6 +44,7 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
             &head_sha,
             &required_scope,
             diff_fingerprint.as_deref(),
+            required_mode.as_deref(),
         )
     } else {
         check_review_verdict_for_target(
@@ -51,6 +53,7 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
             &head_sha,
             &required_scope,
             diff_fingerprint.as_deref(),
+            required_mode.as_deref(),
         )
     };
 
@@ -61,9 +64,14 @@ pub(crate) fn handle_check_verdict(project_root: &Path, args: &ReviewArgs) -> Re
             Ok(0)
         }
         Ok(None) => {
+            let mode_requirement = required_mode
+                .as_deref()
+                .map(|mode| format!(" in review mode '{mode}'"))
+                .unwrap_or_default();
             println!(
-                "Review verdict check failed: no PASS/CLEAN full-diff review ({}) found for {} at {}.",
+                "Review verdict check failed: no PASS/CLEAN full-diff review ({}){} found for {} at {}.",
                 required_scope,
+                mode_requirement,
                 branch,
                 short_sha(&head_sha)
             );
@@ -80,6 +88,7 @@ pub(crate) fn check_review_verdict_for_session(
     head_sha: &str,
     required_scope: &str,
     expected_diff_fingerprint: Option<&str>,
+    required_mode: Option<&str>,
 ) -> Result<Option<ReviewVerdictMatch>> {
     let resolved =
         crate::session_cmds::resolve_session_prefix_with_fallback(project_root, session_prefix)?;
@@ -126,6 +135,16 @@ pub(crate) fn check_review_verdict_for_session(
         return Ok(None);
     }
 
+    if !review_mode_matches(meta.review_mode.as_deref(), required_mode) {
+        debug!(
+            session_id = %resolved.session_id,
+            meta_review_mode = ?meta.review_mode,
+            ?required_mode,
+            "Explicit review verdict session did not match required review mode"
+        );
+        return Ok(None);
+    }
+
     if !diff_fingerprint_matches(&meta, expected_diff_fingerprint) {
         debug!(
             session_id = %resolved.session_id,
@@ -161,6 +180,7 @@ pub(crate) fn check_review_verdict_for_target(
     head_sha: &str,
     required_scope: &str,
     expected_diff_fingerprint: Option<&str>,
+    required_mode: Option<&str>,
 ) -> Result<Option<ReviewVerdictMatch>> {
     if let Some(found) = check_review_verdict_marker(
         project_root,
@@ -168,6 +188,7 @@ pub(crate) fn check_review_verdict_for_target(
         head_sha,
         required_scope,
         expected_diff_fingerprint,
+        required_mode,
     )? {
         return Ok(Some(found));
     }
@@ -224,6 +245,15 @@ pub(crate) fn check_review_verdict_for_target(
                 meta_scope = %meta.scope,
                 expected_scope = required_scope,
                 "Skipping review verdict session: head SHA or scope mismatch"
+            );
+            continue;
+        }
+        if !review_mode_matches(meta.review_mode.as_deref(), required_mode) {
+            debug!(
+                session_id = %session.meta_session_id,
+                meta_review_mode = ?meta.review_mode,
+                ?required_mode,
+                "Skipping review verdict session: review mode mismatch"
             );
             continue;
         }
@@ -299,6 +329,7 @@ fn check_review_verdict_marker(
     head_sha: &str,
     required_scope: &str,
     expected_diff_fingerprint: Option<&str>,
+    required_mode: Option<&str>,
 ) -> Result<Option<ReviewVerdictMatch>> {
     let Some(marker) = crate::review_gate::read_review_gate_marker(project_root, branch, head_sha)
     else {
@@ -325,6 +356,16 @@ fn check_review_verdict_marker(
         debug!(
             session_id = %marker.session_id,
             "Review verdict marker is stale for requested target"
+        );
+        return Ok(None);
+    }
+
+    if !review_mode_matches(marker.review_mode.as_deref(), required_mode) {
+        debug!(
+            session_id = %marker.session_id,
+            marker_review_mode = ?marker.review_mode,
+            ?required_mode,
+            "Review verdict marker did not match required review mode"
         );
         return Ok(None);
     }
@@ -361,6 +402,15 @@ fn check_review_verdict_marker(
             meta_scope = %meta.scope,
             expected_scope = required_scope,
             "Review verdict marker session did not match head SHA or scope"
+        );
+        return Ok(None);
+    }
+    if !review_mode_matches(meta.review_mode.as_deref(), required_mode) {
+        debug!(
+            session_id = %marker.session_id,
+            meta_review_mode = ?meta.review_mode,
+            ?required_mode,
+            "Review verdict marker session did not match required review mode"
         );
         return Ok(None);
     }
@@ -436,6 +486,34 @@ fn required_check_verdict_scope(args: &ReviewArgs) -> String {
         return format!("base:{branch}");
     }
     REQUIRED_FULL_DIFF_SCOPE.to_string()
+}
+
+/// Review mode the verdict must carry for `--check-verdict` to accept it (#1817).
+///
+/// Returns `Some` only when the caller explicitly selected a mode
+/// (`--review-mode <mode>` or `--red-team`). When `None`, the verdict gate keeps
+/// its legacy behavior and accepts a passing verdict regardless of review mode,
+/// so existing callers and legacy artifacts (written before review-mode auditing)
+/// continue to pass byte-for-byte.
+fn required_check_verdict_mode(args: &ReviewArgs) -> Option<String> {
+    if args.red_team || args.review_mode.is_some() {
+        Some(args.effective_review_mode().as_str().to_string())
+    } else {
+        None
+    }
+}
+
+/// Whether a candidate verdict's review mode satisfies the required mode.
+///
+/// A `None` requirement always matches (legacy / unfiltered gate). When a mode
+/// is required, the candidate must carry exactly that mode; a candidate with no
+/// recorded mode (legacy artifact/marker) cannot prove it ran in the required
+/// mode and is therefore rejected.
+fn review_mode_matches(candidate: Option<&str>, required: Option<&str>) -> bool {
+    match required {
+        None => true,
+        Some(required_mode) => candidate == Some(required_mode),
+    }
 }
 
 fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {

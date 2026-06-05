@@ -322,6 +322,7 @@ fn mock_pass_review_persists_pass_review_meta() {
         review_iterations: 0,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
 

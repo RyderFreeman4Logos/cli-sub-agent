@@ -140,7 +140,11 @@ with `metadata.toml`, `TODO.md`, and optional `spec.toml`. `csa todo show --spec
 persisted criteria. `csa review --context <path>` accepts TOML spec documents directly, and when
 `--context` is omitted CSA auto-discovers the latest todo plan's `spec.toml` when present.
 Red-team reviews can be enabled with `csa review --red-team` or `--review-mode red-team`; that mode
-forces adversarial prompt framing and upgrades `security_mode=auto` to `on`. Commits generated from
+forces adversarial prompt framing and upgrades `security_mode=auto` to `on`. The chosen mode is
+recorded on the review artifacts and the fast review-gate marker, so
+`csa review --check-verdict --red-team` accepts only a recorded **red-team** verdict — letting the
+merge gate enforce that a final adversarial review ran before merge. Without a mode filter,
+`--check-verdict` accepts any recorded mode, preserving legacy behavior. Commits generated from
 spec-backed plans add `CSA-Plan:` and `CSA-Criteria:` trailers so the intent and acceptance checks
 stay attached to the audited commit.
 

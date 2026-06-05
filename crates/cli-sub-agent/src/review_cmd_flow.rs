@@ -99,6 +99,13 @@ pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
             &final_meta.head_sha,
             persistable_session_id,
             &final_meta.scope,
+            final_meta.review_mode.as_deref(),
+        );
+    } else {
+        crate::review_gate::remove_review_gate_marker_for_head(
+            project_root,
+            &final_meta.head_sha,
+            Some(persistable_session_id),
         );
     }
     Some(verdict_exit_code)

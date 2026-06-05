@@ -549,6 +549,7 @@ fn build_result_json_payload_includes_review_iterations() {
         review_iterations: 4,
         timestamp: now,
         diff_fingerprint: Some("sha256:abc123".to_string()),
+        review_mode: None,
         fix_convergence: None,
     };
 

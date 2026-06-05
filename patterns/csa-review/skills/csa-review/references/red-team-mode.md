@@ -23,6 +23,10 @@ conceptually before you accept it.
 4. Treat missing tests for a plausible exploit or counterexample as a first-class finding.
 5. Keep the standard finding structure so `review_consensus.rs` can aggregate results.
    Always include compact ReviewArtifact fields and set `review_mode` to `"red-team"`.
+6. Treat any prior-round verdicts, assumptions, or "already reviewed" notes as HYPOTHESES
+   ONLY, never as correctness evidence — re-derive each behavior's correctness from the
+   current diff and working tree from scratch, because as the final adversarial gate you may
+   be the last reviewer before merge.
 
 ## Severity Guidance
 

@@ -136,6 +136,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         scope: "files:tracked.txt".to_string(),
         decision: ReviewDecision::Fail.as_str().to_string(),
         verdict: "HAS_ISSUES".to_string(),
+        review_mode: None,
         max_rounds: 1,
         initial_session_id: initial.execution.meta_session_id.clone(),
         review_iterations: 0,

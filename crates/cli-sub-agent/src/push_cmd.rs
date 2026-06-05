@@ -355,6 +355,7 @@ mod tests {
             review_iterations: 1,
             timestamp: Utc::now(),
             diff_fingerprint: None,
+            review_mode: None,
             fix_convergence: None,
         }
     }

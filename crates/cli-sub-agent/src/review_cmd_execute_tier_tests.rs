@@ -230,6 +230,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
     let session_dir =
@@ -379,6 +380,7 @@ async fn execute_review_advances_tier_fallback_when_explicit_tool_and_tier() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
     let session_dir =

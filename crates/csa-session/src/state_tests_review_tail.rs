@@ -93,6 +93,7 @@ fn review_session_meta_serde_roundtrip() {
         review_iterations: 3,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:abc123".to_string()),
+        review_mode: None,
         fix_convergence: None,
     };
 
@@ -121,6 +122,7 @@ fn review_session_meta_write_and_read() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
 
@@ -157,6 +159,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
     write_review_meta(td.path(), &meta1).expect("write initial");
@@ -178,6 +181,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:def456".to_string()),
+        review_mode: None,
         fix_convergence: None,
     };
     write_review_meta(td.path(), &meta2).expect("write after fix");
@@ -228,6 +232,7 @@ fn review_meta_with_decision(decision: &str, verdict: &str, exit_code: i32) -> R
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     }
 }

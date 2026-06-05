@@ -267,6 +267,7 @@ fn make_review_meta(session_id: &str, decision: &str, iters: u32) -> ReviewSessi
         review_iterations: iters,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     }
 }

@@ -74,6 +74,41 @@ Security mode (`auto`, `on`, `off`) controls whether the review includes
 security-focused analysis (dependency vulnerabilities, injection risks,
 secret exposure, etc.).
 
+### Red-Team Mode
+
+```bash
+csa review --sa-mode false --range main...HEAD --red-team
+```
+
+Red-team mode (`--red-team`, or equivalently `--review-mode red-team`) switches
+the reviewer to an adversarial framing: it assumes the change is fragile until
+disproven, requires a concrete failure hypothesis for every changed behavior, and
+upgrades `security_mode=auto` to `on`. Use it as the final adversarial gate before
+merge.
+
+#### Merge-gate auditability
+
+The review mode is recorded alongside the verdict on every review artifact
+(`review_meta.json`, `output/review-verdict.json`) and on the fast review-gate
+marker. This lets the merge gate verify not just *that* a review passed, but that a
+**red-team** review passed:
+
+```bash
+# Produce an adversarial verdict for the merge range
+csa review --sa-mode false --range main...HEAD --red-team
+
+# Gate the merge on that adversarial verdict
+csa review --check-verdict --range main...HEAD --red-team
+```
+
+`--check-verdict --red-team` (or `--review-mode red-team`) accepts the recorded
+verdict only when it was produced by a red-team review; a `standard` verdict — or a
+legacy artifact written before mode recording — is rejected, so the gate cannot be
+satisfied by a non-adversarial review. When no mode filter is passed,
+`--check-verdict` accepts a verdict of any recorded mode, preserving the original
+mode-agnostic behavior and backward compatibility with artifacts that predate mode
+recording.
+
 ### Multi-Reviewer Consensus
 
 For high-stakes reviews, CSA can run multiple reviewers in parallel and

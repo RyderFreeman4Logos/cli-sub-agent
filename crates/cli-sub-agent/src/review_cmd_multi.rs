@@ -245,8 +245,11 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         ctx.scope,
         &outcomes,
         &head_sha,
-        review_iterations,
-        diff_fingerprint.clone(),
+        ReviewRunMeta {
+            review_iterations,
+            diff_fingerprint: diff_fingerprint.clone(),
+            review_mode: Some(ctx.args.effective_review_mode().as_str()),
+        },
         super::diff_size::ReviewDiffReport {
             diff_size: ctx.diff_size,
             large_diff_warning: ctx.large_diff_warning,
@@ -286,6 +289,10 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         all_reviewers_unavailable,
         head_sha: &head_sha,
         scope: ctx.scope,
+        // Authoritative run-level mode, mirroring the child-sidecar stamp above so
+        // the parent consensus verdict is mode-tagged independently of whether the
+        // per-reviewer findings artifacts carried a mode (#1817).
+        run_review_mode: Some(ctx.args.effective_review_mode().as_str()),
         review_iterations,
         diff_fingerprint: diff_fingerprint.clone(),
         diff_size: ctx.diff_size,
@@ -502,13 +509,21 @@ pub(super) async fn collect_reviewer_outcomes(
     Ok(outcomes)
 }
 
+/// Per-run review metadata stamped onto every reviewer's [`ReviewSessionMeta`]
+/// when persisting multi-reviewer sidecars. `review_mode` records whether the
+/// run was a standard or red-team review so the merge gate can audit it (#1817).
+pub(super) struct ReviewRunMeta<'a> {
+    pub(super) review_iterations: u32,
+    pub(super) diff_fingerprint: Option<String>,
+    pub(super) review_mode: Option<&'a str>,
+}
+
 pub(super) fn persist_multi_review_sidecars(
     project_root: &Path,
     scope: &str,
     outcomes: &[ReviewerOutcome],
     head_sha: &str,
-    review_iterations: u32,
-    diff_fingerprint: Option<String>,
+    run_meta: ReviewRunMeta<'_>,
     diff_report: super::diff_size::ReviewDiffReport<'_>,
 ) {
     let review_meta_timestamp = chrono::Utc::now();
@@ -521,6 +536,7 @@ pub(super) fn persist_multi_review_sidecars(
                 .as_str()
                 .to_string(),
             verdict: outcome.verdict.to_string(),
+            review_mode: run_meta.review_mode.map(str::to_string),
             status_reason: (outcome.verdict == "UNCERTAIN"
                 && outcome
                     .diagnostic
@@ -535,9 +551,9 @@ pub(super) fn persist_multi_review_sidecars(
             exit_code: outcome.exit_code,
             fix_attempted: false,
             fix_rounds: 0,
-            review_iterations,
+            review_iterations: run_meta.review_iterations,
             timestamp: review_meta_timestamp,
-            diff_fingerprint: diff_fingerprint.clone(),
+            diff_fingerprint: run_meta.diff_fingerprint.clone(),
             fix_convergence: None,
         };
         let effective_meta = super::output::fail_closed_review_meta(project_root, &review_meta);

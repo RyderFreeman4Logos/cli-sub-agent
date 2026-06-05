@@ -1,7 +1,7 @@
+use super::convergence::{fix_exit_code_for_convergence, reached_genuine_clean_convergence};
 use super::{
-    CLEAN, fix_exit_code_for_convergence, persist_fix_final_artifacts_for_tests_with_output,
+    CLEAN, persist_fix_final_artifacts_for_tests_with_output,
     persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
-    reached_genuine_clean_convergence,
 };
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
@@ -33,6 +33,7 @@ fn make_clean_review_meta(session_id: &str) -> ReviewSessionMeta {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     }
 }
@@ -530,6 +531,7 @@ fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate
         &meta.head_sha,
         &meta.session_id,
         &meta.scope,
+        None,
     );
     let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
     assert!(marker_path.exists(), "test must seed a stale clean marker");
@@ -680,6 +682,7 @@ fn persist_fix_final_artifacts_exhausted_failing_gate_empty_artifacts_blocks_exi
         &meta.head_sha,
         &meta.session_id,
         &meta.scope,
+        None,
     );
     let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
     assert!(marker_path.exists(), "test must seed a stale clean marker");
@@ -763,6 +766,7 @@ fn persist_fix_final_artifacts_exhausted_failing_gate_non_clean_artifacts_blocks
         &meta.head_sha,
         &meta.session_id,
         &meta.scope,
+        None,
     );
     let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
     assert!(marker_path.exists(), "test must seed a stale clean marker");
@@ -824,6 +828,7 @@ fn persist_fix_final_artifacts_empty_fix_output_blocks_clean_artifact_inference(
         &meta.head_sha,
         &meta.session_id,
         &meta.scope,
+        None,
     );
     let marker_path = crate::review_gate::marker_path(&project_root, branch, &meta.head_sha);
     assert!(marker_path.exists(), "test must seed a stale clean marker");

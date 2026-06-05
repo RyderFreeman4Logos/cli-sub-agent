@@ -22,8 +22,13 @@ use super::resolve::ANTI_RECURSION_PREAMBLE;
 
 #[path = "review_cmd_fix_clean_output.rs"]
 mod clean_output;
+#[path = "review_cmd_fix_convergence.rs"]
+mod convergence;
 #[path = "review_cmd_fix_diff_report.rs"]
 mod diff_report_artifacts;
+use convergence::{
+    FixTerminalOutcome, fix_exit_code_for_convergence, pre_verdict_non_convergence_reason,
+};
 #[cfg(test)]
 pub(crate) use diff_report_artifacts::{
     persist_fix_final_artifacts_for_tests, persist_fix_final_artifacts_for_tests_with_output,
@@ -58,6 +63,8 @@ pub(crate) struct FixLoopContext<'a> {
     pub scope: String,
     pub decision: String,
     pub verdict: String,
+    /// Review mode that produced this verdict ("standard" or "red-team"), #1817.
+    pub review_mode: Option<String>,
     pub max_rounds: u8,
     pub initial_session_id: String,
     pub review_iterations: u32,
@@ -222,6 +229,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
                 decision: "pass".to_string(),
                 verdict: CLEAN.to_string(),
+                review_mode: ctx.review_mode.clone(),
                 status_reason: None,
                 routed_to: None,
                 primary_failure: None,
@@ -265,6 +273,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
         decision: ctx.decision,
         verdict: ctx.verdict,
+        review_mode: ctx.review_mode.clone(),
         status_reason: None,
         routed_to: None,
         primary_failure: None,
@@ -407,6 +416,7 @@ fn persist_fix_final_artifacts_with_current_output(
             &final_meta.head_sha,
             &final_meta.session_id,
             &final_meta.scope,
+            final_meta.review_mode.as_deref(),
         );
     } else {
         remove_review_gate_marker_for_head(project_root, &final_meta);
@@ -494,123 +504,6 @@ fn review_meta_for_final_verdict(
     final_meta
 }
 
-fn fix_exit_code_for_convergence(
-    quality_gate_passed: bool,
-    fix_output_was_substantive: bool,
-    final_decision: ReviewDecision,
-) -> i32 {
-    if reached_genuine_clean_convergence(
-        quality_gate_passed,
-        fix_output_was_substantive,
-        final_decision,
-    ) {
-        0
-    } else {
-        1
-    }
-}
-
-fn reached_genuine_clean_convergence(
-    quality_gate_passed: bool,
-    fix_output_was_substantive: bool,
-    final_decision: ReviewDecision,
-) -> bool {
-    quality_gate_passed && fix_output_was_substantive && final_decision == ReviewDecision::Pass
-}
-
-struct FixTerminalOutcome {
-    quality_gate_passed: bool,
-    fix_output_was_substantive: bool,
-    post_consistency_decision: ReviewDecision,
-    terminal_reason: &'static str,
-}
-
-impl FixTerminalOutcome {
-    fn new(
-        quality_gate_passed: bool,
-        fix_output_was_substantive: bool,
-        post_consistency_decision: ReviewDecision,
-    ) -> Self {
-        Self {
-            quality_gate_passed,
-            fix_output_was_substantive,
-            post_consistency_decision,
-            terminal_reason: terminal_reason_for_convergence(
-                quality_gate_passed,
-                fix_output_was_substantive,
-                post_consistency_decision,
-            ),
-        }
-    }
-
-    fn reached_genuine_clean_convergence(&self) -> bool {
-        reached_genuine_clean_convergence(
-            self.quality_gate_passed,
-            self.fix_output_was_substantive,
-            self.post_consistency_decision,
-        )
-    }
-
-    fn exit_code(&self) -> i32 {
-        fix_exit_code_for_convergence(
-            self.quality_gate_passed,
-            self.fix_output_was_substantive,
-            self.post_consistency_decision,
-        )
-    }
-
-    fn pre_verdict_non_converged(&self) -> bool {
-        pre_verdict_non_convergence_reason(
-            self.quality_gate_passed,
-            self.fix_output_was_substantive,
-        )
-        .is_some()
-    }
-
-    fn fix_convergence_meta(&self) -> FixConvergenceMeta {
-        FixConvergenceMeta {
-            quality_gate_passed: self.quality_gate_passed,
-            fix_output_was_substantive: self.fix_output_was_substantive,
-            post_consistency_decision: self.post_consistency_decision.as_str().to_string(),
-            reached_genuine_clean_convergence: self.reached_genuine_clean_convergence(),
-            terminal_reason: self.terminal_reason.to_string(),
-        }
-    }
-}
-
-fn terminal_reason_for_convergence(
-    quality_gate_passed: bool,
-    fix_output_was_substantive: bool,
-    post_consistency_decision: ReviewDecision,
-) -> &'static str {
-    if reached_genuine_clean_convergence(
-        quality_gate_passed,
-        fix_output_was_substantive,
-        post_consistency_decision,
-    ) {
-        "clean_convergence"
-    } else if !fix_output_was_substantive {
-        "empty_fix_output"
-    } else if !quality_gate_passed {
-        "quality_gate_failed"
-    } else {
-        "post_consistency_non_pass"
-    }
-}
-
-fn pre_verdict_non_convergence_reason(
-    quality_gate_passed: bool,
-    fix_output_was_substantive: bool,
-) -> Option<&'static str> {
-    if !fix_output_was_substantive {
-        Some("empty_fix_output")
-    } else if !quality_gate_passed {
-        Some("quality_gate_failed")
-    } else {
-        None
-    }
-}
-
 fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionMeta) {
     let Ok(session_dir) = csa_session::get_session_dir(project_root, &review_meta.session_id)
     else {
@@ -628,40 +521,20 @@ fn remove_stale_review_verdict(project_root: &Path, review_meta: &ReviewSessionM
 }
 
 fn remove_review_gate_marker_for_head(project_root: &Path, review_meta: &ReviewSessionMeta) {
-    remove_review_gate_marker(project_root, &review_meta.session_id, &review_meta.head_sha);
+    crate::review_gate::remove_review_gate_marker_for_head(
+        project_root,
+        &review_meta.head_sha,
+        Some(&review_meta.session_id),
+    );
 }
 
 fn remove_review_gate_marker_for_current_head(project_root: &Path, session_id: &str) {
     let head_sha = csa_session::detect_git_head(project_root).unwrap_or_default();
-    remove_review_gate_marker(project_root, session_id, &head_sha);
-}
-
-fn remove_review_gate_marker(project_root: &Path, session_id: &str, head_sha: &str) {
-    if head_sha.is_empty() {
-        return;
-    }
-    let backend = csa_session::create_vcs_backend(project_root);
-    let branch = match backend.identity(project_root) {
-        Ok(identity) => identity.ref_name.unwrap_or_default(),
-        Err(error) => {
-            warn!(
-                session_id, error = %error, "Cannot resolve VCS identity"
-            );
-            return;
-        }
-    };
-    if branch.is_empty() {
-        return;
-    }
-    let marker_path = crate::review_gate::marker_path(project_root, &branch, head_sha);
-    if let Err(error) = fs::remove_file(&marker_path)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            session_id, path = %marker_path.display(), error = %error,
-            "Cannot remove review-gate marker"
-        );
-    }
+    crate::review_gate::remove_review_gate_marker_for_head(
+        project_root,
+        &head_sha,
+        Some(session_id),
+    );
 }
 
 #[cfg(test)]

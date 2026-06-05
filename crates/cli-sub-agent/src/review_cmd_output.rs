@@ -112,6 +112,7 @@ pub(super) fn persist_review_verdict_artifact(
             artifact.routed_to = meta.routed_to.clone();
             artifact.primary_failure = meta.primary_failure.clone();
             artifact.failure_reason = meta.failure_reason.clone();
+            artifact.review_mode = meta.review_mode.clone();
             if let Err(error) = enforce_final_verdict_consistency(&session_dir, &mut artifact) {
                 warn!(
                     session_id = %meta.session_id,
@@ -514,6 +515,7 @@ fn build_review_verdict_artifact(
         routed_to,
         primary_failure,
         failure_reason,
+        review_mode: None,
         prior_round_refs,
         diff_size: None,
         large_diff_warning: false,
