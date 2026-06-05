@@ -1013,3 +1013,85 @@ async fn post_exec_gate_runs_when_untracked_source_exists_without_changed_paths(
     assert_eq!(outcome, PostExecGateOutcome::Passed);
     assert_eq!(calls.lock().unwrap().len(), 1);
 }
+
+/// Round-2 resource-lifecycle regression guard (#1726): a gate that exits 0
+/// while leaving a BACKGROUNDED child holding stdout/stderr open must NOT wedge
+/// the runner. The bounded pump drain + process-group reap make
+/// `execute_post_exec_gate_command` return within `timeout_seconds + grace`, and
+/// the leaked descendant is killed. Before the fix the drain awaited EOF forever
+/// (the inherited pipe write-end never closes), defeating the gate timeout.
+#[tokio::test]
+#[cfg(unix)]
+async fn execute_post_exec_gate_command_reaps_backgrounded_pipe_holder() {
+    let project_dir = tempdir().unwrap();
+    let sentinel = project_dir.path().join("pipe-holder-survived");
+    let env = HashMap::from([(
+        "GATE_TEST_SENTINEL".to_string(),
+        sentinel.to_string_lossy().into_owned(),
+    )]);
+
+    // The backgrounded subshell inherits stdout/stderr (the tee pipe) and holds
+    // it open while it sleeps, then WOULD create the sentinel at +6s. The leader
+    // exits 0 immediately (the NORMAL-exit path). The drain grace (2s) expires
+    // because the pipe stays open, triggering the process-group kill — which
+    // reaps the subshell well before +6s, so the sentinel is never written.
+    let command = r#"(sleep 6; : > "$GATE_TEST_SENTINEL") & exit 0"#;
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        execute_post_exec_gate_command(command, project_dir.path(), 30, Some(env)),
+    )
+    .await
+    .expect("gate must not hang when a backgrounded child holds the pipe open")
+    .expect("post-exec gate command should run");
+
+    // The leader's own exit is still reported faithfully.
+    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
+
+    // Wait past the subshell's +6s mark: a surviving holder would have created
+    // the sentinel by now. Its absence proves the group kill reaped it.
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    assert!(
+        !sentinel.exists(),
+        "backgrounded pipe-holder must be reaped by the process-group kill, not outlive the drain"
+    );
+}
+
+/// Round-2 memory bound (#1726): a gate that floods stdout far past
+/// `GATE_CAPTURE_MAX_BYTES` must keep the in-memory capture bounded (no
+/// unbounded slurp) while still tee-ing the full transcript to the parent. The
+/// retained `captured_output` is the bounded TAIL prefixed with a truncation
+/// marker.
+#[tokio::test]
+#[cfg(unix)]
+async fn execute_post_exec_gate_command_bounds_capture_under_flood() {
+    use crate::run_cmd_post_exec_gate_capture::GATE_CAPTURE_MAX_BYTES;
+
+    let project_dir = tempdir().unwrap();
+    // `head -c` bounds the producer and closes the pipe at the byte count
+    // (sending `yes` SIGPIPE), so the gate exits cleanly with a transcript twice
+    // the capture cap — exercising truncation without a leaked holder.
+    let flood_bytes = GATE_CAPTURE_MAX_BYTES * 2;
+    let command = format!("yes payload-line | head -c {flood_bytes}");
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        execute_post_exec_gate_command(&command, project_dir.path(), 30, None),
+    )
+    .await
+    .expect("flooding gate must still terminate")
+    .expect("post-exec gate command should run");
+
+    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
+    assert!(
+        outcome.captured_output.len() <= GATE_CAPTURE_MAX_BYTES + 256,
+        "captured output must stay bounded under flood, got {} bytes",
+        outcome.captured_output.len()
+    );
+    assert!(
+        outcome
+            .captured_output
+            .starts_with("[csa: gate output truncated"),
+        "bounded capture must disclose truncation"
+    );
+}

@@ -8,9 +8,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use csa_config::ProjectConfig;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::process::Command;
-use tokio::task::JoinHandle;
+
+use crate::run_cmd_post_exec_gate_capture::{
+    BoundedTailCapture, drain_pumps_and_reap, kill_gate_process_group, tee_gate_stream,
+};
 
 /// Outcome of running the post-exec gate command, including the combined
 /// stdout+stderr captured for structured failure surfacing (#1726). The output
@@ -110,36 +112,6 @@ impl PostExecGateFailure {
 }
 
 type PostExecGateFuture = Pin<Box<dyn Future<Output = Result<PostExecGateCommandOutcome>> + Send>>;
-
-/// Read `reader` to EOF, re-emitting each chunk to the parent's `sink` (so the
-/// raw transcript stays intact) while appending it to the shared `captured`
-/// buffer for structured failure surfacing (#1726).
-fn tee_gate_stream<R, W>(reader: R, sink: W, captured: Arc<Mutex<Vec<u8>>>) -> JoinHandle<()>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-    W: AsyncWrite + Unpin + Send + 'static,
-{
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    tokio::spawn(async move {
-        let mut reader = reader;
-        let mut sink = sink;
-        let mut chunk = [0u8; 8192];
-        loop {
-            match reader.read(&mut chunk).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let bytes = &chunk[..n];
-                    let _ = sink.write_all(bytes).await;
-                    let _ = sink.flush().await;
-                    if let Ok(mut guard) = captured.lock() {
-                        guard.extend_from_slice(bytes);
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    })
-}
 
 pub(super) struct PostExecGateApplyOptions<'a> {
     pub(super) changed_paths: Option<&'a [String]>,
@@ -367,9 +339,9 @@ pub(super) fn execute_post_exec_gate_command(
         })?;
         let child_pid = child.id();
 
-        // Tee both streams: re-emit to the parent while accumulating a combined
-        // copy for the structured failure report.
-        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        // Tee both streams: re-emit to the parent while accumulating a BOUNDED
+        // combined copy for the structured failure report (#1726).
+        let captured = Arc::new(Mutex::new(BoundedTailCapture::default()));
         let stdout_pump = child
             .stdout
             .take()
@@ -391,40 +363,26 @@ pub(super) fn execute_post_exec_gate_command(
                     PostExecGateCommandExit::Exited(status.code())
                 }
                 Err(_) => {
-                    #[cfg(unix)]
-                    {
-                        if let Some(pid) = child_pid {
-                            // SAFETY: kill() is async-signal-safe. Negative PID targets the process group.
-                            unsafe {
-                                libc::kill(-(pid as i32), libc::SIGKILL);
-                            }
-                        } else {
-                            let _ = child.start_kill();
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = child.start_kill();
-                    }
-
-                    let _ = child.wait().await;
+                    // Kill the whole process group BEFORE reaping the leader, so
+                    // the un-reaped leader anchors the PGID against reuse; then
+                    // reap under a short bound so a wedged reap cannot reintroduce
+                    // an unbounded wait. `start_kill` is the cross-platform
+                    // backstop (the group kill is a no-op off Unix).
+                    kill_gate_process_group(child_pid).await;
+                    let _ = child.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
                     PostExecGateCommandExit::TimedOut
                 }
             };
 
-        // Drain the tee tasks to EOF before reading the buffer. Killing the
-        // process group (or normal exit) closes the child's pipe write ends, so
-        // both reads reach EOF and the joins complete.
-        if let Some(pump) = stdout_pump {
-            let _ = pump.await;
-        }
-        if let Some(pump) = stderr_pump {
-            let _ = pump.await;
-        }
+        // Drain the tee tasks under a bounded grace, reaping the process group
+        // if a backgrounded grandchild still holds a pipe write-end open — so
+        // `timeout_seconds` bounds the TOTAL operation, not just `child.wait()`.
+        drain_pumps_and_reap(stdout_pump, stderr_pump, child_pid).await;
 
         let captured_output = captured
             .lock()
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .map(|mut guard| guard.render())
             .unwrap_or_default();
 
         Ok(PostExecGateCommandOutcome {

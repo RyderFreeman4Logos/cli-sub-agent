@@ -301,10 +301,9 @@ fn kill_pid(pid: i32) {
 
 #[cfg(unix)]
 fn kill_pid_from_file(path: &std::path::Path) {
-    if let Ok(pid) = std::fs::read_to_string(path).map(|content| content.trim().parse::<i32>()) {
-        if let Ok(pid) = pid {
-            kill_pid(pid);
-        }
+    if let Ok(Ok(pid)) = std::fs::read_to_string(path).map(|content| content.trim().parse::<i32>())
+    {
+        kill_pid(pid);
     }
 }
 
