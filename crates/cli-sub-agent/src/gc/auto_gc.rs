@@ -16,6 +16,7 @@ use super::reaper::{
 use super::{
     RETIRE_AFTER_DAYS, STATE_DIR_SIZE_CACHE_FILENAME, extract_pid_from_lock,
     has_confirmed_sessions, is_orphan_session_dir, is_process_alive, runtime_reap_max_age_days,
+    should_skip_orphan_session_dir_delete, should_skip_whole_session_delete,
 };
 
 pub(crate) fn handle_gc_global(
@@ -112,6 +113,12 @@ pub(crate) fn handle_gc_global(
                     );
                     total_empty_sessions += 1;
                     project_removed += 1;
+                } else if should_skip_whole_session_delete(session, &session_dir) {
+                    info!(
+                        session = %session.meta_session_id,
+                        root = %session_root.display(),
+                        "Skipped whole-session delete for Active or live session"
+                    );
                 } else if csa_session::delete_session_from_root(
                     session_root,
                     &session.meta_session_id,
@@ -176,6 +183,12 @@ pub(crate) fn handle_gc_global(
                     );
                     total_expired_sessions += 1;
                     project_removed += 1;
+                } else if should_skip_whole_session_delete(session, &session_dir) {
+                    info!(
+                        session = %session.meta_session_id,
+                        root = %session_root.display(),
+                        "Skipped expired whole-session delete for Active or live session"
+                    );
                 } else if csa_session::delete_session_from_root(
                     session_root,
                     &session.meta_session_id,
@@ -208,6 +221,11 @@ pub(crate) fn handle_gc_global(
                             session_dir.display()
                         );
                         total_orphan_dirs += 1;
+                    } else if should_skip_orphan_session_dir_delete(&session_dir) {
+                        info!(
+                            "Skipped orphan-looking live session directory: {}",
+                            session_dir.display()
+                        );
                     } else if fs::remove_dir_all(&session_dir).is_ok() {
                         info!("Removed orphan directory: {}", session_dir.display());
                         total_orphan_dirs += 1;

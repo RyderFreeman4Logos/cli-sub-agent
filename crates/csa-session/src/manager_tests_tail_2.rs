@@ -36,6 +36,26 @@ fn test_save_session_in_explicit_base() {
 }
 
 #[test]
+fn test_save_session_in_publishes_complete_parseable_state() {
+    let td = tempdir().unwrap();
+    let mut state =
+        create_session_in(td.path(), td.path(), Some("Atomic save"), None, None).unwrap();
+    state.description = Some("updated through atomic save".to_string());
+
+    save_session_in(td.path(), &state).unwrap();
+
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let state_path = session_dir.join(STATE_FILE_NAME);
+    let contents = std::fs::read_to_string(&state_path).unwrap();
+    let parsed: MetaSessionState = toml::from_str(&contents).unwrap();
+    assert_eq!(parsed.meta_session_id, state.meta_session_id);
+    assert_eq!(
+        parsed.description,
+        Some("updated through atomic save".to_string())
+    );
+}
+
+#[test]
 fn test_list_sessions_empty_and_missing() {
     let td = tempdir().unwrap();
     assert!(list_all_sessions_in(td.path()).unwrap().is_empty());
@@ -346,4 +366,3 @@ fn test_prefix_stays_project_scoped() {
     let result = crate::validate::resolve_session_prefix(&sessions_dir_b, &s1.meta_session_id);
     assert!(result.is_err());
 }
-

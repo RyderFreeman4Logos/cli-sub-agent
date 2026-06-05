@@ -2,7 +2,7 @@ use anyhow::Result;
 use tracing::info;
 
 use csa_core::types::OutputFormat;
-use csa_session::{delete_session, list_sessions, list_sessions_tree_filtered};
+use csa_session::{delete_session, get_session_dir, list_sessions, list_sessions_tree_filtered};
 
 use crate::stdout_write::{write_stdout, write_stdout_line};
 
@@ -455,10 +455,19 @@ pub(crate) fn handle_session_clean(
                     &session.meta_session_id[..11.min(session.meta_session_id.len())],
                     age.num_days()
                 );
-            } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
-                info!("Removed expired session: {}", session.meta_session_id);
+                removed += 1;
+            } else {
+                let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
+                if crate::gc::should_skip_whole_session_delete(session, &session_dir) {
+                    info!(
+                        session = %session.meta_session_id,
+                        "Skipped session clean delete for Active or live session"
+                    );
+                } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
+                    info!("Removed expired session: {}", session.meta_session_id);
+                    removed += 1;
+                }
             }
-            removed += 1;
         }
     }
 

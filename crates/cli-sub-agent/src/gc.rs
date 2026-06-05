@@ -7,7 +7,8 @@ use csa_config::{GcConfig, GlobalConfig};
 use csa_core::types::OutputFormat;
 use csa_resource::cleanup_orphan_scopes;
 use csa_session::{
-    delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
+    MetaSessionState, SessionPhase, delete_session, get_session_dir, get_session_root,
+    list_sessions, save_session_in,
 };
 
 mod auto_gc;
@@ -39,6 +40,22 @@ const RUNTIME_DIR_NAME: &str = "runtime";
 const ORPHAN_SLOT_GRACE_SECS: i64 = 30;
 
 pub(crate) type RuntimeReapStats = reaper::RuntimeReapStats;
+
+pub(crate) fn should_skip_whole_session_delete(
+    session: &MetaSessionState,
+    session_dir: &Path,
+) -> bool {
+    session.phase == SessionPhase::Active
+        || csa_process::ToolLiveness::has_live_process(session_dir)
+        || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
+        || csa_process::ToolLiveness::is_alive(session_dir)
+}
+
+pub(crate) fn should_skip_orphan_session_dir_delete(session_dir: &Path) -> bool {
+    csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
+        || csa_process::ToolLiveness::has_live_process(session_dir)
+        || csa_process::ToolLiveness::is_alive(session_dir)
+}
 
 pub(crate) fn handle_gc_args(
     args: GcArgs,
@@ -132,6 +149,11 @@ pub(crate) fn handle_gc(
                     session.meta_session_id
                 );
                 empty_sessions_removed += 1;
+            } else if should_skip_whole_session_delete(session, &session_dir) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped whole-session delete for Active or live session"
+                );
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 empty_sessions_removed += 1;
             }
@@ -183,6 +205,11 @@ pub(crate) fn handle_gc(
                     age.num_days()
                 );
                 expired_sessions_removed += 1;
+            } else if should_skip_whole_session_delete(session, &session_dir) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped expired whole-session delete for Active or live session"
+                );
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 info!("Removed expired session: {}", session.meta_session_id);
                 expired_sessions_removed += 1;
@@ -217,6 +244,11 @@ pub(crate) fn handle_gc(
                         session_dir.display()
                     );
                     orphan_dirs_removed += 1;
+                } else if should_skip_orphan_session_dir_delete(&session_dir) {
+                    info!(
+                        "Skipped orphan-looking live session directory: {}",
+                        session_dir.display()
+                    );
                 } else if fs::remove_dir_all(&session_dir).is_ok() {
                     info!(
                         "Removed orphan directory without state.toml: {}",

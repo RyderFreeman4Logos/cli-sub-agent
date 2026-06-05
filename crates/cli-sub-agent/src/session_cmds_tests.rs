@@ -3,9 +3,9 @@ use super::{
     DeadActiveSessionReconciliation, display_acp_events, display_daemon_spool_logs,
     display_log_files, ensure_terminal_result_for_dead_active_session,
     ensure_terminal_result_for_dead_active_session_with_before_write,
-    filter_sessions_by_csa_version, handle_session_is_alive, handle_session_kill,
-    handle_session_list, handle_session_wait, is_session_stale_for_test, print_content_with_tail,
-    resolve_session_status, select_sessions_for_list, session_to_json,
+    filter_sessions_by_csa_version, handle_session_clean, handle_session_is_alive,
+    handle_session_kill, handle_session_list, handle_session_wait, is_session_stale_for_test,
+    print_content_with_tail, resolve_session_status, select_sessions_for_list, session_to_json,
     status_from_phase_and_result, truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};
@@ -40,6 +40,25 @@ fn truncate_with_ellipsis_handles_multibyte_chinese() {
 fn truncate_with_ellipsis_handles_emoji_without_panic() {
     let input = "session 😀😃😄😁 description";
     assert_eq!(truncate_with_ellipsis(input, 12), "session 😀...");
+}
+
+#[test]
+fn session_clean_preserves_active_session() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut session = create_session(&project, Some("active clean guard"), None, None).unwrap();
+    session.phase = SessionPhase::Active;
+    session.last_accessed = Utc::now() - chrono::Duration::days(40);
+    session.tools.clear();
+    save_session(&session).unwrap();
+
+    handle_session_clean(1, false, None, Some(project.to_string_lossy().to_string())).unwrap();
+
+    let loaded = load_session(&project, &session.meta_session_id).unwrap();
+    assert_eq!(loaded.phase, SessionPhase::Active);
+    assert!(loaded.tools.is_empty());
 }
 
 fn make_result(status: &str, exit_code: i32) -> SessionResult {

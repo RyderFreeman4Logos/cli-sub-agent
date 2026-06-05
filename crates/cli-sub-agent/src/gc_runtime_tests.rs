@@ -4,7 +4,7 @@ use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_core::types::OutputFormat;
 use csa_session::{
     SessionArtifact, SessionPhase, SessionResult, ToolState, create_session, get_session_root,
-    list_sessions, save_result, save_session,
+    list_sessions, load_session, save_result, save_session,
 };
 use std::io;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -12,6 +12,55 @@ use tempfile::tempdir;
 use tracing_subscriber::fmt::MakeWriter;
 
 static CURRENT_DIR_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+#[cfg(target_os = "linux")]
+fn read_process_start_time_ticks(pid: u32) -> u64 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let after_comm = stat.rsplit_once(") ").unwrap().1;
+    after_comm
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_pid_record(pid: u32) -> String {
+    format!("{pid} {}\n", read_process_start_time_ticks(pid))
+}
+
+#[cfg(unix)]
+fn set_file_mtime_seconds_ago(path: &std::path::Path, seconds_ago: u64) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch");
+    let target = now.saturating_sub(std::time::Duration::from_secs(seconds_ago));
+    let tv_sec = target.as_secs() as libc::time_t;
+    let tv_nsec = target.subsec_nanos() as libc::c_long;
+    let times = [
+        libc::timespec { tv_sec, tv_nsec },
+        libc::timespec { tv_sec, tv_nsec },
+    ];
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path contains NUL");
+    // SAFETY: `utimensat` is called with a valid NUL-terminated path and stack-allocated timespec array.
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+    assert_eq!(rc, 0, "utimensat failed for {}", path.display());
+}
+
+#[cfg(unix)]
+fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            backdate_tree(&entry.path(), seconds_ago);
+        }
+    }
+    set_file_mtime_seconds_ago(path, seconds_ago);
+}
 
 #[derive(Clone, Default)]
 struct SharedLogBuffer {
@@ -462,6 +511,112 @@ fn test_handle_gc_reaps_runtime_after_retiring_stale_session() {
     assert!(
         !runtime_dir.exists(),
         "default csa gc must reap runtime/ once a stale session is retired"
+    );
+}
+
+#[test]
+fn test_handle_gc_preserves_active_empty_tools_session() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let _cwd_lock = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+    let project_root = tmp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let mut session =
+        create_session(&project_root, Some("active empty tools"), None, None).unwrap();
+    session.phase = SessionPhase::Active;
+    session.tools.clear();
+    session.last_accessed = chrono::Utc::now() - chrono::Duration::days(40);
+    save_session(&session).unwrap();
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session.meta_session_id).unwrap();
+    let _cwd = CurrentDirGuard::enter(&project_root);
+
+    handle_gc(false, Some(1), false, OutputFormat::Text, None, None).unwrap();
+
+    assert!(
+        session_dir.join("state.toml").exists(),
+        "Active sessions with empty tools must not be whole-session deleted"
+    );
+    let loaded = load_session(&project_root, &session.meta_session_id).unwrap();
+    assert_eq!(loaded.phase, SessionPhase::Active);
+    assert!(loaded.tools.is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_handle_gc_preserves_empty_session_with_live_daemon_pid() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let _cwd_lock = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+    let project_root = tmp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let mut session =
+        create_session(&project_root, Some("live daemon empty tools"), None, None).unwrap();
+    session.phase = SessionPhase::Retired;
+    session.tools.clear();
+    session.last_accessed = chrono::Utc::now() - chrono::Duration::days(40);
+    save_session(&session).unwrap();
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session.meta_session_id).unwrap();
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .unwrap();
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+    let _cwd = CurrentDirGuard::enter(&project_root);
+
+    handle_gc(false, Some(1), false, OutputFormat::Text, None, None).unwrap();
+
+    child.kill().ok();
+    child.wait().ok();
+
+    assert!(
+        session_dir.join("state.toml").exists(),
+        "live daemon.pid must block whole-session empty delete"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_handle_gc_deletes_dead_retired_expired_session() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let _cwd_lock = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+    let project_root = tmp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let mut session =
+        create_session(&project_root, Some("dead retired expired"), None, None).unwrap();
+    let last_accessed = chrono::Utc::now() - chrono::Duration::days(40);
+    session.phase = SessionPhase::Retired;
+    session.last_accessed = last_accessed;
+    session.tools.insert(
+        "codex".to_string(),
+        ToolState {
+            provider_session_id: Some("provider-session".to_string()),
+            last_action_summary: "completed".to_string(),
+            last_exit_code: 0,
+            updated_at: last_accessed,
+            tool_version: None,
+            token_usage: None,
+        },
+    );
+    save_session(&session).unwrap();
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session.meta_session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+    let _cwd = CurrentDirGuard::enter(&project_root);
+
+    handle_gc(false, Some(1), false, OutputFormat::Text, None, None).unwrap();
+
+    assert!(
+        !session_dir.exists(),
+        "dead Retired sessions must remain deletable by expired whole-session GC"
     );
 }
 
