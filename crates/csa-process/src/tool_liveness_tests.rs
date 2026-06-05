@@ -207,6 +207,26 @@ fn record_spool_bytes_written_persists_monotonic_counter() {
 }
 
 #[test]
+fn is_alive_read_only_does_not_persist_liveness_snapshot() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let acp_path = tmp.path().join("output").join("acp-events.jsonl");
+    fs::create_dir_all(acp_path.parent().expect("acp path parent")).expect("create output dir");
+    fs::write(&acp_path, "{}\n").expect("write acp events");
+
+    assert!(ToolLiveness::is_alive_read_only(tmp.path()));
+    assert!(
+        !tmp.path().join(SNAPSHOT_FILE).exists(),
+        "read-only liveness checks must not write the watchdog snapshot"
+    );
+
+    assert!(ToolLiveness::probe(tmp.path()).has_any_signal());
+    assert!(
+        tmp.path().join(SNAPSHOT_FILE).exists(),
+        "the normal execution/watchdog probe must still persist the snapshot"
+    );
+}
+
+#[test]
 fn probe_detects_spool_byte_growth_after_rotation() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(

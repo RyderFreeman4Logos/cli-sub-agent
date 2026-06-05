@@ -97,11 +97,11 @@ pub use manager::{
     find_sessions, get_session_dir, get_session_dir_global, get_session_root,
     legacy_user_result_path, list_all_project_session_roots, list_all_sessions,
     list_all_sessions_all_projects, list_artifacts, list_sessions, list_sessions_from_root,
-    list_sessions_from_root_readonly, load_metadata, load_result, load_result_view, load_session,
-    load_session_global_exact, redact_result_sidecar_value, render_redacted_result_sidecar,
-    resolve_fork_source, resolve_resume_session, save_result, save_result_with_options,
-    save_session, save_session_in, update_last_accessed, validate_tool_access,
-    write_audit_warning_artifact,
+    list_sessions_from_root_readonly, list_sessions_readonly, load_metadata, load_result,
+    load_result_view, load_session, load_session_global_exact, redact_result_sidecar_value,
+    render_redacted_result_sidecar, resolve_fork_source, resolve_resume_session, save_result,
+    save_result_with_options, save_session, save_session_in, update_last_accessed,
+    validate_tool_access, write_audit_warning_artifact,
 };
 
 pub use manager::ResumeSessionResolution;

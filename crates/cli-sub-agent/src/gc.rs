@@ -7,7 +7,8 @@ use csa_config::{GcConfig, GlobalConfig};
 use csa_core::types::OutputFormat;
 use csa_resource::cleanup_orphan_scopes;
 use csa_session::{
-    delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
+    MetaSessionState, SessionPhase, delete_session, get_session_dir, get_session_root,
+    list_sessions, list_sessions_readonly, save_session_in,
 };
 
 mod auto_gc;
@@ -39,6 +40,49 @@ const RUNTIME_DIR_NAME: &str = "runtime";
 const ORPHAN_SLOT_GRACE_SECS: i64 = 30;
 
 pub(crate) type RuntimeReapStats = reaper::RuntimeReapStats;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LivenessProbeMode {
+    PersistSnapshot,
+    ReadOnly,
+}
+
+impl LivenessProbeMode {
+    pub(crate) fn for_dry_run(dry_run: bool) -> Self {
+        if dry_run {
+            Self::ReadOnly
+        } else {
+            Self::PersistSnapshot
+        }
+    }
+
+    fn is_alive(self, session_dir: &Path) -> bool {
+        match self {
+            Self::PersistSnapshot => csa_process::ToolLiveness::is_alive(session_dir),
+            Self::ReadOnly => csa_process::ToolLiveness::is_alive_read_only(session_dir),
+        }
+    }
+}
+
+pub(crate) fn should_skip_whole_session_delete(
+    session: &MetaSessionState,
+    session_dir: &Path,
+    liveness_probe_mode: LivenessProbeMode,
+) -> bool {
+    session.phase == SessionPhase::Active
+        || csa_process::ToolLiveness::has_live_process(session_dir)
+        || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
+        || liveness_probe_mode.is_alive(session_dir)
+}
+
+pub(crate) fn should_skip_orphan_session_dir_delete(
+    session_dir: &Path,
+    liveness_probe_mode: LivenessProbeMode,
+) -> bool {
+    csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
+        || csa_process::ToolLiveness::has_live_process(session_dir)
+        || liveness_probe_mode.is_alive(session_dir)
+}
 
 pub(crate) fn handle_gc_args(
     args: GcArgs,
@@ -75,7 +119,11 @@ pub(crate) fn handle_gc(
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd)?;
     let session_root = get_session_root(&project_root)?;
-    let sessions = list_sessions(&project_root, None)?;
+    let sessions = if dry_run {
+        list_sessions_readonly(&project_root, None)?
+    } else {
+        list_sessions(&project_root, None)?
+    };
     let gc_config = GcConfig::load_for_project(&project_root)?;
     let now = chrono::Utc::now();
     let runtime_reap_max_age_days =
@@ -87,6 +135,7 @@ pub(crate) fn handle_gc(
     let mut expired_sessions_removed = 0;
     let mut sessions_retired = 0u64;
     let mut orphan_scopes_cleaned = 0u64;
+    let liveness_probe_mode = LivenessProbeMode::for_dry_run(dry_run);
 
     if dry_run {
         eprintln!("[dry-run] No changes will be made.");
@@ -126,7 +175,12 @@ pub(crate) fn handle_gc(
         }
 
         if session.tools.is_empty() {
-            if dry_run {
+            if should_skip_whole_session_delete(session, &session_dir, liveness_probe_mode) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped whole-session delete for Active or live session"
+                );
+            } else if dry_run {
                 eprintln!(
                     "[dry-run] Would remove empty session: {}",
                     session.meta_session_id
@@ -176,7 +230,12 @@ pub(crate) fn handle_gc(
             && let Some(days) = max_age_days
             && age.num_days() > days as i64
         {
-            if dry_run {
+            if should_skip_whole_session_delete(session, &session_dir, liveness_probe_mode) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped expired whole-session delete for Active or live session"
+                );
+            } else if dry_run {
                 eprintln!(
                     "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
                     session.meta_session_id,
@@ -193,7 +252,11 @@ pub(crate) fn handle_gc(
     let session_root = csa_session::get_session_root(&project_root)?;
     let rotation_path = session_root.join("rotation.toml");
     if rotation_path.exists() {
-        let remaining = list_sessions(&project_root, None)?;
+        let remaining = if dry_run {
+            list_sessions_readonly(&project_root, None)?
+        } else {
+            list_sessions(&project_root, None)?
+        };
         if remaining.is_empty() {
             if dry_run {
                 eprintln!("[dry-run] Would remove rotation state: {rotation_path:?}");
@@ -211,7 +274,12 @@ pub(crate) fn handle_gc(
         for entry in entries.flatten() {
             if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
                 let session_dir = entry.path();
-                if dry_run {
+                if should_skip_orphan_session_dir_delete(&session_dir, liveness_probe_mode) {
+                    info!(
+                        "Skipped orphan-looking live session directory: {}",
+                        session_dir.display()
+                    );
+                } else if dry_run {
                     eprintln!(
                         "[dry-run] Would remove orphan directory: {}",
                         session_dir.display()

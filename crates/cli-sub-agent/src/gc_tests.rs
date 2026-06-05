@@ -4,6 +4,23 @@ use csa_core::types::OutputFormat;
 use std::os::unix::fs as unix_fs;
 use tempfile::tempdir;
 
+#[cfg(target_os = "linux")]
+fn read_process_start_time_ticks(pid: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let after_comm = stat.rsplit_once(") ").unwrap().1;
+    after_comm
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_pid_record(pid: u32) -> String {
+    format!("{pid} {}\n", read_process_start_time_ticks(pid))
+}
+
 /// Create a minimal project root with a session dir containing `state.toml`.
 fn make_project_root(base: &std::path::Path, segments: &[&str]) {
     let mut path = base.to_path_buf();
@@ -246,6 +263,75 @@ fn test_orphan_check_skips_path_segments_and_non_ulid() {
     assert_eq!(orphans[0].file_name().to_string_lossy(), orphan_name);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn test_orphan_cleanup_preserves_dir_with_live_daemon_pid() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let session_root = csa_session::get_session_root(&project_root).unwrap();
+    let orphan_dir = session_root
+        .join("sessions")
+        .join("01CCCC0000000000000000000D");
+    fs::create_dir_all(&orphan_dir).unwrap();
+    let mut child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    fs::write(orphan_dir.join("daemon.pid"), daemon_pid_record(child.id())).unwrap();
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&orphan_dir));
+
+    handle_gc(
+        false,
+        None,
+        false,
+        OutputFormat::Text,
+        None,
+        Some(project_root.to_str().unwrap()),
+    )
+    .unwrap();
+
+    child.kill().ok();
+    child.wait().ok();
+
+    assert!(
+        orphan_dir.exists(),
+        "orphan-looking dir with live daemon.pid must be preserved"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_orphan_cleanup_preserves_dir_with_live_lock() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let session_root = csa_session::get_session_root(&project_root).unwrap();
+    let orphan_dir = session_root
+        .join("sessions")
+        .join("01DDDD0000000000000000000E");
+    fs::create_dir_all(&orphan_dir).unwrap();
+    let _lock = csa_lock::acquire_lock(&orphan_dir, "codex", "orphan cleanup test").unwrap();
+    assert!(csa_process::ToolLiveness::has_live_process(&orphan_dir));
+
+    handle_gc(
+        false,
+        None,
+        false,
+        OutputFormat::Text,
+        None,
+        Some(project_root.to_str().unwrap()),
+    )
+    .unwrap();
+
+    assert!(
+        orphan_dir.exists(),
+        "orphan-looking dir with live lock must be preserved"
+    );
+}
+
 #[test]
 fn test_discover_skips_symlinked_sessions_dir() {
     let tmp = tempdir().unwrap();
@@ -403,6 +489,125 @@ scanned_at = 1
             cache_path.display()
         );
     }
+}
+
+#[test]
+fn test_gc_global_preserves_active_empty_tools_session() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let mut session =
+        csa_session::create_session(&project_root, Some("global active empty"), None, None)
+            .unwrap();
+    session.phase = csa_session::SessionPhase::Active;
+    session.tools.clear();
+    session.last_accessed = chrono::Utc::now() - chrono::Duration::days(40);
+    csa_session::save_session(&session).unwrap();
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session.meta_session_id).unwrap();
+
+    handle_gc_global(false, Some(1), false, OutputFormat::Text, None)
+        .expect("global gc should succeed");
+
+    assert!(
+        session_dir.join("state.toml").exists(),
+        "global empty-session sweep must preserve Active sessions"
+    );
+}
+
+fn session_dir_entries(session_dir: &std::path::Path) -> Vec<String> {
+    let mut entries = fs::read_dir(session_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+fn create_corrupt_session_state(
+    project_root: &std::path::Path,
+) -> (String, std::path::PathBuf, std::path::PathBuf, Vec<u8>) {
+    let session = csa_session::create_session(project_root, Some("corrupt"), None, None).unwrap();
+    let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).unwrap();
+    let state_path = session_dir.join("state.toml");
+    let corrupt_state = b"not valid toml = [".to_vec();
+    fs::write(&state_path, &corrupt_state).unwrap();
+    (
+        session.meta_session_id,
+        session_dir,
+        state_path,
+        corrupt_state,
+    )
+}
+
+#[test]
+fn test_handle_gc_dry_run_preserves_corrupt_state_without_recovery() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let (_, session_dir, state_path, corrupt_state) = create_corrupt_session_state(&project_root);
+    let entries_before = session_dir_entries(&session_dir);
+
+    handle_gc(
+        true,
+        Some(0),
+        false,
+        OutputFormat::Text,
+        None,
+        Some(project_root.to_string_lossy().as_ref()),
+    )
+    .expect("gc dry-run should not require corrupt-state recovery");
+
+    assert_eq!(session_dir_entries(&session_dir), entries_before);
+    assert_eq!(fs::read(&state_path).unwrap(), corrupt_state);
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn test_handle_gc_global_dry_run_preserves_corrupt_state_without_recovery() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let (_, session_dir, state_path, corrupt_state) = create_corrupt_session_state(&project_root);
+    let entries_before = session_dir_entries(&session_dir);
+
+    handle_gc_global(true, Some(0), false, OutputFormat::Text, None)
+        .expect("global gc dry-run should not require corrupt-state recovery");
+
+    assert_eq!(session_dir_entries(&session_dir), entries_before);
+    assert_eq!(fs::read(&state_path).unwrap(), corrupt_state);
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn test_handle_gc_recovers_corrupt_state_when_not_dry_run() {
+    let tmp = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path().join("project");
+    fs::create_dir_all(&project_root).unwrap();
+    let (session_id, session_dir, state_path, corrupt_state) =
+        create_corrupt_session_state(&project_root);
+
+    handle_gc(
+        false,
+        Some(0),
+        false,
+        OutputFormat::Text,
+        None,
+        Some(project_root.to_string_lossy().as_ref()),
+    )
+    .expect("gc execution should recover corrupt state");
+
+    assert!(session_dir.join("state.toml.corrupt").exists());
+    assert_ne!(fs::read(&state_path).unwrap(), corrupt_state);
+    let recovered = csa_session::load_session(&project_root, &session_id).unwrap();
+    assert_eq!(
+        recovered.description.as_deref(),
+        Some("(recovered from corrupt state)")
+    );
 }
 
 // --- Retirement logic tests ---

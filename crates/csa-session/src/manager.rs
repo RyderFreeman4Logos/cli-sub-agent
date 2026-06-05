@@ -7,8 +7,11 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
+#[path = "atomic_state_write.rs"]
+mod atomic_state_write;
+#[path = "manager_access.rs"]
+mod manager_access;
 #[path = "manager_audit.rs"]
 mod manager_audit;
 #[path = "manager_daemon.rs"]
@@ -17,9 +20,17 @@ mod manager_daemon;
 mod manager_legacy;
 #[path = "manager_paths.rs"]
 mod manager_paths;
+#[path = "manager_recovery.rs"]
+mod manager_recovery;
 #[path = "manager_result.rs"]
 mod manager_result;
+#[path = "manager_vcs.rs"]
+mod manager_vcs;
 
+#[cfg(test)]
+pub(crate) use manager_access::load_metadata_in;
+pub(crate) use manager_access::validate_tool_access_in;
+pub use manager_access::{load_metadata, resolve_fork_source, validate_tool_access};
 pub use manager_audit::{RepoWriteAudit, compute_repo_write_audit, write_audit_warning_artifact};
 pub use manager_daemon::{ResumeSessionResolution, create_session_with_daemon_env};
 use manager_daemon::{SessionIdStrategy, preassigned_daemon_session_id_from_env};
@@ -41,6 +52,8 @@ pub use manager_result::{
 pub(crate) use manager_result::{
     list_artifacts_in, load_result_in, load_result_view_in, save_result_in,
 };
+pub use manager_vcs::detect_git_head;
+use manager_vcs::{detect_change_id, detect_current_branch, detect_git_status_porcelain};
 
 const STATE_FILE_NAME: &str = "state.toml";
 const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
@@ -231,51 +244,6 @@ fn create_session_in_with_strategy(
 
     Ok(state)
 }
-pub fn detect_git_head(project_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(project_path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let head = String::from_utf8(output.stdout).ok()?;
-    let trimmed = head.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn detect_git_status_porcelain(project_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["status", "--porcelain=v1", "-z"])
-        .current_dir(project_path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    String::from_utf8(output.stdout).ok()
-}
-
-/// Detect a VCS change identifier for session-change binding using the active backend.
-fn detect_change_id(project_path: &Path) -> Option<String> {
-    let backend = crate::vcs_backends::create_vcs_backend(project_path);
-    backend.head_id(project_path).ok().flatten()
-}
-
-fn detect_current_branch(project_path: &Path) -> Option<String> {
-    let backend = crate::vcs_backends::create_vcs_backend(project_path);
-    backend.current_branch(project_path).ok().flatten()
-}
-
 /// Load an existing session
 pub fn load_session(project_path: &Path, session_id: &str) -> Result<MetaSessionState> {
     let base_dir = resolve_read_base_dir(project_path, Some(session_id))?;
@@ -364,10 +332,7 @@ pub fn save_session_in(base_dir: &Path, state: &MetaSessionState) -> Result<()> 
 
     let contents = toml::to_string_pretty(state).context("Failed to serialize session state")?;
 
-    fs::write(&state_path, contents)
-        .with_context(|| format!("Failed to write state file: {}", state_path.display()))?;
-
-    Ok(())
+    atomic_state_write::write_state_atomically(&session_dir, &state_path, &contents)
 }
 
 /// Delete a session and its directory
@@ -461,65 +426,15 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                 );
             }
             Err(e) => {
-                // BUG-11: Corrupt state.toml recovery
                 let session_dir = get_session_dir_in(base_dir, &session_id);
-                let state_path = session_dir.join(STATE_FILE_NAME);
-                if !state_path.exists() {
-                    tracing::warn!(session_id = %session_id, "No state.toml");
-                    continue;
+                if let Some(minimal_state) = manager_recovery::recover_corrupt_session_state(
+                    base_dir,
+                    &session_dir,
+                    &session_id,
+                    &e,
+                ) {
+                    sessions.push(minimal_state);
                 }
-                let backup_path = session_dir.join("state.toml.corrupt");
-                if let Err(backup_err) = fs::rename(&state_path, &backup_path) {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        error = %backup_err,
-                        "Failed to backup corrupt state.toml"
-                    );
-                    continue;
-                }
-                tracing::warn!(
-                    session_id = %session_id,
-                    error = %e,
-                    "Recovered corrupt state.toml → state.toml.corrupt"
-                );
-                let now = chrono::Utc::now();
-                let minimal_state = MetaSessionState {
-                    meta_session_id: session_id.clone(),
-                    description: Some("(recovered from corrupt state)".to_string()),
-                    project_path: "(unknown)".to_string(),
-                    branch: None,
-                    created_at: now,
-                    last_accessed: now,
-                    csa_version: None,
-                    genealogy: crate::state::Genealogy::default(),
-                    tools: HashMap::new(),
-                    context_status: Default::default(),
-                    total_token_usage: None,
-                    phase: Default::default(),
-                    task_context: Default::default(),
-                    turn_count: 0,
-                    token_budget: None,
-                    sandbox_info: None,
-                    termination_reason: None,
-                    is_seed_candidate: false,
-                    git_head_at_creation: None,
-                    pre_session_porcelain: None,
-                    last_return_packet: None,
-                    change_id: None,
-                    spec_id: None,
-                    fork_call_timestamps: Vec::new(),
-                    vcs_identity: None,
-                    identity_version: 1,
-                };
-                if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        error = %save_err,
-                        "Failed to save minimal state after recovery"
-                    );
-                    continue;
-                }
-                sessions.push(minimal_state);
             }
         }
     }
@@ -538,20 +453,44 @@ pub fn list_sessions(
     list_sessions_in(&base_dir, tool_filter)
 }
 
+/// Read-only variant of [`list_sessions`] (skips corrupt-state recovery).
+pub fn list_sessions_readonly(
+    project_path: &Path,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let base_dir = resolve_read_base_dir(project_path, None)?;
+    list_sessions_in_readonly(&base_dir, tool_filter)
+}
+
 /// Internal implementation: list sessions with optional filter
 pub(crate) fn list_sessions_in(
     base_dir: &Path,
     tool_filter: Option<&[&str]>,
 ) -> Result<Vec<MetaSessionState>> {
     let all_sessions = list_all_sessions_in(base_dir)?;
+    Ok(filter_sessions_by_tool(all_sessions, tool_filter))
+}
 
+/// Read-only internal implementation: list sessions with optional filter.
+pub(crate) fn list_sessions_in_readonly(
+    base_dir: &Path,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let all_sessions = list_all_sessions_in_readonly(base_dir)?;
+    Ok(filter_sessions_by_tool(all_sessions, tool_filter))
+}
+
+fn filter_sessions_by_tool(
+    all_sessions: Vec<MetaSessionState>,
+    tool_filter: Option<&[&str]>,
+) -> Vec<MetaSessionState> {
     if let Some(tools) = tool_filter {
-        Ok(all_sessions
+        all_sessions
             .into_iter()
             .filter(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)))
-            .collect())
+            .collect()
     } else {
-        Ok(all_sessions)
+        all_sessions
     }
 }
 
@@ -691,103 +630,6 @@ pub(crate) fn complete_session_in(
     validate_session_id(session_id)?;
     let sessions_dir = base_dir.join("sessions");
     crate::git::commit_session(&sessions_dir, session_id, message)
-}
-
-/// Load session metadata (tool ownership info)
-pub fn load_metadata(
-    project_path: &Path,
-    session_id: &str,
-) -> Result<Option<crate::metadata::SessionMetadata>> {
-    let base_dir = resolve_read_base_dir(project_path, Some(session_id))?;
-    load_metadata_in(&base_dir, session_id)
-}
-
-/// Internal implementation: load metadata from explicit base directory
-pub(crate) fn load_metadata_in(
-    base_dir: &Path,
-    session_id: &str,
-) -> Result<Option<crate::metadata::SessionMetadata>> {
-    validate_session_id(session_id)?;
-    let session_dir = get_session_dir_in(base_dir, session_id);
-    let metadata_path = session_dir.join(crate::metadata::METADATA_FILE_NAME);
-
-    if !metadata_path.exists() {
-        return Ok(None);
-    }
-
-    let contents = fs::read_to_string(&metadata_path)
-        .with_context(|| format!("Failed to read metadata: {}", metadata_path.display()))?;
-    let metadata: crate::metadata::SessionMetadata = toml::from_str(&contents)
-        .with_context(|| format!("Failed to parse metadata: {}", metadata_path.display()))?;
-
-    Ok(Some(metadata))
-}
-
-/// Resolve a session reference as a fork source without tool-lock enforcement.
-///
-/// Unlike [`resolve_resume_session`], this function does NOT check `tool_locked`
-/// because soft forks only read context from the parent session and do not require
-/// tool ownership. The returned `provider_session_id` is from the *source* tool
-/// (not the fork target), which native forks may need.
-pub fn resolve_fork_source(
-    project_path: &Path,
-    session_ref: &str,
-) -> Result<ResumeSessionResolution> {
-    let primary = get_session_root(project_path)?;
-    match resolve_fork_source_in(&primary, session_ref) {
-        Ok(resolution) => Ok(resolution),
-        Err(primary_error) => {
-            let Some(legacy) = legacy_session_root(project_path) else {
-                return Err(primary_error);
-            };
-            if !legacy.join("sessions").exists() {
-                return Err(primary_error);
-            }
-            resolve_fork_source_in(&legacy, session_ref).map_err(|_| primary_error)
-        }
-    }
-}
-
-/// Internal implementation: resolve fork source IDs without tool-lock check.
-fn resolve_fork_source_in(base_dir: &Path, session_ref: &str) -> Result<ResumeSessionResolution> {
-    let sessions_dir = base_dir.join("sessions");
-    let meta_session_id = resolve_session_prefix(&sessions_dir, session_ref)?;
-
-    // Load session to find the source tool's provider session ID (for native fork).
-    // We take the first tool entry that has a provider_session_id.
-    let session = load_session_in(base_dir, &meta_session_id)?;
-    let provider_session_id = session
-        .tools
-        .values()
-        .find_map(|state| state.provider_session_id.clone());
-
-    Ok(ResumeSessionResolution {
-        meta_session_id,
-        provider_session_id,
-    })
-}
-
-/// Validate that the given tool can access this session.
-/// Returns Ok(()) if access is allowed, Err if tool_locked and tool doesn't match.
-pub fn validate_tool_access(project_path: &Path, session_id: &str, tool: &str) -> Result<()> {
-    let base_dir = resolve_read_base_dir(project_path, Some(session_id))?;
-    validate_tool_access_in(&base_dir, session_id, tool)
-}
-
-/// Internal implementation: validate tool access in explicit base directory
-pub(crate) fn validate_tool_access_in(base_dir: &Path, session_id: &str, tool: &str) -> Result<()> {
-    if let Some(metadata) = load_metadata_in(base_dir, session_id)?
-        && metadata.tool_locked
-        && metadata.tool != tool
-    {
-        anyhow::bail!(
-            "Session '{}' is locked to tool '{}', cannot access with '{}'",
-            session_id,
-            metadata.tool,
-            tool
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

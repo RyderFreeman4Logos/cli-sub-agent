@@ -14,8 +14,9 @@ use super::reaper::{
     sessions_with_dry_run_retirements, stale_session_retirement_candidate,
 };
 use super::{
-    RETIRE_AFTER_DAYS, STATE_DIR_SIZE_CACHE_FILENAME, extract_pid_from_lock,
+    LivenessProbeMode, RETIRE_AFTER_DAYS, STATE_DIR_SIZE_CACHE_FILENAME, extract_pid_from_lock,
     has_confirmed_sessions, is_orphan_session_dir, is_process_alive, runtime_reap_max_age_days,
+    should_skip_orphan_session_dir_delete, should_skip_whole_session_delete,
 };
 
 pub(crate) fn handle_gc_global(
@@ -49,6 +50,7 @@ pub(crate) fn handle_gc_global(
     let mut total_transcripts_removed = 0u64;
     let mut total_transcript_bytes_reclaimed = 0u64;
     let mut projects_failed = 0u64;
+    let liveness_probe_mode = LivenessProbeMode::for_dry_run(dry_run);
 
     if dry_run {
         eprintln!("[dry-run] Global GC — no changes will be made.");
@@ -104,7 +106,13 @@ pub(crate) fn handle_gc_global(
             }
 
             if session.tools.is_empty() {
-                if dry_run {
+                if should_skip_whole_session_delete(session, &session_dir, liveness_probe_mode) {
+                    info!(
+                        session = %session.meta_session_id,
+                        root = %session_root.display(),
+                        "Skipped whole-session delete for Active or live session"
+                    );
+                } else if dry_run {
                     eprintln!(
                         "[dry-run] Would remove empty session: {} (in {})",
                         session.meta_session_id,
@@ -167,7 +175,13 @@ pub(crate) fn handle_gc_global(
                 && let Some(days) = max_age_days
                 && age.num_days() > days as i64
             {
-                if dry_run {
+                if should_skip_whole_session_delete(session, &session_dir, liveness_probe_mode) {
+                    info!(
+                        session = %session.meta_session_id,
+                        root = %session_root.display(),
+                        "Skipped expired whole-session delete for Active or live session"
+                    );
+                } else if dry_run {
                     eprintln!(
                         "[dry-run] Would remove expired session: {} ({} days old, in {})",
                         session.meta_session_id,
@@ -202,7 +216,12 @@ pub(crate) fn handle_gc_global(
             for entry in entries.flatten() {
                 if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
                     let session_dir = entry.path();
-                    if dry_run {
+                    if should_skip_orphan_session_dir_delete(&session_dir, liveness_probe_mode) {
+                        info!(
+                            "Skipped orphan-looking live session directory: {}",
+                            session_dir.display()
+                        );
+                    } else if dry_run {
                         eprintln!(
                             "[dry-run] Would remove orphan directory: {}",
                             session_dir.display()

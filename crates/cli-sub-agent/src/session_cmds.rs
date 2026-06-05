@@ -2,7 +2,7 @@ use anyhow::Result;
 use tracing::info;
 
 use csa_core::types::OutputFormat;
-use csa_session::{delete_session, list_sessions, list_sessions_tree_filtered};
+use csa_session::{delete_session, get_session_dir, list_sessions, list_sessions_tree_filtered};
 
 use crate::stdout_write::{write_stdout, write_stdout_line};
 
@@ -438,9 +438,14 @@ pub(crate) fn handle_session_clean(
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
-    let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
+    let sessions = if dry_run {
+        csa_session::list_sessions_readonly(&project_root, tool_filter.as_deref())?
+    } else {
+        list_sessions(&project_root, tool_filter.as_deref())?
+    };
     let now = chrono::Utc::now();
     let mut removed = 0;
+    let liveness_probe_mode = crate::gc::LivenessProbeMode::for_dry_run(dry_run);
 
     if dry_run {
         eprintln!("[dry-run] No changes will be made.");
@@ -449,16 +454,27 @@ pub(crate) fn handle_session_clean(
     for session in &sessions {
         let age = now.signed_duration_since(session.last_accessed);
         if age.num_days() > days as i64 {
-            if dry_run {
+            let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
+            if crate::gc::should_skip_whole_session_delete(
+                session,
+                &session_dir,
+                liveness_probe_mode,
+            ) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped session clean delete for Active or live session"
+                );
+            } else if dry_run {
                 eprintln!(
                     "[dry-run] Would remove: {} (last accessed {} days ago)",
                     &session.meta_session_id[..11.min(session.meta_session_id.len())],
                     age.num_days()
                 );
+                removed += 1;
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 info!("Removed expired session: {}", session.meta_session_id);
+                removed += 1;
             }
-            removed += 1;
         }
     }
 

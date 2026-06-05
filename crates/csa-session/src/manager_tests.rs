@@ -229,6 +229,44 @@ fn test_list_sessions_with_tool_filter() {
 }
 
 #[test]
+fn test_list_sessions_readonly_preserves_corrupt_state_without_recovery() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let session = create_session_in(td.path(), td.path(), Some("corrupt"), None, None).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &session.meta_session_id);
+    let state_path = session_dir.join(STATE_FILE_NAME);
+    let corrupt_state = b"not valid toml = [".to_vec();
+    std::fs::write(&state_path, &corrupt_state).unwrap();
+
+    let sessions = list_sessions_in_readonly(td.path(), None).unwrap();
+
+    assert!(sessions.is_empty());
+    assert_eq!(std::fs::read(&state_path).unwrap(), corrupt_state);
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn test_list_sessions_recovers_corrupt_state() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let session = create_session_in(td.path(), td.path(), Some("corrupt"), None, None).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &session.meta_session_id);
+    let state_path = session_dir.join(STATE_FILE_NAME);
+    std::fs::write(&state_path, b"not valid toml = [").unwrap();
+
+    let sessions = list_sessions_in(td.path(), None).unwrap();
+
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].meta_session_id, session.meta_session_id);
+    assert!(session_dir.join("state.toml.corrupt").exists());
+    let recovered = load_session_in(td.path(), &session.meta_session_id).unwrap();
+    assert_eq!(
+        recovered.description.as_deref(),
+        Some("(recovered from corrupt state)")
+    );
+}
+
+#[test]
 fn test_resolve_resume_session_with_provider_id() {
     let td = tempdir().unwrap();
     let mut state = create_session_in(td.path(), td.path(), Some("Resume"), None, None).unwrap();
