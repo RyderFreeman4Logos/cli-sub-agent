@@ -68,6 +68,7 @@ pub(crate) fn persist_fix_final_artifacts_for_tests_with_output(
         quality_gate_passed,
         Some(current_fix_output),
         empty_diff_report(),
+        None,
     )
 }
 
@@ -85,5 +86,25 @@ pub(crate) fn persist_fix_final_artifacts_for_tests_with_output_and_diff_report(
         quality_gate_passed,
         Some(current_fix_output),
         diff_report,
+        None,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn persist_fix_final_artifacts_for_tests_with_noop_probe(
+    project_root: &Path,
+    review_meta: &ReviewSessionMeta,
+    quality_gate_passed: bool,
+    current_fix_output: &str,
+    initial_head: Option<String>,
+) -> ReviewDecision {
+    let noop_probe = super::FixNoOpProbe { initial_head };
+    super::persist_fix_final_artifacts_with_current_output(
+        project_root,
+        review_meta,
+        quality_gate_passed,
+        Some(current_fix_output),
+        empty_diff_report(),
+        Some(&noop_probe),
     )
 }

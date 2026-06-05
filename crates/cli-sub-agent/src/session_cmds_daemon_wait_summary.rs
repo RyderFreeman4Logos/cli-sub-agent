@@ -284,6 +284,13 @@ fn read_review_verdict_label(
 ) -> Option<String> {
     if let Some(artifact) = read_review_verdict_artifact(session_dir) {
         let meta = read_review_meta_for_label(session_dir);
+        if let Some(label) = meta
+            .as_ref()
+            .and_then(|meta| format_fix_loop_noop_label(meta.failure_reason.as_deref()))
+            .or_else(|| format_fix_loop_noop_label(artifact.failure_reason.as_deref()))
+        {
+            return Some(label);
+        }
         if artifact.decision == ReviewDecision::Pass {
             if !wait_result_allows_pass_verdict(result) {
                 return Some("UNAVAILABLE".to_string());
@@ -312,6 +319,9 @@ fn read_review_verdict_label(
         && let Ok(raw) = std::fs::read_to_string(&meta_path)
         && let Ok(meta) = serde_json::from_str::<ReviewSessionMeta>(&raw)
     {
+        if let Some(label) = format_fix_loop_noop_label(meta.failure_reason.as_deref()) {
+            return Some(label);
+        }
         if meta.fix_attempted && !meta.fix_clean_converged() {
             return Some("UNAVAILABLE".to_string());
         }
@@ -319,6 +329,14 @@ fn read_review_verdict_label(
     }
 
     None
+}
+
+fn format_fix_loop_noop_label(reason: Option<&str>) -> Option<String> {
+    let reason = reason?.strip_prefix("fix_loop_noop:")?.trim();
+    if reason.is_empty() {
+        return None;
+    }
+    Some(format!("FIX-LOOP-NO-OP ({reason})"))
 }
 
 fn read_review_verdict_artifact(session_dir: &Path) -> Option<ReviewVerdictArtifact> {
