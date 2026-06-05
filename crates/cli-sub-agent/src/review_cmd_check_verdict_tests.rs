@@ -197,6 +197,95 @@ fn set_review_timestamp(project_root: &Path, session_id: &str, timestamp: i64) {
     csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
 }
 
+#[test]
+fn issue_1817_failing_red_team_parent_blocks_gate_over_earlier_child_pass() {
+    // #1817 consumer side: a red-team merge gate (`--check-verdict --red-team`) must
+    // honor a FAILING parent consensus that carries the run mode, instead of falling
+    // through to an earlier child reviewer PASS. Before the producer fix the parent FAIL
+    // recorded `review_mode = None`, so the red-team mode filter SKIPPED it and the child
+    // PASS satisfied the gate -- a false merge approval.
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let branch = "feature";
+    let head_sha = "abcdef1234567890";
+
+    // Earlier child reviewer PASS, tagged red-team.
+    let child_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    set_review_mode(&project, &child_id, Some("red-team"));
+    set_review_timestamp(&project, &child_id, 1_000);
+
+    // The child alone satisfies a red-team gate.
+    let found = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap()
+    .expect("a red-team child PASS must satisfy the gate on its own");
+    assert_eq!(found.session_id, child_id);
+
+    // A later parent consensus REJECTS the change.
+    let parent_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Fail,
+        "HAS_ISSUES",
+    );
+    set_review_timestamp(&project, &parent_id, 2_000);
+
+    // Pre-fix hazard: a mode-LESS parent FAIL is invisible to the red-team filter, so the
+    // gate falls through to the earlier child PASS -- a false approval.
+    set_review_mode(&project, &parent_id, None);
+    let fell_through = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap();
+    assert_eq!(
+        fell_through.map(|m| m.session_id),
+        Some(child_id.clone()),
+        "a mode-less parent FAIL is skipped by the red-team filter (the #1817 bug)"
+    );
+
+    // Post-fix: the parent FAIL carries the run mode, so the red-team gate matches the
+    // latest (failing) parent and blocks -- no fall-through to the child PASS.
+    set_review_mode(&project, &parent_id, Some("red-team"));
+    let blocked = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap();
+    assert!(
+        blocked.is_none(),
+        "a mode-tagged failing parent consensus must block the red-team gate, \
+         not fall through to the child PASS"
+    );
+}
+
 fn parse_review_args(argv: &[&str]) -> ReviewArgs {
     let cli = Cli::try_parse_from(argv).expect("review CLI args should parse");
     match cli.command {

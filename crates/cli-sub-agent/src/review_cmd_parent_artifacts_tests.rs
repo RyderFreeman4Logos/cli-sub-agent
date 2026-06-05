@@ -330,6 +330,216 @@ fn issue_1817_consensus_parent_verdict_carries_review_mode() {
     );
 }
 
+fn init_git_repo_for_marker(project: &Path) {
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args(args)
+            .status()
+            .expect("git command should execute");
+        assert!(status.success(), "git {args:?} should succeed");
+    };
+    run(&["init"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "Test User"]);
+    fs::write(project.join("tracked.txt"), "baseline\n").expect("write baseline file");
+    run(&["add", "tracked.txt"]);
+    run(&["commit", "-m", "initial"]);
+}
+
+fn current_git_branch(project: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .expect("git rev-parse should execute");
+    assert!(output.status.success(), "git rev-parse should succeed");
+    String::from_utf8(output.stdout)
+        .expect("branch name should be utf-8")
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn issue_1817_mode_less_reviewer_on_red_team_run_tags_parent_pass() {
+    // #1817 regression: when the per-reviewer findings artifact carries NO review_mode
+    // (legacy / contract-format), the parent consensus must still record the RUN-level
+    // mode on review_meta.json, review-verdict.json, AND the review-gate marker -- not
+    // `None`. Otherwise `csa review --check-verdict --red-team` skips the mode-less
+    // parent verdict and the red-team merge-gate audit cannot be proven.
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let project = temp.path();
+    // A git repo is needed so the clean-verdict gate marker resolves a branch.
+    init_git_repo_for_marker(project);
+    let branch = current_git_branch(project);
+
+    let session_dir = project.display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    // Contract-format reviewer artifact => parse_reviewer_artifact yields review_mode = None.
+    let reviewer_dir = project.join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "verdict": "PASS",
+            "summary": "No blocking findings in main...HEAD.",
+            "findings": []
+        }))
+        .expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+
+    let outcomes = vec![reviewer_outcome(
+        0,
+        ToolName::Codex,
+        crate::review_consensus::CLEAN,
+        None,
+    )];
+    let ctx = MultiReviewerConsensusArtifacts {
+        project_root: project,
+        reviewers: 1,
+        outcomes: &outcomes,
+        final_verdict: crate::review_consensus::CLEAN,
+        all_reviewers_unavailable: false,
+        head_sha: "abcdef1234567890",
+        scope: "range:main...HEAD",
+        run_review_mode: Some("red-team"),
+        review_iterations: 1,
+        diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
+    };
+
+    write_multi_reviewer_consensus_artifacts(
+        ctx,
+        &startup_env_for_parent_session(project, "01PARENTSESSION000000000000"),
+    )
+    .expect("parent consensus artifacts should be produced");
+
+    let meta: csa_session::state::ReviewSessionMeta = serde_json::from_str(
+        &fs::read_to_string(project.join("review_meta.json"))
+            .expect("review_meta.json should exist"),
+    )
+    .expect("review meta should parse");
+    assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(
+        meta.review_mode.as_deref(),
+        Some("red-team"),
+        "a mode-less reviewer on a red-team run must still tag the parent meta red-team"
+    );
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(project.join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(
+        verdict.review_mode.as_deref(),
+        Some("red-team"),
+        "a mode-less reviewer on a red-team run must still tag the parent verdict red-team"
+    );
+
+    let marker = crate::review_gate::read_review_gate_marker(project, &branch, "abcdef1234567890")
+        .expect("a clean red-team consensus must write a review-gate marker");
+    assert_eq!(
+        marker.review_mode.as_deref(),
+        Some("red-team"),
+        "a mode-less reviewer on a red-team run must still tag the review-gate marker red-team"
+    );
+}
+
+#[test]
+fn issue_1817_failing_parent_consensus_on_red_team_run_is_mode_tagged() {
+    // #1817 regression (FAIL path): a REJECTING parent consensus on a red-team run must
+    // record the run mode on review_meta.json + review-verdict.json so the red-team gate
+    // matches and honors the parent FAIL instead of skipping it on a mode mismatch. (A
+    // non-clean verdict writes no gate marker, by design, so the FAIL is honored via the
+    // persisted session verdict.)
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let temp = tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().display().to_string();
+    let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
+    let _session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01PARENTSESSION000000000000");
+    let _daemon_session_dir_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_session_id_guard = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+
+    // Mode-less reviewer artifact carrying a blocking finding => consensus FAIL.
+    let reviewer_dir = temp.path().join("reviewer-1");
+    fs::create_dir_all(&reviewer_dir).expect("reviewer dir should be created");
+    let findings = vec![blocking_finding("FAIL-FID")];
+    fs::write(
+        reviewer_dir.join("review-findings.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "verdict": "HAS_ISSUES",
+            "summary": "Blocking finding in main...HEAD.",
+            "findings": findings,
+        }))
+        .expect("artifact should serialize"),
+    )
+    .expect("review artifact should be written");
+
+    let outcomes = vec![reviewer_outcome(
+        0,
+        ToolName::Codex,
+        crate::review_consensus::HAS_ISSUES,
+        None,
+    )];
+    let ctx = MultiReviewerConsensusArtifacts {
+        project_root: temp.path(),
+        reviewers: 1,
+        outcomes: &outcomes,
+        final_verdict: crate::review_consensus::HAS_ISSUES,
+        all_reviewers_unavailable: false,
+        head_sha: "abcdef1234567890",
+        scope: "range:main...HEAD",
+        run_review_mode: Some("red-team"),
+        review_iterations: 1,
+        diff_fingerprint: Some("sha256:test".to_string()),
+        diff_size: None,
+        large_diff_warning: None,
+    };
+
+    write_multi_reviewer_consensus_artifacts(
+        ctx,
+        &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
+    )
+    .expect("parent consensus artifacts should be produced");
+
+    let meta: csa_session::state::ReviewSessionMeta = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("review_meta.json"))
+            .expect("review_meta.json should exist"),
+    )
+    .expect("review meta should parse");
+    assert_eq!(meta.decision, ReviewDecision::Fail.as_str());
+    assert_eq!(
+        meta.review_mode.as_deref(),
+        Some("red-team"),
+        "a failing red-team parent consensus must record the run mode so the gate honors the FAIL"
+    );
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should exist"),
+    )
+    .expect("review verdict should parse");
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(
+        verdict.review_mode.as_deref(),
+        Some("red-team"),
+        "a failing red-team parent verdict must be mode-tagged"
+    );
+}
+
 #[test]
 fn issue_1696_reviewer_artifact_ignores_info_without_dropping_countable_findings() {
     let temp = tempdir().expect("tempdir should be created");
@@ -756,6 +966,7 @@ fn consensus_artifacts_copy_child_only_findings_into_parent_session_outputs() {
         all_reviewers_unavailable: false,
         head_sha: "abcdef1234567890",
         scope: "range:main...HEAD",
+        run_review_mode: None,
         review_iterations: 1,
         diff_fingerprint: Some("sha256:test".to_string()),
         diff_size: None,
@@ -1333,6 +1544,7 @@ fn write_multi_reviewer_consensus_artifacts_preserves_blocking_findings_on_clean
         all_reviewers_unavailable: false,
         head_sha: "abcdef1234567890",
         scope: "range:main...HEAD",
+        run_review_mode: None,
         review_iterations: 2,
         diff_fingerprint: Some("sha256:test".to_string()),
         diff_size: None,
@@ -1498,6 +1710,7 @@ fn write_standalone_consensus_review_artifacts_updates_carrier_session() {
         all_reviewers_unavailable: false,
         head_sha: "abcdef1234567890",
         scope: "range:main...HEAD",
+        run_review_mode: None,
         review_iterations: 2,
         diff_fingerprint: Some("sha256:test".to_string()),
         diff_size: None,
@@ -1588,6 +1801,7 @@ fn standalone_consensus_preserves_blocking_child_findings_on_clean_consensus() {
         all_reviewers_unavailable: false,
         head_sha: "abcdef1234567890",
         scope: "range:main...HEAD",
+        run_review_mode: None,
         review_iterations: 1,
         diff_fingerprint: Some("sha256:test".to_string()),
         diff_size: None,
@@ -1667,6 +1881,7 @@ fn write_standalone_consensus_review_artifacts_skips_synthetic_unavailable_carri
         all_reviewers_unavailable: false,
         head_sha: "abcdef1234567890",
         scope: "range:main...HEAD",
+        run_review_mode: None,
         review_iterations: 2,
         diff_fingerprint: Some("sha256:test".to_string()),
         diff_size: None,

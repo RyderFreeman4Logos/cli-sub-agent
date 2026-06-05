@@ -289,6 +289,10 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         all_reviewers_unavailable,
         head_sha: &head_sha,
         scope: ctx.scope,
+        // Authoritative run-level mode, mirroring the child-sidecar stamp above so
+        // the parent consensus verdict is mode-tagged independently of whether the
+        // per-reviewer findings artifacts carried a mode (#1817).
+        run_review_mode: Some(ctx.args.effective_review_mode().as_str()),
         review_iterations,
         diff_fingerprint: diff_fingerprint.clone(),
         diff_size: ctx.diff_size,

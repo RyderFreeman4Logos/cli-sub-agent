@@ -34,6 +34,10 @@ pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) all_reviewers_unavailable: bool,
     pub(super) head_sha: &'a str,
     pub(super) scope: &'a str,
+    /// Run-level review mode (`effective_review_mode`), recorded on the parent
+    /// meta/verdict/marker so the `--check-verdict` mode filter matches even when
+    /// the per-reviewer artifacts carry none (#1817).
+    pub(super) run_review_mode: Option<&'a str>,
     pub(super) review_iterations: u32,
     pub(super) diff_fingerprint: Option<String>,
     pub(super) diff_size: Option<&'a ReviewDiffSize>,
@@ -183,6 +187,8 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
     startup_env: &StartupSubtreeEnv,
     parent_review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<()> {
+    // Test-only entry; production threads the run mode through the struct field.
+    let run_review_mode = parent_review_meta.and_then(|meta| meta.review_mode.as_deref());
     write_multi_reviewer_parent_artifacts_with_diff_size(
         project_root,
         reviewers,
@@ -191,6 +197,7 @@ pub(super) fn write_multi_reviewer_parent_artifacts(
         all_reviewers_unavailable,
         startup_env,
         parent_review_meta,
+        run_review_mode,
         None,
         None,
     )
@@ -205,6 +212,7 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
     all_reviewers_unavailable: bool,
     startup_env: &StartupSubtreeEnv,
     parent_review_meta: Option<&ReviewSessionMeta>,
+    run_review_mode: Option<&str>,
     diff_size: Option<&ReviewDiffSize>,
     large_diff_warning: Option<LargeDiffWarning>,
 ) -> Result<()> {
@@ -236,13 +244,14 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
             diff_size,
             large_diff_warning,
         },
-        parent_artifact.review_mode.as_deref(),
+        // Authoritative run mode, not reviewer-derived `parent_artifact.review_mode` (#1817).
+        run_review_mode,
     )?;
     if let Some(meta) = parent_review_meta {
         let mut meta = meta.clone();
         meta.decision = parent_decision.as_str().to_string();
         meta.verdict = parent_verdict.clone();
-        meta.review_mode = parent_artifact.review_mode.clone();
+        meta.review_mode = run_review_mode.map(str::to_string);
         meta.exit_code = if parent_decision.is_clean() { 0 } else { 1 };
         write_review_meta_with_diff_report(&session_dir, &meta, diff_size, large_diff_warning)
             .context("failed to write parent review_meta.json")?;
@@ -280,6 +289,7 @@ pub(super) fn write_multi_reviewer_consensus_artifacts(
         ctx.all_reviewers_unavailable,
         startup_env,
         final_review_meta.as_ref(),
+        ctx.run_review_mode,
         ctx.diff_size,
         ctx.large_diff_warning,
     )?;
@@ -316,7 +326,8 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         head_sha: ctx.head_sha.to_string(),
         decision: decision.as_str().to_string(),
         verdict: verdict.clone(),
-        review_mode: artifact.review_mode.clone(),
+        // Authoritative run mode so the gate filter matches this carrier (#1817).
+        review_mode: ctx.run_review_mode.map(str::to_string),
         status_reason: None,
         routed_to: None,
         primary_failure: None,
@@ -340,7 +351,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         &consolidated.findings,
         Vec::new(),
     );
-    verdict_artifact.review_mode = artifact.review_mode.clone();
+    verdict_artifact.review_mode = ctx.run_review_mode.map(str::to_string);
     verdict_artifact.diff_size = ctx.diff_size.cloned();
     apply_large_diff_warning(&mut verdict_artifact, ctx.large_diff_warning);
     write_review_verdict(&session_dir, &verdict_artifact)
@@ -387,7 +398,7 @@ pub(super) fn parent_consensus_review_meta(
         head_sha: head_sha.to_string(),
         decision: decision.as_str().to_string(),
         verdict: final_verdict.to_string(),
-        // Populated from the consolidated artifact at write time (#1817).
+        // Overwritten with the run-level review mode at parent write time (#1817).
         review_mode: None,
         status_reason: None,
         routed_to: None,
