@@ -178,6 +178,7 @@ fn prior_round_context_prefers_session_findings_over_root() {
             review_iterations: 1,
             timestamp: chrono::Utc::now(),
             diff_fingerprint: None,
+            review_mode: None,
             fix_convergence: None,
         }
     }

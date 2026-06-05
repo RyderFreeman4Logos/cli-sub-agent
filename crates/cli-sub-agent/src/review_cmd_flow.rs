@@ -99,6 +99,7 @@ pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
             &final_meta.head_sha,
             persistable_session_id,
             &final_meta.scope,
+            final_meta.review_mode.as_deref(),
         );
     }
     Some(verdict_exit_code)

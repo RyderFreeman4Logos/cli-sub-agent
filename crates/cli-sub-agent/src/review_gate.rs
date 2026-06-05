@@ -39,6 +39,10 @@ pub(crate) struct ReviewGateMarker {
     pub scope: String,
     #[serde(default = "default_marker_verdict")]
     pub verdict: String,
+    /// Review mode that produced this marker ("standard" or "red-team").
+    /// Absent for legacy markers written before review-mode auditing (#1817).
+    #[serde(default)]
+    pub review_mode: Option<String>,
 }
 
 fn default_marker_verdict() -> String {
@@ -76,10 +80,24 @@ pub(crate) fn marker_path(project_root: &Path, branch: &str, head_sha: &str) -> 
 }
 
 /// TOML content written to the marker file.
-fn marker_toml(session_id: &str, branch: &str, head_sha: &str, scope: &str) -> String {
+///
+/// `review_mode` is emitted only when known so legacy markers (and standard
+/// reviews where the caller did not resolve a mode) stay deserializable via the
+/// `#[serde(default)]` on [`ReviewGateMarker::review_mode`].
+fn marker_toml(
+    session_id: &str,
+    branch: &str,
+    head_sha: &str,
+    scope: &str,
+    review_mode: Option<&str>,
+) -> String {
     let ts = Utc::now().to_rfc3339();
+    let review_mode_line = match review_mode {
+        Some(mode) => format!("review_mode = {mode:?}\n"),
+        None => String::new(),
+    };
     format!(
-        "session_id = {session_id:?}\ntimestamp = {ts:?}\nbranch = {branch:?}\nhead_sha = {head_sha:?}\nscope = {scope:?}\nverdict = \"CLEAN\"\n"
+        "session_id = {session_id:?}\ntimestamp = {ts:?}\nbranch = {branch:?}\nhead_sha = {head_sha:?}\nscope = {scope:?}\nverdict = \"CLEAN\"\n{review_mode_line}"
     )
 }
 
@@ -129,6 +147,7 @@ pub(crate) fn write_review_gate_marker(
     head_sha: &str,
     session_id: &str,
     scope: &str,
+    review_mode: Option<&str>,
 ) {
     if branch.is_empty() || head_sha.is_empty() {
         debug!("Skipping review-gate marker: branch or head_sha is empty");
@@ -144,7 +163,7 @@ pub(crate) fn write_review_gate_marker(
         return;
     }
     let path = marker_path(project_root, branch, head_sha);
-    let content = marker_toml(session_id, branch, head_sha, scope);
+    let content = marker_toml(session_id, branch, head_sha, scope, review_mode);
     if let Err(e) = fs::write(&path, &content) {
         warn!(
             path = %path.display(),
@@ -169,12 +188,13 @@ pub(crate) fn maybe_write_gate_marker_for_clean(
     verdict: &str,
     first_session_id: Option<&str>,
     scope: &str,
+    review_mode: Option<&str>,
 ) {
     if verdict != "CLEAN" {
         return;
     }
     if let Some(sid) = first_session_id {
-        maybe_write_review_gate_marker(project_root, head_sha, sid, scope);
+        maybe_write_review_gate_marker(project_root, head_sha, sid, scope, review_mode);
     }
 }
 
@@ -186,6 +206,7 @@ pub(crate) fn maybe_write_review_gate_marker(
     head_sha: &str,
     session_id: &str,
     scope: &str,
+    review_mode: Option<&str>,
 ) {
     let backend = csa_session::create_vcs_backend(project_root);
     let branch = match backend.identity(project_root) {
@@ -199,7 +220,14 @@ pub(crate) fn maybe_write_review_gate_marker(
         debug!("Skipping review-gate marker: no branch resolved");
         return;
     }
-    write_review_gate_marker(project_root, &branch, head_sha, session_id, scope);
+    write_review_gate_marker(
+        project_root,
+        &branch,
+        head_sha,
+        session_id,
+        scope,
+        review_mode,
+    );
 }
 
 /// Remove stale review-gate markers.
@@ -351,6 +379,7 @@ mod tests {
             "abc1234567890",
             "SID001",
             "range:main...HEAD",
+            Some("red-team"),
         );
         let path = marker_path(project_root, "feat/test", "abc1234567890");
         assert!(
@@ -362,6 +391,7 @@ mod tests {
         assert!(content.contains("SID001"));
         assert!(content.contains("range:main...HEAD"));
         assert!(content.contains("verdict = \"CLEAN\""));
+        assert!(content.contains("review_mode = \"red-team\""));
         let marker = read_review_gate_marker(project_root, "feat/test", "abc1234567890")
             .expect("marker should parse");
         assert_eq!(marker.session_id, "SID001");
@@ -369,7 +399,32 @@ mod tests {
         assert_eq!(marker.head_sha, "abc1234567890");
         assert_eq!(marker.scope, "range:main...HEAD");
         assert_eq!(marker.verdict, "CLEAN");
+        assert_eq!(marker.review_mode.as_deref(), Some("red-team"));
         assert!(!marker.timestamp.is_empty());
+    }
+
+    #[test]
+    fn marker_without_review_mode_deserializes_to_none() {
+        let td = TempDir::new().unwrap();
+        let project_root = td.path();
+        // A standard review (or legacy marker) omits review_mode entirely.
+        write_review_gate_marker(
+            project_root,
+            "feat/legacy",
+            "abc1234567890",
+            "SID_LEGACY",
+            "range:main...HEAD",
+            None,
+        );
+        let path = marker_path(project_root, "feat/legacy", "abc1234567890");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            !content.contains("review_mode"),
+            "review_mode line must be omitted when unknown"
+        );
+        let marker = read_review_gate_marker(project_root, "feat/legacy", "abc1234567890")
+            .expect("marker should parse");
+        assert_eq!(marker.review_mode, None);
     }
 
     #[test]
@@ -385,6 +440,7 @@ mod tests {
             "deadbeef00000",
             "SID_OLD",
             "range:main...HEAD",
+            None,
         );
         let marker = marker_path(project_root, "old-gone-branch", "deadbeef00000");
         assert!(marker.exists());
@@ -422,6 +478,7 @@ mod tests {
             "abc0000000011",
             "SID_LIVE",
             "range:main...HEAD",
+            None,
         );
         let marker = marker_path(project_root, &branch, "abc0000000011");
         assert!(marker.exists());
@@ -447,6 +504,7 @@ mod tests {
             "ffffffff00011",
             "SID_DRY",
             "range:main...HEAD",
+            None,
         );
         let marker = marker_path(project_root, "phantom-branch", "ffffffff00011");
         assert!(marker.exists());

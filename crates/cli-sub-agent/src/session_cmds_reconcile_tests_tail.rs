@@ -488,6 +488,7 @@ fn late_real_result_already_exists_cleans_up_reconcile_owned_sidecar() {
             review_iterations: 1,
             timestamp: now,
             diff_fingerprint: None,
+            review_mode: None,
             fix_convergence: None,
         },
     )
@@ -606,6 +607,7 @@ fn retire_if_dead_with_result_preserves_pr_bot_handoff_for_real_results() {
             review_iterations: 1,
             timestamp: now,
             diff_fingerprint: None,
+            review_mode: None,
             fix_convergence: None,
         },
     )

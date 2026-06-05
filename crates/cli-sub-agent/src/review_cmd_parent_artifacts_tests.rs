@@ -1,5 +1,5 @@
 use super::{
-    MultiReviewerConsensusArtifacts, clear_multi_reviewer_artifact_dirs,
+    MultiReviewerConsensusArtifacts, ReviewDiffReport, clear_multi_reviewer_artifact_dirs,
     parent_artifact_for_decision, parent_consensus_review_meta, parent_review_decision,
     parse_reviewer_artifact, write_multi_reviewer_consensus_artifacts,
     write_multi_reviewer_parent_artifacts, write_parent_review_verdict,
@@ -264,7 +264,10 @@ fn issue_1696_parent_verdict_counts_all_reviewer_findings_when_decision_passes()
         &consolidated.findings,
         decision,
         crate::review_consensus::CLEAN,
-        None,
+        ReviewDiffReport {
+            diff_size: None,
+            large_diff_warning: None,
+        },
         None,
     )
     .expect("parent review verdict should be written");
@@ -283,6 +286,47 @@ fn issue_1696_parent_verdict_counts_all_reviewer_findings_when_decision_passes()
         parent_artifact.findings.len(),
         3,
         "the parent artifact may stay filtered while verdict counts remain descriptive"
+    );
+}
+
+#[test]
+fn issue_1817_consensus_parent_verdict_carries_review_mode() {
+    // Multi-reviewer consensus: the parent verdict must record the review mode so
+    // the merge gate can audit that a red-team consensus actually ran (#1817).
+    let temp = tempdir().expect("tempdir should be created");
+    let consolidated = ReviewArtifact {
+        severity_summary: SeveritySummary::from_findings(&[]),
+        findings: Vec::new(),
+        review_mode: Some("red-team".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: "01PARENTSESSION000000000000".to_string(),
+        timestamp: chrono::Utc::now(),
+    };
+    let decision = ReviewDecision::Pass;
+    let parent_artifact = parent_artifact_for_decision(&consolidated, decision);
+
+    write_parent_review_verdict(
+        temp.path(),
+        "01PARENTSESSION000000000000",
+        &consolidated.findings,
+        decision,
+        crate::review_consensus::CLEAN,
+        ReviewDiffReport {
+            diff_size: None,
+            large_diff_warning: None,
+        },
+        parent_artifact.review_mode.as_deref(),
+    )
+    .expect("parent review verdict should be written");
+
+    let verdict_path = temp.path().join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_slice(&fs::read(verdict_path).expect("read review verdict"))
+            .expect("review verdict should parse");
+    assert_eq!(
+        artifact.review_mode.as_deref(),
+        Some("red-team"),
+        "consensus parent verdict must propagate the reviewers' red-team mode"
     );
 }
 
@@ -801,6 +845,7 @@ fn write_multi_reviewer_parent_artifacts_promotes_empty_findings_to_pass() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:test".to_string()),
+        review_mode: None,
         fix_convergence: None,
     };
 
@@ -1185,6 +1230,7 @@ fn write_multi_reviewer_parent_artifacts_marks_all_unavailable() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:test".to_string()),
+        review_mode: None,
         fix_convergence: None,
     };
 
@@ -1682,6 +1728,7 @@ fn write_multi_reviewer_parent_artifacts_writes_daemon_review_meta() {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:test".to_string()),
+        review_mode: None,
         fix_convergence: None,
     };
 

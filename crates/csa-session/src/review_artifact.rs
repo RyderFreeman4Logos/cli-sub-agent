@@ -116,6 +116,10 @@ pub struct ReviewVerdictArtifact {
     pub decision: ReviewDecision,
     pub verdict_legacy: String,
     pub severity_counts: BTreeMap<Severity, u32>,
+    /// Review mode that produced this verdict ("standard" or "red-team").
+    /// Mirrors `ReviewSessionMeta.review_mode`; absent for legacy artifacts (#1817).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routed_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,6 +170,7 @@ impl ReviewVerdictArtifact {
             decision,
             verdict_legacy: verdict_legacy.into(),
             severity_counts,
+            review_mode: None,
             routed_to: None,
             primary_failure: None,
             failure_reason: None,
@@ -333,6 +338,45 @@ mod tests {
 
         assert_eq!(decoded, artifact);
         assert_eq!(decoded.schema_version, REVIEW_VERDICT_SCHEMA_VERSION);
+        // from_parts leaves review_mode unset; persist sites populate it from meta.
+        assert_eq!(decoded.review_mode, None);
+    }
+
+    #[test]
+    fn review_verdict_artifact_review_mode_roundtrips() {
+        let mut artifact = ReviewVerdictArtifact::from_parts(
+            "01JABCDEF0123456789ABCDEFG",
+            ReviewDecision::Pass,
+            "CLEAN",
+            &[],
+            Vec::new(),
+        );
+        artifact.review_mode = Some("red-team".to_string());
+
+        let json = serde_json::to_string(&artifact).expect("serialize verdict with review_mode");
+        assert!(json.contains("\"review_mode\":\"red-team\""));
+        let decoded: ReviewVerdictArtifact =
+            serde_json::from_str(&json).expect("deserialize verdict with review_mode");
+        assert_eq!(decoded.review_mode.as_deref(), Some("red-team"));
+    }
+
+    #[test]
+    fn review_verdict_artifact_review_mode_defaults_to_none_for_legacy_json() {
+        let json = r#"
+        {
+            "schema_version": 1,
+            "session_id": "01JABCDEF0123456789ABCDEFG",
+            "timestamp": "2026-02-24T00:00:00Z",
+            "decision": "pass",
+            "verdict_legacy": "CLEAN",
+            "severity_counts": {}
+        }
+        "#;
+
+        let artifact: ReviewVerdictArtifact =
+            serde_json::from_str(json).expect("deserialize legacy verdict without review_mode");
+
+        assert_eq!(artifact.review_mode, None);
     }
 
     #[test]

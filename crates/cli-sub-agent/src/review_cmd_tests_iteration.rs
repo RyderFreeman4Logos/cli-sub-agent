@@ -52,6 +52,7 @@ fn make_review_meta(session_id: &str, decision: &str, review_iterations: u32) ->
         review_iterations,
         timestamp: Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     }
 }

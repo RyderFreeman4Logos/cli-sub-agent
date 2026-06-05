@@ -21,7 +21,8 @@ use crate::review_consensus::{
 use crate::startup_env::StartupSubtreeEnv;
 
 use super::diff_size::{
-    LargeDiffWarning, apply_large_diff_warning, write_review_meta_with_diff_report,
+    LargeDiffWarning, ReviewDiffReport, apply_large_diff_warning,
+    write_review_meta_with_diff_report,
 };
 use super::output::ReviewerOutcome;
 
@@ -231,13 +232,17 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
         &consolidated.findings,
         parent_decision,
         &parent_verdict,
-        diff_size,
-        large_diff_warning,
+        ReviewDiffReport {
+            diff_size,
+            large_diff_warning,
+        },
+        parent_artifact.review_mode.as_deref(),
     )?;
     if let Some(meta) = parent_review_meta {
         let mut meta = meta.clone();
         meta.decision = parent_decision.as_str().to_string();
         meta.verdict = parent_verdict.clone();
+        meta.review_mode = parent_artifact.review_mode.clone();
         meta.exit_code = if parent_decision.is_clean() { 0 } else { 1 };
         write_review_meta_with_diff_report(&session_dir, &meta, diff_size, large_diff_warning)
             .context("failed to write parent review_meta.json")?;
@@ -247,6 +252,7 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
             &meta.verdict,
             outcomes.first().map(|o| o.session_id.as_str()),
             &meta.scope,
+            meta.review_mode.as_deref(),
         );
     }
     write_parent_review_summary(&session_dir, outcomes, &parent_verdict, diff_size)?;
@@ -310,6 +316,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         head_sha: ctx.head_sha.to_string(),
         decision: decision.as_str().to_string(),
         verdict: verdict.clone(),
+        review_mode: artifact.review_mode.clone(),
         status_reason: None,
         routed_to: None,
         primary_failure: None,
@@ -333,6 +340,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         &consolidated.findings,
         Vec::new(),
     );
+    verdict_artifact.review_mode = artifact.review_mode.clone();
     verdict_artifact.diff_size = ctx.diff_size.cloned();
     apply_large_diff_warning(&mut verdict_artifact, ctx.large_diff_warning);
     write_review_verdict(&session_dir, &verdict_artifact)
@@ -345,6 +353,7 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         &meta.verdict,
         Some(&target.session_id),
         &meta.scope,
+        meta.review_mode.as_deref(),
     );
     Ok(Some(target.session_id.clone()))
 }
@@ -378,6 +387,8 @@ pub(super) fn parent_consensus_review_meta(
         head_sha: head_sha.to_string(),
         decision: decision.as_str().to_string(),
         verdict: final_verdict.to_string(),
+        // Populated from the consolidated artifact at write time (#1817).
+        review_mode: None,
         status_reason: None,
         routed_to: None,
         primary_failure: None,
@@ -454,8 +465,8 @@ fn write_parent_review_verdict(
     severity_count_findings: &[Finding],
     decision: ReviewDecision,
     verdict_legacy: &str,
-    diff_size: Option<&ReviewDiffSize>,
-    large_diff_warning: Option<LargeDiffWarning>,
+    diff_report: ReviewDiffReport<'_>,
+    review_mode: Option<&str>,
 ) -> Result<()> {
     let mut verdict = ReviewVerdictArtifact::from_parts(
         session_id.to_string(),
@@ -464,8 +475,9 @@ fn write_parent_review_verdict(
         severity_count_findings,
         Vec::new(),
     );
-    verdict.diff_size = diff_size.cloned();
-    apply_large_diff_warning(&mut verdict, large_diff_warning);
+    verdict.review_mode = review_mode.map(str::to_string);
+    verdict.diff_size = diff_report.diff_size.cloned();
+    apply_large_diff_warning(&mut verdict, diff_report.large_diff_warning);
     write_review_verdict(session_dir, &verdict)
         .context("failed to write parent output/review-verdict.json")
 }

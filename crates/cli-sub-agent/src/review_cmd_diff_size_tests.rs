@@ -52,6 +52,7 @@ fn review_meta(session_id: &str) -> ReviewSessionMeta {
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("fingerprint".to_string()),
+        review_mode: None,
         fix_convergence: None,
     }
 }

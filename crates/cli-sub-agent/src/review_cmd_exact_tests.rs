@@ -147,6 +147,7 @@ fn exact_test_make_review_meta(
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     }
 }
@@ -407,6 +408,7 @@ fn final_iteration_pass_overrides_transient_fail_and_prose_unavailable() {
         &head_sha,
         "range:main...HEAD",
         None,
+        None,
     )
     .unwrap()
     .expect("check-verdict should accept the canonical final pass");
@@ -499,6 +501,7 @@ fn final_iteration_high_finding_fails_all_verdict_consumers() {
         branch,
         &head_sha,
         "range:main...HEAD",
+        None,
         None,
     )
     .unwrap();
@@ -833,6 +836,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
         review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
     let session_dir =
@@ -895,6 +899,7 @@ async fn execute_review_unavailable_does_not_persist_session_artifacts() {
         review_iterations: 0,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
     let persisted_exit_code =

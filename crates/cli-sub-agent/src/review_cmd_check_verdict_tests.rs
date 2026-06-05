@@ -97,6 +97,7 @@ fn write_review_session_with_description(
         review_iterations: 1,
         timestamp: Utc::now(),
         diff_fingerprint: None,
+        review_mode: None,
         fix_convergence: None,
     };
     csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
@@ -257,6 +258,7 @@ fn check_verdict_finds_pass_for_current_branch_head_and_full_diff() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap()
     .expect("expected matching verdict");
@@ -293,6 +295,7 @@ fn issue_1696_check_verdict_pass_message_surfaces_nonblocking_counts() {
         &branch,
         &head_sha,
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
         None,
     )
     .unwrap()
@@ -340,14 +343,21 @@ fn check_verdict_reads_review_marker_before_session_scan() {
         head_sha,
         &session_id,
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
     );
 
     set_session_branch(&project, &session_id, "other-branch");
 
-    let found =
-        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
-            .unwrap()
-            .expect("marker should identify the matching verdict session");
+    let found = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap()
+    .expect("marker should identify the matching verdict session");
     assert_eq!(found.session_id, session_id);
 }
 
@@ -375,6 +385,7 @@ fn check_verdict_rejects_stale_diff_fingerprint() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         Some("sha256:new"),
+        None,
     )
     .unwrap();
     assert!(found.is_none(), "stale diff review must not satisfy gate");
@@ -386,6 +397,7 @@ fn check_verdict_rejects_stale_diff_fingerprint() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         Some("sha256:new"),
+        None,
     )
     .unwrap()
     .expect("matching diff fingerprint should satisfy gate");
@@ -434,6 +446,7 @@ fn check_verdict_rejects_child_pass_when_parent_consensus_fails() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap();
     assert!(found.is_none(), "child reviewer pass must not satisfy gate");
@@ -471,6 +484,7 @@ fn check_verdict_rejects_when_latest_matching_verdict_fails() {
         "feature",
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
         None,
     )
     .unwrap();
@@ -513,6 +527,7 @@ fn check_verdict_accepts_when_latest_matching_verdict_passes() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap()
     .expect("newer clean review should satisfy gate");
@@ -545,6 +560,7 @@ fn check_verdict_accepts_reviewer_sub_session_pass_without_parent_consensus() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap()
     .expect("reviewer sub-session pass should satisfy gate when it is the latest match");
@@ -576,6 +592,7 @@ fn check_verdict_accepts_consensus_parent_named_like_reviewer() {
         "feature",
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
         None,
     )
     .unwrap()
@@ -625,6 +642,7 @@ fn check_verdict_rejects_non_pass_artifact_even_when_meta_is_pass() {
             "feature",
             "abcdef1234567890",
             REQUIRED_FULL_DIFF_SCOPE,
+            None,
             None,
         )
         .unwrap();
@@ -733,6 +751,7 @@ fn check_verdict_does_not_recover_or_rewrite_corrupt_session_state() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap()
     .expect("expected matching verdict despite unrelated corrupt session");
@@ -767,6 +786,7 @@ fn check_verdict_rejects_commit_review_even_when_clean() {
         "abcdef1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap();
     assert!(found.is_none());
@@ -794,6 +814,7 @@ fn check_verdict_rejects_stale_head() {
         "feature",
         "new1234567890",
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
         None,
     )
     .unwrap();
@@ -835,6 +856,7 @@ fn check_verdict_explicit_session_does_not_fallback_to_stale_pass() {
         head_sha,
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap();
     assert!(
@@ -842,10 +864,16 @@ fn check_verdict_explicit_session_does_not_fallback_to_stale_pass() {
         "explicit failed session must not fall back to another PASS session"
     );
 
-    let scanned =
-        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
-            .unwrap()
-            .expect("target scan should still find stale pass");
+    let scanned = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap()
+    .expect("target scan should still find stale pass");
     assert_eq!(scanned.session_id, stale_pass);
 }
 
@@ -889,6 +917,7 @@ fn check_verdict_rejects_fix_pass_artifact_with_failed_meta_explicit_marker_and_
         head_sha,
         &session_id,
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
     );
 
     let explicit = check_review_verdict_for_session(
@@ -898,6 +927,7 @@ fn check_verdict_rejects_fix_pass_artifact_with_failed_meta_explicit_marker_and_
         head_sha,
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap();
     assert!(
@@ -905,9 +935,15 @@ fn check_verdict_rejects_fix_pass_artifact_with_failed_meta_explicit_marker_and_
         "explicit check must reject pass artifact when fix meta failed"
     );
 
-    let scanned =
-        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
-            .unwrap();
+    let scanned = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap();
     assert!(
         scanned.is_none(),
         "marker and session-scan paths must reject pass artifact when fix meta failed"
@@ -945,6 +981,7 @@ fn check_verdict_accepts_clean_initial_fix_without_fix_round_explicit_marker_and
         head_sha,
         &session_id,
         REQUIRED_FULL_DIFF_SCOPE,
+        None,
     );
 
     let explicit = check_review_verdict_for_session(
@@ -954,15 +991,22 @@ fn check_verdict_accepts_clean_initial_fix_without_fix_round_explicit_marker_and
         head_sha,
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap()
     .expect("explicit check should accept clean initial --fix metadata");
     assert_eq!(explicit.session_id, session_id);
 
-    let scanned =
-        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
-            .unwrap()
-            .expect("marker and session-scan paths should accept clean initial --fix metadata");
+    let scanned = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap()
+    .expect("marker and session-scan paths should accept clean initial --fix metadata");
     assert_eq!(scanned.session_id, session_id);
 }
 
@@ -998,15 +1042,22 @@ fn check_verdict_accepts_quota_unavailable_co_reviewer_clean_primary() {
         head_sha,
         REQUIRED_FULL_DIFF_SCOPE,
         None,
+        None,
     )
     .unwrap()
     .expect("explicit check should accept clean primary despite co-reviewer quota");
     assert_eq!(explicit.session_id, session_id);
 
-    let scanned =
-        check_review_verdict_for_target(&project, branch, head_sha, REQUIRED_FULL_DIFF_SCOPE, None)
-            .unwrap()
-            .expect("scan should accept clean primary despite co-reviewer quota");
+    let scanned = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap()
+    .expect("scan should accept clean primary despite co-reviewer quota");
     assert_eq!(scanned.session_id, session_id);
 }
 
@@ -1038,4 +1089,321 @@ fn check_verdict_uses_requested_range_scope() {
 
     let exit = handle_check_verdict(temp.path(), &args).unwrap();
     assert_eq!(exit, 0);
+}
+
+// ---------------------------------------------------------------------------
+// #1817: review-mode auditing for the merge gate. `--check-verdict` with an
+// explicit `--red-team`/`--review-mode` requires the persisted verdict to carry
+// the matching review mode; without a mode filter the gate keeps legacy behavior.
+// ---------------------------------------------------------------------------
+
+/// Stamp a review mode onto both the meta and the verdict artifact of an
+/// already-written session (mirrors the production single-source flow where
+/// `ReviewSessionMeta.review_mode` drives `ReviewVerdictArtifact.review_mode`).
+fn set_review_mode(project_root: &Path, session_id: &str, review_mode: Option<&str>) {
+    let session_dir = csa_session::get_session_dir(project_root, session_id).unwrap();
+    let mut meta = read_review_meta(&session_dir)
+        .unwrap()
+        .expect("review meta should exist");
+    meta.review_mode = review_mode.map(str::to_string);
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let raw = std::fs::read_to_string(&verdict_path).expect("read review verdict");
+    let mut artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&raw).expect("parse review verdict");
+    artifact.review_mode = review_mode.map(str::to_string);
+    csa_session::write_review_verdict(&session_dir, &artifact).expect("write review verdict");
+}
+
+#[test]
+fn required_check_verdict_mode_resolves_only_when_explicitly_requested() {
+    // No mode flag → no requirement (legacy gate behavior preserved).
+    let plain = parse_review_args(&["csa", "review", "--check-verdict", "--range", "main...HEAD"]);
+    assert_eq!(required_check_verdict_mode(&plain), None);
+
+    // `--red-team` shorthand → require red-team.
+    let red_team = parse_review_args(&[
+        "csa",
+        "review",
+        "--check-verdict",
+        "--red-team",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert_eq!(
+        required_check_verdict_mode(&red_team).as_deref(),
+        Some("red-team")
+    );
+
+    // Explicit `--review-mode red-team` → require red-team.
+    let review_mode_flag = parse_review_args(&[
+        "csa",
+        "review",
+        "--check-verdict",
+        "--review-mode",
+        "red-team",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert_eq!(
+        required_check_verdict_mode(&review_mode_flag).as_deref(),
+        Some("red-team")
+    );
+
+    // Explicit `--review-mode standard` is still an explicit requirement.
+    let standard_flag = parse_review_args(&[
+        "csa",
+        "review",
+        "--check-verdict",
+        "--review-mode",
+        "standard",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert_eq!(
+        required_check_verdict_mode(&standard_flag).as_deref(),
+        Some("standard")
+    );
+}
+
+#[test]
+fn review_mode_matches_treats_absent_requirement_as_wildcard() {
+    // No requirement always matches (legacy/unfiltered gate).
+    assert!(review_mode_matches(None, None));
+    assert!(review_mode_matches(Some("red-team"), None));
+    assert!(review_mode_matches(Some("standard"), None));
+
+    // A requirement matches only an exact candidate; legacy `None` cannot prove it.
+    assert!(review_mode_matches(Some("red-team"), Some("red-team")));
+    assert!(!review_mode_matches(Some("standard"), Some("red-team")));
+    assert!(!review_mode_matches(None, Some("red-team")));
+}
+
+#[test]
+fn check_verdict_red_team_required_accepts_matching_red_team_verdict() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let session_id = write_review_session(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    set_review_mode(&project, &session_id, Some("red-team"));
+
+    let found = check_review_verdict_for_target(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap()
+    .expect("red-team verdict must satisfy a red-team requirement");
+    assert_eq!(found.session_id, session_id);
+}
+
+#[test]
+fn check_verdict_red_team_required_rejects_standard_verdict() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let session_id = write_review_session(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    set_review_mode(&project, &session_id, Some("standard"));
+
+    let found = check_review_verdict_for_target(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap();
+    assert!(
+        found.is_none(),
+        "a standard-mode verdict must not satisfy a red-team requirement"
+    );
+}
+
+#[test]
+fn check_verdict_red_team_required_rejects_legacy_verdict_without_mode() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Legacy session: review_mode is absent (written before #1817).
+    let _session_id = write_review_session(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+
+    let found = check_review_verdict_for_target(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap();
+    assert!(
+        found.is_none(),
+        "a legacy verdict with no recorded mode cannot prove a red-team review ran"
+    );
+}
+
+#[test]
+fn check_verdict_without_mode_filter_accepts_any_mode() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Legacy (no mode) verdict is accepted by an unfiltered gate, byte-for-byte.
+    let legacy_id = write_review_session(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    let found = check_review_verdict_for_target(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap()
+    .expect("unfiltered gate must accept a legacy verdict");
+    assert_eq!(found.session_id, legacy_id);
+
+    // A red-team verdict is likewise accepted by an unfiltered gate.
+    set_review_mode(&project, &legacy_id, Some("red-team"));
+    let found = check_review_verdict_for_target(
+        &project,
+        "feature",
+        "abcdef1234567890",
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        None,
+    )
+    .unwrap()
+    .expect("unfiltered gate must accept a red-team verdict");
+    assert_eq!(found.session_id, legacy_id);
+}
+
+#[test]
+fn check_verdict_red_team_marker_fast_path_enforces_mode() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let branch = "feature";
+    let head_sha = "abcdef1234567890";
+    let session_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    set_review_mode(&project, &session_id, Some("red-team"));
+    crate::review_gate::write_review_gate_marker(
+        &project,
+        branch,
+        head_sha,
+        &session_id,
+        REQUIRED_FULL_DIFF_SCOPE,
+        Some("red-team"),
+    );
+
+    // Force the marker to be the only locator (session branch no longer matches).
+    set_session_branch(&project, &session_id, "other-branch");
+
+    let found = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap()
+    .expect("red-team marker must satisfy a red-team requirement");
+    assert_eq!(found.session_id, session_id);
+}
+
+#[test]
+fn check_verdict_red_team_required_rejects_legacy_marker() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let temp = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let branch = "feature";
+    let head_sha = "abcdef1234567890";
+    let session_id = write_review_session(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        ReviewDecision::Pass,
+        "CLEAN",
+    );
+    // Legacy marker + legacy session: neither records a review mode.
+    crate::review_gate::write_review_gate_marker(
+        &project,
+        branch,
+        head_sha,
+        &session_id,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+    );
+
+    let found = check_review_verdict_for_target(
+        &project,
+        branch,
+        head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        None,
+        Some("red-team"),
+    )
+    .unwrap();
+    assert!(
+        found.is_none(),
+        "a legacy marker without a recorded mode must not satisfy a red-team requirement"
+    );
 }
