@@ -11,8 +11,9 @@
 //!    truncation, so resident memory is capped regardless of output volume;
 //!  - [`drain_pumps_and_reap`] bounds the post-exit pump drain by
 //!    [`GATE_PUMP_DRAIN_GRACE`]; if a backgrounded grandchild inherited a pipe
-//!    write-end and holds it open past the grace, the pump tasks are aborted and
-//!    the gate child's process group is killed, so the gate `timeout_seconds`
+//!    write-end and holds it open past the grace, the gate child's process group
+//!    is terminated with an ownership-safe `SIGTERM`→(conditional)`SIGKILL`
+//!    escalation and the pump tasks are aborted, so the gate `timeout_seconds`
 //!    bounds the TOTAL operation (wait + drain), not just `child.wait()`.
 
 use std::sync::{Arc, Mutex};
@@ -39,9 +40,22 @@ pub(crate) const GATE_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
 /// aborted and the process group is reaped.
 pub(crate) const GATE_PUMP_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-/// Grace between the process-group `SIGTERM` and the escalating `SIGKILL`,
-/// matching the project's two-phase subprocess-termination pattern (Rust 015).
+/// Grace between the process-group `SIGTERM` and the escalating `SIGKILL` on the
+/// TIMEOUT path, matching the project's two-phase subprocess-termination pattern
+/// (Rust 015). Sound to fire the second signal unconditionally there because the
+/// un-reaped leader anchors the PGID across the window (see
+/// [`kill_gate_process_group`]).
 const GATE_GROUP_TERM_GRACE: Duration = Duration::from_millis(100);
+
+/// Grace the drain-grace-expiry escalation waits AFTER its `SIGTERM` for the
+/// surviving pipe-holder to close the pipe (pumps reach EOF) before deciding
+/// whether a `SIGKILL` is still warranted. Unlike the timeout path, here the
+/// leader has already been reaped, so the escalation sends `SIGKILL` ONLY if a
+/// pump is STILL open when this elapses — i.e. a live group member still anchors
+/// the PGID, keeping the group `SIGKILL` reuse-safe (#1726). Generous enough to
+/// let a SIGTERM-responsive descendant exit and the pump observe EOF, yet
+/// negligible against any real gate `timeout_seconds`.
+const GATE_GROUP_ESCALATION_GRACE: Duration = Duration::from_millis(500);
 
 /// Accumulates the combined gate output while retaining only the last
 /// [`GATE_CAPTURE_MAX_BYTES`] bytes, so a noisy or flooding gate cannot grow
@@ -138,36 +152,44 @@ where
     })
 }
 
+/// Send `signal` to the gate child's process GROUP via a negative PID. The
+/// caller MUST guarantee the target PGID is still anchored at this instant — by
+/// an un-reaped (zombie) leader, or by a still-alive group member — so the signal
+/// can only reach this gate's own descendants and never a PID-reuse victim.
+#[cfg(unix)]
+fn signal_gate_process_group(pid: i32, signal: i32) {
+    // SAFETY: kill(2) is async-signal-safe. A negative PID targets the process
+    // group created by `process_group(0)` at spawn. The caller guarantees the
+    // PGID is still anchored at this instant (see each call site), so the signal
+    // reaches only this gate's own descendants, never a recycled group.
+    unsafe {
+        libc::kill(-pid, signal);
+    }
+}
+
 /// `SIGTERM`-then-`SIGKILL` the gate child's process GROUP (negative PID),
 /// reaping any descendant that inherited the gate's stdout/stderr pipe.
 ///
-/// ## PGID-reuse safety
-/// Both call sites guarantee the target PGID cannot have been recycled at the
-/// instant the signal is sent, so `-pid` reaches only this gate's descendants
-/// and never a PID-reuse victim:
-///  * the **timeout** path calls this BEFORE reaping the group leader, so the
-///    un-reaped leader anchors the PGID;
-///  * the **drain-grace-expiry** path calls this only when a pipe write-end is
-///    still open — i.e. a live descendant remains in the group. On Linux the
-///    kernel keeps a PGID's numeric value reserved for as long as any process
-///    is a member of that group (the `struct pid` is pinned via `PIDTYPE_PGID`),
-///    so the leader having already been reaped does not free it for reuse.
+/// ## PGID-reuse safety — TIMEOUT PATH ONLY
+/// The UNCONDITIONAL second (`SIGKILL`) signal here is sound ONLY while the group
+/// leader has not yet been reaped: an un-reaped (zombie) leader pins the PGID via
+/// `PIDTYPE_PGID`, so the value cannot be recycled across the `SIGTERM`→`SIGKILL`
+/// window and `-pid` reaches only this gate's descendants. The timeout caller
+/// guarantees this by calling here BEFORE `child.wait()`.
+///
+/// The drain-grace-expiry path must NOT use this helper: by then the leader has
+/// already been reaped, so the surviving pipe-holder is the ONLY PGID anchor — if
+/// it exits on the `SIGTERM`, the unconditional `SIGKILL` could race PGID reuse.
+/// That path uses the ownership-safe escalation in [`drain_pumps_and_reap`]
+/// instead (#1726).
 pub(crate) async fn kill_gate_process_group(child_pid: Option<u32>) {
     #[cfg(unix)]
     {
         if let Some(pid) = child_pid {
-            // SAFETY: kill(2) is async-signal-safe; a negative PID targets the
-            // process group created by `process_group(0)` at spawn. The PGID is
-            // not reused at this instant (see the fn-level PGID-reuse-safety
-            // note), so the signal reaches only this gate's own descendants.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
+            let pid = pid as i32;
+            signal_gate_process_group(pid, libc::SIGTERM);
             tokio::time::sleep(GATE_GROUP_TERM_GRACE).await;
-            // SAFETY: same PGID-anchoring invariant as the SIGTERM above.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
+            signal_gate_process_group(pid, libc::SIGKILL);
         }
     }
     #[cfg(not(unix))]
@@ -176,44 +198,91 @@ pub(crate) async fn kill_gate_process_group(child_pid: Option<u32>) {
     }
 }
 
+/// Await every still-pending pump task until they all reach EOF or `grace`
+/// elapses, whichever comes first. Pump handles polled to completion in an
+/// earlier call MUST be pruned by the caller (via [`JoinHandle::is_finished`])
+/// between calls so this never re-polls a finished handle (which would panic).
+async fn await_pumps_bounded(pumps: &mut [JoinHandle<()>], grace: Duration) {
+    if pumps.is_empty() {
+        return;
+    }
+    let _ = tokio::time::timeout(grace, async move {
+        for pump in pumps.iter_mut() {
+            // `&mut JoinHandle` is a `Future`; awaiting a not-yet-completed
+            // handle is sound. The caller prunes completed handles between calls,
+            // so a handle is never awaited after it already returned `Ready`.
+            let _ = pump.await;
+        }
+    })
+    .await;
+}
+
 /// Drain the tee pump tasks under [`GATE_PUMP_DRAIN_GRACE`]. Returns once both
-/// pumps reach EOF (the child closed its pipes) or the grace expires. On expiry
-/// — a backgrounded descendant inherited a pipe write-end and is holding it
-/// open — the gate child's process group is killed (reaping the descendant and
-/// closing the pipe) and the pump tasks are aborted, so the runner returns
-/// instead of blocking forever and the gate `timeout_seconds` bounds the TOTAL
-/// operation rather than only `child.wait()`.
+/// pumps reach EOF (the child closed its pipes) or the grace expires. On
+/// expiry — a backgrounded descendant inherited a pipe write-end and is holding
+/// it open after the caller already reaped the group leader — the descendant is
+/// reaped with an OWNERSHIP-SAFE escalation so the gate `timeout_seconds` bounds
+/// the TOTAL operation rather than only `child.wait()`:
+///
+///  1. `SIGTERM` the gate's process group (politely ask the pipe-holder to go);
+///  2. RE-WAIT the pumps for [`GATE_GROUP_ESCALATION_GRACE`]. If they reach EOF,
+///     the pipe-holder died from the `SIGTERM` and released the pipe — the PGID
+///     may now be unanchored, so NO `SIGKILL` is sent (a blind second signal
+///     could race PGID reuse and hit an unrelated recycled group);
+///  3. otherwise a pump is STILL open, proving a live group member still holds
+///     the write-end and thus re-anchors the PGID, so `SIGKILL` to the group is
+///     reuse-safe. Send it, then abort the leaked pump tasks (#1726).
+///
+/// Contrast the TIMEOUT path, which calls [`kill_gate_process_group`] BEFORE
+/// reaping the leader: there the un-reaped leader anchors the PGID, so its
+/// unconditional `SIGTERM`→`SIGKILL` cannot race reuse.
 pub(crate) async fn drain_pumps_and_reap(
     stdout_pump: Option<JoinHandle<()>>,
     stderr_pump: Option<JoinHandle<()>>,
     child_pid: Option<u32>,
 ) {
-    // Capture abort handles before moving the join handles into the drain
-    // future: dropping a `JoinHandle` only detaches the task, so an explicit
-    // abort is required to stop a pump still blocked on a held-open pipe.
-    let aborts: Vec<AbortHandle> = [&stdout_pump, &stderr_pump]
-        .into_iter()
-        .flatten()
-        .map(JoinHandle::abort_handle)
-        .collect();
+    let mut pumps: Vec<JoinHandle<()>> = [stdout_pump, stderr_pump].into_iter().flatten().collect();
+    // Capture abort handles up front: dropping a `JoinHandle` only detaches the
+    // task, so an explicit abort is required to stop a pump still blocked on a
+    // descendant-held pipe. Aborting an already-finished pump is a harmless no-op.
+    let aborts: Vec<AbortHandle> = pumps.iter().map(JoinHandle::abort_handle).collect();
 
-    let join = async move {
-        if let Some(pump) = stdout_pump {
-            let _ = pump.await;
-        }
-        if let Some(pump) = stderr_pump {
-            let _ = pump.await;
-        }
-    };
+    // Phase 1: wait for both pumps to reach EOF under the drain grace. A
+    // well-behaved gate closes its pipes on exit and this returns immediately.
+    await_pumps_bounded(&mut pumps, GATE_PUMP_DRAIN_GRACE).await;
+    pumps.retain(|pump| !pump.is_finished());
+    if pumps.is_empty() {
+        return;
+    }
 
-    if tokio::time::timeout(GATE_PUMP_DRAIN_GRACE, join)
-        .await
-        .is_err()
+    // A backgrounded descendant is still holding a pipe write-end past the drain
+    // grace, and the caller has ALREADY reaped the group leader — so escalate
+    // ownership-safely (see the fn docs) rather than via the unconditional
+    // `kill_gate_process_group`, whose second signal would race PGID reuse here.
+    #[cfg(unix)]
+    if let Some(pid) = child_pid {
+        let pid = pid as i32;
+        // Phase 2: politely terminate the group, then re-wait for the pumps to
+        // reach EOF under a short escalation grace.
+        signal_gate_process_group(pid, libc::SIGTERM);
+        await_pumps_bounded(&mut pumps, GATE_GROUP_ESCALATION_GRACE).await;
+        pumps.retain(|pump| !pump.is_finished());
+        // Phase 3: escalate to `SIGKILL` ONLY while a pump is STILL open — a live
+        // group member then anchors the PGID, so the group `SIGKILL` is reuse-safe.
+        // If the pumps drained, the pipe-holder already exited on the `SIGTERM`
+        // and a blind `SIGKILL` could hit a recycled PGID, so it is deliberately
+        // skipped (there is nothing left to kill).
+        if !pumps.is_empty() {
+            signal_gate_process_group(pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
     {
-        kill_gate_process_group(child_pid).await;
-        for abort in aborts {
-            abort.abort();
-        }
+        let _ = child_pid;
+    }
+
+    for abort in aborts {
+        abort.abort();
     }
 }
 
