@@ -438,8 +438,25 @@ TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
 if ! grep -qF -- '- [ ] ' "${TODO_PATH}"; then
   fail_step7_gate "TODO missing checkbox tasks."
 fi
-if ! grep -q 'DONE WHEN' "${TODO_PATH}"; then
-  fail_step7_gate "TODO missing DONE WHEN clauses."
+# Per-task DONE WHEN gate (#1843; 4th sibling of the #1822 per-task conversion).
+# Every OPEN task must carry its OWN `DONE WHEN:` clause (AGENTS.md Meta 005), not
+# a single global mention. Mirrors mktd's pre-persist awk; `is_open` matches `- [ ]`
+# (not mktd's `^- \[ \] .+`) so the empty `- [ ] ` placeholder `csa todo create`
+# leaves when mktd fails before persist is still rejected, as the prior global check did.
+if ! awk '
+function flush() { if (in_open == 1 && has_clause == 0) bad = 1; in_open = 0; has_clause = 0 }
+function scan(text,   pos, rest) {
+  pos = index(text, "DONE WHEN:")
+  if (pos > 0) { rest = substr(text, pos + 10); sub(/^[ \t]+/, "", rest); if (length(rest) > 0) has_clause = 1 }
+}
+{
+  is_open = ($0 ~ /^- \[ \]/)
+  if ($0 ~ /^- \[[ xX]\]/ || $0 ~ /^#/) { flush(); if (is_open == 1) { in_open = 1; scan($0) }; next }
+  if (in_open == 1) scan($0)
+}
+END { flush(); exit (bad + 0) }
+' "${TODO_PATH}"; then
+  fail_step7_gate "TODO has an open task without a mechanically-verifiable DONE WHEN: clause."
 fi
 if [ "${MKTD_EXIT}" -ne 0 ]; then
   echo "WARNING: mktd exited ${MKTD_EXIT}, but TODO gates passed; treating Step 7 as successful." >&2
