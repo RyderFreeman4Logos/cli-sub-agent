@@ -117,7 +117,10 @@ struct PreviewScenario {
     live_dir: PathBuf,
     dead_empty_dir: PathBuf,
     dead_expired_dir: PathBuf,
+    live_orphan_dir: PathBuf,
+    dead_orphan_dir: PathBuf,
     _live_lock: csa_lock::SessionLock,
+    _live_orphan_lock: csa_lock::SessionLock,
 }
 
 #[cfg(unix)]
@@ -155,6 +158,14 @@ fn backdate_tree(path: &Path, seconds_ago: u64) {
         }
     }
     set_file_mtime_seconds_ago(path, seconds_ago);
+}
+
+#[cfg(unix)]
+fn seed_liveness_snapshot_candidate(session_dir: &Path) {
+    let acp_path = session_dir.join("output").join("acp-events.jsonl");
+    std::fs::create_dir_all(acp_path.parent().expect("acp path parent")).unwrap();
+    std::fs::write(&acp_path, "{}\n").unwrap();
+    set_file_mtime_seconds_ago(&acp_path, 120);
 }
 
 #[cfg(unix)]
@@ -218,8 +229,25 @@ fn seed_preview_scenario(project_root: &Path) -> PreviewScenario {
         SessionPhase::Retired,
         true,
     );
+    seed_liveness_snapshot_candidate(&dead_empty_dir);
+    seed_liveness_snapshot_candidate(&dead_expired_dir);
+
     let live_lock = csa_lock::acquire_lock(&live_dir, "codex", "gc dry-run preview test").unwrap();
     assert!(csa_process::ToolLiveness::has_live_process(&live_dir));
+    let sessions_dir = csa_session::get_session_root(project_root)
+        .unwrap()
+        .join("sessions");
+    let live_orphan_dir = sessions_dir.join("01EEEE0000000000000000000F");
+    let dead_orphan_dir = sessions_dir.join("01FFFF0000000000000000000G");
+    std::fs::create_dir_all(&live_orphan_dir).unwrap();
+    std::fs::create_dir_all(&dead_orphan_dir).unwrap();
+    seed_liveness_snapshot_candidate(&dead_orphan_dir);
+    let live_orphan_lock =
+        csa_lock::acquire_lock(&live_orphan_dir, "codex", "gc dry-run orphan preview test")
+            .unwrap();
+    assert!(csa_process::ToolLiveness::has_live_process(
+        &live_orphan_dir
+    ));
 
     PreviewScenario {
         active_id,
@@ -230,7 +258,10 @@ fn seed_preview_scenario(project_root: &Path) -> PreviewScenario {
         live_dir,
         dead_empty_dir,
         dead_expired_dir,
+        live_orphan_dir,
+        dead_orphan_dir,
         _live_lock: live_lock,
+        _live_orphan_lock: live_orphan_lock,
     }
 }
 
@@ -286,6 +317,25 @@ fn assert_gc_preview_matches_execution_candidates(preview: &str, scenario: &Prev
             .any(|line| line.contains(&scenario.dead_expired_id)),
         "dry-run preview must list the dead expired session that execution deletes: {preview}"
     );
+
+    let orphan_lines: Vec<_> = preview
+        .lines()
+        .filter(|line| line.contains("Would remove orphan directory"))
+        .collect();
+    let live_orphan_dir = scenario.live_orphan_dir.display().to_string();
+    let dead_orphan_dir = scenario.dead_orphan_dir.display().to_string();
+    assert!(
+        !orphan_lines
+            .iter()
+            .any(|line| line.contains(&live_orphan_dir)),
+        "dry-run orphan preview must not list live orphan dirs: {preview}"
+    );
+    assert!(
+        orphan_lines
+            .iter()
+            .any(|line| line.contains(&dead_orphan_dir)),
+        "dry-run orphan preview must list the dead orphan dir execution deletes: {preview}"
+    );
 }
 
 #[cfg(unix)]
@@ -329,6 +379,94 @@ fn assert_execution_deleted_only_preview_candidates(scenario: &PreviewScenario) 
         !scenario.dead_expired_dir.exists(),
         "execution must delete the dead expired session shown in preview"
     );
+}
+
+#[cfg(unix)]
+fn assert_gc_execution_deleted_only_preview_candidates(scenario: &PreviewScenario) {
+    assert_execution_deleted_only_preview_candidates(scenario);
+    assert!(
+        scenario.live_orphan_dir.exists(),
+        "execution must preserve live orphan dirs"
+    );
+    assert!(
+        !scenario.dead_orphan_dir.exists(),
+        "execution must delete the dead orphan dir shown in preview"
+    );
+}
+
+#[cfg(unix)]
+fn preview_target_dirs(scenario: &PreviewScenario) -> Vec<&Path> {
+    vec![
+        scenario.active_dir.as_path(),
+        scenario.live_dir.as_path(),
+        scenario.dead_empty_dir.as_path(),
+        scenario.dead_expired_dir.as_path(),
+        scenario.live_orphan_dir.as_path(),
+        scenario.dead_orphan_dir.as_path(),
+    ]
+}
+
+#[cfg(unix)]
+fn relative_file_set(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeSet<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.insert(
+                    path.strip_prefix(root)
+                        .expect("path under root")
+                        .to_path_buf(),
+                );
+            }
+        }
+    }
+
+    let mut files = std::collections::BTreeSet::new();
+    visit(dir, dir, &mut files);
+    files
+}
+
+#[cfg(unix)]
+fn snapshot_preview_target_files(
+    scenario: &PreviewScenario,
+) -> Vec<(PathBuf, std::collections::BTreeSet<PathBuf>)> {
+    preview_target_dirs(scenario)
+        .into_iter()
+        .map(|dir| (dir.to_path_buf(), relative_file_set(dir)))
+        .collect()
+}
+
+#[cfg(unix)]
+fn assert_preview_target_files_unchanged(
+    before: &[(PathBuf, std::collections::BTreeSet<PathBuf>)],
+) {
+    for (dir, files_before) in before {
+        assert_eq!(
+            &relative_file_set(dir),
+            files_before,
+            "dry-run preview must not create or remove files under {}",
+            dir.display()
+        );
+    }
+}
+
+#[cfg(unix)]
+fn assert_no_liveness_snapshots(scenario: &PreviewScenario) {
+    for dir in preview_target_dirs(scenario) {
+        assert!(
+            !dir.join(".liveness.snapshot").exists(),
+            "dry-run preview must not write .liveness.snapshot in {}",
+            dir.display()
+        );
+    }
 }
 
 /// Run `csa init` (minimal mode) inside the given temp directory.
@@ -969,6 +1107,7 @@ fn gc_dry_run_preview_excludes_active_and_live_sessions() {
     let project_root = tmp.path().join("project");
     let scenario = seed_preview_scenario(&project_root);
     let cd = project_root.to_string_lossy().to_string();
+    let dry_run_files = snapshot_preview_target_files(&scenario);
 
     let preview_output = csa_cmd(tmp.path())
         .args(["gc", "--dry-run", "--max-age-days", "1", "--cd", &cd])
@@ -978,13 +1117,15 @@ fn gc_dry_run_preview_excludes_active_and_live_sessions() {
     let preview = output_text(&preview_output);
 
     assert_gc_preview_matches_execution_candidates(&preview, &scenario);
+    assert_preview_target_files_unchanged(&dry_run_files);
+    assert_no_liveness_snapshots(&scenario);
 
     let execution_output = csa_cmd(tmp.path())
         .args(["gc", "--max-age-days", "1", "--cd", &cd])
         .output()
         .expect("failed to run csa gc");
     assert_command_success(&execution_output, "csa gc");
-    assert_execution_deleted_only_preview_candidates(&scenario);
+    assert_gc_execution_deleted_only_preview_candidates(&scenario);
 }
 
 #[cfg(unix)]
@@ -995,6 +1136,7 @@ fn gc_global_dry_run_preview_excludes_active_and_live_sessions() {
     let _env = E2eEnvGuard::set(tmp.path());
     let project_root = tmp.path().join("project");
     let scenario = seed_preview_scenario(&project_root);
+    let dry_run_files = snapshot_preview_target_files(&scenario);
 
     let preview_output = csa_cmd(tmp.path())
         .args(["gc", "--global", "--dry-run", "--max-age-days", "1"])
@@ -1004,13 +1146,15 @@ fn gc_global_dry_run_preview_excludes_active_and_live_sessions() {
     let preview = output_text(&preview_output);
 
     assert_gc_preview_matches_execution_candidates(&preview, &scenario);
+    assert_preview_target_files_unchanged(&dry_run_files);
+    assert_no_liveness_snapshots(&scenario);
 
     let execution_output = csa_cmd(tmp.path())
         .args(["gc", "--global", "--max-age-days", "1"])
         .output()
         .expect("failed to run csa gc --global");
     assert_command_success(&execution_output, "csa gc --global");
-    assert_execution_deleted_only_preview_candidates(&scenario);
+    assert_gc_execution_deleted_only_preview_candidates(&scenario);
 }
 
 #[cfg(unix)]
@@ -1022,6 +1166,7 @@ fn session_clean_dry_run_preview_excludes_active_and_live_sessions() {
     let project_root = tmp.path().join("project");
     let scenario = seed_preview_scenario(&project_root);
     let cd = project_root.to_string_lossy().to_string();
+    let dry_run_files = snapshot_preview_target_files(&scenario);
 
     let preview_output = csa_cmd(tmp.path())
         .args(["session", "clean", "--days", "1", "--dry-run", "--cd", &cd])
@@ -1031,6 +1176,8 @@ fn session_clean_dry_run_preview_excludes_active_and_live_sessions() {
     let preview = output_text(&preview_output);
 
     assert_session_clean_preview_matches_execution_candidates(&preview, &scenario);
+    assert_preview_target_files_unchanged(&dry_run_files);
+    assert_no_liveness_snapshots(&scenario);
 
     let execution_output = csa_cmd(tmp.path())
         .args(["session", "clean", "--days", "1", "--cd", &cd])

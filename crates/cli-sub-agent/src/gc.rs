@@ -41,20 +41,47 @@ const ORPHAN_SLOT_GRACE_SECS: i64 = 30;
 
 pub(crate) type RuntimeReapStats = reaper::RuntimeReapStats;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LivenessProbeMode {
+    PersistSnapshot,
+    ReadOnly,
+}
+
+impl LivenessProbeMode {
+    pub(crate) fn for_dry_run(dry_run: bool) -> Self {
+        if dry_run {
+            Self::ReadOnly
+        } else {
+            Self::PersistSnapshot
+        }
+    }
+
+    fn is_alive(self, session_dir: &Path) -> bool {
+        match self {
+            Self::PersistSnapshot => csa_process::ToolLiveness::is_alive(session_dir),
+            Self::ReadOnly => csa_process::ToolLiveness::is_alive_read_only(session_dir),
+        }
+    }
+}
+
 pub(crate) fn should_skip_whole_session_delete(
     session: &MetaSessionState,
     session_dir: &Path,
+    liveness_probe_mode: LivenessProbeMode,
 ) -> bool {
     session.phase == SessionPhase::Active
         || csa_process::ToolLiveness::has_live_process(session_dir)
         || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
-        || csa_process::ToolLiveness::is_alive(session_dir)
+        || liveness_probe_mode.is_alive(session_dir)
 }
 
-pub(crate) fn should_skip_orphan_session_dir_delete(session_dir: &Path) -> bool {
+pub(crate) fn should_skip_orphan_session_dir_delete(
+    session_dir: &Path,
+    liveness_probe_mode: LivenessProbeMode,
+) -> bool {
     csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
         || csa_process::ToolLiveness::has_live_process(session_dir)
-        || csa_process::ToolLiveness::is_alive(session_dir)
+        || liveness_probe_mode.is_alive(session_dir)
 }
 
 pub(crate) fn handle_gc_args(
@@ -104,6 +131,7 @@ pub(crate) fn handle_gc(
     let mut expired_sessions_removed = 0;
     let mut sessions_retired = 0u64;
     let mut orphan_scopes_cleaned = 0u64;
+    let liveness_probe_mode = LivenessProbeMode::for_dry_run(dry_run);
 
     if dry_run {
         eprintln!("[dry-run] No changes will be made.");
@@ -143,7 +171,7 @@ pub(crate) fn handle_gc(
         }
 
         if session.tools.is_empty() {
-            if should_skip_whole_session_delete(session, &session_dir) {
+            if should_skip_whole_session_delete(session, &session_dir, liveness_probe_mode) {
                 info!(
                     session = %session.meta_session_id,
                     "Skipped whole-session delete for Active or live session"
@@ -198,7 +226,7 @@ pub(crate) fn handle_gc(
             && let Some(days) = max_age_days
             && age.num_days() > days as i64
         {
-            if should_skip_whole_session_delete(session, &session_dir) {
+            if should_skip_whole_session_delete(session, &session_dir, liveness_probe_mode) {
                 info!(
                     session = %session.meta_session_id,
                     "Skipped expired whole-session delete for Active or live session"
@@ -238,17 +266,17 @@ pub(crate) fn handle_gc(
         for entry in entries.flatten() {
             if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
                 let session_dir = entry.path();
-                if dry_run {
+                if should_skip_orphan_session_dir_delete(&session_dir, liveness_probe_mode) {
+                    info!(
+                        "Skipped orphan-looking live session directory: {}",
+                        session_dir.display()
+                    );
+                } else if dry_run {
                     eprintln!(
                         "[dry-run] Would remove orphan directory: {}",
                         session_dir.display()
                     );
                     orphan_dirs_removed += 1;
-                } else if should_skip_orphan_session_dir_delete(&session_dir) {
-                    info!(
-                        "Skipped orphan-looking live session directory: {}",
-                        session_dir.display()
-                    );
                 } else if fs::remove_dir_all(&session_dir).is_ok() {
                     info!(
                         "Removed orphan directory without state.toml: {}",

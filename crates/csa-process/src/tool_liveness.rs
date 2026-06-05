@@ -88,8 +88,21 @@ struct LivenessSnapshot {
 /// 4) stderr growth (`stderr.log`)
 pub struct ToolLiveness;
 
+#[derive(Debug, Clone, Copy)]
+enum SnapshotPersistence {
+    Persist,
+    ReadOnly,
+}
+
 impl ToolLiveness {
     pub(crate) fn probe(session_dir: &Path) -> LivenessSignals {
+        Self::probe_with_snapshot_persistence(session_dir, SnapshotPersistence::Persist)
+    }
+
+    fn probe_with_snapshot_persistence(
+        session_dir: &Path,
+        snapshot_persistence: SnapshotPersistence,
+    ) -> LivenessSignals {
         let now = SystemTime::now();
         let mut snapshot = load_snapshot(session_dir);
         let daemon_pid_alive = Self::daemon_pid_is_alive(session_dir);
@@ -105,12 +118,20 @@ impl ToolLiveness {
             fatal_error: provider_error.is_some(),
         };
 
-        save_snapshot(session_dir, &snapshot);
+        if matches!(snapshot_persistence, SnapshotPersistence::Persist) {
+            save_snapshot(session_dir, &snapshot);
+        }
         signals
     }
 
     pub fn is_alive(session_dir: &Path) -> bool {
         Self::probe(session_dir).has_any_signal()
+    }
+
+    /// Return coarse liveness without updating the watchdog snapshot file.
+    pub fn is_alive_read_only(session_dir: &Path) -> bool {
+        Self::probe_with_snapshot_persistence(session_dir, SnapshotPersistence::ReadOnly)
+            .has_any_signal()
     }
 
     /// Return a live process PID that still matches this session's context.

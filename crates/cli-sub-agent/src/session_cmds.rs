@@ -441,6 +441,7 @@ pub(crate) fn handle_session_clean(
     let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
     let now = chrono::Utc::now();
     let mut removed = 0;
+    let liveness_probe_mode = crate::gc::LivenessProbeMode::for_dry_run(dry_run);
 
     if dry_run {
         eprintln!("[dry-run] No changes will be made.");
@@ -450,7 +451,11 @@ pub(crate) fn handle_session_clean(
         let age = now.signed_duration_since(session.last_accessed);
         if age.num_days() > days as i64 {
             let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
-            if crate::gc::should_skip_whole_session_delete(session, &session_dir) {
+            if crate::gc::should_skip_whole_session_delete(
+                session,
+                &session_dir,
+                liveness_probe_mode,
+            ) {
                 info!(
                     session = %session.meta_session_id,
                     "Skipped session clean delete for Active or live session"
