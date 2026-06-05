@@ -1,13 +1,14 @@
 use super::convergence::{fix_exit_code_for_convergence, reached_genuine_clean_convergence};
 use super::{
-    CLEAN, persist_fix_final_artifacts_for_tests_with_output,
+    CLEAN, persist_fix_final_artifacts_for_tests_with_noop_probe,
+    persist_fix_final_artifacts_for_tests_with_output,
     persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
 };
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
 use csa_session::{
-    FindingsFile, ReviewDiffSize, ReviewFinding, ReviewFindingFileRange, Severity,
+    FindingsFile, ReviewDiffSize, ReviewFinding, ReviewFindingFileRange, SessionResult, Severity,
     write_findings_toml,
 };
 use std::fs;
@@ -101,6 +102,32 @@ fn read_review_meta(session_dir: &Path) -> ReviewSessionMeta {
         &fs::read_to_string(session_dir.join("review_meta.json")).expect("read meta"),
     )
     .expect("parse meta")
+}
+
+fn seed_session_result(project_root: &Path, session_id: &str, summary: &str) {
+    let now = chrono::Utc::now();
+    let result = SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: summary.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: Vec::new(),
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        post_exec_gate: None,
+        manager_fields: Default::default(),
+    };
+    csa_session::save_result(project_root, session_id, &result).expect("save result.toml");
 }
 
 fn stale_finding() -> ReviewFinding {
@@ -581,6 +608,63 @@ fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate
         false,
         "post_consistency_non_pass",
     );
+}
+
+#[test]
+fn persist_fix_final_artifacts_noop_probe_marks_meta_verdict_and_result() {
+    let branch = "fix-1877-noop";
+    let project_root = temp_git_project_root("persist-fix-noop-probe", branch);
+    let state_home = temp_project_root("persist-fix-noop-probe-state");
+    let _state_home = ScopedTestEnvVar::set("XDG_STATE_HOME", state_home);
+    let session_id = ulid::Ulid::new().to_string();
+    let session_dir = create_session_dir(&project_root, &session_id);
+    let current_output = "<!-- CSA:SECTION:summary -->\nBlocking issues still remain.\n<!-- CSA:SECTION:summary:END -->\n<!-- CSA:SECTION:details -->\nMedium: src/lib.rs:99 current-round finding.\n<!-- CSA:SECTION:details:END -->\n";
+    persist_prior_blocking_review_with_current_output(&session_dir, current_output);
+    seed_session_result(&project_root, &session_id, "review still reports a finding");
+
+    let mut meta = make_clean_review_meta(&session_id);
+    meta.head_sha = csa_session::detect_git_head(&project_root).expect("detect HEAD");
+    meta.decision = ReviewDecision::Fail.as_str().to_string();
+    meta.verdict = "HAS_ISSUES".to_string();
+    meta.exit_code = 1;
+
+    let final_decision = persist_fix_final_artifacts_for_tests_with_noop_probe(
+        &project_root,
+        &meta,
+        true,
+        current_output,
+        Some(meta.head_sha.clone()),
+    );
+
+    assert_eq!(final_decision, ReviewDecision::Fail);
+    let persisted_meta = read_review_meta(&session_dir);
+    assert_eq!(
+        persisted_meta.failure_reason.as_deref(),
+        Some("fix_loop_noop:head_unchanged_worktree_clean")
+    );
+    assert_fix_convergence(
+        &persisted_meta,
+        true,
+        true,
+        ReviewDecision::Fail,
+        false,
+        "fix_loop_noop:head_unchanged_worktree_clean",
+    );
+
+    let artifact = read_review_verdict(&session_dir);
+    assert_eq!(
+        artifact.failure_reason.as_deref(),
+        Some("fix_loop_noop:head_unchanged_worktree_clean")
+    );
+
+    let result = csa_session::load_result(&project_root, &session_id)
+        .expect("load result")
+        .expect("result should exist");
+    assert_eq!(
+        result.summary,
+        "fix loop did not engage: head_unchanged_worktree_clean"
+    );
+    assert!(result.warnings.contains(&result.summary));
 }
 
 #[test]

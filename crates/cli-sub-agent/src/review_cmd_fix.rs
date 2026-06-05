@@ -26,14 +26,18 @@ mod clean_output;
 mod convergence;
 #[path = "review_cmd_fix_diff_report.rs"]
 mod diff_report_artifacts;
+#[path = "review_cmd_fix_noop.rs"]
+mod noop;
 use convergence::{
     FixTerminalOutcome, fix_exit_code_for_convergence, pre_verdict_non_convergence_reason,
 };
 #[cfg(test)]
 pub(crate) use diff_report_artifacts::{
-    persist_fix_final_artifacts_for_tests, persist_fix_final_artifacts_for_tests_with_output,
+    persist_fix_final_artifacts_for_tests, persist_fix_final_artifacts_for_tests_with_noop_probe,
+    persist_fix_final_artifacts_for_tests_with_output,
     persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
 };
+use noop::{FixNoOpProbe, apply_fix_loop_noop_signal, is_fix_loop_noop_failure_reason};
 
 /// Context for review fix-loop execution.
 pub(crate) struct FixLoopContext<'a> {
@@ -81,6 +85,7 @@ pub(crate) struct FixLoopContext<'a> {
 pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     let mut session_id = ctx.initial_session_id;
     let diff_report = ctx.diff_report;
+    let noop_probe = FixNoOpProbe::capture(ctx.project_root);
     // Entering the fix loop means the current review is not clean; any existing
     // marker for this SHA is stale until genuine clean convergence rewrites it.
     remove_review_gate_marker_for_current_head(ctx.project_root, &session_id);
@@ -250,6 +255,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                 true,
                 Some(&fix_output),
                 diff_report,
+                Some(&noop_probe),
             );
             if final_decision == ReviewDecision::Pass {
                 info!(
@@ -294,6 +300,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
         last_gate_passed,
         last_fix_output.as_deref(),
         diff_report,
+        Some(&noop_probe),
     );
     error!(
         max_rounds = ctx.max_rounds,
@@ -321,6 +328,7 @@ fn persist_fix_final_artifacts(
         quality_gate_passed,
         None,
         diff_report_artifacts::empty_diff_report(),
+        None,
     )
 }
 
@@ -330,6 +338,7 @@ fn persist_fix_final_artifacts_with_current_output(
     quality_gate_passed: bool,
     current_fix_output: Option<&str>,
     diff_report: super::diff_size::ReviewDiffReport<'_>,
+    noop_probe: Option<&FixNoOpProbe>,
 ) -> ReviewDecision {
     let fix_output_was_substantive = current_fix_output
         .map(|output| !is_review_output_empty(output))
@@ -404,7 +413,15 @@ fn persist_fix_final_artifacts_with_current_output(
         final_verdict.decision,
     );
     let final_meta = review_meta_for_final_verdict(&meta_for_verdict, &final_verdict, &outcome);
+    let final_meta = apply_fix_loop_noop_signal(project_root, final_meta, &outcome, noop_probe);
     diff_report_artifacts::persist_fix_review_meta(project_root, &final_meta, diff_report);
+    if final_meta
+        .failure_reason
+        .as_deref()
+        .is_some_and(is_fix_loop_noop_failure_reason)
+    {
+        diff_report_artifacts::persist_fix_review_verdict(project_root, &final_meta, diff_report);
+    }
     super::diff_size::persist_review_diff_size_headers(
         project_root,
         &final_meta.session_id,

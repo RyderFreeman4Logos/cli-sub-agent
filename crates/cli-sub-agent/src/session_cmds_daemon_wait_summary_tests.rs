@@ -96,6 +96,70 @@ fn compact_summary_includes_usage_and_review_verdict() {
 }
 
 #[test]
+fn compact_summary_labels_fix_loop_noop_from_review_meta() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        r#"{"schema_version":1,"session_id":"01TESTWAITNOOP","timestamp":"2026-04-01T00:00:00Z","decision":"fail","verdict_legacy":"HAS_ISSUES","severity_counts":{"critical":0,"high":0,"medium":1,"low":0},"failure_reason":"fix_loop_noop:head_unchanged_worktree_clean","prior_round_refs":[]}"#,
+    )
+    .expect("review verdict should be written");
+    std::fs::write(
+        temp.path().join("review_meta.json"),
+        r#"{
+  "session_id": "01TESTWAITNOOP",
+  "head_sha": "deadbeef",
+  "decision": "fail",
+  "verdict": "HAS_ISSUES",
+  "failure_reason": "fix_loop_noop:head_unchanged_worktree_clean",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 1,
+  "fix_attempted": true,
+  "fix_rounds": 1,
+  "timestamp": "2026-04-01T00:00:00Z",
+  "fix_convergence": {
+    "quality_gate_passed": true,
+    "fix_output_was_substantive": true,
+    "post_consistency_decision": "fail",
+    "reached_genuine_clean_convergence": false,
+    "terminal_reason": "fix_loop_noop:head_unchanged_worktree_clean"
+  }
+}"#,
+    )
+    .expect("review meta should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "fix loop did not engage: head_unchanged_worktree_clean".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        fallback_chain: None,
+        gate_timeout: false,
+        warnings: vec!["fix loop did not engage: head_unchanged_worktree_clean".to_string()],
+        raw_process_exit_code: None,
+        uncommitted_changes: None,
+        manager_fields: Default::default(),
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITNOOP", &result);
+
+    assert!(summary.contains("Review verdict: FIX-LOOP-NO-OP (head_unchanged_worktree_clean)"));
+    assert!(summary.contains("Warning: fix loop did not engage: head_unchanged_worktree_clean"));
+    assert!(summary.contains("Summary: fix loop did not engage: head_unchanged_worktree_clean"));
+}
+
+#[test]
 fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let output_dir = temp.path().join("output");
