@@ -95,6 +95,27 @@ fn test_gemini_oauth_browser_prompt_is_auth_unavailable_failover() {
 }
 
 #[test]
+fn test_gemini_manual_authorization_required_is_auth_unavailable_failover() {
+    let stderr = "\
+Error: Manual authorization is required. \
+Please run the Gemini CLI in an interactive terminal to log in.";
+    let detected = detect_rate_limit(
+        "gemini-cli",
+        stderr,
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+    )
+    .expect("manual authorization prompt should classify");
+
+    assert_eq!(detected.matched_pattern, "auth_unavailable");
+    assert_eq!(detected.reason, "auth_unavailable");
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
+    assert!(!requires_init_failure_window(&detected));
+}
+
+#[test]
 fn issue_1719_quota_and_auth_failover_are_transient_and_sanitized() {
     let cases = [
         ("reason: QUOTA_EXHAUSTED", "rate-limit-429", "HTTP 429"),

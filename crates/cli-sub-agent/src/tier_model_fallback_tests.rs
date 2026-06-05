@@ -196,6 +196,9 @@ codex/openai/gpt-5.5/xhigh=HTTP 429; earliest_reset=1h 0m"
 /// The exact stderr gemini-cli emits when its key is rejected mid-run (a 400
 /// from inside `ModelRouterService.route` once a session is established).
 const GEMINI_400_API_KEY_INVALID_STDERR: &str = r#"Error talking to Gemini API in ModelRouterService.route: _ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}"#;
+const GEMINI_MANUAL_AUTHORIZATION_STDERR: &str = "\
+Error: Manual authorization is required. \
+Please run the Gemini CLI in an interactive terminal to log in.";
 
 #[test]
 fn issue_1848_midrun_gemini_api_key_invalid_advances_past_init_window() {
@@ -215,6 +218,35 @@ fn issue_1848_midrun_gemini_api_key_invalid_advances_past_init_window() {
     assert_eq!(detected.reason, "auth_unavailable");
     assert!(detected.advance_to_next_model);
     assert!(!detected.quota_exhausted);
+}
+
+#[test]
+fn issue_1867_midrun_gemini_manual_authorization_advances_past_init_window() {
+    let detected = classify_next_model_failure_with_elapsed(
+        "gemini-cli",
+        GEMINI_MANUAL_AUTHORIZATION_STDERR,
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        Some(Duration::from_secs(39)),
+    )
+    .expect("mid-run manual auth prompt must advance to the next tier candidate (#1867)");
+    assert_eq!(detected.reason, "auth_unavailable");
+    assert!(detected.advance_to_next_model);
+    assert!(!detected.quota_exhausted);
+
+    let generic_400 = classify_next_model_failure_with_elapsed(
+        "gemini-cli",
+        "Error: request failed with status: 400 Bad Request (malformed request payload)",
+        "",
+        1,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        Some(Duration::from_secs(39)),
+    );
+    assert!(
+        generic_400.is_none(),
+        "a generic non-auth 400 past the init window must remain gated (#1736)"
+    );
 }
 
 #[test]

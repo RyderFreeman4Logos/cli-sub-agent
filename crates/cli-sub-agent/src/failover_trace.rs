@@ -23,6 +23,8 @@ use csa_core::types::{FallbackAttempt, ToolName, provider_for_tool_name};
 /// undetected / errored tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FailoverSkipKind {
+    /// Authentication is unavailable in non-interactive mode.
+    AuthUnavailable,
     /// OAuth / subscription quota exhausted (e.g. gemini "monthly spending cap").
     OauthQuota,
     /// Provider returned an HTTP 429 / rate-limit marker.
@@ -40,10 +42,11 @@ pub(crate) enum FailoverSkipKind {
 }
 
 impl FailoverSkipKind {
-    /// Stable, machine-readable category string (kebab-case). This is what the
-    /// orchestrator parses out of the fallback chain.
+    /// Stable, machine-readable category string. This is what the orchestrator
+    /// parses out of the fallback chain.
     pub(crate) const fn category(self) -> &'static str {
         match self {
+            Self::AuthUnavailable => "auth_unavailable",
             Self::OauthQuota => "oauth-quota",
             Self::RateLimit429 => "rate-limit-429",
             Self::Disabled => "disabled",
@@ -94,7 +97,10 @@ impl FailoverSkipKind {
         // narrowly first via the canonical detector, then a bare `oauth` marker.
         // A generic "quota" substring is deliberately NOT treated as permanent
         // here — that is the transient class handled below.
-        if csa_core::gemini::detect_permanent_quota_exhaustion_pattern(&lower).is_some()
+        if lower.contains("auth_unavailable") || lower.contains("manual authorization is required")
+        {
+            Self::AuthUnavailable
+        } else if csa_core::gemini::detect_permanent_quota_exhaustion_pattern(&lower).is_some()
             || lower.contains("oauth")
         {
             Self::OauthQuota

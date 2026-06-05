@@ -22,19 +22,6 @@ pub(crate) fn detect_review_routing_metadata(
     }
 }
 
-pub(crate) fn persist_review_routing_artifact(
-    project_root: &Path,
-    meta_session_id: &str,
-    review_routing: &ReviewRoutingMetadata,
-) {
-    persist_review_routing_artifact_with_fallback_chain(
-        project_root,
-        meta_session_id,
-        review_routing,
-        &[],
-    );
-}
-
 pub(crate) fn persist_review_routing_artifact_with_fallback_chain(
     project_root: &Path,
     meta_session_id: &str,
