@@ -105,7 +105,13 @@ pub(crate) fn handle_gc_global(
             }
 
             if session.tools.is_empty() {
-                if dry_run {
+                if should_skip_whole_session_delete(session, &session_dir) {
+                    info!(
+                        session = %session.meta_session_id,
+                        root = %session_root.display(),
+                        "Skipped whole-session delete for Active or live session"
+                    );
+                } else if dry_run {
                     eprintln!(
                         "[dry-run] Would remove empty session: {} (in {})",
                         session.meta_session_id,
@@ -113,12 +119,6 @@ pub(crate) fn handle_gc_global(
                     );
                     total_empty_sessions += 1;
                     project_removed += 1;
-                } else if should_skip_whole_session_delete(session, &session_dir) {
-                    info!(
-                        session = %session.meta_session_id,
-                        root = %session_root.display(),
-                        "Skipped whole-session delete for Active or live session"
-                    );
                 } else if csa_session::delete_session_from_root(
                     session_root,
                     &session.meta_session_id,
@@ -174,7 +174,13 @@ pub(crate) fn handle_gc_global(
                 && let Some(days) = max_age_days
                 && age.num_days() > days as i64
             {
-                if dry_run {
+                if should_skip_whole_session_delete(session, &session_dir) {
+                    info!(
+                        session = %session.meta_session_id,
+                        root = %session_root.display(),
+                        "Skipped expired whole-session delete for Active or live session"
+                    );
+                } else if dry_run {
                     eprintln!(
                         "[dry-run] Would remove expired session: {} ({} days old, in {})",
                         session.meta_session_id,
@@ -183,12 +189,6 @@ pub(crate) fn handle_gc_global(
                     );
                     total_expired_sessions += 1;
                     project_removed += 1;
-                } else if should_skip_whole_session_delete(session, &session_dir) {
-                    info!(
-                        session = %session.meta_session_id,
-                        root = %session_root.display(),
-                        "Skipped expired whole-session delete for Active or live session"
-                    );
                 } else if csa_session::delete_session_from_root(
                     session_root,
                     &session.meta_session_id,

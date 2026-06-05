@@ -143,17 +143,17 @@ pub(crate) fn handle_gc(
         }
 
         if session.tools.is_empty() {
-            if dry_run {
+            if should_skip_whole_session_delete(session, &session_dir) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped whole-session delete for Active or live session"
+                );
+            } else if dry_run {
                 eprintln!(
                     "[dry-run] Would remove empty session: {}",
                     session.meta_session_id
                 );
                 empty_sessions_removed += 1;
-            } else if should_skip_whole_session_delete(session, &session_dir) {
-                info!(
-                    session = %session.meta_session_id,
-                    "Skipped whole-session delete for Active or live session"
-                );
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 empty_sessions_removed += 1;
             }
@@ -198,18 +198,18 @@ pub(crate) fn handle_gc(
             && let Some(days) = max_age_days
             && age.num_days() > days as i64
         {
-            if dry_run {
+            if should_skip_whole_session_delete(session, &session_dir) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped expired whole-session delete for Active or live session"
+                );
+            } else if dry_run {
                 eprintln!(
                     "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
                     session.meta_session_id,
                     age.num_days()
                 );
                 expired_sessions_removed += 1;
-            } else if should_skip_whole_session_delete(session, &session_dir) {
-                info!(
-                    session = %session.meta_session_id,
-                    "Skipped expired whole-session delete for Active or live session"
-                );
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 info!("Removed expired session: {}", session.meta_session_id);
                 expired_sessions_removed += 1;

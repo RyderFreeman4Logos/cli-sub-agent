@@ -449,24 +449,22 @@ pub(crate) fn handle_session_clean(
     for session in &sessions {
         let age = now.signed_duration_since(session.last_accessed);
         if age.num_days() > days as i64 {
-            if dry_run {
+            let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
+            if crate::gc::should_skip_whole_session_delete(session, &session_dir) {
+                info!(
+                    session = %session.meta_session_id,
+                    "Skipped session clean delete for Active or live session"
+                );
+            } else if dry_run {
                 eprintln!(
                     "[dry-run] Would remove: {} (last accessed {} days ago)",
                     &session.meta_session_id[..11.min(session.meta_session_id.len())],
                     age.num_days()
                 );
                 removed += 1;
-            } else {
-                let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
-                if crate::gc::should_skip_whole_session_delete(session, &session_dir) {
-                    info!(
-                        session = %session.meta_session_id,
-                        "Skipped session clean delete for Active or live session"
-                    );
-                } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
-                    info!("Removed expired session: {}", session.meta_session_id);
-                    removed += 1;
-                }
+            } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
+                info!("Removed expired session: {}", session.meta_session_id);
+                removed += 1;
             }
         }
     }
