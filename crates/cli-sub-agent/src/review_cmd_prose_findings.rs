@@ -184,11 +184,11 @@ pub(in crate::review_cmd) fn zero_severity_counts() -> BTreeMap<Severity, u32> {
 pub(in crate::review_cmd) fn severity_from_label(level: &str) -> Option<Severity> {
     let normalized = level.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "critical" | "p0" => Some(Severity::Critical),
-        "high" | "p1" => Some(Severity::High),
-        "medium" | "p2" => Some(Severity::Medium),
-        "low" | "info" | "p3" | "p4" => Some(Severity::Low),
-        _ => None,
+        "critical" => Some(Severity::Critical),
+        "high" => Some(Severity::High),
+        "medium" => Some(Severity::Medium),
+        "low" | "info" => Some(Severity::Low),
+        _ => priority_severity_from_label(&normalized),
     }
 }
 
@@ -516,5 +516,21 @@ fn line_has_unparsed_finding_like_structure(line: &str) -> bool {
     if body.starts_with('`') {
         return false;
     }
-    bracketed_finding_severity(body).is_some() || leading_severity_from_title(body).is_some()
+    structured_finding_body(line).is_some()
+        || bracketed_finding_severity(body).is_some()
+        || leading_severity_from_title(body).is_some()
+}
+
+fn priority_severity_from_label(label: &str) -> Option<Severity> {
+    let priority = label.strip_prefix('p')?;
+    if priority.is_empty() || !priority.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+
+    match priority.parse::<u32>().ok()? {
+        0 => Some(Severity::Critical),
+        1 => Some(Severity::High),
+        2 => Some(Severity::Medium),
+        _ => Some(Severity::Low),
+    }
 }

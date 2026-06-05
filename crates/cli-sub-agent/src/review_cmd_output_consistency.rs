@@ -6,11 +6,14 @@ use csa_core::types::ReviewDecision;
 use csa_session::{FindingsFile, ReviewVerdictArtifact, Severity, write_findings_toml};
 
 use super::artifacts::severity_counts_are_zero;
-use super::artifacts::{has_blocking_severity, load_findings_toml_from_output};
+use super::artifacts::{
+    has_blocking_severity, load_findings_toml_from_output, load_review_artifact_from_output,
+};
 use super::prose_signals::{reconcile_counts_with_prose, review_prose_signals};
 use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
+const SEVERITY_FINDINGS_MISMATCH_REASON: &str = "severity_counts_findings_mismatch";
 
 pub(super) fn enforce_final_verdict_consistency(
     session_dir: &Path,
@@ -44,8 +47,15 @@ pub(super) fn enforce_final_verdict_consistency(
     let prose_grade = highest_prose_severity_grade(session_dir);
 
     let resume_to_fix = has_resume_to_fix_suggestion(session_dir)?;
+    let has_review_artifact_findings = load_review_artifact_from_output(session_dir)?
+        .is_some_and(|artifact| !artifact.findings.is_empty());
+    let has_structured_findings =
+        !findings_file.findings.is_empty() || has_review_artifact_findings;
+    let structured_mismatch =
+        !severity_counts_are_zero(&artifact.severity_counts) && !has_structured_findings;
     let blocking_prose =
         prose_signals.blocking_summary || has_blocking_severity(&prose_signals.severity_counts);
+    let blocking_structured = has_blocking_severity(&artifact.severity_counts);
     let parsed_findings_prose = prose_signals.parsed_findings_sections;
     let unparsed_findings_prose = prose_signals.unparseable_findings_sections;
 
@@ -54,9 +64,19 @@ pub(super) fn enforce_final_verdict_consistency(
             .failure_reason
             .get_or_insert_with(|| PROSE_FINDINGS_UNPARSED_REASON.to_string());
     }
+    if structured_mismatch {
+        artifact
+            .failure_reason
+            .get_or_insert_with(|| SEVERITY_FINDINGS_MISMATCH_REASON.to_string());
+    }
 
     if artifact.decision == ReviewDecision::Pass
-        && (resume_to_fix || blocking_prose || parsed_findings_prose || unparsed_findings_prose)
+        && (resume_to_fix
+            || blocking_prose
+            || blocking_structured
+            || parsed_findings_prose
+            || unparsed_findings_prose
+            || structured_mismatch)
     {
         artifact.decision = ReviewDecision::Fail;
         artifact.verdict_legacy = "HAS_ISSUES".to_string();
