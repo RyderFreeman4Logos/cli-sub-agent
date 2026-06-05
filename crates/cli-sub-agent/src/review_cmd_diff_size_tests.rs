@@ -267,3 +267,20 @@ fn resolve_large_diff_warn_lines_uses_default_when_absent_and_project_override_w
         Some(0)
     );
 }
+
+#[test]
+fn large_diff_warn_lines_zero_disables_auto_escalation_signal() {
+    let project: ProjectConfig =
+        toml::from_str("schema_version = 1\n[review]\nlarge_diff_warn_lines = 0\n")
+            .expect("parse project config with disabled threshold");
+    let diff_size = ReviewDiffSize {
+        files: 4,
+        changed_lines: 10_000,
+        bytes: 65_536,
+        notes: Vec::new(),
+    };
+
+    let warning = warn_if_large_diff(Some(&diff_size), Some(&project), &GlobalConfig::default());
+
+    assert!(warning.is_none());
+}

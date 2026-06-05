@@ -17,6 +17,7 @@ pub(crate) struct AutoReviewerRequest<'a> {
     pub(crate) explicit_reviewer_count: bool,
     pub(crate) single: bool,
     pub(crate) scope_is_range: bool,
+    pub(crate) large_diff_auto_escalation: bool,
     pub(crate) explicit_tool: Option<ToolName>,
     pub(crate) explicit_model_spec: Option<&'a str>,
     pub(crate) primary_tool: ToolName,
@@ -94,6 +95,56 @@ fn build_selected_tool_subset(
     selected
 }
 
+fn build_auto_heterogeneous_tool_subset(
+    primary_tool: ToolName,
+    tier_reviewer_tools: &[ToolName],
+    reviewers: usize,
+) -> Vec<ToolName> {
+    let mut selected = vec![primary_tool];
+    let mut selected_families = vec![primary_tool.model_family()];
+    let mut same_family_candidates = Vec::new();
+
+    for tool in tier_reviewer_tools {
+        if selected.contains(tool) {
+            continue;
+        }
+
+        let family = tool.model_family();
+        if selected_families.contains(&family) {
+            same_family_candidates.push(*tool);
+        } else {
+            selected_families.push(family);
+            selected.push(*tool);
+            if selected.len() == reviewers {
+                return selected;
+            }
+        }
+    }
+
+    for tool in same_family_candidates {
+        if selected.len() == reviewers {
+            break;
+        }
+        selected.push(tool);
+    }
+
+    selected
+}
+
+fn has_at_least_two_model_families(tools: &[ToolName]) -> bool {
+    let mut families = Vec::new();
+    for tool in tools {
+        let family = tool.model_family();
+        if !families.contains(&family) {
+            families.push(family);
+            if families.len() >= 2 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn repeat_reviewer_pool(pool: &[ToolName], reviewer_count: usize) -> Vec<ToolName> {
     (0..reviewer_count)
         .map(|idx| pool[idx % pool.len()])
@@ -106,7 +157,7 @@ pub(crate) fn resolve_auto_reviewer_selection(
     if request.requested_reviewers != 1
         || request.explicit_reviewer_count
         || request.single
-        || !request.scope_is_range
+        || !(request.scope_is_range || request.large_diff_auto_escalation)
         || request.explicit_tool.is_some()
         || request.explicit_model_spec.is_some()
     {
@@ -119,18 +170,18 @@ pub(crate) fn resolve_auto_reviewer_selection(
         request.global_config,
     );
     let tier_reviewer_tools = collect_unique_tier_tools(&tier_reviewer_specs);
-    let preference_order = effective_review_tool_preferences(request.config, request.global_config);
-    let unique_pool = build_selected_tool_subset(
+    let unique_pool = build_auto_heterogeneous_tool_subset(
         request.primary_tool,
         &tier_reviewer_tools,
         MAX_AUTO_HETEROGENEOUS_REVIEWERS,
-        &preference_order,
     );
 
-    (unique_pool.len() >= 2).then_some(AutoReviewerSelection {
-        reviewers: unique_pool.len(),
-        selected_tools: unique_pool,
-    })
+    (unique_pool.len() >= 2 && has_at_least_two_model_families(&unique_pool)).then_some(
+        AutoReviewerSelection {
+            reviewers: unique_pool.len(),
+            selected_tools: unique_pool,
+        },
+    )
 }
 
 pub(crate) fn resolve_effective_reviewer_count(request: &AutoReviewerRequest<'_>) -> usize {
@@ -217,7 +268,8 @@ pub(crate) fn resolve_multi_reviewer_pool(
 #[cfg(test)]
 mod tests {
     use super::{
-        AutoReviewerRequest, resolve_auto_reviewer_selection, resolve_multi_reviewer_pool,
+        AutoReviewerRequest, resolve_auto_reviewer_selection, resolve_effective_reviewer_count,
+        resolve_multi_reviewer_pool,
     };
     use crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV;
     use crate::test_env_lock::TEST_ENV_LOCK;
@@ -339,6 +391,17 @@ mod tests {
         config
     }
 
+    fn distinct_model_family_count(tools: &[ToolName]) -> usize {
+        let mut families = Vec::new();
+        for tool in tools {
+            let family = tool.model_family();
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        }
+        families.len()
+    }
+
     #[test]
     fn auto_reviewer_selection_skips_single_tool_tier() {
         let (_env_lock, _available_guard) = assume_review_tools_available();
@@ -350,6 +413,7 @@ mod tests {
             explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
+            large_diff_auto_escalation: false,
             explicit_tool: None,
             explicit_model_spec: None,
             primary_tool: ToolName::Codex,
@@ -377,6 +441,7 @@ mod tests {
             explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
+            large_diff_auto_escalation: false,
             explicit_tool: None,
             explicit_model_spec: None,
             primary_tool: ToolName::GeminiCli,
@@ -390,6 +455,39 @@ mod tests {
         assert_eq!(
             selection.selected_tools,
             vec![ToolName::GeminiCli, ToolName::Codex, ToolName::Opencode]
+        );
+        assert_eq!(distinct_model_family_count(&selection.selected_tools), 3);
+    }
+
+    #[test]
+    fn large_diff_auto_escalation_selects_heterogeneous_reviewers_for_non_range_scope() {
+        let (_env_lock, _available_guard) = assume_review_tools_available();
+        let config = project_config_with_tier(&[
+            "codex/openai/gpt-5.4/high",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        ]);
+        let global = GlobalConfig::default();
+
+        let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
+            requested_reviewers: 1,
+            explicit_reviewer_count: false,
+            single: false,
+            scope_is_range: false,
+            large_diff_auto_escalation: true,
+            explicit_tool: None,
+            explicit_model_spec: None,
+            primary_tool: ToolName::Codex,
+            resolved_tier_name: Some("quality"),
+            config: Some(&config),
+            global_config: &global,
+        })
+        .expect("large non-range diff should auto-select heterogeneous reviewers");
+
+        assert!(selection.reviewers >= 2);
+        assert!(distinct_model_family_count(&selection.selected_tools) >= 2);
+        assert_eq!(
+            selection.selected_tools,
+            vec![ToolName::Codex, ToolName::GeminiCli]
         );
     }
 
@@ -440,6 +538,7 @@ mod tests {
             explicit_reviewer_count: false,
             single: true,
             scope_is_range: true,
+            large_diff_auto_escalation: true,
             explicit_tool: None,
             explicit_model_spec: None,
             primary_tool: ToolName::Codex,
@@ -465,6 +564,7 @@ mod tests {
             explicit_reviewer_count: true,
             single: false,
             scope_is_range: true,
+            large_diff_auto_escalation: true,
             explicit_tool: None,
             explicit_model_spec: None,
             primary_tool: ToolName::Codex,
@@ -474,6 +574,33 @@ mod tests {
         });
 
         assert!(selection.is_none());
+    }
+
+    #[test]
+    fn large_diff_auto_escalation_respects_explicit_reviewer_count() {
+        let (_env_lock, _available_guard) = assume_review_tools_available();
+        let config = project_config_with_tier(&[
+            "codex/openai/gpt-5.4/high",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openrouter/sonnet/high",
+        ]);
+        let global = GlobalConfig::default();
+
+        let reviewers = resolve_effective_reviewer_count(&AutoReviewerRequest {
+            requested_reviewers: 2,
+            explicit_reviewer_count: true,
+            single: false,
+            scope_is_range: false,
+            large_diff_auto_escalation: true,
+            explicit_tool: None,
+            explicit_model_spec: None,
+            primary_tool: ToolName::Codex,
+            resolved_tier_name: Some("quality"),
+            config: Some(&config),
+            global_config: &global,
+        });
+
+        assert_eq!(reviewers, 2);
     }
 
     #[test]
@@ -490,6 +617,7 @@ mod tests {
             explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
+            large_diff_auto_escalation: true,
             explicit_tool: None,
             explicit_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
             primary_tool: ToolName::Codex,
@@ -515,9 +643,36 @@ mod tests {
             explicit_reviewer_count: false,
             single: false,
             scope_is_range: true,
+            large_diff_auto_escalation: true,
             explicit_tool: Some(ToolName::Codex),
             explicit_model_spec: None,
             primary_tool: ToolName::Codex,
+            resolved_tier_name: Some("quality"),
+            config: Some(&config),
+            global_config: &global,
+        });
+
+        assert!(selection.is_none());
+    }
+
+    #[test]
+    fn large_diff_auto_escalation_requires_two_model_families() {
+        let (_env_lock, _available_guard) = assume_review_tools_available();
+        let config = project_config_with_tier(&[
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "antigravity-cli/google/gemini-3.1-pro-preview/xhigh",
+        ]);
+        let global = GlobalConfig::default();
+
+        let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
+            requested_reviewers: 1,
+            explicit_reviewer_count: false,
+            single: false,
+            scope_is_range: false,
+            large_diff_auto_escalation: true,
+            explicit_tool: None,
+            explicit_model_spec: None,
+            primary_tool: ToolName::GeminiCli,
             resolved_tier_name: Some("quality"),
             config: Some(&config),
             global_config: &global,
@@ -540,6 +695,7 @@ mod tests {
             explicit_reviewer_count: false,
             single: false,
             scope_is_range: false,
+            large_diff_auto_escalation: false,
             explicit_tool: None,
             explicit_model_spec: None,
             primary_tool: ToolName::Codex,

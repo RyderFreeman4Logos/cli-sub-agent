@@ -160,9 +160,8 @@ pub(crate) async fn handle_review(
     .await?;
 
     let scope = derive_scope_for_project(&args, &project_root);
-    let diff_size = diff_size::compute_review_diff_size(&project_root, &scope);
-    let large_diff_warning =
-        diff_size::warn_if_large_diff(diff_size.as_ref(), config.as_ref(), &global_config);
+    let diff = diff_size::compute_review_diff_size(&project_root, &scope);
+    let large_warn = diff_size::warn_if_large_diff(diff.as_ref(), config.as_ref(), &global_config);
     let mode = if args.fix {
         "review-and-fix"
     } else {
@@ -216,7 +215,7 @@ pub(crate) async fn handle_review(
         prompt.push_str(summary);
     }
 
-    diff_size::append_cross_dimension_anchor(&mut prompt, diff_size.as_ref(), large_diff_warning);
+    diff_size::append_cross_dimension_anchor(&mut prompt, diff.as_ref(), large_warn);
 
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
@@ -309,6 +308,7 @@ pub(crate) async fn handle_review(
         explicit_reviewer_count: args.reviewers.is_some(),
         single: args.single,
         scope_is_range: args.range.is_some(),
+        large_diff_auto_escalation: large_warn.is_some(),
         explicit_tool: explicit_review_tool(&args),
         explicit_model_spec: args.model_spec.as_deref(),
         primary_tool: tool,
@@ -407,7 +407,7 @@ pub(crate) async fn handle_review(
         let auth_prompt_failure = resolved.auth_prompt_failure;
         print!(
             "{}",
-            diff_size::add_review_diff_size_line(&sanitized, diff_size.as_ref())
+            diff_size::add_review_diff_size_line(&sanitized, diff.as_ref())
         );
         debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
         let review_iterations = result
@@ -449,17 +449,13 @@ pub(crate) async fn handle_review(
             &project_root,
             &review_meta,
             result.persistable_session_id.as_deref(),
-            diff_size.as_ref(),
-            large_diff_warning,
+            diff.as_ref(),
+            large_warn,
         );
         let effective_exit_code = persisted_verdict_exit_code.unwrap_or(effective_exit_code);
         if let Some(session_id) = result.persistable_session_id.as_deref() {
             persist_review_result_exit_code(&project_root, session_id, effective_exit_code);
-            diff_size::persist_review_diff_size_headers(
-                &project_root,
-                session_id,
-                diff_size.as_ref(),
-            );
+            diff_size::persist_review_diff_size_headers(&project_root, session_id, diff.as_ref());
         }
         if verdict != CLEAN {
             dirty_tree::maybe_emit_dirty_tree_hint(
@@ -540,8 +536,8 @@ pub(crate) async fn handle_review(
             extra_readable: &args.extra_readable,
             timeout: args.timeout,
             diff_report: diff_size::ReviewDiffReport {
-                diff_size: diff_size.as_ref(),
-                large_diff_warning,
+                diff_size: diff.as_ref(),
+                large_diff_warning: large_warn,
             },
             project_root: &project_root,
             scope,
@@ -596,8 +592,8 @@ pub(crate) async fn handle_review(
         global_config: &global_config,
         pre_session_hook: pre_session_hook.clone(),
         review_routing,
-        diff_size: diff_size.as_ref(),
-        large_diff_warning,
+        diff_size: diff.as_ref(),
+        large_diff_warning: large_warn,
         review_model,
         resolved_model_spec,
         resolved_tier_name,
