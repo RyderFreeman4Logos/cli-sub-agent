@@ -153,7 +153,7 @@ fn tier_bypass_gate_allows_inherited_trusted_pin() {
         project_config: Some(&cfg),
         global_config: &GlobalConfig::default(),
         flags: super::TierBypassGateFlags {
-            model_spec: false,
+            model_spec: true,
             force: false,
             force_ignore_tier_setting: true,
             model: false,
@@ -162,6 +162,30 @@ fn tier_bypass_gate_allows_inherited_trusted_pin() {
         inherited_trusted_pin: true,
     })
     .expect("trusted inherited #1741 subtree pins should continue under gate-off");
+}
+
+#[test]
+fn tier_bypass_gate_rejects_user_force_with_inherited_trusted_pin() {
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+
+    let err = super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
+        project_config: Some(&cfg),
+        global_config: &GlobalConfig::default(),
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: true,
+            force_ignore_tier_setting: true,
+            model: false,
+            thinking: false,
+        },
+        inherited_trusted_pin: true,
+    })
+    .expect_err("inherited subtree pins must not allow unrelated user bypass flags");
+    let msg = err.to_string();
+
+    assert!(msg.contains("Refused flags: --force"), "{msg}");
+    assert!(!msg.contains("--model-spec"), "{msg}");
+    assert!(!msg.contains("--force-ignore-tier-setting"), "{msg}");
 }
 
 #[test]
@@ -370,6 +394,45 @@ fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
 
     assert_eq!(result.0, ToolName::Codex);
     assert_eq!(result.1.as_deref(), Some("codex/openai/gpt-5.4/high"));
+    assert!(result.2.is_none());
+}
+
+#[test]
+fn resolve_tool_and_model_uses_inherited_model_spec_when_gate_default() {
+    let _guard = assume_tier_tools_available();
+    let cfg = config_with_tier(
+        "tier-1",
+        vec!["gemini-cli/google/gemini-3/high"],
+        &["gemini-cli", "codex"],
+    );
+    let global = GlobalConfig::default();
+    let inherited_spec = "codex/openai/gpt-5.5/xhigh";
+
+    super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
+        project_config: Some(&cfg),
+        global_config: &global,
+        flags: super::TierBypassGateFlags {
+            model_spec: true,
+            force: false,
+            force_ignore_tier_setting: true,
+            model: false,
+            thinking: false,
+        },
+        inherited_trusted_pin: true,
+    })
+    .expect("inherited subtree model-spec should pass the gate without global opt-in");
+
+    let result = super::resolve_tool_and_model(super::RoutingRequest {
+        model_spec: Some(inherited_spec),
+        config: Some(&cfg),
+        force_ignore_tier_setting: true,
+        tier_bypass_allowed: super::tier_bypass_allowed(Some(&cfg), &global, true),
+        ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
+    })
+    .expect("trusted inherited model-spec should resolve exactly");
+
+    assert_eq!(result.0, ToolName::Codex);
+    assert_eq!(result.1.as_deref(), Some(inherited_spec));
     assert!(result.2.is_none());
 }
 

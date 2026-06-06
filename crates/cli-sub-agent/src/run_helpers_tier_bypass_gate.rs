@@ -15,6 +15,9 @@ pub(crate) struct TierBypassGateCtx<'a> {
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) global_config: &'a GlobalConfig,
     pub(crate) flags: TierBypassGateFlags,
+    /// True only for CSA-injected subtree pins already validated from startup
+    /// env. It exempts the inherited model-spec pin and its paired force-ignore
+    /// marker, not unrelated user bypass flags.
     pub(crate) inherited_trusted_pin: bool,
 }
 
@@ -23,7 +26,7 @@ pub(crate) fn enforce_tier_bypass_gate(ctx: TierBypassGateCtx<'_>) -> Result<()>
         return Ok(());
     };
 
-    if tier_bypass_allowed(Some(cfg), ctx.global_config, ctx.inherited_trusted_pin) {
+    if ctx.global_config.tier_policy.allow_force_bypass {
         return Ok(());
     }
 
@@ -61,13 +64,13 @@ pub(crate) fn tier_bypass_allowed(
 
 fn refused_tier_bypass_flags(ctx: &TierBypassGateCtx<'_>) -> Vec<&'static str> {
     let mut flags = Vec::new();
-    if ctx.flags.model_spec {
+    if ctx.flags.model_spec && !ctx.inherited_trusted_pin {
         flags.push("--model-spec");
     }
     if ctx.flags.force {
         flags.push("--force");
     }
-    if ctx.flags.force_ignore_tier_setting {
+    if ctx.flags.force_ignore_tier_setting && !ctx.inherited_trusted_pin {
         flags.push("--force-ignore-tier-setting");
     }
     if ctx.flags.model {
