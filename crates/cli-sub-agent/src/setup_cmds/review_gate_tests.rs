@@ -1,8 +1,47 @@
 use super::*;
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+use tracing_subscriber::fmt::MakeWriter;
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SharedLogBuffer {
+    fn contents(&self) -> String {
+        String::from_utf8(self.bytes.lock().unwrap().clone()).unwrap()
+    }
+}
+
+struct SharedLogWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = SharedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriter {
+            bytes: Arc::clone(&self.bytes),
+        }
+    }
+}
+
+impl Write for SharedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.bytes.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 fn run_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -23,6 +62,7 @@ fn init_git_repo(project_root: &Path) {
     run_git(project_root, &["init"]);
     run_git(project_root, &["config", "user.email", "test@example.com"]);
     run_git(project_root, &["config", "user.name", "Test User"]);
+    run_git(project_root, &["config", "core.filemode", "true"]);
     fs::write(project_root.join("tracked.txt"), "baseline\n").expect("write baseline");
     run_git(project_root, &["add", "tracked.txt"]);
     run_git(project_root, &["commit", "-m", "initial"]);
@@ -36,6 +76,38 @@ fn track_file(project_root: &Path, relative_path: &str, content: &str) {
     fs::write(path, content).expect("write tracked file");
     run_git(project_root, &["add", relative_path]);
     run_git(project_root, &["commit", "-m", "track review gate opt-in"]);
+}
+
+fn git_status_short(project_root: &Path) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["status", "--short"])
+        .output()
+        .expect("git status should execute");
+    assert!(
+        output.status.success(),
+        "git status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("status should be UTF-8")
+}
+
+fn capture_warnings<F>(f: F) -> String
+where
+    F: FnOnce(),
+{
+    let buffer = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .with_writer(buffer.clone())
+        .finish();
+
+    tracing::subscriber::with_default(subscriber, f);
+    buffer.contents()
 }
 
 #[cfg(unix)]
@@ -192,6 +264,109 @@ fn generated_pre_push_wiring_invokes_branch_protection_before_review_check() {
     );
     assert!(result.contains("      run: scripts/hooks/branch-protection.sh"));
     assert!(result.contains("      run: scripts/hooks/review-check.sh"));
+}
+
+#[test]
+fn tracked_different_review_check_is_not_overwritten_and_warns() {
+    let td = TempDir::new().expect("create tempdir");
+    init_git_repo(td.path());
+    let custom = "#!/bin/sh\n# Installed by: csa setup review-gate\n# repo-owned custom review gate\nexit 0\n";
+    track_file(td.path(), "scripts/hooks/review-check.sh", custom);
+
+    let logs = capture_warnings(|| {
+        install_review_check_script(td.path()).expect("install should skip tracked hook");
+    });
+
+    let script = fs::read_to_string(td.path().join("scripts/hooks/review-check.sh"))
+        .expect("read review-check.sh");
+    assert_eq!(script, custom, "tracked hook must remain byte-for-byte");
+    assert_eq!(git_status_short(td.path()), "", "tracked hook stays clean");
+    assert!(logs.contains("respecting git-tracked hook"));
+    assert!(logs.contains("review-check.sh"));
+}
+
+#[test]
+fn absent_review_check_is_installed() {
+    let td = TempDir::new().expect("create tempdir");
+
+    install_review_check_script(td.path()).expect("missing hook should install");
+
+    let script = fs::read_to_string(td.path().join("scripts/hooks/review-check.sh"))
+        .expect("read installed review-check.sh");
+    assert_eq!(script, REVIEW_CHECK_TEMPLATE);
+}
+
+#[test]
+fn tracked_identical_review_check_is_noop_and_clean() {
+    let td = TempDir::new().expect("create tempdir");
+    init_git_repo(td.path());
+    track_file(
+        td.path(),
+        "scripts/hooks/review-check.sh",
+        REVIEW_CHECK_TEMPLATE,
+    );
+
+    let logs = capture_warnings(|| {
+        install_review_check_script(td.path()).expect("identical hook should be a no-op");
+    });
+
+    let script = fs::read_to_string(td.path().join("scripts/hooks/review-check.sh"))
+        .expect("read review-check.sh");
+    assert_eq!(script, REVIEW_CHECK_TEMPLATE);
+    assert_eq!(
+        git_status_short(td.path()),
+        "",
+        "identical hook stays clean"
+    );
+    assert!(logs.is_empty(), "identical hook should not warn");
+}
+
+#[test]
+fn untracked_different_review_check_is_updated() {
+    let td = TempDir::new().expect("create tempdir");
+    init_git_repo(td.path());
+    let script_path = td.path().join("scripts/hooks/review-check.sh");
+    fs::create_dir_all(script_path.parent().unwrap()).expect("create hooks dir");
+    fs::write(&script_path, "#!/bin/sh\n# stale CSA-managed hook\n").expect("write stale hook");
+
+    install_review_check_script(td.path()).expect("untracked hook may be updated");
+
+    let script = fs::read_to_string(script_path).expect("read review-check.sh");
+    assert_eq!(script, REVIEW_CHECK_TEMPLATE);
+}
+
+#[test]
+fn non_git_different_review_check_is_not_overwritten_and_warns() {
+    let td = TempDir::new().expect("create tempdir");
+    let script_path = td.path().join("scripts/hooks/review-check.sh");
+    fs::create_dir_all(script_path.parent().unwrap()).expect("create hooks dir");
+    let custom = "#!/bin/sh\n# local hook outside git\nexit 0\n";
+    fs::write(&script_path, custom).expect("write local hook");
+
+    let logs = capture_warnings(|| {
+        install_review_check_script(td.path()).expect("unknown tracked status should skip");
+    });
+
+    let script = fs::read_to_string(script_path).expect("read review-check.sh");
+    assert_eq!(script, custom);
+    assert!(logs.contains("could not determine whether existing hook is git-tracked"));
+    assert!(logs.contains("review-check.sh"));
+}
+
+#[test]
+fn tracked_different_branch_protection_is_not_overwritten() {
+    let td = TempDir::new().expect("create tempdir");
+    init_git_repo(td.path());
+    let custom =
+        "#!/bin/sh\n# Installed by: csa setup review-gate\n# repo-owned branch policy\nexit 0\n";
+    track_file(td.path(), "scripts/hooks/branch-protection.sh", custom);
+
+    install_branch_protection_script(td.path()).expect("install should skip tracked hook");
+
+    let script = fs::read_to_string(td.path().join("scripts/hooks/branch-protection.sh"))
+        .expect("read branch-protection.sh");
+    assert_eq!(script, custom);
+    assert_eq!(git_status_short(td.path()), "", "tracked hook stays clean");
 }
 
 #[test]
