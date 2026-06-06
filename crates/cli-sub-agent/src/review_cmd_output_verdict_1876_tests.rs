@@ -582,6 +582,55 @@ No findings.
 }
 
 #[test]
+fn issue_1896_raw_superset_cross_dimension_blocker_fails_closed() {
+    let session_id = "01TEST1896RAWSUPERSET0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1896-raw-superset-blocker", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+No findings.
+
+## Cross-Dimension Blocking Enumeration
+1. Correctness: no independent blocker found.
+2. Security: no independent blocker found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+    fs::write(
+        session_dir.join("output.log"),
+        r#"## Cross-Dimension Blocking Enumeration
+1. Correctness: raw transcript reports a concrete blocker only present in output.log.
+2. Security: no independent blocker found.
+"#,
+    )
+    .expect("write raw review log");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_1896_findings_none_and_empty_cross_dimension_stays_pass() {
     let session_id = "01TEST1896CLEANNONE000";
     let (_env_lock, project_root, session_dir) =

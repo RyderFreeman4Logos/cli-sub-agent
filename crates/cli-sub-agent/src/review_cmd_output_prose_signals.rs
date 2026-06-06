@@ -107,10 +107,26 @@ fn push_review_content(contents: &mut Vec<(String, String)>, section_id: &str, c
 }
 
 fn review_content_is_covered_by_sections(contents: &[(String, String)], candidate: &str) -> bool {
-    !contents.is_empty()
-        && contents
-            .iter()
-            .all(|(_, content)| candidate.contains(content.trim()))
+    let mut residual = candidate.trim().to_string();
+    if residual.is_empty() {
+        return true;
+    }
+
+    for (_, content) in contents {
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        while let Some(start) = residual.find(trimmed) {
+            let end = start + trimmed.len();
+            residual.replace_range(start..end, "");
+        }
+        if residual.trim().is_empty() {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn record_review_prose_signal(
@@ -307,4 +323,44 @@ pub(super) fn reconcile_counts_with_prose(
         *count = (*count).max(*prose_count);
     }
     structured_counts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::review_content_is_covered_by_sections;
+
+    fn review_contents() -> Vec<(String, String)> {
+        vec![
+            ("summary".to_string(), "PASS".to_string()),
+            (
+                "details".to_string(),
+                "## Findings\n\nNo findings.".to_string(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn exact_duplicate_candidate_is_covered_by_sections() {
+        let candidate = "PASS\n## Findings\n\nNo findings.";
+
+        assert!(review_content_is_covered_by_sections(
+            &review_contents(),
+            candidate
+        ));
+    }
+
+    #[test]
+    fn superset_candidate_with_raw_extra_is_not_covered_by_sections() {
+        let candidate = concat!(
+            "PASS\n",
+            "## Findings\n\nNo findings.\n\n",
+            "## Cross-Dimension Blocking Enumeration\n",
+            "1. Correctness: raw transcript blocker only present in output.log.\n"
+        );
+
+        assert!(!review_content_is_covered_by_sections(
+            &review_contents(),
+            candidate
+        ));
+    }
 }
