@@ -571,6 +571,10 @@ mod thinking_tests;
 mod prompt_guard_tests;
 
 #[cfg(test)]
+#[path = "pipeline_tests_git_guard_env.rs"]
+mod git_guard_env_tests;
+
+#[cfg(test)]
 #[path = "pipeline_tests_preflight.rs"]
 mod preflight_tests;
 

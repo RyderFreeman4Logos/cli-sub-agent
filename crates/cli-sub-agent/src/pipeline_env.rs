@@ -18,6 +18,7 @@ pub(crate) fn build_merged_env(
     tool_name: &str,
     current_depth: u32,
     pattern_internal: bool,
+    sa_mode: bool,
 ) -> HashMap<String, String> {
     let suppress = config
         .map(|c| c.should_suppress_notify(tool_name))
@@ -79,6 +80,11 @@ pub(crate) fn build_merged_env(
             csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY.to_string(),
             "1".to_string(),
         );
+    }
+    if sa_mode {
+        merged_env.insert("CSA_GIT_PUSH_ALLOWED".to_string(), "true".to_string());
+    } else {
+        merged_env.remove("CSA_GIT_PUSH_ALLOWED");
     }
 
     merged_env
