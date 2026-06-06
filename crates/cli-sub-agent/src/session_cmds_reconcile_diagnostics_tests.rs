@@ -1,52 +1,16 @@
 use super::*;
-use crate::test_env_lock::TEST_ENV_LOCK;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_session::{create_session, get_session_dir, load_result, load_session};
 use std::fs;
-use tokio::sync::OwnedMutexGuard;
-
-struct EnvVarGuard {
-    key: &'static str,
-    original: Option<String>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let original = std::env::var(key).ok();
-        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
-        unsafe { std::env::set_var(key, value) };
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
-        unsafe {
-            match self.original.as_deref() {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-}
 
 struct SessionTestEnv {
-    _env_lock: OwnedMutexGuard<()>,
-    _home_guard: EnvVarGuard,
-    _state_guard: EnvVarGuard,
+    _sandbox: ScopedSessionSandbox,
 }
 
 impl SessionTestEnv {
     fn new(td: &tempfile::TempDir) -> Self {
-        let env_lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
-        let state_home = td.path().join("xdg-state");
-        fs::create_dir_all(&state_home).expect("create state home");
-        let home_guard = EnvVarGuard::set("HOME", td.path());
-        let state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
         Self {
-            _env_lock: env_lock,
-            _home_guard: home_guard,
-            _state_guard: state_guard,
+            _sandbox: ScopedSessionSandbox::new_blocking(td),
         }
     }
 }
