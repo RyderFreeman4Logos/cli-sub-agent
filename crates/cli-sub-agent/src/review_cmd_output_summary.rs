@@ -5,6 +5,7 @@ use anyhow::Result;
 use csa_session::output_parser::parse_sections;
 use csa_session::{OutputIndex, OutputSection};
 
+use super::sections::last_non_empty_section_content;
 use super::{derive_review_result_summary, has_structured_review_content, sanitize_review_output};
 
 pub(crate) fn is_edit_restriction_summary(summary: &str) -> bool {
@@ -18,30 +19,9 @@ pub(crate) fn truncate_review_result_summary(line: &str) -> String {
         .collect()
 }
 
-fn current_run_has_summary_section(output: &str) -> bool {
-    let sanitized = sanitize_review_output(output);
-    let sections = parse_sections(&sanitized);
-    sections.iter().rev().any(|section| {
-        section.id == "summary"
-            && !extract_section_content(&sanitized, section)
-                .trim()
-                .is_empty()
-    })
-}
-
-fn extract_section_content(output: &str, section: &OutputSection) -> String {
-    if section.line_start == 0 || section.line_end < section.line_start {
-        return String::new();
-    }
-
-    let start = section.line_start - 1;
-    let count = section.line_end - start;
-    output
-        .lines()
-        .skip(start)
-        .take(count)
-        .collect::<Vec<&str>>()
-        .join("\n")
+fn current_run_summary_section(output: &str) -> Option<String> {
+    let sections = parse_sections(output);
+    last_non_empty_section_content(output, &sections, "summary")
 }
 
 pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -> Result<()> {
@@ -53,28 +33,10 @@ pub(crate) fn ensure_review_summary_artifact(session_dir: &Path, output: &str) -
     fs::create_dir_all(&output_dir)
         .map_err(|error| anyhow::anyhow!("create {}: {error}", output_dir.display()))?;
     let summary_path = output_dir.join("summary.md");
-    let summary = if current_run_has_summary_section(output) {
-        let sanitized = sanitize_review_output(output);
-        let sections = parse_sections(&sanitized);
-        if let Some(summary) = sections
-            .iter()
-            .rev()
-            .find(|section| section.id == "summary")
-            .map(|section| extract_section_content(&sanitized, section))
-            .filter(|summary| !summary.trim().is_empty())
-        {
-            fs::write(&summary_path, &summary)
-                .map_err(|error| anyhow::anyhow!("write {}: {error}", summary_path.display()))?;
-            summary
-        } else {
-            let Some(summary) = fs::read_to_string(&summary_path)
-                .ok()
-                .filter(|summary| !summary.trim().is_empty())
-            else {
-                return Ok(());
-            };
-            summary
-        }
+    let summary = if let Some(summary) = current_run_summary_section(output) {
+        fs::write(&summary_path, &summary)
+            .map_err(|error| anyhow::anyhow!("write {}: {error}", summary_path.display()))?;
+        summary
     } else {
         let Some(summary) = derive_review_result_summary(output) else {
             return Ok(());
