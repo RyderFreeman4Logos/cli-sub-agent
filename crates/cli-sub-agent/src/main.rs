@@ -516,7 +516,11 @@ async fn run() -> Result<()> {
                 &args.session_id,
                 args.cd.as_deref(),
                 &mut startup_env,
-                run_cmd_daemon::DaemonSpawnOptions::for_prompt_file(args.prompt_file.as_deref()),
+                run_cmd_daemon::DaemonSpawnOptions::for_debate(
+                    args.question.as_deref(),
+                    args.topic.as_deref(),
+                    args.question_file.as_deref(),
+                ),
             )?;
             let result =
                 debate_cmd::handle_debate(args, current_depth, output_format, &startup_env).await;

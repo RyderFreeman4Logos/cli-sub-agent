@@ -123,7 +123,7 @@ pub(crate) async fn handle_debate(
         .await?;
     }
 
-    // 3. Read question (--prompt-file / positional / --topic / stdin), strip
+    // 3. Read question (positional / --topic / --question-file / stdin), strip
     // difficulty frontmatter, prepend --context / --file (see
     // debate_cmd_question::build_debate_question).
     let (question, frontmatter_difficulty) = question::build_debate_question(&mut args)?;
@@ -321,6 +321,10 @@ mod tests;
 #[cfg(test)]
 #[path = "debate_cmd_readonly_tests.rs"]
 mod readonly_tests;
+
+#[cfg(test)]
+#[path = "debate_cmd_question_tests.rs"]
+mod question_tests;
 
 #[cfg(test)]
 #[path = "debate_cmd_round4_tests.rs"]
