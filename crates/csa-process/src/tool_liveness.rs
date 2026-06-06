@@ -20,6 +20,7 @@ const STDERR_LOG_FILE: &str = "stderr.log";
 #[cfg(test)]
 const OUTPUT_LOG_FILE: &str = "output.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
+const LIVENESS_SCOPE_FILE: &str = ".liveness.scope";
 const FATAL_ERROR_MARKERS_FILE: &str = ".fatal-error-markers";
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +78,11 @@ struct LivenessSnapshot {
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
     process_cpu_ticks: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct LivenessScope {
+    stderr_start_offset: Option<u64>,
 }
 
 /// Filesystem-only liveness probe for a running tool session.
@@ -216,6 +222,32 @@ pub fn write_fatal_error_markers(session_dir: &Path, markers: &[String]) -> std:
         writeln!(file, "{marker}")?;
     }
     Ok(())
+}
+
+/// Start a fresh liveness/fatal-marker window for the backend that is about to run.
+///
+/// Session logs are append-only for auditability, so failover must not truncate
+/// `stderr.log` or `output.log`. This records the current offsets instead and
+/// seeds the progress snapshot at those offsets, making subsequent probes
+/// evaluate only the newly active backend's provider markers and progress.
+pub fn reset_liveness_scope(session_dir: &Path, active_tool: &str) -> std::io::Result<()> {
+    let output_start_offset = file_len(&session_dir.join("output.log")).unwrap_or(0);
+    let stderr_start_offset = file_len(&session_dir.join(STDERR_LOG_FILE)).unwrap_or(0);
+    let acp_events_size = Some(file_len(&session_dir.join(ACP_EVENTS_LOG_FILE)).unwrap_or(0));
+
+    let snapshot = LivenessSnapshot {
+        spool_bytes_written: Some(output_start_offset),
+        observed_spool_bytes_written: Some(output_start_offset),
+        acp_events_size,
+        stderr_log_size: Some(stderr_start_offset),
+        process_cpu_ticks: None,
+    };
+    write_snapshot(session_dir, &snapshot)?;
+
+    fs::write(
+        session_dir.join(LIVENESS_SCOPE_FILE),
+        format!("active_tool={active_tool}\nstderr_start_offset={stderr_start_offset}\n"),
+    )
 }
 
 pub(crate) fn record_spool_bytes_written(session_dir: &Path, bytes_written: u64) {
@@ -557,7 +589,11 @@ fn load_snapshot(session_dir: &Path) -> LivenessSnapshot {
 }
 
 fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
-    let mut lines = Vec::with_capacity(4);
+    let _ = write_snapshot(session_dir, snapshot);
+}
+
+fn write_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) -> std::io::Result<()> {
+    let mut lines = Vec::with_capacity(5);
     if let Some(value) = snapshot.spool_bytes_written {
         lines.push(format!("spool_bytes_written={value}"));
     }
@@ -574,9 +610,30 @@ fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
         lines.push(format!("process_cpu_ticks={value}"));
     }
     if lines.is_empty() {
-        return;
+        return Ok(());
     }
-    let _ = fs::write(snapshot_path(session_dir), lines.join("\n"));
+    fs::write(snapshot_path(session_dir), lines.join("\n"))
+}
+
+fn load_liveness_scope(session_dir: &Path) -> LivenessScope {
+    let path = session_dir.join(LIVENESS_SCOPE_FILE);
+    let Ok(content) = fs::read_to_string(path) else {
+        return LivenessScope::default();
+    };
+    let mut scope = LivenessScope::default();
+    for line in content.lines() {
+        let mut parts = line.splitn(2, '=');
+        let key = parts.next().unwrap_or_default().trim();
+        let value = parts.next().unwrap_or_default().trim();
+        if key == "stderr_start_offset" {
+            scope.stderr_start_offset = value.parse::<u64>().ok();
+        }
+    }
+    scope
+}
+
+fn file_len(path: &Path) -> Option<u64> {
+    fs::metadata(path).ok().map(|meta| meta.len())
 }
 
 fn extract_pid(lock_content: &str) -> Option<u32> {

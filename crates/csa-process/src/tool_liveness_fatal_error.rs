@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use super::ProviderErrorKind;
-use super::{FATAL_ERROR_MARKERS_FILE, STDERR_LOG_FILE};
+use super::{FATAL_ERROR_MARKERS_FILE, STDERR_LOG_FILE, load_liveness_scope};
 
 const FATAL_ERROR_TAIL_BYTES: u64 = 4096;
 
@@ -160,7 +160,12 @@ fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
 /// separation).
 pub(super) fn provider_error_signal(session_dir: &Path) -> Option<ProviderErrorKind> {
     let regexes = fatal_error_regexes_for_session(session_dir);
-    let stderr_tail = read_file_tail(&session_dir.join(STDERR_LOG_FILE)).ok();
+    let scope = load_liveness_scope(session_dir);
+    let stderr_tail = read_file_tail_after(
+        &session_dir.join(STDERR_LOG_FILE),
+        scope.stderr_start_offset,
+    )
+    .ok();
 
     if matches_provider_error(&regexes.permanent, stderr_tail.as_deref()) {
         return Some(ProviderErrorKind::Permanent);
@@ -237,11 +242,17 @@ pub(super) fn build_fatal_error_regex(markers: &[String]) -> Option<Regex> {
         .ok()
 }
 
-fn read_file_tail(path: &Path) -> std::io::Result<String> {
+fn read_file_tail_after(path: &Path, start_offset: Option<u64>) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
-    let tail_len = file_len.min(FATAL_ERROR_TAIL_BYTES);
-    file.seek(SeekFrom::Start(file_len.saturating_sub(tail_len)))?;
+    let active_start = start_offset
+        .filter(|offset| *offset <= file_len)
+        .unwrap_or(0);
+    let active_len = file_len.saturating_sub(active_start);
+    let tail_len = active_len.min(FATAL_ERROR_TAIL_BYTES);
+    file.seek(SeekFrom::Start(
+        active_start + active_len.saturating_sub(tail_len),
+    ))?;
 
     let mut buf = Vec::with_capacity(tail_len as usize);
     file.take(tail_len).read_to_end(&mut buf)?;

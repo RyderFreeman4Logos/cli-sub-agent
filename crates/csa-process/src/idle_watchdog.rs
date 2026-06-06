@@ -75,7 +75,7 @@ pub(crate) fn idle_timeout_note(
         return (
             "fatal backend error",
             format!(
-                "fatal backend error: matched configured 4xx/5xx/provider marker and observed no {progress_kind} for 30s; process killed"
+                "fatal backend error: active backend matched configured 4xx/5xx/provider marker and observed no {progress_kind} for 30s; process killed"
             ),
         );
     }
@@ -437,6 +437,7 @@ mod tests {
 
         assert_eq!(kind, "fatal backend error");
         assert!(note.contains("fatal backend error"));
+        assert!(note.contains("active backend"));
     }
 
     #[test]

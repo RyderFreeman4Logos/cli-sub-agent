@@ -58,6 +58,17 @@ pub(super) fn write_fatal_error_marker_sidecar(
     tool_name: &str,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
 ) -> anyhow::Result<()> {
+    csa_process::reset_liveness_scope(session_dir, tool_name).map_err(|err| {
+        persist_pipeline_pre_exec_failure(
+            project_root,
+            session,
+            tool_name,
+            anyhow::anyhow!(err).context("Failed to reset active liveness scope"),
+            cleanup_guard,
+            None,
+        )
+    })?;
+
     let Some(cfg) = config else {
         return Ok(());
     };

@@ -261,6 +261,73 @@ fn probe_detects_fatal_error_marker_in_stderr_tail() {
 }
 
 #[test]
+fn active_scope_ignores_provider_marker_from_failed_over_backend() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "gemini failed: HTTP 429 Too Many Requests reason: 'QUOTA_EXHAUSTED'\n",
+    )
+    .expect("write stale stderr");
+
+    reset_liveness_scope(tmp.path(), "codex").expect("reset active scope");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(
+        !signals.fatal_error,
+        "provider marker before active scope must not trip fallback backend"
+    );
+}
+
+#[test]
+fn active_scope_detects_provider_marker_from_current_backend() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(STDERR_LOG_FILE),
+        "gemini failed: HTTP 429 Too Many Requests reason: 'QUOTA_EXHAUSTED'\n",
+    )
+    .expect("write stale stderr");
+    reset_liveness_scope(tmp.path(), "codex").expect("reset active scope");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(tmp.path().join(STDERR_LOG_FILE))
+        .expect("open stderr")
+        .write_all(b"codex failed: HTTP 500 Internal Server Error\n")
+        .expect("append active stderr");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(
+        signals.fatal_error,
+        "provider marker after active scope must still trip current backend"
+    );
+}
+
+#[test]
+fn reset_liveness_scope_seeds_progress_baseline_for_new_backend() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(OUTPUT_LOG_FILE), "old output\n").expect("write output");
+    fs::write(
+        tmp.path().join(SNAPSHOT_FILE),
+        "spool_bytes_written=999\nobserved_spool_bytes_written=999\nstderr_log_size=999\n",
+    )
+    .expect("write stale snapshot");
+
+    reset_liveness_scope(tmp.path(), "codex").expect("reset active scope");
+    let current_len = fs::metadata(tmp.path().join(OUTPUT_LOG_FILE))
+        .expect("output metadata")
+        .len();
+    record_spool_bytes_written(tmp.path(), current_len + 8);
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(
+        signals.output_growth,
+        "first active backend output after reset should count as fresh progress"
+    );
+}
+
+#[test]
 fn probe_ignores_broad_http_markers_in_output_log_content() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(
