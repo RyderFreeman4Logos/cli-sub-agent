@@ -133,34 +133,34 @@ fn ensure_fail_closed_grade(
     }
 }
 
-/// Highest reviewer-assigned severity GRADE legible in the persisted review
-/// sections (`summary`/`details`), tolerant of markdown inline-code backticks
-/// around the tag (e.g. `` `[HIGH]` ``). The structured finding parsers require
-/// the bracket to start the body and therefore skip backtick-wrapped tags, so
-/// the fail-closed grader consults this to avoid under-grading a real HIGH whose
-/// machine-readable findings failed to parse (#1852). Returns `None` when no
-/// bracketed severity tag is present. Best-effort: an unreadable section index
-/// yields `None` (callers fall back to MEDIUM), never an error.
+/// Highest reviewer-assigned severity GRADE legible in the canonical review
+/// text, tolerant of markdown inline-code backticks around the tag (e.g.
+/// `` `[HIGH]` ``). The structured finding parsers require the bracket to start
+/// the body and therefore skip backtick-wrapped tags, so the fail-closed grader
+/// consults this to avoid under-grading a real HIGH whose machine-readable
+/// findings failed to parse (#1852). Returns `None` when no bracketed severity
+/// tag is present. Best-effort: unreadable review text yields `None` (callers
+/// fall back to MEDIUM), never an error.
 fn highest_prose_severity_grade(session_dir: &Path) -> Option<Severity> {
-    let sections = csa_session::read_all_sections(session_dir).ok()?;
+    let review_text = crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)
+        .ok()
+        .flatten()?;
     let mut best: Option<Severity> = None;
-    for (_, content) in sections {
-        let mut in_code_fence = false;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code_fence = !in_code_fence;
-                continue;
-            }
-            if in_code_fence {
-                continue;
-            }
-            for severity in bracketed_severities_in_line(trimmed) {
-                best = Some(match best {
-                    Some(current) => current.max(severity),
-                    None => severity,
-                });
-            }
+    let mut in_code_fence = false;
+    for line in review_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
+        for severity in bracketed_severities_in_line(trimmed) {
+            best = Some(match best {
+                Some(current) => current.max(severity),
+                None => severity,
+            });
         }
     }
     best

@@ -666,3 +666,6 @@ Findings: none.
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+#[path = "review_cmd_output_verdict_1896_source_set_tests.rs"]
+mod source_set_tests;
