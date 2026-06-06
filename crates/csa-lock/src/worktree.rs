@@ -369,24 +369,14 @@ fn stale_holder_can_be_reclaimed(
     holder_session_liveness: &mut impl FnMut(&str) -> HolderSessionLiveness,
 ) -> bool {
     match holder_session_liveness(holder_session_id) {
-        HolderSessionLiveness::Live | HolderSessionLiveness::Unknown => return false,
-        HolderSessionLiveness::RegistryAbsent => {
-            return matches!(
+        HolderSessionLiveness::Dead | HolderSessionLiveness::RegistryAbsent => {
+            matches!(
                 process_probe_state(diagnostic.pid),
                 ProcessProbeState::Missing
-            );
+            )
         }
-        HolderSessionLiveness::Dead => {}
+        HolderSessionLiveness::Live | HolderSessionLiveness::Unknown => false,
     }
-
-    // Loaded terminal session state is stronger than a signalable diagnostic
-    // PID because the numeric PID may have been reused after the CSA holder
-    // exited. EPERM or probe failure stays conservative because we cannot
-    // inspect enough to rule out the holder.
-    !matches!(
-        process_probe_state(diagnostic.pid),
-        ProcessProbeState::PermissionDenied | ProcessProbeState::Unknown
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

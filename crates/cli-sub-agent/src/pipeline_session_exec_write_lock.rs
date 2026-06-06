@@ -263,24 +263,34 @@ mod tests {
     }
 
     #[test]
-    fn acquire_if_needed_reclaims_completed_holder_session_lock() {
+    fn acquire_if_needed_blocks_completed_holder_session_with_signalable_pid() {
         let temp = tempfile::tempdir().unwrap();
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
                 .expect("create holder session");
         save_success_result(temp.path(), &holder.meta_session_id);
-        let _holder_lock =
+        let holder_lock =
             csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
                 .expect("holder lock");
+        let lock_path = holder_lock.lock_path().to_path_buf();
         let candidate =
             csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
                 .expect("create candidate session");
+        assert_eq!(
+            holder_session_liveness(temp.path(), &holder.meta_session_id),
+            HolderSessionLiveness::Dead
+        );
 
-        let lock = acquire_if_needed(temp.path(), &candidate, false)
-            .expect("completed holder should be reclaimed")
-            .expect("writer should acquire a lock");
+        let err = acquire_if_needed(temp.path(), &candidate, false)
+            .expect_err("completed holder with signalable pid must block")
+            .to_string();
 
-        assert!(!lock.is_lineage_reentry());
+        assert!(err.contains("concurrent write session blocked"));
+        assert!(err.contains(&holder.meta_session_id));
+        assert!(
+            lock_path.exists(),
+            "canonical lock path must not be moved aside"
+        );
     }
 
     #[test]
