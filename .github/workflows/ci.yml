@@ -39,61 +39,7 @@ jobs:
           MONOLITH_TOKEN_THRESHOLD: "8000"
           MONOLITH_LINE_THRESHOLD: "800"
           TOKUIN_MODEL: "gpt-4o"
-        run: |
-          set -euo pipefail
-
-          checker="$(mktemp)"
-          trap 'rm -f "$checker"' EXIT
-
-          cat >"$checker" <<'SCRIPT'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          file="$1"
-          threshold_tokens="${MONOLITH_TOKEN_THRESHOLD}"
-          threshold_lines="${MONOLITH_LINE_THRESHOLD}"
-          model="${TOKUIN_MODEL}"
-
-          case "$file" in
-              *.lock|*lock.json|*lock.yaml) exit 0 ;;
-              */AGENTS.md|*/FACTORY.md) exit 0 ;;
-              */PATTERN.md|*/SKILL.md) exit 0 ;;
-              */workflow.toml) exit 0 ;;
-          esac
-
-          [ -f "$file" ] || exit 0
-          grep -Iq '' "$file" 2>/dev/null || exit 0
-
-          if ! lines="$(wc -l <"$file" 2>/dev/null)"; then
-              lines=0
-          fi
-          lines="$(printf '%s' "$lines" | tr -d '[:space:]')"
-          case "$lines" in
-              ''|*[!0-9]*) lines=0 ;;
-          esac
-          if [ "$lines" -gt "$threshold_lines" ]; then
-              printf 'Monolith file detected (%s lines, limit: %s): %q\n' "$lines" "$threshold_lines" "$file" >&2
-              exit 1
-          fi
-
-          if ! tokens="$(./target/debug/csa tokuin estimate --model "$model" "$file" 2>/dev/null)"; then
-              tokens=0
-          fi
-          tokens="$(printf '%s' "$tokens" | tr -d '[:space:]')"
-          case "$tokens" in
-              ''|*[!0-9]*) tokens=0 ;;
-          esac
-          if [ "$tokens" -gt "$threshold_tokens" ]; then
-              printf 'Monolith file detected (%s tokens, limit: %s): %q\n' "$tokens" "$threshold_tokens" "$file" >&2
-              exit 1
-          fi
-          SCRIPT
-
-          chmod +x "$checker"
-
-          while IFS= read -r -d '' file; do
-            "$checker" "$file"
-          done < <(git ls-files -z --recurse-submodules)
+        run: scripts/monolith/check.sh --scope all --baseline scripts/monolith/baseline.toml --report-all
 
   fmt:
     name: Format
