@@ -22,6 +22,8 @@ const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa se
 const HINT_CONFIG_ERROR: &str =
     "hint: validate config with 'csa config validate' or reinitialize with 'csa init'";
 const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; current builds pin TMPDIR to a writable sandbox temp dir (private /tmp in bwrap, session tmp elsewhere) and seed under CSA session state, but older builds may still need re-run with TMPDIR=/tmp";
+const LEFTHOOK_CORE_HOOKSPATH_CONFLICT: &str = "core.hooksPath is set locally";
+const HINT_LEFTHOOK_CORE_HOOKSPATH_CONFLICT: &str = "hint: lefthook blocked git commit because core.hooksPath is set locally. Staged work may be uncommitted. Run `git config --unset-all --local core.hooksPath`, then rerun the commit or continue the session.";
 const SANDBOX_FS_DENIAL_MARKERS: [&str; 7] = [
     "read-only file system",
     "permission denied",
@@ -152,6 +154,18 @@ pub(crate) fn append_sandbox_fs_denial_hint(
     }
     stderr_output.push_str(&hint);
     stderr_output.push('\n');
+}
+
+pub(crate) fn lefthook_core_hookspath_conflict_hint(
+    stderr: &str,
+    stdout: &str,
+) -> Option<&'static str> {
+    if stderr.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT)
+        || stdout.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT)
+    {
+        return Some(HINT_LEFTHOOK_CORE_HOOKSPATH_CONFLICT);
+    }
+    None
 }
 
 fn extract_denied_path(text: &str) -> Option<String> {
@@ -299,6 +313,31 @@ mod tests {
     fn test_no_hint_for_generic_error() {
         let err = anyhow::anyhow!("something failed");
         assert_eq!(suggest_fix(&err), None);
+    }
+
+    #[test]
+    fn lefthook_core_hookspath_conflict_hint_detects_commit_failure_output() {
+        let stderr = r#"
+Error: core.hooksPath is set locally to '/x/.git/hooks'
+hint: Unset it:
+hint:   git config --unset-all --local core.hooksPath
+"#;
+        let hint = lefthook_core_hookspath_conflict_hint(stderr, "").unwrap();
+        assert!(
+            hint.contains("git config --unset-all --local core.hooksPath"),
+            "got: {hint}"
+        );
+        assert!(
+            hint.contains("Staged work may be uncommitted"),
+            "got: {hint}"
+        );
+    }
+
+    #[test]
+    fn lefthook_core_hookspath_conflict_hint_ignores_unrelated_commit_failure() {
+        let stderr = "error: Recipe `clippy` failed on line 12 with exit code 1";
+        let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
+        assert!(hint.is_none(), "got: {hint:?}");
     }
 
     #[test]
