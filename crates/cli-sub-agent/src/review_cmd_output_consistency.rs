@@ -58,8 +58,11 @@ pub(super) fn enforce_final_verdict_consistency(
     let blocking_structured = has_blocking_severity(&artifact.severity_counts);
     let parsed_findings_prose = prose_signals.parsed_findings_sections;
     let unparsed_findings_prose = prose_signals.unparseable_findings_sections;
+    let checklist_violation_mismatch = prose_signals.checklist_violation_findings
+        && !has_structured_findings
+        && severity_counts_are_zero(&artifact.severity_counts);
 
-    if unparsed_findings_prose {
+    if unparsed_findings_prose || checklist_violation_mismatch {
         artifact
             .failure_reason
             .get_or_insert_with(|| PROSE_FINDINGS_UNPARSED_REASON.to_string());
@@ -76,6 +79,7 @@ pub(super) fn enforce_final_verdict_consistency(
             || blocking_structured
             || parsed_findings_prose
             || unparsed_findings_prose
+            || checklist_violation_mismatch
             || structured_mismatch)
     {
         artifact.decision = ReviewDecision::Fail;
