@@ -413,3 +413,259 @@ No findings.
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+const ISSUE_1896_DETAILS: &str = r#"# Code Review Report
+
+## Scope
+- Scope: `range:main...HEAD`
+- Mode: `review-only`
+- Review mode: `standard`
+- Security mode: `auto`
+- Project profile: `rust`
+
+## Findings
+
+1. [high][correctness] `PathEnvGuard` mutates global `PATH` in a parallel test binary (`crates/csa-process/src/tool_liveness_tests.rs:37`, confidence=0.86)
+
+Trigger: `cargo test -p csa-process` runs tests in parallel by default. The new test changes process-wide `PATH`, while the same crate has many tests that concurrently spawn `sh`, `sleep`, `bash`, `echo`, and `true` through `Command::new(...)`, which reads `PATH`.
+
+Expected: the test should avoid process-global env mutation, or run the probe in an isolated subprocess with `.env("PATH", patched_path)`, or otherwise prove no concurrent environment access can occur.
+
+Actual: `PathEnvGuard::prepend` calls `unsafe { std::env::set_var("PATH", joined) }`, and `Drop` restores/removes `PATH`. The safety comment only says tests do not concurrently mutate `PATH`; Rust's safety requirement is stronger because concurrent environment reads are also unsafe on Unix.
+
+Impact: test-only undefined behavior / CI instability under Rust 2024 env-mutation rules. This is not a design preference; it is an unsafe-block soundness issue.
+
+Evidence:
+- New unsafe env mutation: `crates/csa-process/src/tool_liveness_tests.rs:35-37`
+- Restore path repeats the same global mutation: `crates/csa-process/src/tool_liveness_tests.rs:45-49`
+- Same test binary contains concurrent PATH readers via command spawning, e.g. `tool_liveness_tests.rs:80`, `:115`, `:133`, plus many `lib_tests*.rs` command spawns found by `rg`.
+
+Class sweep: 2 new same-class sites in this diff: initial `set_var("PATH", ...)` and Drop restore/remove.
+
+## Cross-Dimension Blocking Enumeration
+1. Correctness / unsafe soundness: global `PATH` mutation in a parallel test binary.
+2. Security: no independent blocker found.
+3. Contract/doc-sync: no independent blocker found.
+4. Ordering/completeness: no independent blocker found.
+"#;
+
+#[test]
+fn issue_1896_golden_progress_full_md_does_not_hide_details_findings() {
+    let session_id = "01TEST1896GOLDENFULLMD00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1896-golden-full-md", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER),
+        "",
+    )
+    .expect("write synthetic marker");
+    fs::write(
+        session_dir.join("output").join("full.md"),
+        "Loaded review protocol.\nCollecting diff context.\nPreparing final report.\n",
+    )
+    .expect("write progress-only full.md");
+    fs::write(
+        session_dir.join("output").join("summary.md"),
+        "One high-severity issue found.\n",
+    )
+    .expect("write summary.md");
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        ISSUE_1896_DETAILS,
+    )
+    .expect("write details.md");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    crate::review_cmd::findings_toml::persist_review_findings_toml(&project_root, &meta);
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 1);
+    assert_eq!(findings.findings[0].severity, Severity::High);
+    assert_eq!(
+        findings.findings[0].file_ranges[0].path,
+        "crates/csa-process/src/tool_liveness_tests.rs"
+    );
+    assert_eq!(findings.findings[0].file_ranges[0].start, 37);
+
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1896_ordinal_double_bracket_high_finding_parses() {
+    let session_id = "01TEST1896PARSEHIGH000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1896-parse-high", session_id);
+
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+1. [high][correctness] Parser recognizes this finding (`crates/example/src/lib.rs:12`, confidence=0.90)
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    crate::review_cmd::findings_toml::persist_review_findings_toml(&project_root, &meta);
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 1);
+    assert_eq!(findings.findings[0].severity, Severity::High);
+    assert_eq!(
+        findings.findings[0].file_ranges[0].path,
+        "crates/example/src/lib.rs"
+    );
+    assert_eq!(findings.findings[0].file_ranges[0].start, 12);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1896_cross_dimension_concrete_blocker_fails_closed() {
+    let session_id = "01TEST1896CROSSBLOCKER";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1896-cross-blocker", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+No findings.
+
+## Cross-Dimension Blocking Enumeration
+1. Correctness / unsafe soundness: global PATH mutation in a parallel test binary.
+2. Security: no independent blocker found.
+3. Contract/doc-sync: none.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1896_raw_superset_cross_dimension_blocker_fails_closed() {
+    let session_id = "01TEST1896RAWSUPERSET0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1896-raw-superset-blocker", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+No findings.
+
+## Cross-Dimension Blocking Enumeration
+1. Correctness: no independent blocker found.
+2. Security: no independent blocker found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+    fs::write(
+        session_dir.join("output.log"),
+        r#"## Cross-Dimension Blocking Enumeration
+1. Correctness: raw transcript reports a concrete blocker only present in output.log.
+2. Security: no independent blocker found.
+"#,
+    )
+    .expect("write raw review log");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1896_findings_none_and_empty_cross_dimension_stays_pass() {
+    let session_id = "01TEST1896CLEANNONE000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1896-clean-none", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+Findings: none.
+
+## Cross-Dimension Blocking Enumeration
+1. Correctness: no independent blocker found.
+2. Security: none.
+3. Contract/doc-sync: no independent blockers found.
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    assert!(verdict.failure_reason.is_none());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[path = "review_cmd_output_verdict_1896_source_set_tests.rs"]
+mod source_set_tests;

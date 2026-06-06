@@ -58,11 +58,15 @@ pub(super) fn enforce_final_verdict_consistency(
     let blocking_structured = has_blocking_severity(&artifact.severity_counts);
     let parsed_findings_prose = prose_signals.parsed_findings_sections;
     let unparsed_findings_prose = prose_signals.unparseable_findings_sections;
+    let cross_dimension_blocker = prose_signals.cross_dimension_blockers;
     let checklist_violation_mismatch = prose_signals.checklist_violation_findings
         && !has_structured_findings
         && severity_counts_are_zero(&artifact.severity_counts);
+    let cross_dimension_blocker_mismatch = cross_dimension_blocker
+        && !has_structured_findings
+        && severity_counts_are_zero(&artifact.severity_counts);
 
-    if unparsed_findings_prose || checklist_violation_mismatch {
+    if unparsed_findings_prose || checklist_violation_mismatch || cross_dimension_blocker_mismatch {
         artifact
             .failure_reason
             .get_or_insert_with(|| PROSE_FINDINGS_UNPARSED_REASON.to_string());
@@ -79,7 +83,9 @@ pub(super) fn enforce_final_verdict_consistency(
             || blocking_structured
             || parsed_findings_prose
             || unparsed_findings_prose
+            || cross_dimension_blocker
             || checklist_violation_mismatch
+            || cross_dimension_blocker_mismatch
             || structured_mismatch)
     {
         artifact.decision = ReviewDecision::Fail;
@@ -127,34 +133,34 @@ fn ensure_fail_closed_grade(
     }
 }
 
-/// Highest reviewer-assigned severity GRADE legible in the persisted review
-/// sections (`summary`/`details`), tolerant of markdown inline-code backticks
-/// around the tag (e.g. `` `[HIGH]` ``). The structured finding parsers require
-/// the bracket to start the body and therefore skip backtick-wrapped tags, so
-/// the fail-closed grader consults this to avoid under-grading a real HIGH whose
-/// machine-readable findings failed to parse (#1852). Returns `None` when no
-/// bracketed severity tag is present. Best-effort: an unreadable section index
-/// yields `None` (callers fall back to MEDIUM), never an error.
+/// Highest reviewer-assigned severity GRADE legible in the canonical review
+/// text, tolerant of markdown inline-code backticks around the tag (e.g.
+/// `` `[HIGH]` ``). The structured finding parsers require the bracket to start
+/// the body and therefore skip backtick-wrapped tags, so the fail-closed grader
+/// consults this to avoid under-grading a real HIGH whose machine-readable
+/// findings failed to parse (#1852). Returns `None` when no bracketed severity
+/// tag is present. Best-effort: unreadable review text yields `None` (callers
+/// fall back to MEDIUM), never an error.
 fn highest_prose_severity_grade(session_dir: &Path) -> Option<Severity> {
-    let sections = csa_session::read_all_sections(session_dir).ok()?;
+    let review_text = crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)
+        .ok()
+        .flatten()?;
     let mut best: Option<Severity> = None;
-    for (_, content) in sections {
-        let mut in_code_fence = false;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code_fence = !in_code_fence;
-                continue;
-            }
-            if in_code_fence {
-                continue;
-            }
-            for severity in bracketed_severities_in_line(trimmed) {
-                best = Some(match best {
-                    Some(current) => current.max(severity),
-                    None => severity,
-                });
-            }
+    let mut in_code_fence = false;
+    for line in review_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
+        for severity in bracketed_severities_in_line(trimmed) {
+            best = Some(match best {
+                Some(current) => current.max(severity),
+                None => severity,
+            });
         }
     }
     best

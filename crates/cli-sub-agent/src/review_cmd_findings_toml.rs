@@ -106,10 +106,18 @@ fn derive_findings_toml_artifact(
         return Ok((FindingsFile::default(), Some("review text unavailable")));
     };
 
+    let prose_artifact = findings_file_from_prose(&review_text);
     match extract_findings_toml_from_text(&review_text) {
+        Some(artifact) if artifact.findings.is_empty() => {
+            if let Some(prose_artifact) = prose_artifact {
+                Ok((prose_artifact, None))
+            } else {
+                Ok((artifact, None))
+            }
+        }
         Some(artifact) => Ok((artifact, None)),
         None => {
-            if let Some(artifact) = findings_file_from_prose(&review_text) {
+            if let Some(artifact) = prose_artifact {
                 Ok((artifact, None))
             } else {
                 Ok((
@@ -123,9 +131,11 @@ fn derive_findings_toml_artifact(
 
 /// Load the canonical review prose for a session.
 ///
-/// Resolves the authoritative review text via a fixed source precedence:
-/// when persisted `details` sections exist, prefer `output/full.md`, then the raw
-/// `output.log`, then the `details.md` body; otherwise fall back to `output/full.md`.
+/// Resolves the authoritative review text by unioning every available prose
+/// source: persisted `summary`/`details` sections, physical `summary.md` and
+/// `details.md`, plus raw `output/full.md` and `output.log` review text. Valid
+/// fenced `findings.toml` content is preserved inside the raw text, but never
+/// causes physical review prose to be skipped.
 /// This is the SINGLE source of review prose shared by both the findings extractor
 /// and the fail-closed verdict detector ([`super::output::clean_detection::
 /// review_contains_prose_fail_conclusion`]). Sharing one loader keeps their source
@@ -136,69 +146,72 @@ fn derive_findings_toml_artifact(
 pub(in crate::review_cmd) fn load_canonical_review_text(
     session_dir: &Path,
 ) -> Result<Option<String>, anyhow::Error> {
-    let details_path = session_dir.join("output").join("details.md");
-    if details_path.exists() {
-        for candidate in [
-            session_dir.join("output").join("full.md"),
-            session_dir.join("output.log"),
-        ] {
-            if !candidate.exists() {
-                continue;
-            }
-            let raw_output = fs::read_to_string(&candidate)
-                .map_err(|error| anyhow::anyhow!("read {}: {error}", candidate.display()))?;
-            if let Some(review_text) = extract_review_text(&raw_output) {
-                return Ok(Some(review_text));
-            }
-        }
-        let mut latest_summary = None;
-        let mut latest_details = None;
-        for (section, content) in csa_session::read_all_sections(session_dir)? {
-            match section.id.as_str() {
-                "summary" => latest_summary = Some(content),
-                "details" => latest_details = Some(content),
-                _ => {}
-            }
-        }
-        let structured_text = [latest_summary, latest_details]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !structured_text.trim().is_empty() {
-            return Ok(Some(structured_text));
-        }
+    let mut review_texts = Vec::new();
+    let mut latest_summary = None;
+    let mut latest_details = None;
 
-        let mut file_text = Vec::new();
-        for file_name in ["summary.md", "details.md"] {
-            let path = session_dir.join("output").join(file_name);
-            if !path.exists() {
-                continue;
-            }
-            let content = fs::read_to_string(&path)
-                .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
-            if !content.trim().is_empty() {
-                file_text.push(content);
-            }
+    for (section, content) in csa_session::read_all_sections(session_dir)? {
+        match section.id.as_str() {
+            "summary" => latest_summary = Some(content),
+            "details" => latest_details = Some(content),
+            _ => {}
         }
-        let file_text = file_text.join("\n");
-        return Ok((!file_text.trim().is_empty()).then_some(file_text));
+    }
+    let structured_text = [latest_summary, latest_details]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
+    push_distinct_review_text(&mut review_texts, structured_text);
+
+    let mut file_text = Vec::new();
+    for file_name in ["summary.md", "details.md"] {
+        let path = session_dir.join("output").join(file_name);
+        if !path.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+        if !content.trim().is_empty() {
+            file_text.push(content);
+        }
+    }
+    push_distinct_review_text(&mut review_texts, file_text.join("\n"));
+
+    for candidate in [
+        session_dir.join("output").join("full.md"),
+        session_dir.join("output.log"),
+    ] {
+        if !candidate.exists() {
+            continue;
+        }
+        let raw_output = fs::read_to_string(&candidate)
+            .map_err(|error| anyhow::anyhow!("read {}: {error}", candidate.display()))?;
+        if let Some(review_text) = extract_review_text(&raw_output) {
+            push_distinct_review_text(&mut review_texts, review_text);
+        }
     }
 
-    let full_output_path = session_dir.join("output").join("full.md");
-    if !full_output_path.exists() {
-        return Ok(None);
-    }
+    Ok((!review_texts.is_empty()).then_some(review_texts.join("\n")))
+}
 
-    let raw_output = fs::read_to_string(&full_output_path)
-        .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
-    Ok(extract_review_text(&raw_output))
+fn push_distinct_review_text(texts: &mut Vec<String>, candidate: String) {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if texts.iter().any(|text| text.trim() == trimmed) {
+        return;
+    }
+    texts.push(candidate);
 }
 
 pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile> {
     let mut in_block = false;
     let mut block_info = String::new();
     let mut block_content = Vec::new();
+    let mut parsed_findings = Vec::new();
+    let mut saw_findings_toml = false;
 
     for line in text.lines() {
         let trimmed = line.trim();
@@ -215,7 +228,12 @@ pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile
             if is_findings_toml_fence_label(&block_info) {
                 let content = block_content.join("\n");
                 if let Ok(artifact) = toml::from_str::<FindingsFile>(&content) {
-                    return Some(artifact);
+                    saw_findings_toml = true;
+                    for finding in artifact.findings {
+                        if !parsed_findings.contains(&finding) {
+                            parsed_findings.push(finding);
+                        }
+                    }
                 }
             }
             in_block = false;
@@ -227,7 +245,9 @@ pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile
         block_content.push(line.to_string());
     }
 
-    None
+    saw_findings_toml.then_some(FindingsFile {
+        findings: parsed_findings,
+    })
 }
 
 fn is_findings_toml_fence_label(info: &str) -> bool {
@@ -235,6 +255,9 @@ fn is_findings_toml_fence_label(info: &str) -> bool {
         .any(|token| token.eq_ignore_ascii_case(FINDINGS_TOML_FENCE_LABEL))
 }
 
+#[cfg(test)]
+#[path = "review_cmd_findings_toml_source_set_tests.rs"]
+mod source_set_tests;
 #[cfg(test)]
 #[path = "review_cmd_findings_toml_tests.rs"]
 mod tests;
