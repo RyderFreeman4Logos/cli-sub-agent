@@ -39,6 +39,8 @@ pub(crate) use fallback::{
 };
 #[path = "pipeline_post_exec_helpers.rs"]
 mod helpers;
+#[path = "pipeline_post_exec_lefthook.rs"]
+mod lefthook;
 #[path = "pipeline_post_exec_no_op.rs"]
 mod no_op;
 #[path = "pipeline_post_exec_progress.rs"]
@@ -394,6 +396,7 @@ pub(crate) async fn process_execution_result(
         session_result.raw_process_exit_code = Some(raw_exit_code);
         session_result.warnings.push(note);
     }
+    lefthook::maybe_record_core_hookspath_conflict(result, &mut session_result);
     crate::pipeline_jj_journal::maybe_record_post_run_snapshot(
         ctx.config.map(|config| &config.vcs),
         ctx.project_root,
