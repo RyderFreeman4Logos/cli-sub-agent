@@ -4,50 +4,28 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::cli::{
-    Commands, ConfigCommands, PlanCommands, TodoCommands, TodoRefCommands, TokuinCommands,
-};
+use crate::cli::{Commands, SkillCommands};
 
 const CSA_SKILL_MODE_ENV: &str = "CSA_SKILL_MODE";
 const CSA_SKILL_MODE_EXECUTOR: &str = "executor";
-
-const EXECUTOR_SAFE_CSA_COMMAND_PREFIXES: &[&[&str]] = &[
-    &["todo", "create"],
-    &["todo", "save"],
-    &["todo", "persist"],
-    &["todo", "attest"],
-    &["todo", "ref", "add"],
-    &["todo", "ref", "list"],
-    &["todo", "ref", "show"],
-    &["todo", "show"],
-    &["todo", "list"],
-    &["todo", "find"],
-    &["tokuin", "estimate"],
-    &["tokuin", "models"],
-    &["health"],
-    &["config", "get"],
-    &["config", "show"],
-];
 
 pub(crate) fn enforce(command: &Commands) -> Result<()> {
     if !is_active() {
         return Ok(());
     }
 
-    let prefix = command_prefix(command);
-    if is_safe_prefix(&prefix) {
-        tracing::info!(
-            command = %format_command_prefix(&prefix),
-            "allowed non-recursive csa command in executor mode"
+    enforce_active(command)
+}
+
+fn enforce_active(command: &Commands) -> Result<()> {
+    if let Some(skill) = recursive_dev2merge_skill(command) {
+        anyhow::bail!(
+            "executor mode blocks recursive dev2merge invocation `csa run --skill {skill}`"
         );
-        return Ok(());
     }
 
-    anyhow::bail!(
-        "executor mode blocks recursive csa command `{}`. Allowed non-recursive csa command prefixes: {}",
-        format_command_prefix(&prefix),
-        format_safe_prefixes(),
-    );
+    tracing::info!("allowed non-recursive csa command in executor mode");
+    Ok(())
 }
 
 pub(crate) fn mark_skill_executor_env(env: &mut Option<HashMap<String, String>>, is_skill: bool) {
@@ -65,148 +43,85 @@ fn is_active() -> bool {
         .unwrap_or(false)
 }
 
-fn is_safe_prefix(prefix: &[&str]) -> bool {
-    EXECUTOR_SAFE_CSA_COMMAND_PREFIXES.contains(&prefix)
-}
-
-fn command_prefix(command: &Commands) -> Vec<&'static str> {
+fn recursive_dev2merge_skill(command: &Commands) -> Option<&str> {
     match command {
-        Commands::Run { .. } => vec!["run"],
-        Commands::Review(_) => vec!["review"],
-        Commands::Debate(_) => vec!["debate"],
-        Commands::Plan {
-            cmd: PlanCommands::Run { .. },
-        } => vec!["plan", "run"],
-        Commands::Todo { cmd } => todo_prefix(cmd),
-        Commands::Config { cmd } => config_prefix(cmd),
-        Commands::Tokuin {
-            cmd: TokuinCommands::Estimate { .. },
-        } => vec!["tokuin", "estimate"],
-        Commands::Tokuin {
-            cmd: TokuinCommands::Models,
-        } => vec!["tokuin", "models"],
-        Commands::Verify(_) => vec!["verify"],
-        Commands::Health(_) => vec!["health"],
-        Commands::Hunt(_) => vec!["hunt"],
-        Commands::Arch(_) => vec!["arch"],
-        Commands::Triage(_) => vec!["triage"],
-        Commands::Mktsk(_) => vec!["mktsk"],
-        Commands::Session { .. } => vec!["session"],
-        Commands::Push(_) => vec!["push"],
-        Commands::Merge(_) => vec!["merge"],
-        Commands::Audit { .. } => vec!["audit"],
-        Commands::Init { .. } => vec!["init"],
-        Commands::Gc(_) => vec!["gc"],
-        Commands::Memory { .. } => vec!["memory"],
-        Commands::Eval { .. } => vec!["eval"],
-        Commands::Doctor { .. } => vec!["doctor"],
-        Commands::Batch { .. } => vec!["batch"],
-        Commands::McpServer => vec!["mcp-server"],
-        Commands::McpHub { .. } => vec!["mcp-hub"],
-        Commands::Skill { .. } => vec!["skill"],
-        Commands::Setup { .. } => vec!["setup"],
-        Commands::Tiers { .. } => vec!["tiers"],
-        Commands::Checklist { .. } => vec!["checklist"],
-        Commands::Migrate { .. } => vec!["migrate"],
-        Commands::SelfUpdate { .. } => vec!["self-update"],
-        Commands::ClaudeSubAgent(_) => vec!["claude-sub-agent"],
-        Commands::Xurl { .. } => vec!["xurl"],
-        Commands::Recall(_) => vec!["recall"],
-        Commands::Hooks { .. } => vec!["hooks"],
+        Commands::Run {
+            skill: Some(skill), ..
+        } if is_dev2merge_skill(skill) => Some(skill.as_str()),
+        Commands::Skill {
+            cmd: SkillCommands::Run { name, .. },
+        } if is_dev2merge_skill(name) => Some(name.as_str()),
+        _ => None,
     }
 }
 
-fn todo_prefix(cmd: &TodoCommands) -> Vec<&'static str> {
-    match cmd {
-        TodoCommands::Create { .. } => vec!["todo", "create"],
-        TodoCommands::Save { .. } => vec!["todo", "save"],
-        TodoCommands::Persist { .. } => vec!["todo", "persist"],
-        TodoCommands::Attest { .. } => vec!["todo", "attest"],
-        TodoCommands::List { .. } => vec!["todo", "list"],
-        TodoCommands::Find { .. } => vec!["todo", "find"],
-        TodoCommands::Errors { .. } => vec!["todo", "errors"],
-        TodoCommands::Show { .. } => vec!["todo", "show"],
-        TodoCommands::Ref { cmd } => match cmd {
-            TodoRefCommands::Add { .. } => vec!["todo", "ref", "add"],
-            TodoRefCommands::List { .. } => vec!["todo", "ref", "list"],
-            TodoRefCommands::Show { .. } => vec!["todo", "ref", "show"],
-            TodoRefCommands::ImportTranscript { .. } => vec!["todo", "ref", "import-transcript"],
-        },
-        TodoCommands::Diff { .. } => vec!["todo", "diff"],
-        TodoCommands::History { .. } => vec!["todo", "history"],
-        TodoCommands::Update { .. } => vec!["todo", "update"],
-        TodoCommands::Status { .. } => vec!["todo", "status"],
-        TodoCommands::Dag { .. } => vec!["todo", "dag"],
-        TodoCommands::Epic { .. } => vec!["todo", "epic"],
-    }
-}
-
-fn config_prefix(cmd: &ConfigCommands) -> Vec<&'static str> {
-    match cmd {
-        ConfigCommands::Get { .. } => vec!["config", "get"],
-        ConfigCommands::Show { .. } => vec!["config", "show"],
-        ConfigCommands::Edit { .. } => vec!["config", "edit"],
-        ConfigCommands::Validate { .. } => vec!["config", "validate"],
-        ConfigCommands::Set { .. } => vec!["config", "set"],
-    }
-}
-
-fn format_command_prefix(prefix: &[&str]) -> String {
-    format!("csa {}", prefix.join(" "))
-}
-
-fn format_safe_prefixes() -> String {
-    EXECUTOR_SAFE_CSA_COMMAND_PREFIXES
-        .iter()
-        .map(|prefix| format_command_prefix(prefix))
-        .collect::<Vec<_>>()
-        .join(", ")
+fn is_dev2merge_skill(skill: &str) -> bool {
+    matches!(skill, "dev2merge" | "dev-to-merge")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::Cli;
+    use clap::Parser;
 
-    #[test]
-    fn safe_prefixes_allow_todo_persistence_commands() {
-        for prefix in [
-            &["todo", "create"][..],
-            &["todo", "save"][..],
-            // Regression (#1822 round-3): `csa todo persist` must be allowed in
-            // executor mode so mktd Step 13 can persist generated plans.
-            &["todo", "persist"][..],
-            &["todo", "ref", "add"][..],
-            &["todo", "ref", "list"][..],
-            &["todo", "ref", "show"][..],
-            &["todo", "show"][..],
-            &["todo", "list"][..],
-            &["todo", "find"][..],
-            &["tokuin", "estimate"][..],
-            &["config", "get"][..],
-            &["config", "show"][..],
-            &["health"][..],
-        ] {
-            assert!(
-                is_safe_prefix(prefix),
-                "prefix should be allowed: {prefix:?}"
-            );
-        }
+    fn parse_command(args: &[&str]) -> Commands {
+        Cli::try_parse_from(args)
+            .expect("test command should parse")
+            .command
+    }
+
+    fn assert_executor_guard_allows(args: &[&str]) {
+        let command = parse_command(args);
+        enforce_active(&command).expect("executor guard should allow command");
+    }
+
+    fn assert_executor_guard_blocks(args: &[&str]) {
+        let command = parse_command(args);
+        let err = enforce_active(&command).expect_err("executor guard should block command");
+        assert!(
+            err.to_string().contains("recursive dev2merge invocation"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn safe_prefixes_block_recursive_execution_commands() {
-        for prefix in [
-            &["run"][..],
-            &["review"][..],
-            &["debate"][..],
-            &["plan", "run"][..],
-            &["todo", "ref", "import-transcript"][..],
-            &["config", "set"][..],
-        ] {
-            assert!(
-                !is_safe_prefix(prefix),
-                "prefix should be blocked: {prefix:?}"
-            );
-        }
+    fn executor_guard_allows_review() {
+        assert_executor_guard_allows(&["csa", "review", "--diff"]);
+    }
+
+    #[test]
+    fn executor_guard_allows_debate() {
+        assert_executor_guard_allows(&["csa", "debate", "question"]);
+    }
+
+    #[test]
+    fn executor_guard_blocks_dev2merge_skill_run() {
+        assert_executor_guard_blocks(&["csa", "run", "--skill", "dev2merge", "prompt"]);
+    }
+
+    #[test]
+    fn executor_guard_blocks_dev_to_merge_skill_run() {
+        assert_executor_guard_blocks(&["csa", "run", "--skill", "dev-to-merge", "prompt"]);
+    }
+
+    #[test]
+    fn executor_guard_blocks_dev2merge_skill_subcommand_run() {
+        assert_executor_guard_blocks(&["csa", "skill", "run", "dev2merge", "prompt"]);
+    }
+
+    #[test]
+    fn executor_guard_blocks_dev_to_merge_skill_subcommand_run() {
+        assert_executor_guard_blocks(&["csa", "skill", "run", "dev-to-merge", "prompt"]);
+    }
+
+    #[test]
+    fn executor_guard_allows_mktd_skill_run() {
+        assert_executor_guard_allows(&["csa", "run", "--skill", "mktd", "prompt"]);
+    }
+
+    #[test]
+    fn executor_guard_allows_general_run() {
+        assert_executor_guard_allows(&["csa", "run", "prompt"]);
     }
 }
