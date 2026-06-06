@@ -54,10 +54,9 @@ pub(crate) fn has_structured_review_content(output: &str) -> bool {
 }
 
 pub(crate) fn derive_review_result_summary(output: &str) -> Option<String> {
-    let sanitized = sanitize_review_output(output);
-    let sections = parse_sections(&sanitized);
-    let content = last_non_empty_section_content(&sanitized, &sections, "summary")
-        .or_else(|| last_non_empty_section_content(&sanitized, &sections, "details"))?;
+    let sections = parse_sections(output);
+    let content = last_non_empty_section_content(output, &sections, "summary")
+        .or_else(|| last_non_empty_section_content(output, &sections, "details"))?;
 
     content
         .lines()
@@ -66,7 +65,7 @@ pub(crate) fn derive_review_result_summary(output: &str) -> Option<String> {
         .map(truncate_review_result_summary)
 }
 
-fn last_non_empty_section_content(
+pub(super) fn last_non_empty_section_content(
     output: &str,
     sections: &[OutputSection],
     section_id: &str,
@@ -92,10 +91,14 @@ fn extract_section_content(output: &str, section: &OutputSection) -> String {
 
     let start = section.line_start - 1;
     let count = section.line_end - start;
-    output
-        .lines()
-        .skip(start)
-        .take(count)
-        .collect::<Vec<&str>>()
-        .join("\n")
+    let mut lines = output.lines().skip(start).take(count);
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let mut content = String::from(first);
+    for line in lines {
+        content.push('\n');
+        content.push_str(line);
+    }
+    content
 }
