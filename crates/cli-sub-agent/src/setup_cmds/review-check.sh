@@ -2,9 +2,10 @@
 # Git pre-push hook: verify csa review has been run on current HEAD.
 # Installed by: csa setup review-gate
 #
-# Fast path: stat .csa/state/review-gate/<branch_safe>-<short_sha>.pass
-#   millisecond check; new commits auto-invalidate (different SHA → different filename).
-# Slow path (fallback): csa review --check-verdict scans session store.
+# The gate ALWAYS validates the session verdict via `csa review --check-verdict`.
+# A SHA-pinned marker (.csa/state/review-gate/<branch_safe>-<short_sha>.pass) may exist
+#   from a prior run; it is informational only (logged, never a standalone pass), so a
+#   stale or forged marker cannot satisfy the gate without a recorded passing review.
 
 set -euo pipefail
 
