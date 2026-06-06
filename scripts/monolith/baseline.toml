@@ -1,0 +1,747 @@
+# Current over-budget Rust files measured by scripts/monolith/check.sh policy.
+# #1880 baselines pre-existing monolith debt with a no-growth ratchet.
+
+[[files]]
+path = "crates/cli-sub-agent/src/audit/topo.rs"
+kind = "source"
+baseline_tokens = 10229
+baseline_lines = 797
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/bug_class.rs"
+kind = "source"
+baseline_tokens = 8155
+baseline_lines = 698
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/config_cmds.rs"
+kind = "source"
+baseline_tokens = 8297
+baseline_lines = 757
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/config_cmds_tests.rs"
+kind = "test"
+baseline_tokens = 8839
+baseline_lines = 788
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/debate_cmd_exact_tests.rs"
+kind = "test"
+baseline_tokens = 14783
+baseline_lines = 1154
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/debate_cmd_tests.rs"
+kind = "test"
+baseline_tokens = 9964
+baseline_lines = 938
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/debate_cmd_tests_tail.rs"
+kind = "test"
+baseline_tokens = 8615
+baseline_lines = 790
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/doctor_routing.rs"
+kind = "source"
+baseline_tokens = 8725
+baseline_lines = 796
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/doctor_tests.rs"
+kind = "test"
+baseline_tokens = 9594
+baseline_lines = 766
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/edit_restriction_guard.rs"
+kind = "source"
+baseline_tokens = 8526
+baseline_lines = 778
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/gc_runtime_tests.rs"
+kind = "test"
+baseline_tokens = 8258
+baseline_lines = 731
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/gc_tests.rs"
+kind = "test"
+baseline_tokens = 8458
+baseline_lines = 717
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/memory_capture.rs"
+kind = "source"
+baseline_tokens = 8116
+baseline_lines = 745
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pattern_resolver_tests.rs"
+kind = "test"
+baseline_tokens = 7717
+baseline_lines = 812
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pipeline_sandbox.rs"
+kind = "source"
+baseline_tokens = 8272
+baseline_lines = 642
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pipeline_tests.rs"
+kind = "test"
+baseline_tokens = 9396
+baseline_lines = 879
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pipeline_tests_initial_response.rs"
+kind = "test"
+baseline_tokens = 8233
+baseline_lines = 788
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pipeline_tests_post_exec_audit.rs"
+kind = "test"
+baseline_tokens = 9497
+baseline_lines = 861
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pipeline_tests_tail.rs"
+kind = "test"
+baseline_tokens = 8106
+baseline_lines = 785
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/plan_cmd_tests_tail.rs"
+kind = "test"
+baseline_tokens = 8417
+baseline_lines = 780
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/preflight_state_dir.rs"
+kind = "source"
+baseline_tokens = 9960
+baseline_lines = 807
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_check_verdict_tests.rs"
+kind = "test"
+baseline_tokens = 16581
+baseline_lines = 1569
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_exact_tests.rs"
+kind = "test"
+baseline_tokens = 11301
+baseline_lines = 919
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_execute.rs"
+kind = "source"
+baseline_tokens = 11348
+baseline_lines = 915
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_execute_tests.rs"
+kind = "test"
+baseline_tokens = 9012
+baseline_lines = 786
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_execute_tier_tests.rs"
+kind = "test"
+baseline_tokens = 10389
+baseline_lines = 831
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_findings_toml_tests.rs"
+kind = "test"
+baseline_tokens = 9448
+baseline_lines = 884
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_fix_convergence_tests.rs"
+kind = "test"
+baseline_tokens = 12707
+baseline_lines = 1006
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_output_tests.rs"
+kind = "test"
+baseline_tokens = 10920
+baseline_lines = 809
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_output_verdict_1045_tests.rs"
+kind = "test"
+baseline_tokens = 8946
+baseline_lines = 639
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_output_verdict_1675_tests.rs"
+kind = "test"
+baseline_tokens = 9327
+baseline_lines = 623
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_output_verdict_1804_tests.rs"
+kind = "test"
+baseline_tokens = 8779
+baseline_lines = 747
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_parent_artifacts_tests.rs"
+kind = "test"
+baseline_tokens = 26375
+baseline_lines = 2011
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_tests.rs"
+kind = "test"
+baseline_tokens = 8462
+baseline_lines = 824
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_cmd_tests_tail.rs"
+kind = "test"
+baseline_tokens = 10101
+baseline_lines = 922
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/review_consensus_tests.rs"
+kind = "test"
+baseline_tokens = 9011
+baseline_lines = 890
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_cmd_attempt.rs"
+kind = "source"
+baseline_tokens = 11572
+baseline_lines = 820
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_cmd_attempt_tests.rs"
+kind = "test"
+baseline_tokens = 10561
+baseline_lines = 1038
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_cmd_execute_post_exec_tests.rs"
+kind = "test"
+baseline_tokens = 15567
+baseline_lines = 1192
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_cmd_execute_tests.rs"
+kind = "test"
+baseline_tokens = 9213
+baseline_lines = 856
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_cmd_tests_no_verify.rs"
+kind = "test"
+baseline_tokens = 7857
+baseline_lines = 809
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_helpers_tier_tests.rs"
+kind = "test"
+baseline_tokens = 9832
+baseline_lines = 886
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_daemon_tests.rs"
+kind = "test"
+baseline_tokens = 9125
+baseline_lines = 805
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_reconcile.rs"
+kind = "source"
+baseline_tokens = 12136
+baseline_lines = 897
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_reconcile_tests.rs"
+kind = "test"
+baseline_tokens = 9042
+baseline_lines = 793
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_reconcile_tests_tail.rs"
+kind = "test"
+baseline_tokens = 9610
+baseline_lines = 792
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_result_tests.rs"
+kind = "test"
+baseline_tokens = 8325
+baseline_lines = 746
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_tests.rs"
+kind = "test"
+baseline_tokens = 9738
+baseline_lines = 867
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_tests_tail.rs"
+kind = "test"
+baseline_tokens = 11803
+baseline_lines = 834
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_tests_tail_wait.rs"
+kind = "test"
+baseline_tokens = 8396
+baseline_lines = 712
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/skill_cmds.rs"
+kind = "source"
+baseline_tokens = 8311
+baseline_lines = 770
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/tests/e2e.rs"
+kind = "test"
+baseline_tokens = 15082
+baseline_lines = 1391
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-acp/src/connection_tests.rs"
+kind = "test"
+baseline_tokens = 8710
+baseline_lines = 804
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/config.rs"
+kind = "source"
+baseline_tokens = 10561
+baseline_lines = 795
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/config_merge_tests.rs"
+kind = "test"
+baseline_tokens = 7716
+baseline_lines = 863
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/config_runtime_tests.rs"
+kind = "test"
+baseline_tokens = 7307
+baseline_lines = 805
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/config_tests.rs"
+kind = "test"
+baseline_tokens = 8258
+baseline_lines = 814
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/config_tests_tail.rs"
+kind = "test"
+baseline_tokens = 7929
+baseline_lines = 818
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/global.rs"
+kind = "source"
+baseline_tokens = 9821
+baseline_lines = 803
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/global_tests.rs"
+kind = "test"
+baseline_tokens = 8380
+baseline_lines = 885
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/migrate.rs"
+kind = "source"
+baseline_tokens = 8469
+baseline_lines = 748
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-config/src/validate_tests_tiers.rs"
+kind = "test"
+baseline_tokens = 8363
+baseline_lines = 792
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/context_loader.rs"
+kind = "source"
+baseline_tokens = 9370
+baseline_lines = 721
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/executor_build_cmd_tests.rs"
+kind = "test"
+baseline_tokens = 10465
+baseline_lines = 881
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/executor_build_cmd_tests_part2.rs"
+kind = "test"
+baseline_tokens = 11597
+baseline_lines = 981
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/executor_tests.rs"
+kind = "test"
+baseline_tokens = 8216
+baseline_lines = 800
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_acp_crash_retry.rs"
+kind = "source"
+baseline_tokens = 10013
+baseline_lines = 747
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_cli.rs"
+kind = "source"
+baseline_tokens = 9496
+baseline_lines = 717
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_cli_tests.rs"
+kind = "test"
+baseline_tokens = 10061
+baseline_lines = 755
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_gemini_acp_runtime.rs"
+kind = "source"
+baseline_tokens = 8521
+baseline_lines = 800
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_gemini_acp_runtime_tests_tail.rs"
+kind = "test"
+baseline_tokens = 9939
+baseline_lines = 797
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_tests_extra.rs"
+kind = "test"
+baseline_tokens = 8727
+baseline_lines = 751
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_tests_gemini_fallback.rs"
+kind = "test"
+baseline_tokens = 10245
+baseline_lines = 846
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_tests_gemini_sandbox_lockstep.rs"
+kind = "test"
+baseline_tokens = 9161
+baseline_lines = 734
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_tests_tail.rs"
+kind = "test"
+baseline_tokens = 8717
+baseline_lines = 762
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-executor/src/transport_tmux.rs"
+kind = "source"
+baseline_tokens = 9794
+baseline_lines = 818
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-hooks/src/guard_tests.rs"
+kind = "test"
+baseline_tokens = 9555
+baseline_lines = 790
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-hooks/src/runner.rs"
+kind = "source"
+baseline_tokens = 8671
+baseline_lines = 749
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-lock/src/slot.rs"
+kind = "source"
+baseline_tokens = 8246
+baseline_lines = 729
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-mcp-hub/src/serve.rs"
+kind = "source"
+baseline_tokens = 8123
+baseline_lines = 759
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-mcp-hub/src/skill_writer.rs"
+kind = "source"
+baseline_tokens = 8162
+baseline_lines = 766
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-process/src/lib_tests.rs"
+kind = "test"
+baseline_tokens = 8387
+baseline_lines = 802
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-process/src/pty_fork.rs"
+kind = "source"
+baseline_tokens = 8321
+baseline_lines = 792
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-resource/src/isolation_plan_tests.rs"
+kind = "test"
+baseline_tokens = 8395
+baseline_lines = 713
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-scheduler/src/rate_limit_tests.rs"
+kind = "test"
+baseline_tokens = 8492
+baseline_lines = 781
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-session/src/manager_tests_result_view.rs"
+kind = "test"
+baseline_tokens = 8796
+baseline_lines = 830
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-session/src/output_parser/mod.rs"
+kind = "source"
+baseline_tokens = 9721
+baseline_lines = 782
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-session/src/output_parser/return_packet.rs"
+kind = "source"
+baseline_tokens = 8337
+baseline_lines = 706
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-session/src/vcs_backends.rs"
+kind = "source"
+baseline_tokens = 8658
+baseline_lines = 800
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-todo/src/git.rs"
+kind = "source"
+baseline_tokens = 8822
+baseline_lines = 797
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/csa-todo/src/reference.rs"
+kind = "source"
+baseline_tokens = 9191
+baseline_lines = 786
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/weave/src/link.rs"
+kind = "source"
+baseline_tokens = 8350
+baseline_lines = 733
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "crates/weave/src/main.rs"
+kind = "source"
+baseline_tokens = 9637
+baseline_lines = 695
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
