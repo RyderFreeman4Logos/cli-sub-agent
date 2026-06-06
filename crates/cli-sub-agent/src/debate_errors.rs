@@ -3,6 +3,11 @@ use std::path::Path;
 use csa_process::{ExecutionResult, ToolLiveness};
 use csa_session::MetaSessionState;
 
+pub(crate) const EMPTY_DEBATE_QUESTION_ERROR: &str = concat!(
+    "debate question is empty (stdin is not available to the detached daemon - ",
+    "pass a positional QUESTION, use --question-file <path>, or pair --context with a QUESTION)"
+);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DebateErrorKind {
     Transient(String),

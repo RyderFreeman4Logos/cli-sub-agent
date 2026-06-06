@@ -541,10 +541,10 @@ pub struct DebateArgs {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_readable: Vec<PathBuf>,
 
-    /// Read the debate question from a file (bypasses shell quoting issues).
-    /// Use `-` or `/dev/stdin` to read the prompt from stdin (heredoc or pipe).
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["question", "topic"])]
-    pub prompt_file: Option<PathBuf>,
+    /// Read the debate question from a file; use this for long multi-paragraph motions.
+    /// Use `-` or `/dev/stdin` to read from stdin (heredoc or pipe).
+    #[arg(long = "question-file", alias = "prompt-file", value_name = "PATH")]
+    pub question_file: Option<PathBuf>,
 
     /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
     #[arg(long, hide = true)]

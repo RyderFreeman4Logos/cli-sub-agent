@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::debate_errors::EMPTY_DEBATE_QUESTION_ERROR;
 use crate::startup_env::StartupSubtreeEnv;
 
 const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -13,6 +14,9 @@ const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DaemonSpawnOptions {
     run_stdin_prompt: RunStdinPrompt,
+    prompt_file_to_capture: Option<PathBuf>,
+    remove_prompt_file_arg: bool,
+    prompt_file_forward_arg: PromptFileForwardArg,
     no_fs_sandbox: bool,
     extra_writable: Vec<PathBuf>,
 }
@@ -22,8 +26,32 @@ enum RunStdinPrompt {
     #[default]
     None,
     Omitted,
+    DebateOmitted,
     PositionalSentinel,
     PromptFileSentinel,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PromptFileForwardArg {
+    #[default]
+    PromptFile,
+    QuestionFile,
+}
+
+impl PromptFileForwardArg {
+    fn flag(self) -> &'static str {
+        match self {
+            Self::PromptFile => "--prompt-file",
+            Self::QuestionFile => "--question-file",
+        }
+    }
+
+    fn accepted_flags(self) -> &'static [&'static str] {
+        match self {
+            Self::PromptFile => &["--prompt-file"],
+            Self::QuestionFile => &["--question-file", "--prompt-file"],
+        }
+    }
 }
 
 impl DaemonSpawnOptions {
@@ -50,21 +78,45 @@ impl DaemonSpawnOptions {
 
         Self {
             run_stdin_prompt,
+            prompt_file_forward_arg: PromptFileForwardArg::PromptFile,
             no_fs_sandbox,
             extra_writable: extra_writable.to_vec(),
+            ..Default::default()
         }
     }
 
-    pub(crate) fn for_prompt_file(prompt_file: Option<&Path>) -> Self {
-        let run_stdin_prompt =
-            if prompt_file.is_some_and(crate::run_helpers::is_prompt_file_stdin_sentinel) {
-                RunStdinPrompt::PromptFileSentinel
-            } else {
-                RunStdinPrompt::None
-            };
+    pub(crate) fn for_debate(
+        question: Option<&str>,
+        topic: Option<&str>,
+        question_file: Option<&Path>,
+    ) -> Self {
+        let question_from_stdin = question == Some("-");
+        let inline_question_available = question.is_some() || topic.is_some();
+        let question_file_is_stdin =
+            question_file.is_some_and(crate::run_helpers::is_prompt_file_stdin_sentinel);
+        let run_stdin_prompt = if question_from_stdin {
+            RunStdinPrompt::PositionalSentinel
+        } else if inline_question_available {
+            RunStdinPrompt::None
+        } else if question_file_is_stdin {
+            RunStdinPrompt::PromptFileSentinel
+        } else if question_file.is_none() {
+            RunStdinPrompt::DebateOmitted
+        } else {
+            RunStdinPrompt::None
+        };
+        let prompt_file_to_capture = if !inline_question_available && !question_file_is_stdin {
+            question_file.map(Path::to_path_buf)
+        } else {
+            None
+        };
+        let remove_prompt_file_arg = question_from_stdin && question_file.is_some();
 
         Self {
             run_stdin_prompt,
+            prompt_file_to_capture,
+            remove_prompt_file_arg,
+            prompt_file_forward_arg: PromptFileForwardArg::QuestionFile,
             ..Default::default()
         }
     }
@@ -272,9 +324,9 @@ pub(crate) fn spawn_and_exit(
     let sid = csa_session::new_session_id();
     let session_root = csa_session::get_session_root(&project_root)?;
     let session_dir = session_root.join("sessions").join(&sid);
-    let stdin_prompt = read_stdin_prompt_if_needed(&spawn_options)?;
+    let prompt_input = read_daemon_prompt_input_if_needed(&spawn_options)?;
     persist_daemon_placeholder_session(&project_root, &session_dir, &sid, subcommand)?;
-    let stdin_prompt_file = write_stdin_prompt_if_needed(&session_dir, stdin_prompt)?;
+    let prompt_input_file = write_daemon_prompt_input_if_needed(&session_dir, prompt_input)?;
 
     // Collect args to forward: everything after the subcommand verb.
     // spawn_daemon() injects '<subcommand> --daemon-child --session-id <ID>' itself.
@@ -285,7 +337,7 @@ pub(crate) fn spawn_and_exit(
         &all_args,
         subcommand,
         &spawn_options,
-        stdin_prompt_file.as_deref(),
+        prompt_input_file.as_deref(),
     );
 
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
@@ -383,13 +435,31 @@ fn persist_daemon_placeholder_session(
     Ok(())
 }
 
-fn read_stdin_prompt_if_needed(spawn_options: &DaemonSpawnOptions) -> Result<Option<String>> {
+fn read_daemon_prompt_input_if_needed(
+    spawn_options: &DaemonSpawnOptions,
+) -> Result<Option<String>> {
+    let mut stdin = std::io::stdin();
+    read_daemon_prompt_input_if_needed_from_reader(spawn_options, stdin.is_terminal(), &mut stdin)
+}
+
+fn read_daemon_prompt_input_if_needed_from_reader<R: Read>(
+    spawn_options: &DaemonSpawnOptions,
+    stdin_is_terminal: bool,
+    reader: &mut R,
+) -> Result<Option<String>> {
+    if let Some(path) = &spawn_options.prompt_file_to_capture {
+        let prompt = read_daemon_prompt_file(path, spawn_options.prompt_file_forward_arg)?;
+        return Ok(Some(prompt));
+    }
+
     if spawn_options.run_stdin_prompt == RunStdinPrompt::None {
         return Ok(None);
     }
 
-    let mut stdin = std::io::stdin();
-    if stdin.is_terminal() {
+    if stdin_is_terminal {
+        if spawn_options.run_stdin_prompt == RunStdinPrompt::DebateOmitted {
+            anyhow::bail!(EMPTY_DEBATE_QUESTION_ERROR);
+        }
         anyhow::bail!(
             "No prompt provided and stdin is a terminal.\n\n\
              Usage:\n  \
@@ -398,12 +468,29 @@ fn read_stdin_prompt_if_needed(spawn_options: &DaemonSpawnOptions) -> Result<Opt
         );
     }
 
-    let prompt = read_bounded_stdin_prompt(&mut stdin, STDIN_PROMPT_MAX_BYTES)
-        .context("failed to read daemon run prompt from stdin")?;
+    let read_context = if spawn_options.run_stdin_prompt == RunStdinPrompt::DebateOmitted {
+        "failed to read daemon debate question from stdin"
+    } else {
+        "failed to read daemon run prompt from stdin"
+    };
+    let prompt = read_bounded_stdin_prompt(reader, STDIN_PROMPT_MAX_BYTES).context(read_context)?;
     if prompt.trim().is_empty() {
+        if spawn_options.run_stdin_prompt == RunStdinPrompt::DebateOmitted {
+            anyhow::bail!(EMPTY_DEBATE_QUESTION_ERROR);
+        }
         anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
     }
     Ok(Some(prompt))
+}
+
+fn read_daemon_prompt_file(path: &Path, forward_arg: PromptFileForwardArg) -> Result<String> {
+    let flag = forward_arg.flag();
+    let prompt = std::fs::read_to_string(path)
+        .with_context(|| format!("{flag}: failed to read '{}'", path.display()))?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("{flag} '{}' is empty", path.display());
+    }
+    Ok(prompt)
 }
 
 fn read_bounded_stdin_prompt(reader: impl Read, max_bytes: u64) -> Result<String> {
@@ -419,7 +506,7 @@ fn read_bounded_stdin_prompt(reader: impl Read, max_bytes: u64) -> Result<String
     Ok(prompt)
 }
 
-fn write_stdin_prompt_if_needed(
+fn write_daemon_prompt_input_if_needed(
     session_dir: &Path,
     prompt: Option<String>,
 ) -> Result<Option<PathBuf>> {
@@ -467,30 +554,63 @@ fn build_forwarded_args(
     }
 
     if spawn_options.run_stdin_prompt == RunStdinPrompt::PromptFileSentinel {
-        remove_prompt_file_sentinel_arg(&mut forwarded_args);
+        remove_prompt_file_arg(
+            &mut forwarded_args,
+            spawn_options.prompt_file_forward_arg.accepted_flags(),
+            true,
+        );
+    }
+
+    if spawn_options.prompt_file_to_capture.is_some() {
+        remove_prompt_file_arg(
+            &mut forwarded_args,
+            spawn_options.prompt_file_forward_arg.accepted_flags(),
+            false,
+        );
+    }
+
+    if spawn_options.remove_prompt_file_arg {
+        remove_prompt_file_arg(
+            &mut forwarded_args,
+            spawn_options.prompt_file_forward_arg.accepted_flags(),
+            false,
+        );
     }
 
     if let Some(prompt_file) = stdin_prompt_file {
-        forwarded_args.push("--prompt-file".to_string());
+        forwarded_args.push(spawn_options.prompt_file_forward_arg.flag().to_string());
         forwarded_args.push(prompt_file.display().to_string());
     }
 
     forwarded_args
 }
 
-fn remove_prompt_file_sentinel_arg(args: &mut Vec<String>) {
-    let Some(pos) = args.iter().position(|arg| {
-        arg.strip_prefix("--prompt-file=").is_some_and(|value| {
-            crate::run_helpers::is_prompt_file_stdin_sentinel(Path::new(value))
-        }) || arg == "--prompt-file"
+fn remove_prompt_file_arg(args: &mut Vec<String>, flags: &[&str], sentinel_only: bool) {
+    let Some((pos, flag, value_in_arg)) = args.iter().enumerate().find_map(|(pos, arg)| {
+        flags.iter().find_map(|flag| {
+            if arg == flag {
+                Some((pos, *flag, None))
+            } else {
+                arg.strip_prefix(&format!("{flag}="))
+                    .map(|value| (pos, *flag, Some(value.to_string())))
+            }
+        })
     }) else {
         return;
     };
 
-    if args[pos] == "--prompt-file" {
-        if args.get(pos + 1).is_some_and(|value| {
-            crate::run_helpers::is_prompt_file_stdin_sentinel(Path::new(value))
-        }) {
+    if let Some(value) = value_in_arg {
+        if !sentinel_only || crate::run_helpers::is_prompt_file_stdin_sentinel(Path::new(&value)) {
+            args.remove(pos);
+        }
+        return;
+    }
+
+    if args[pos] == flag {
+        let Some(value) = args.get(pos + 1) else {
+            return;
+        };
+        if !sentinel_only || crate::run_helpers::is_prompt_file_stdin_sentinel(Path::new(value)) {
             args.drain(pos..=pos + 1);
         }
     } else {
