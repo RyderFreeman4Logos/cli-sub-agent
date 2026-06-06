@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_session::{
@@ -138,6 +138,12 @@ pub(super) async fn bootstrap_session(
         if let Err(e) = session.apply_phase_event(PhaseEvent::Resumed) {
             warn!(session = %session.meta_session_id, error = %e, "Skipping phase transition on resume");
         } else {
+            csa_session::save_session(&session).with_context(|| {
+                format!(
+                    "failed to persist resumed Active phase for session {}",
+                    session.meta_session_id
+                )
+            })?;
             info!(session = %session.meta_session_id, "Session resumed and marked Active");
         }
     }

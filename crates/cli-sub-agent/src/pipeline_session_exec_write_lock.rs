@@ -167,6 +167,11 @@ fn holder_session_is_active(project_root: &Path, session_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::{ParentSessionSource, SessionCreationMode};
+    use crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV;
+    use crate::test_session_sandbox::ScopedSessionSandbox;
+    use csa_core::types::ToolName;
+    use csa_session::{PhaseEvent, ToolState, save_session};
 
     #[test]
     fn worktree_mutation_predicate_keys_on_readonly_not_session_type() {
@@ -235,6 +240,86 @@ mod tests {
 
         assert!(err.contains("concurrent write session blocked"));
         assert!(err.contains(&holder.meta_session_id));
+    }
+
+    #[tokio::test]
+    async fn resumed_available_holder_persists_active_before_lineage_lock_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new(&temp).await;
+        let project_root = temp.path();
+        let mut holder =
+            csa_session::create_session(project_root, Some("holder"), None, Some("codex"))
+                .expect("create holder session");
+        holder.tools.insert(
+            "codex".to_string(),
+            ToolState {
+                provider_session_id: Some("provider-holder".to_string()),
+                last_action_summary: String::new(),
+                last_exit_code: 0,
+                updated_at: chrono::Utc::now(),
+                tool_version: Some("codex-test".to_string()),
+                token_usage: None,
+            },
+        );
+        holder
+            .apply_phase_event(PhaseEvent::Compressed)
+            .expect("holder should become Available");
+        save_session(&holder).expect("save Available holder");
+        let holder_session_id = holder.meta_session_id.clone();
+        assert_eq!(
+            csa_session::load_session(project_root, &holder_session_id)
+                .expect("load saved holder")
+                .phase,
+            SessionPhase::Available
+        );
+
+        let bootstrapped = super::super::session_exec_bootstrap::bootstrap_session(
+            &ToolName::Codex,
+            "resume holder",
+            Some(&holder_session_id),
+            false,
+            None,
+            None,
+            project_root,
+            None,
+            None,
+            Some("run"),
+            None,
+            ParentSessionSource::ExplicitOrEnv,
+            SessionCreationMode::DaemonManaged,
+            &EMPTY_STARTUP_SUBTREE_ENV,
+        )
+        .await
+        .expect("resume holder session");
+        assert_eq!(bootstrapped.session.phase, SessionPhase::Active);
+        assert_eq!(
+            csa_session::load_session(project_root, &holder_session_id)
+                .expect("load resumed holder")
+                .phase,
+            SessionPhase::Active,
+            "resumed holder phase must be persisted before worktree-lock lineage checks"
+        );
+
+        let _holder_lock = acquire_if_needed(project_root, &bootstrapped.session, false)
+            .expect("resumed holder should acquire worktree lock")
+            .expect("writable holder should take a lock");
+        let child = csa_session::create_session(
+            project_root,
+            Some("lineage child"),
+            Some(&holder_session_id),
+            Some("codex"),
+        )
+        .expect("create lineage child");
+
+        let child_lock = acquire_if_needed(project_root, &child, false)
+            .expect("child should re-enter under persisted-active holder")
+            .expect("writable child should get a lock guard");
+
+        assert!(child_lock.is_lineage_reentry());
+        assert_eq!(
+            child_lock.holder_session_id(),
+            Some(holder_session_id.as_str())
+        );
     }
 
     fn save_success_result(project_root: &Path, session_id: &str) {
