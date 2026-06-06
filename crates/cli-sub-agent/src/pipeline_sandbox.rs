@@ -4,7 +4,6 @@
 //! Handles enforcement mode checking, capability detection, config resolution,
 //! and first-turn telemetry recording.
 
-use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
@@ -15,6 +14,9 @@ use csa_resource::isolation_plan::{
 };
 use csa_session::MetaSessionState;
 use tracing::{info, warn};
+
+#[path = "pipeline_sandbox_writable.rs"]
+mod writable_sources;
 
 /// Outcome of sandbox resolution — either enriched options or a fatal error string
 /// (for `Required` mode with no capability).
@@ -34,74 +36,6 @@ fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> Pat
     })
 }
 
-fn resolve_and_prepare_writable_sources(
-    paths: &[PathBuf],
-    project_root: &Path,
-    source_label: &str,
-    removal_target: &str,
-) -> Result<Vec<PathBuf>, String> {
-    let resolved = csa_resource::isolation_plan::resolve_writable_paths(paths, project_root)
-        .map_err(|e| format!("{source_label} validation failed: {e}"))?;
-
-    for (path, candidate) in paths.iter().zip(resolved.iter()) {
-        match candidate.try_exists() {
-            Ok(true) => {}
-            Ok(false) => {
-                if path_looks_like_file(path) {
-                    prepare_missing_file_source(candidate, path, source_label)?;
-                } else {
-                    return Err(format!(
-                        "{source_label} path '{}' does not exist. Create it first or remove the {removal_target}.",
-                        path.display()
-                    ));
-                }
-            }
-            Err(error) => {
-                return Err(format!(
-                    "{source_label} path '{}' could not be checked before session launch: {error}",
-                    path.display()
-                ));
-            }
-        }
-    }
-    Ok(resolved)
-}
-
-fn path_looks_like_file(path: &Path) -> bool {
-    path.extension().is_some()
-}
-
-fn prepare_missing_file_source(
-    candidate: &Path,
-    original: &Path,
-    source_label: &str,
-) -> Result<(), String> {
-    let parent = candidate.parent().ok_or_else(|| {
-        format!(
-            "{source_label} path '{}' has no parent directory for file pre-creation.",
-            original.display()
-        )
-    })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        format!(
-            "{source_label} path '{}' parent '{}' could not be created before session launch: {error}",
-            original.display(),
-            parent.display()
-        )
-    })?;
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(candidate)
-        .map(|_| ())
-        .map_err(|error| {
-            format!(
-                "{source_label} path '{}' could not be created before session launch: {error}",
-                original.display()
-            )
-        })
-}
-
 pub(crate) fn validate_run_extra_writable_sources_exist(
     config: Option<&ProjectConfig>,
     project_root: &Path,
@@ -112,22 +46,16 @@ pub(crate) fn validate_run_extra_writable_sources_exist(
         return Ok(());
     }
     if !extra_writable.is_empty() {
-        resolve_and_prepare_writable_sources(
+        writable_sources::resolve_and_prepare_writable_sources(
             extra_writable,
             project_root,
             "--extra-writable",
-            "flag",
         )?;
     }
     if let Some(cfg) = config
         && !cfg.filesystem_sandbox.extra_writable.is_empty()
     {
-        resolve_and_prepare_writable_sources(
-            &cfg.filesystem_sandbox.extra_writable,
-            project_root,
-            "filesystem_sandbox.extra_writable",
-            "config entry",
-        )?;
+        writable_sources::resolve_config_extra_writable_sources(cfg, project_root)?;
     }
     Ok(())
 }
@@ -231,11 +159,10 @@ pub(crate) fn resolve_sandbox_options(
             }
             // CLI --extra-writable / --expose-readable (no-config path).
             if !extra_writable.is_empty() {
-                let resolved = match resolve_and_prepare_writable_sources(
+                let resolved = match writable_sources::resolve_and_prepare_writable_sources(
                     extra_writable,
                     project_root,
                     "--extra-writable",
-                    "flag",
                 ) {
                     Ok(paths) => paths,
                     Err(message) => {
@@ -359,7 +286,12 @@ pub(crate) fn resolve_sandbox_options(
 
     // Per-tool filesystem sandbox: check for REPLACE-semantics writable paths.
     let per_tool_writable = if !no_fs_sandbox {
-        cfg.sandbox_writable_paths(tool_name)
+        match writable_sources::resolve_per_tool_writable_sources(cfg, tool_name, project_root) {
+            Ok(paths) => paths,
+            Err(message) => {
+                return SandboxResolution::RequiredButUnavailable(message);
+            }
+        }
     } else {
         None
     };
@@ -398,27 +330,15 @@ pub(crate) fn resolve_sandbox_options(
 
     if !no_fs_sandbox {
         if let Some(ref paths) = per_tool_writable {
-            let resolved =
-                match csa_resource::isolation_plan::resolve_writable_paths(paths, project_root) {
-                    Ok(paths) => paths,
-                    Err(e) => {
-                        return SandboxResolution::RequiredButUnavailable(format!(
-                            "Per-tool writable_paths validation failed for '{tool_name}': {e}"
-                        ));
-                    }
-                };
-            for path in resolved {
-                builder = builder.with_writable_path(path);
+            for path in paths {
+                builder = builder.with_writable_path(path.clone());
             }
         } else {
             // No per-tool override — apply global extra_writable paths.
-            let fs_config = &cfg.filesystem_sandbox;
-            if !fs_config.extra_writable.is_empty() {
-                let resolved = match resolve_and_prepare_writable_sources(
-                    &fs_config.extra_writable,
+            if !cfg.filesystem_sandbox.extra_writable.is_empty() {
+                let resolved = match writable_sources::resolve_config_extra_writable_sources(
+                    cfg,
                     project_root,
-                    "filesystem_sandbox.extra_writable",
-                    "config entry",
                 ) {
                     Ok(paths) => paths,
                     Err(message) => {
@@ -447,11 +367,10 @@ pub(crate) fn resolve_sandbox_options(
 
     // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
     if !no_fs_sandbox && !extra_writable.is_empty() {
-        let resolved = match resolve_and_prepare_writable_sources(
+        let resolved = match writable_sources::resolve_and_prepare_writable_sources(
             extra_writable,
             project_root,
             "--extra-writable",
-            "flag",
         ) {
             Ok(paths) => paths,
             Err(message) => {

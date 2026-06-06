@@ -65,7 +65,7 @@ enforcement_mode = "best-effort"
 }
 
 #[test]
-fn test_extra_writable_rejects_nonexistent_path_before_sandbox_launch() {
+fn test_extra_writable_creates_missing_directory_before_sandbox_launch() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let missing = project_root.path().join("missing-extra");
     let cfg = parse_project_config(
@@ -92,15 +92,22 @@ enforcement_mode = "best-effort"
         &[],
     );
 
-    let SandboxResolution::RequiredButUnavailable(message) = result else {
-        panic!("Expected missing --extra-writable path to fail before sandbox launch");
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected missing --extra-writable directory to be created before sandbox launch");
     };
-    assert_eq!(
-        message,
-        format!(
-            "--extra-writable path '{}' does not exist. Create it first or remove the flag.",
-            missing.display()
-        )
+    assert!(
+        missing.is_dir(),
+        "missing --extra-writable directory should be created"
+    );
+
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&missing.canonicalize().unwrap()),
+        "created directory should be in writable_paths, got: {:?}",
+        sandbox.isolation_plan.writable_paths
     );
 }
 
@@ -167,20 +174,17 @@ fn test_run_extra_writable_pre_daemon_validation_creates_missing_file_source() {
 }
 
 #[test]
-fn test_run_extra_writable_pre_daemon_validation_rejects_nonexistent_path() {
+fn test_run_extra_writable_pre_daemon_validation_creates_missing_directory() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let missing = project_root.path().join("missing-extra");
     let extra = vec![missing.clone()];
 
-    let err = validate_run_extra_writable_sources_exist(None, project_root.path(), false, &extra)
-        .expect_err("missing --extra-writable path should fail before daemon spawn");
+    validate_run_extra_writable_sources_exist(None, project_root.path(), false, &extra)
+        .expect("missing --extra-writable directory should be created before daemon spawn");
 
-    assert_eq!(
-        err,
-        format!(
-            "--extra-writable path '{}' does not exist. Create it first or remove the flag.",
-            missing.display()
-        )
+    assert!(
+        missing.is_dir(),
+        "pre-daemon validation should create missing --extra-writable directory"
     );
 }
 
@@ -231,8 +235,9 @@ extra_writable = ["drafts"]
 }
 
 #[test]
-fn test_global_extra_writable_rejects_nonexistent_path_before_sandbox_launch() {
+fn test_global_extra_writable_creates_missing_path_before_sandbox_launch() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
+    let missing = project_root.path().join("missing-extra");
     let cfg = parse_project_config(
         r#"
 [resources]
@@ -259,20 +264,95 @@ extra_writable = ["missing-extra"]
         &[],
     );
 
-    let SandboxResolution::RequiredButUnavailable(message) = result else {
-        panic!(
-            "Expected missing filesystem_sandbox.extra_writable path to fail before sandbox launch"
-        );
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected missing filesystem_sandbox.extra_writable path to be created");
     };
-    assert_eq!(
-        message,
-        "filesystem_sandbox.extra_writable path 'missing-extra' does not exist. Create it first or remove the config entry."
+    assert!(
+        missing.is_dir(),
+        "missing filesystem_sandbox.extra_writable directory should be created"
+    );
+
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&missing.canonicalize().unwrap()),
+        "created global extra_writable path should be in writable_paths, got: {:?}",
+        sandbox.isolation_plan.writable_paths
+    );
+}
+
+#[test]
+fn test_global_extra_writable_creates_missing_path_with_per_tool_writable_paths() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let tool_writable = project_root.path().join("tool-writable");
+    let missing = project_root.path().join("missing-extra");
+    std::fs::create_dir_all(&tool_writable).expect("create tool writable dir");
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+
+[filesystem_sandbox]
+extra_writable = ["missing-extra"]
+
+[tools.codex.filesystem_sandbox]
+writable_paths = ["tool-writable"]
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "codex",
+        "test-session",
+        project_root.path(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &[],
+        &[],
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected global extra_writable path to be created with per-tool writable_paths");
+    };
+    assert!(
+        missing.is_dir(),
+        "missing global extra_writable directory should be created even with per-tool writable_paths"
+    );
+
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        sandbox.isolation_plan.readonly_project_root,
+        "per-tool writable_paths should keep project root read-only"
+    );
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&tool_writable.canonicalize().unwrap()),
+        "tool writable path should remain in writable_paths, got: {:?}",
+        sandbox.isolation_plan.writable_paths
+    );
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&missing.canonicalize().unwrap()),
+        "created global extra_writable path should be appended, got: {:?}",
+        sandbox.isolation_plan.writable_paths
     );
 }
 
 #[test]
 fn test_run_extra_writable_pre_daemon_validation_checks_global_config() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
+    let missing = project_root.path().join("missing-extra");
     let cfg = parse_project_config(
         r#"
 [filesystem_sandbox]
@@ -280,15 +360,92 @@ extra_writable = ["missing-extra"]
 "#,
     );
 
-    let err =
-        validate_run_extra_writable_sources_exist(Some(&cfg), project_root.path(), false, &[])
-            .expect_err(
-                "missing filesystem_sandbox.extra_writable path should fail before daemon spawn",
-            );
+    validate_run_extra_writable_sources_exist(Some(&cfg), project_root.path(), false, &[]).expect(
+        "missing filesystem_sandbox.extra_writable path should be created before daemon spawn",
+    );
 
-    assert_eq!(
-        err,
-        "filesystem_sandbox.extra_writable path 'missing-extra' does not exist. Create it first or remove the config entry."
+    assert!(
+        missing.is_dir(),
+        "pre-daemon validation should create global extra_writable directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_global_extra_writable_skips_path_when_missing_directory_cannot_be_created() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePermissions {
+        path: PathBuf,
+        mode: u32,
+    }
+
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            if let Ok(metadata) = std::fs::metadata(&self.path) {
+                let mut permissions = metadata.permissions();
+                permissions.set_mode(self.mode);
+                let _ = std::fs::set_permissions(&self.path, permissions);
+            }
+        }
+    }
+
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let locked_parent = project_root.path().join("locked");
+    std::fs::create_dir_all(&locked_parent).expect("create locked parent");
+    let original_mode = std::fs::metadata(&locked_parent)
+        .expect("locked parent metadata")
+        .permissions()
+        .mode();
+    let _restore = RestorePermissions {
+        path: locked_parent.clone(),
+        mode: original_mode,
+    };
+    let mut locked_permissions = std::fs::metadata(&locked_parent)
+        .expect("locked parent metadata")
+        .permissions();
+    locked_permissions.set_mode(0o500);
+    std::fs::set_permissions(&locked_parent, locked_permissions).expect("make parent read-only");
+
+    let missing = locked_parent.join("missing-extra");
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+
+[filesystem_sandbox]
+extra_writable = ["locked/missing-extra"]
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "codex",
+        "test-session",
+        project_root.path(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &[],
+        &[],
+    );
+
+    if missing.exists() {
+        return;
+    }
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("mkdir failure for allowed extra_writable should skip the entry, not abort");
+    };
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        !sandbox.isolation_plan.writable_paths.contains(&missing),
+        "uncreated extra_writable path should be skipped, got: {:?}",
+        sandbox.isolation_plan.writable_paths
     );
 }
 
@@ -322,6 +479,41 @@ enforcement_mode = "best-effort"
     assert!(
         matches!(result, SandboxResolution::RequiredButUnavailable(ref msg) if msg.contains("extra-writable")),
         "dangerous path in --extra-writable should be rejected"
+    );
+}
+
+#[test]
+fn test_global_extra_writable_rejects_dangerous_paths() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+
+[filesystem_sandbox]
+extra_writable = ["/etc/shadow"]
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "codex",
+        "test-session",
+        project_root.path(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &[],
+        &[],
+    );
+
+    assert!(
+        matches!(result, SandboxResolution::RequiredButUnavailable(ref msg) if msg.contains("filesystem_sandbox.extra_writable validation failed")),
+        "dangerous global extra_writable path should be rejected before creation"
     );
 }
 
