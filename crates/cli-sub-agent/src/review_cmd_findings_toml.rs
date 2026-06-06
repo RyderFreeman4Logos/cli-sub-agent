@@ -165,7 +165,24 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
             .flatten()
             .collect::<Vec<_>>()
             .join("\n");
-        return Ok((!structured_text.trim().is_empty()).then_some(structured_text));
+        if !structured_text.trim().is_empty() {
+            return Ok(Some(structured_text));
+        }
+
+        let mut file_text = Vec::new();
+        for file_name in ["summary.md", "details.md"] {
+            let path = session_dir.join("output").join(file_name);
+            if !path.exists() {
+                continue;
+            }
+            let content = fs::read_to_string(&path)
+                .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+            if !content.trim().is_empty() {
+                file_text.push(content);
+            }
+        }
+        let file_text = file_text.join("\n");
+        return Ok((!file_text.trim().is_empty()).then_some(file_text));
     }
 
     let full_output_path = session_dir.join("output").join("full.md");

@@ -18,6 +18,7 @@ pub(super) struct ReviewProseSignals {
     pub(super) blocking_summary: bool,
     pub(super) parsed_findings_sections: bool,
     pub(super) unparseable_findings_sections: bool,
+    pub(super) checklist_violation_findings: bool,
     pub(super) findings: Vec<ReviewFinding>,
 }
 
@@ -28,6 +29,7 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
         blocking_summary: prose.blocking_summary,
         parsed_findings_sections: false,
         unparseable_findings_sections: false,
+        checklist_violation_findings: false,
         findings: Vec::new(),
     };
     let default_unlabeled_severity = prose.blocking_summary.then_some(Severity::Medium);
@@ -100,6 +102,7 @@ fn record_review_prose_signal(
         classify_findings_sections(content, default_unlabeled_severity.clone());
     signals.parsed_findings_sections |= parsed_findings_sections;
     signals.unparseable_findings_sections |= unparseable_findings_sections;
+    signals.checklist_violation_findings |= checklist_violation_references_finding(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
     let counts = severity_counts_from_review_findings(&findings);
@@ -132,6 +135,63 @@ fn classify_findings_sections(
 
 fn contains_canonical_clean_conclusion(content: &str) -> bool {
     contains_clean_phrase(content) || detect_prose_clean_conclusion(content)
+}
+
+fn checklist_violation_references_finding(content: &str) -> bool {
+    let mut in_checklist_section = false;
+    let mut in_code_fence = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            in_checklist_section = is_checklist_heading(trimmed);
+            continue;
+        }
+        if in_checklist_section && line_violation_references_finding_id(trimmed) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_checklist_heading(line: &str) -> bool {
+    let normalized = line.trim_start_matches('#').trim();
+    let normalized = normalized
+        .split_once('(')
+        .map_or(normalized, |(heading, _)| heading.trim_end());
+    normalized.to_ascii_lowercase().contains("checklist")
+}
+
+fn line_violation_references_finding_id(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    if !lower.contains("violation") {
+        return false;
+    }
+    let Some(index) = lower.find("finding") else {
+        return false;
+    };
+    line.get(index + "finding".len()..)
+        .unwrap_or_default()
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+        .any(token_looks_like_finding_id)
+}
+
+fn token_looks_like_finding_id(token: &str) -> bool {
+    let token = token.trim();
+    let has_alpha = token.chars().any(|ch| ch.is_ascii_alphabetic());
+    token.len() >= 2
+        && has_alpha
+        && (token.chars().any(|ch| ch.is_ascii_digit())
+            || token.contains('-')
+            || token.contains('_'))
 }
 
 fn merge_severity_counts_add(

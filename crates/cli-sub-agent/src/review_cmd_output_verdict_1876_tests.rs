@@ -250,3 +250,166 @@ fn issue_1876_nonempty_findings_with_zero_counts_fail_closed() {
 
     assert_eq!(decision, ReviewDecision::Fail);
 }
+
+#[test]
+fn issue_1887_physical_details_word_severity_findings_fail_and_populate_counts() {
+    let session_id = "01TEST1887PHYSDETAILSHIGH";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1887-physical-details-high", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        r#"## Findings
+
+1. [High][regression] Shared monolith checker ignores non-Rust files (scripts/monolith/check.sh:280, confidence=0.94)
+2. [Medium][test-gap] Monolith checker shell tests are not run by repo verification (scripts/tests/monolith-check-tests.sh:249, confidence=0.89)
+
+## AGENTS.md Checklist
+
+| Rule | Status |
+| --- | --- |
+| 016 testing | VIOLATION via finding MONO-002 |
+"#,
+    )
+    .expect("write details.md");
+    assert!(!session_dir.join("output").join("index.toml").exists());
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_ne!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 2);
+    assert_eq!(findings.findings[0].severity, Severity::High);
+    assert_eq!(
+        findings.findings[0].file_ranges[0].path,
+        "scripts/monolith/check.sh"
+    );
+    assert_eq!(findings.findings[0].file_ranges[0].start, 280);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1887_physical_details_empty_findings_stays_pass() {
+    let session_id = "01TEST1887PHYSDETAILSPASS";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1887-physical-details-pass", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "## Findings\n\nNo findings.\n",
+    )
+    .expect("write details.md");
+    assert!(!session_dir.join("output").join("index.toml").exists());
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    assert!(verdict.failure_reason.is_none());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1887_high_category_numbered_line_parses_to_high() {
+    let session_id = "01TEST1887PARSEHIGH000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1887-parse-high", session_id);
+
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "## Findings\n\n1. [High][regression] Parser recognizes word severity (src/lib.rs:7, confidence=0.94)\n",
+    )
+    .expect("write details.md");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    crate::review_cmd::findings_toml::persist_review_findings_toml(&project_root, &meta);
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 1);
+    assert_eq!(findings.findings[0].severity, Severity::High);
+    assert_eq!(findings.findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings.findings[0].file_ranges[0].start, 7);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1887_medium_category_numbered_line_parses_to_medium() {
+    let session_id = "01TEST1887PARSEMEDIUM0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1887-parse-medium", session_id);
+
+    fs::write(
+        session_dir.join("output").join("details.md"),
+        "## Findings\n\n1. [Medium][test-gap] Parser recognizes medium severity (tests/review.rs:42, confidence=0.89)\n",
+    )
+    .expect("write details.md");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    crate::review_cmd::findings_toml::persist_review_findings_toml(&project_root, &meta);
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 1);
+    assert_eq!(findings.findings[0].severity, Severity::Medium);
+    assert_eq!(findings.findings[0].file_ranges[0].path, "tests/review.rs");
+    assert_eq!(findings.findings[0].file_ranges[0].start, 42);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_1887_checklist_violation_referencing_finding_id_fails_closed() {
+    let session_id = "01TEST1887CHECKLIST000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1887-checklist-violation", session_id);
+
+    write_empty_findings_toml(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        r#"<!-- CSA:SECTION:summary -->
+PASS
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+## Findings
+
+No findings.
+
+## AGENTS.md Checklist
+
+| Rule | Status |
+| --- | --- |
+| 016 testing | VIOLATION via finding MONO-001 |
+<!-- CSA:SECTION:details:END -->
+"#,
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
