@@ -1312,12 +1312,11 @@ fn write_multi_reviewer_parent_artifacts_fails_closed_when_empty_artifact_masks_
     );
 }
 
-#[test]
-fn clear_multi_reviewer_artifact_dirs_removes_stale_empty_artifact_so_dissenter_fails_closed() {
-    // #1681: the parent/daemon session dir can survive across review invocations in a
-    // plan. If reviewer-1 left an empty artifact in round 1, round 2 must clear it before
-    // accepting reviewer-1 as a persisted HAS_ISSUES dissenter.
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+#[tokio::test]
+async fn clear_multi_reviewer_artifact_dirs_removes_stale_empty_artifact_so_dissenter_fails_closed()
+{
+    // #1681: stale parent/daemon reviewer artifacts must be cleared before round 2.
+    let _env_lock = TEST_ENV_LOCK.lock().await;
     let temp = tempdir().expect("tempdir should be created");
     let session_dir = temp.path().display().to_string();
     let _session_dir_guard = ScopedEnvVarRestore::set(CSA_SESSION_DIR_ENV_KEY, &session_dir);
@@ -1354,6 +1353,7 @@ fn clear_multi_reviewer_artifact_dirs_removes_stale_empty_artifact_so_dissenter_
         2,
         &startup_env_for_parent_session(temp.path(), "01PARENTSESSION000000000000"),
     )
+    .await
     .expect("stale reviewer dirs should be cleared");
 
     assert!(

@@ -110,10 +110,8 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         &reviewer_tool_plan,
         &tier_reviewer_specs,
     );
-    super::parent_artifacts::clear_multi_reviewer_artifact_dirs(
-        ctx.reviewers,
-        &parent_startup_env,
-    )?;
+    super::parent_artifacts::clear_multi_reviewer_artifact_dirs(ctx.reviewers, &parent_startup_env)
+        .await?;
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {

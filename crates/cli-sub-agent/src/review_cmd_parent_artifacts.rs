@@ -48,7 +48,7 @@ pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) large_diff_warning: Option<LargeDiffWarning>,
 }
 
-pub(super) fn clear_multi_reviewer_artifact_dirs(
+pub(super) async fn clear_multi_reviewer_artifact_dirs(
     reviewers: usize,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
@@ -56,17 +56,22 @@ pub(super) fn clear_multi_reviewer_artifact_dirs(
         return Ok(());
     };
 
-    for reviewer_index in 1..=reviewers {
-        let reviewer_dir = session_dir.join(format!("reviewer-{reviewer_index}"));
-        match fs::remove_dir_all(&reviewer_dir) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("failed to clear {}", reviewer_dir.display()));
+    tokio::task::spawn_blocking(move || {
+        for reviewer_index in 1..=reviewers {
+            let reviewer_dir = session_dir.join(format!("reviewer-{reviewer_index}"));
+            match fs::remove_dir_all(&reviewer_dir) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("failed to clear {}", reviewer_dir.display()));
+                }
             }
         }
-    }
+        Ok(())
+    })
+    .await
+    .context("failed to join multi-reviewer artifact cleanup task")??;
     Ok(())
 }
 
