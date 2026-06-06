@@ -584,29 +584,23 @@ fn test_build_command_codex_strips_lefthook_env_reinjected_by_extra_env() {
 
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+    let os = std::ffi::OsStr::new;
 
-    assert_eq!(env_map.get(std::ffi::OsStr::new("LEFTHOOK")), Some(&None));
-    assert_eq!(
-        env_map.get(std::ffi::OsStr::new("LEFTHOOK_SKIP_PRE_COMMIT")),
-        Some(&None)
-    );
-    assert_eq!(
-        env_map.get(std::ffi::OsStr::new("SAFE_ENV")),
-        Some(&Some(std::ffi::OsStr::new("ok")))
-    );
-    assert!(
-        env_map
-            .get(std::ffi::OsStr::new("CSA_REAL_GIT"))
-            .is_some_and(Option::is_some),
-        "git guard should expose the real git binary"
-    );
-    assert!(
-        env_map
-            .get(std::ffi::OsStr::new("PATH"))
-            .and_then(|value| value.as_ref())
-            .is_some_and(|value| value.to_string_lossy().contains("guards")),
-        "git guard should prepend its wrapper directory to PATH"
-    );
+    assert_eq!(env_map.get(os("LEFTHOOK")), Some(&None));
+    assert_eq!(env_map.get(os("LEFTHOOK_SKIP_PRE_COMMIT")), Some(&None));
+    assert_eq!(env_map.get(os("SAFE_ENV")), Some(&Some(os("ok"))));
+    assert!(env_map.get(os("CSA_REAL_GIT")).is_some_and(Option::is_some));
+    let session_dir = env_map
+        .get(os("CSA_SESSION_DIR"))
+        .and_then(|value| value.as_ref())
+        .unwrap()
+        .to_string_lossy();
+    let path = env_map
+        .get(os("PATH"))
+        .and_then(|value| value.as_ref())
+        .unwrap()
+        .to_string_lossy();
+    assert!(path.starts_with(&format!("{session_dir}/bin")));
 }
 
 #[test]

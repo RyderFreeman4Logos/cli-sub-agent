@@ -38,13 +38,15 @@ pub(crate) fn apply_subtree_pin(cmd: &mut Command, pin: Option<&csa_core::env::S
 
 pub(crate) fn inject_git_guard_env(cmd: &mut Command) {
     let mut guard_env = HashMap::new();
-    if let Some(path) = cmd
-        .as_std()
-        .get_envs()
-        .find_map(|(key, value)| (key == OsStr::new("PATH")).then_some(value))
-        .flatten()
-    {
-        guard_env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
+    for key in ["PATH", "CSA_SESSION_DIR"] {
+        if let Some(value) = cmd
+            .as_std()
+            .get_envs()
+            .find_map(|(env_key, value)| (env_key == OsStr::new(key)).then_some(value))
+            .flatten()
+        {
+            guard_env.insert(key.to_string(), value.to_string_lossy().into_owned());
+        }
     }
 
     csa_hooks::git_guard::inject_git_guard_env(&mut guard_env);

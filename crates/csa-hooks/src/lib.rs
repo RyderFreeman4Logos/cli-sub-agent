@@ -53,6 +53,8 @@ pub mod directive;
 pub mod event;
 pub mod event_bus;
 pub mod git_guard;
+#[cfg(test)]
+mod git_guard_tests;
 pub mod guard;
 pub mod mempal_capture;
 pub mod merge_guard;

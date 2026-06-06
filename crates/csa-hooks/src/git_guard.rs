@@ -3,8 +3,8 @@
 //! CSA tool subprocesses share the caller's `.git` directory, so Git hooks are
 //! the last deterministic local gate before an agent-created commit lands in
 //! the repository.  This module injects a `git` wrapper ahead of the real Git
-//! binary in `PATH` and blocks known hook-bypass forms before the commit is
-//! created.
+//! binary in `PATH`, strips hook-bypass inputs from commits, and blocks leaf
+//! worker pushes.
 
 use std::collections::HashMap;
 use std::fs;
@@ -15,23 +15,27 @@ use std::sync::{LazyLock, Mutex};
 
 use anyhow::{Context, Result};
 
-const GUARD_DIR_NAME: &str = "guards";
+const FALLBACK_GUARD_DIR_NAME: &str = "guards";
+const SESSION_GUARD_DIR_NAME: &str = "bin";
+const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
 static GUARD_SETUP_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-const GIT_WRAPPER: &str = r#"#!/usr/bin/env bash
-# CSA git guard: blocks git commit hook bypass.
+const GIT_WRAPPER: &str = r#"#!/bin/sh
+# CSA git guard: strips git commit hook bypass and blocks leaf-worker pushes.
 # Injected by CSA via PATH.
-set -euo pipefail
+set -eu
 
 REAL_GIT="${CSA_REAL_GIT:-}"
 if [ -z "${REAL_GIT}" ]; then
   GUARD_DIR="$(cd "$(dirname "$0")" && pwd)"
   CLEAN_PATH=""
-  IFS=: read -ra _PATH_DIRS <<< "${PATH:-}"
-  for _dir in "${_PATH_DIRS[@]}"; do
+  OLD_IFS="${IFS}"
+  IFS=:
+  for _dir in ${PATH:-}; do
     [ -z "${_dir}" ] && continue
     [ "${_dir}" = "${GUARD_DIR}" ] && continue
     CLEAN_PATH="${CLEAN_PATH:+${CLEAN_PATH}:}${_dir}"
   done
+  IFS="${OLD_IFS}"
   REAL_GIT="$(PATH="${CLEAN_PATH}" command -v git 2>/dev/null)" || true
 fi
 
@@ -47,10 +51,66 @@ is_hooks_path_config() {
   esac
 }
 
+strip_hook_bypass_env() {
+  unset LEFTHOOK || true
+  unset LEFTHOOK_DISABLED || true
+  unset HUSKY || true
+  unset HUSKY_DISABLE || true
+  unset SKIP_HOOKS || true
+  unset SKIP_GIT_HOOKS || true
+  unset PRE_COMMIT_ALLOW_NO_CONFIG || true
+  unset LEFTHOOK_SKIP || true
+  unset LEFTHOOK_EXCLUDE || true
+  unset SKIP || true
+
+  for env_name in $(env | sed -n \
+    -e 's/^\(LEFTHOOK_SKIP_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(LEFTHOOK_EXCLUDE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    unset "${env_name}" || true
+  done
+}
+
+append_sanitized_arg() {
+  quoted_arg="'$(printf "%s" "$1" | sed "s/'/'\\\\''/g")'"
+  if [ -z "${SANITIZED_ARGS}" ]; then
+    SANITIZED_ARGS="${quoted_arg}"
+  else
+    SANITIZED_ARGS="${SANITIZED_ARGS} ${quoted_arg}"
+  fi
+}
+
+strip_commit_short_arg() {
+  short_options="${1#-}"
+  rebuilt_options=""
+  while [ -n "${short_options}" ]; do
+    short_remainder="${short_options#?}"
+    short_option="${short_options%"${short_remainder}"}"
+    short_options="${short_remainder}"
+    case "${short_option}" in
+      n)
+        STRIPPED_NO_VERIFY=true
+        ;;
+      C|F|c|m|t)
+        rebuilt_options="${rebuilt_options}${short_option}${short_options}"
+        short_options=""
+        ;;
+      *)
+        rebuilt_options="${rebuilt_options}${short_option}"
+        ;;
+    esac
+  done
+
+  if [ -n "${rebuilt_options}" ]; then
+    STRIPPED_SHORT_RESULT="-${rebuilt_options}"
+  else
+    STRIPPED_SHORT_RESULT=""
+  fi
+}
+
 COMMAND=""
 BLOCK_HOOKS_PATH_OVERRIDE=false
 EXPECT_VALUE=""
-for arg in "$@"; do
+for arg do
   if [ -n "${EXPECT_VALUE}" ]; then
     if [ "${EXPECT_VALUE}" = "config" ] && is_hooks_path_config "${arg}"; then
       BLOCK_HOOKS_PATH_OVERRIDE=true
@@ -61,7 +121,7 @@ for arg in "$@"; do
 
   case "${arg}" in
     --help|-h)
-      exec "${REAL_GIT}" "$@"
+      continue
       ;;
     -c|--config)
       EXPECT_VALUE="config"
@@ -98,6 +158,13 @@ for arg in "$@"; do
   esac
 done
 
+strip_hook_bypass_env
+
+if [ "${COMMAND}" = "push" ] && [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
+  echo "CSA git-guard: git push blocked for leaf-worker sessions." >&2
+  exit 128
+fi
+
 if [ "${COMMAND}" != "commit" ]; then
   exec "${REAL_GIT}" "$@"
 fi
@@ -107,73 +174,94 @@ if [ "${BLOCK_HOOKS_PATH_OVERRIDE}" = "true" ]; then
   exit 1
 fi
 
+SANITIZED_ARGS=""
+STRIPPED_NO_VERIFY=false
+COMMAND_SEEN=false
+END_OF_COMMIT_OPTIONS=false
+EXPECT_GLOBAL_VALUE=""
 EXPECT_COMMIT_VALUE=""
-for arg in "$@"; do
+for arg do
+  if [ "${COMMAND_SEEN}" = "false" ]; then
+    append_sanitized_arg "${arg}"
+    if [ -n "${EXPECT_GLOBAL_VALUE}" ]; then
+      EXPECT_GLOBAL_VALUE=""
+      continue
+    fi
+
+    case "${arg}" in
+      -c|--config|-C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
+        EXPECT_GLOBAL_VALUE="1"
+        continue
+        ;;
+      --config=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--super-prefix=*|--config-env=*)
+        continue
+        ;;
+      --*)
+        continue
+        ;;
+      -*)
+        continue
+        ;;
+      *)
+        [ "${arg}" = "commit" ] && COMMAND_SEEN=true
+        continue
+        ;;
+    esac
+  fi
+
+  if [ "${END_OF_COMMIT_OPTIONS}" = "true" ]; then
+    append_sanitized_arg "${arg}"
+    continue
+  fi
+
   if [ -n "${EXPECT_COMMIT_VALUE}" ]; then
+    append_sanitized_arg "${arg}"
     EXPECT_COMMIT_VALUE=""
     continue
   fi
 
   case "${arg}" in
     --no-verify|--no-verify=*)
-      echo "BLOCKED: CSA git guard prohibits git commit --no-verify." >&2
-      exit 1
+      STRIPPED_NO_VERIFY=true
       ;;
     --)
-      break
+      append_sanitized_arg "${arg}"
+      END_OF_COMMIT_OPTIONS=true
+      continue
       ;;
     --author|--cleanup|--date|--file|--fixup|--message|--pathspec-from-file|--reuse-message|--reedit-message|--squash|--template|--trailer)
+      append_sanitized_arg "${arg}"
       EXPECT_COMMIT_VALUE="commit-option"
       continue
       ;;
     --author=*|--cleanup=*|--date=*|--file=*|--fixup=*|--message=*|--pathspec-from-file=*|--reuse-message=*|--reedit-message=*|--squash=*|--template=*|--trailer=*)
+      append_sanitized_arg "${arg}"
       continue
       ;;
     --*)
+      append_sanitized_arg "${arg}"
       ;;
     -*)
-      # Git commit uses -n as the short form of --no-verify. Short options that
-      # take values consume the rest of the cluster or the next argument, so a
-      # leading dash inside that value must not be parsed as another option.
-      short_options="${arg#-}"
-      while [ -n "${short_options}" ]; do
-        short_option="${short_options:0:1}"
-        short_options="${short_options:1}"
-        case "${short_option}" in
-          n)
-            echo "BLOCKED: CSA git guard prohibits git commit -n/short -n combinations." >&2
-            exit 1
-            ;;
-          C|F|c|m|t)
-            if [ -z "${short_options}" ]; then
-              EXPECT_COMMIT_VALUE="commit-option"
-            fi
-            break
-            ;;
-        esac
-      done
+      STRIPPED_SHORT_RESULT=""
+      strip_commit_short_arg "${arg}"
+      if [ -n "${STRIPPED_SHORT_RESULT}" ]; then
+        append_sanitized_arg "${STRIPPED_SHORT_RESULT}"
+      fi
+      case "${STRIPPED_SHORT_RESULT}" in
+        -*[CFcmt])
+          EXPECT_COMMIT_VALUE="commit-option"
+          ;;
+      esac
+      ;;
+    *)
+      append_sanitized_arg "${arg}"
       ;;
   esac
 done
 
-if [ "${LEFTHOOK:-}" = "0" ]; then
-  echo "BLOCKED: CSA git guard prohibits LEFTHOOK=0 during git commit." >&2
-  exit 1
+if [ "${STRIPPED_NO_VERIFY}" = "true" ]; then
+  echo "CSA git-guard: stripped --no-verify from git commit (hook bypass forbidden)" >&2
 fi
-
-if [ -n "${LEFTHOOK_SKIP:-}" ] || [ -n "${LEFTHOOK_EXCLUDE:-}" ] || [ -n "${SKIP:-}" ]; then
-  echo "BLOCKED: CSA git guard prohibits LEFTHOOK_SKIP/LEFTHOOK_EXCLUDE/SKIP during git commit." >&2
-  exit 1
-fi
-
-while IFS='=' read -r name _value; do
-  case "${name}" in
-    LEFTHOOK_SKIP_*|LEFTHOOK_EXCLUDE_*)
-      echo "BLOCKED: CSA git guard prohibits ${name} during git commit." >&2
-      exit 1
-      ;;
-  esac
-done < <(env)
 
 if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   top="$("${REAL_GIT}" rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -187,23 +275,8 @@ if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 
   if [ -n "${lefthook_config}" ]; then
     hooks_path="$("${REAL_GIT}" config --path --get core.hooksPath 2>/dev/null || true)"
-    lefthook_hooks=()
-    while IFS= read -r line || [ -n "${line}" ]; do
-      line="${line%$'\r'}"
-      case "${line}" in
-        ""|\#*|" "*|$'\t'*) continue ;;
-      esac
-      hook_name="${line%%:*}"
-      [ "${hook_name}" = "${line}" ] && continue
-      case "${hook_name}" in
-        applypatch-msg|commit-msg|fsmonitor-watchman|p4-changelist|p4-post-changelist|p4-pre-submit|p4-prepare-changelist|post-applypatch|post-checkout|post-commit|post-index-change|post-merge|post-receive|post-rewrite|post-update|pre-applypatch|pre-auto-gc|pre-commit|pre-merge-commit|pre-push|pre-rebase|pre-receive|prepare-commit-msg|proc-receive|push-to-checkout|reference-transaction|sendemail-validate|update)
-          lefthook_hooks+=("${hook_name}")
-          ;;
-      esac
-    done < "${lefthook_config}"
-
     hook_path_for() {
-      local hook_name="$1"
+      hook_name="$1"
       if [ -n "${hooks_path}" ]; then
         case "${hooks_path}" in
           /*) printf '%s\n' "${hooks_path}/${hook_name}" ;;
@@ -214,31 +287,55 @@ if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       fi
     }
 
-    for hook_name in "${lefthook_hooks[@]}"; do
-      hook_path="$(hook_path_for "${hook_name}")"
-      if [ -z "${hook_path}" ] || [ ! -x "${hook_path}" ]; then
-        echo "BLOCKED: lefthook config defines ${hook_name} but no executable ${hook_name} hook is active." >&2
-        echo "Run: lefthook install" >&2
-        if [ -n "${hook_path}" ]; then
-          echo "Expected hook: ${hook_path}" >&2
-        fi
-        exit 1
-      fi
-    done
+    while IFS= read -r line || [ -n "${line}" ]; do
+      case "${line}" in
+        ""|\#*|" "*) continue ;;
+      esac
+      hook_name="${line%%:*}"
+      [ "${hook_name}" = "${line}" ] && continue
+      case "${hook_name}" in
+        applypatch-msg|commit-msg|fsmonitor-watchman|p4-changelist|p4-post-changelist|p4-pre-submit|p4-prepare-changelist|post-applypatch|post-checkout|post-commit|post-index-change|post-merge|post-receive|post-rewrite|post-update|pre-applypatch|pre-auto-gc|pre-commit|pre-merge-commit|pre-push|pre-rebase|pre-receive|prepare-commit-msg|proc-receive|push-to-checkout|reference-transaction|sendemail-validate|update)
+          hook_path="$(hook_path_for "${hook_name}")"
+          if [ -z "${hook_path}" ] || [ ! -x "${hook_path}" ]; then
+            echo "BLOCKED: lefthook config defines ${hook_name} but no executable ${hook_name} hook is active." >&2
+            echo "Run: lefthook install" >&2
+            if [ -n "${hook_path}" ]; then
+              echo "Expected hook: ${hook_path}" >&2
+            fi
+            exit 1
+          fi
+          ;;
+      esac
+    done < "${lefthook_config}"
   fi
 fi
 
+eval "set -- ${SANITIZED_ARGS}"
 exec "${REAL_GIT}" "$@"
 "#;
 
 pub fn ensure_git_guard_dir() -> Result<PathBuf> {
     let data_dir = csa_config::paths::state_dir()
         .context("cannot determine CSA state directory")?
-        .join(GUARD_DIR_NAME);
+        .join(FALLBACK_GUARD_DIR_NAME);
 
-    fs::create_dir_all(&data_dir)
+    ensure_git_guard_dir_at(&data_dir)
+}
+
+fn ensure_git_guard_dir_for_env(env: &HashMap<String, String>) -> Result<PathBuf> {
+    if let Some(session_dir) = env
+        .get(CSA_SESSION_DIR_ENV)
+        .filter(|value| !value.is_empty())
+    {
+        return ensure_git_guard_dir_at(&Path::new(session_dir).join(SESSION_GUARD_DIR_NAME));
+    }
+
+    ensure_git_guard_dir()
+}
+
+fn ensure_git_guard_dir_at(data_dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(data_dir)
         .with_context(|| format!("failed to create guard dir: {}", data_dir.display()))?;
-
     let wrapper_path = data_dir.join("git");
     fs::write(&wrapper_path, GIT_WRAPPER)
         .with_context(|| format!("failed to write git wrapper: {}", wrapper_path.display()))?;
@@ -246,7 +343,7 @@ pub fn ensure_git_guard_dir() -> Result<PathBuf> {
     fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
         .with_context(|| format!("failed to chmod git wrapper: {}", wrapper_path.display()))?;
 
-    Ok(data_dir)
+    Ok(data_dir.to_path_buf())
 }
 
 pub fn inject_git_guard_env(env: &mut HashMap<String, String>) {
@@ -257,7 +354,7 @@ pub fn inject_git_guard_env(env: &mut HashMap<String, String>) {
             return;
         }
     };
-    let guard_dir = match ensure_git_guard_dir() {
+    let guard_dir = match ensure_git_guard_dir_for_env(env) {
         Ok(dir) => dir,
         Err(error) => {
             tracing::warn!("git guard setup failed (best-effort skip): {error:#}");
@@ -314,376 +411,4 @@ fn prepend_guard_dir(env: &mut HashMap<String, String>, guard_dir: &Path) {
 #[must_use]
 pub fn git_wrapper_script() -> &'static str {
     GIT_WRAPPER
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(unix)]
-    use crate::test_support::ENV_LOCK;
-
-    use super::{git_wrapper_script, inject_git_guard_env};
-    use std::collections::HashMap;
-    #[cfg(unix)]
-    use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-    #[cfg(unix)]
-    use std::path::Path;
-    #[cfg(unix)]
-    use std::time::Duration;
-
-    #[cfg(unix)]
-    fn write_executable(path: &Path, contents: impl AsRef<[u8]>) {
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(contents.as_ref()).unwrap();
-        file.sync_all().unwrap();
-        drop(file);
-
-        for attempt in 0..5 {
-            match std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)) {
-                Ok(()) => return,
-                Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(err) => panic!("failed to mark {} executable: {err}", path.display()),
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    fn write_fake_worktree_git(path: &Path) {
-        write_executable(
-            path,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-case "$*" in
-  "rev-parse --is-inside-work-tree") exit 0 ;;
-  "rev-parse --show-toplevel") printf '%s\n' "${FAKE_TOP}" ; exit 0 ;;
-  "config --path --get core.hooksPath") exit 1 ;;
-esac
-if [ "${1:-}" = "rev-parse" ] && [ "${2:-}" = "--git-path" ]; then
-  printf '%s\n' "${FAKE_TOP}/.git/${3}"
-  exit 0
-fi
-printf '%s\n' "$*"
-"#,
-        );
-    }
-
-    #[test]
-    fn inject_git_guard_env_sets_real_git_and_path() {
-        let mut env = HashMap::new();
-        inject_git_guard_env(&mut env);
-
-        assert!(env.contains_key("PATH"));
-        assert!(
-            env.get("PATH")
-                .is_some_and(|value| value.contains("guards"))
-        );
-        assert!(env.contains_key("CSA_REAL_GIT"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_blocks_no_verify_before_real_git() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        let marker = temp.path().join("called");
-        write_executable(
-            &fake_git,
-            format!(
-                "#!/usr/bin/env bash\necho called > '{}'\n",
-                marker.display()
-            ),
-        );
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("--no-verify")
-            .env("CSA_REAL_GIT", &fake_git)
-            .output()
-            .unwrap();
-
-        assert!(!output.status.success());
-        assert!(!marker.exists(), "real git must not run after --no-verify");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("--no-verify"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_blocks_lefthook_bypass_env_before_real_git() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        let marker = temp.path().join("called");
-        write_executable(
-            &fake_git,
-            format!(
-                "#!/usr/bin/env bash\necho called > '{}'\n",
-                marker.display()
-            ),
-        );
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("-m")
-            .arg("test")
-            .env("CSA_REAL_GIT", &fake_git)
-            .env("LEFTHOOK", "0")
-            .output()
-            .unwrap();
-
-        assert!(!output.status.success());
-        assert!(!marker.exists(), "real git must not run after LEFTHOOK=0");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("LEFTHOOK=0"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_allows_pre_push_only_lefthook_config_without_pre_commit() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let repo = temp.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
-        std::fs::write(
-            repo.join("lefthook.yml"),
-            "pre-push:\n  commands:\n    review:\n      run: echo ok\n",
-        )
-        .unwrap();
-        write_executable(
-            repo.join(".git/hooks/pre-push").as_path(),
-            "#!/usr/bin/env bash\n",
-        );
-
-        let fake_git = temp.path().join("real-git");
-        write_fake_worktree_git(&fake_git);
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("-m")
-            .arg("test")
-            .current_dir(&repo)
-            .env("CSA_REAL_GIT", &fake_git)
-            .env("FAKE_TOP", &repo)
-            .output()
-            .unwrap();
-
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "commit -m test"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_blocks_missing_defined_pre_push_lefthook_hook() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let repo = temp.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
-        std::fs::write(repo.join("lefthook.yml"), "pre-push:\n").unwrap();
-
-        let fake_git = temp.path().join("real-git");
-        write_fake_worktree_git(&fake_git);
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("-m")
-            .arg("test")
-            .current_dir(&repo)
-            .env("CSA_REAL_GIT", &fake_git)
-            .env("FAKE_TOP", &repo)
-            .output()
-            .unwrap();
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success());
-        assert!(stderr.contains("pre-push"), "{stderr}");
-        assert!(stderr.contains("lefthook install"), "{stderr}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_requires_pre_commit_when_lefthook_config_defines_it() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let repo = temp.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
-        std::fs::write(repo.join("lefthook.yml"), "pre-commit:\npre-push:\n").unwrap();
-        write_executable(
-            repo.join(".git/hooks/pre-push").as_path(),
-            "#!/usr/bin/env bash\n",
-        );
-
-        let fake_git = temp.path().join("real-git");
-        write_fake_worktree_git(&fake_git);
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("-m")
-            .arg("test")
-            .current_dir(&repo)
-            .env("CSA_REAL_GIT", &fake_git)
-            .env("FAKE_TOP", &repo)
-            .output()
-            .unwrap();
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success());
-        assert!(stderr.contains("pre-commit"), "{stderr}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_allows_long_commit_options_containing_n() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("--amend")
-            .env("CSA_REAL_GIT", &fake_git)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "commit --amend"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_allows_markdown_bullet_after_long_message_option() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
-
-        // Commit message body intentionally starts with "- " (markdown bullet),
-        // which is NOT a separate flag — bind to a variable so clippy does not
-        // misinterpret the leading dash as a split-args candidate.
-        let body_msg = "- **Design Intent**: count failed reads as skipped";
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("--message")
-            .arg("fix(batch): count read failures as skipped")
-            .arg("--message")
-            .arg(body_msg)
-            .env("CSA_REAL_GIT", &fake_git)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "commit --message fix(batch): count read failures as skipped --message - **Design Intent**: count failed reads as skipped"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_allows_leading_dash_after_short_message_option() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
-
-        // Message intentionally starts with "- " (markdown bullet); bind to a
-        // variable so clippy does not flag suspicious_command_arg_space.
-        let msg = "- leading dash is message text";
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("-m")
-            .arg(msg)
-            .env("CSA_REAL_GIT", &fake_git)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "commit -m - leading dash is message text"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_allows_leading_dash_after_file_option() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("commit")
-            .arg("-F")
-            .arg("-")
-            .env("CSA_REAL_GIT", &fake_git)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "commit -F -"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrapper_forwards_non_commit_commands() {
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let temp = tempfile::tempdir().unwrap();
-        let wrapper = temp.path().join("git");
-        write_executable(&wrapper, git_wrapper_script());
-
-        let fake_git = temp.path().join("real-git");
-        write_executable(&fake_git, "#!/usr/bin/env bash\necho \"$@\"\n");
-
-        let output = std::process::Command::new(&wrapper)
-            .arg("status")
-            .env("CSA_REAL_GIT", &fake_git)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "status");
-    }
 }

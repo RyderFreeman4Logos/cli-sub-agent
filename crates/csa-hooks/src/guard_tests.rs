@@ -171,13 +171,13 @@ mod unix_tests {
     }
 
     fn command_output(command: &mut std::process::Command) -> std::process::Output {
-        for attempt in 0..5 {
+        for attempt in 0..25 {
             match command.output() {
                 Ok(output) => return output,
-                Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt < 24 => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
                 }
-                Err(err) => panic!("failed to run command: {err}"),
+                Err(err) => panic!("command failed: {err}"),
             }
         }
         unreachable!("bounded retry loop always returns or panics")

@@ -158,11 +158,12 @@ fn cas_dir_differs_for_different_urls() {
 #[test]
 fn ensure_cached_fetch_updates_default_head_commit() {
     fn run_git(current_dir: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(current_dir)
-            .output()
-            .unwrap();
+        let mut command = Command::new("git");
+        command.args(args).current_dir(current_dir);
+        if args.first() == Some(&"push") {
+            command.env("CSA_GIT_PUSH_ALLOWED", "true");
+        }
+        let output = command.output().unwrap();
         assert!(
             output.status.success(),
             "git {:?} failed: {}",

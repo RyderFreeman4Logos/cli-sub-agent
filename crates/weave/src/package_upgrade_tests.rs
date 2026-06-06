@@ -97,11 +97,12 @@ fn manual_install(
 /// Push a new commit to the remote, returning the new commit hash.
 fn push_new_version(work: &Path, version: &str) -> String {
     fn run_git(dir: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
+        let mut command = Command::new("git");
+        command.args(args).current_dir(dir);
+        if args.first() == Some(&"push") {
+            command.env("CSA_GIT_PUSH_ALLOWED", "true");
+        }
+        let output = command.output().unwrap();
         assert!(output.status.success());
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }

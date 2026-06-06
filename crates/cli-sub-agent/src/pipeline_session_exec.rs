@@ -293,6 +293,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             .await?;
     let result_file_cleared = clear_expected_result_artifacts_for_prompt(prompt, &session_dir);
     let execution_start_time = chrono::Utc::now();
+    let sa_mode =
+        std::env::var_os(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)
+            .is_some_and(|value| value == "true" || value == "1");
     let session_config = global_config.map(|gc| {
         let mcp_servers = resolve_mcp_servers(project_root, gc);
         if !mcp_servers.is_empty() {
@@ -315,6 +318,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         executor.tool_name(),
         startup_env.current_depth(),
         startup_env.pattern_internal(),
+        sa_mode,
     );
     crate::pipeline_env::apply_task_target_dir_guards(
         task_type,
@@ -550,10 +554,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             },
         );
     }
-    let sa_mode = std::env::var(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)
-        .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
-        .unwrap_or(false);
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
         executor,
         prompt,

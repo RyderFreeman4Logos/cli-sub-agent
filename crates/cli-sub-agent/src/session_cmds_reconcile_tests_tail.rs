@@ -48,11 +48,12 @@ fn make_result(status: &str, exit_code: i32) -> SessionResult {
 }
 
 fn run_git(dir: &std::path::Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    let mut command = std::process::Command::new("git");
+    command.args(args).current_dir(dir);
+    if args.first() == Some(&"push") {
+        command.env("CSA_GIT_PUSH_ALLOWED", "true");
+    }
+    let output = command.output().unwrap();
     assert!(
         output.status.success(),
         "git {:?} failed: stdout={} stderr={}",

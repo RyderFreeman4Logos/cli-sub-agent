@@ -359,10 +359,8 @@ fn test_build_env_codex_strips_lefthook_bypass_env_only_for_codex() {
         env.get("CSA_REAL_GIT").is_some_and(|value| !value.is_empty()),
         "ACP env should expose real git for the git guard"
     );
-    assert!(
-        env.get("PATH").is_some_and(|value| value.contains("guards")),
-        "ACP env should prepend the git guard wrapper directory to PATH"
-    );
+    let session_bin = format!("{}/bin", env.get("CSA_SESSION_DIR").unwrap());
+    assert!(env.get("PATH").unwrap().starts_with(&session_bin));
 }
 
 #[test]
