@@ -2,10 +2,11 @@ use crate::{
     SessionLock, acquire_lock_at_path_with_metadata, project_resource_lock_path,
     read_lock_diagnostic,
 };
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use anyhow::Result;
 use std::fs;
 use std::io::ErrorKind;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Guard for a write-capable CSA session sharing one git worktree.
@@ -119,41 +120,6 @@ impl Drop for WorktreeWriteLock {
     }
 }
 
-/// Session-registry liveness for the holder recorded in a worktree lock file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HolderSessionLiveness {
-    /// The holder session is still running or otherwise registered as live.
-    Live,
-    /// The holder session is positively known to be completed or retired.
-    Dead,
-    /// The holder session was not found in the registry; diagnostic PID proof is still required.
-    RegistryAbsent,
-    /// The caller could not determine holder-session state.
-    Unknown,
-}
-
-impl HolderSessionLiveness {
-    /// Construct a live holder-session state for external liveness callbacks.
-    pub const fn live() -> Self {
-        Self::Live
-    }
-
-    /// Construct a positively dead holder-session state for external liveness callbacks.
-    pub const fn dead() -> Self {
-        Self::Dead
-    }
-
-    /// Construct a registry-absent holder-session state for external liveness callbacks.
-    pub const fn registry_absent() -> Self {
-        Self::RegistryAbsent
-    }
-
-    /// Construct an unknown holder-session state for external liveness callbacks.
-    pub const fn unknown() -> Self {
-        Self::Unknown
-    }
-}
-
 /// Acquire a fail-fast exclusive write lock for a canonical git worktree root.
 ///
 /// Lock path:
@@ -166,22 +132,6 @@ pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
     ancestor_session_ids: &[String],
-) -> Result<WorktreeWriteLock> {
-    acquire_worktree_write_lock_with_liveness(
-        worktree_root,
-        session_id,
-        ancestor_session_ids,
-        |_| HolderSessionLiveness::unknown(),
-    )
-}
-
-/// Acquire a worktree write lock, reclaiming a stale lock only when the holder
-/// session is known dead by the caller-provided registry check.
-pub fn acquire_worktree_write_lock_with_liveness(
-    worktree_root: &Path,
-    session_id: &str,
-    ancestor_session_ids: &[String],
-    holder_session_liveness: impl FnMut(&str) -> HolderSessionLiveness,
 ) -> Result<WorktreeWriteLock> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -217,28 +167,13 @@ pub fn acquire_worktree_write_lock_with_liveness(
                 && ancestor_session_ids
                     .iter()
                     .any(|ancestor| ancestor == holder_session_id)
+                && diagnostic
+                    .as_ref()
+                    .is_some_and(|diag| diagnostic_matches_current_flock_owner(&lock_path, diag))
             {
                 return Ok(WorktreeWriteLock {
                     inner: WorktreeWriteLockKind::LineageReentry {
                         holder_session_id: holder_session_id.clone(),
-                    },
-                    lock_path,
-                });
-            }
-
-            if let Some(lock) = try_reclaim_stale_worktree_lock(
-                &lock_path,
-                &lock_name,
-                &reason,
-                session_id,
-                &canonical_root,
-                diagnostic.as_ref(),
-                holder_session_liveness,
-            )? {
-                return Ok(WorktreeWriteLock {
-                    inner: WorktreeWriteLockKind::Acquired {
-                        _lock: lock,
-                        owner_session_id: session_id.to_string(),
                     },
                     lock_path,
                 });
@@ -260,167 +195,73 @@ pub fn acquire_worktree_write_lock_with_liveness(
     }
 }
 
-fn try_reclaim_stale_worktree_lock(
+fn diagnostic_matches_current_flock_owner(
     lock_path: &Path,
-    lock_name: &str,
-    reason: &str,
-    session_id: &str,
-    canonical_root: &Path,
-    diagnostic: Option<&crate::LockDiagnostic>,
-    mut holder_session_liveness: impl FnMut(&str) -> HolderSessionLiveness,
-) -> Result<Option<SessionLock>> {
-    let Some(diagnostic) = diagnostic else {
-        return Ok(None);
-    };
-    let Some(holder_session_id) = diagnostic.holder_session_id.as_deref() else {
-        return Ok(None);
-    };
-
-    if !stale_holder_can_be_reclaimed(diagnostic, holder_session_id, &mut holder_session_liveness) {
-        return Ok(None);
-    }
-
-    let reclaim_lock_path = lock_path.with_file_name(".reclaim.lock");
-    let _reclaim_guard = match acquire_lock_at_path_with_metadata(
-        &reclaim_lock_path,
-        "worktree-write:reclaim",
-        "serialize stale worktree lock reclaim",
-        Some(session_id),
-        Some(canonical_root),
-    ) {
-        Ok(guard) => guard,
-        Err(err) => {
-            tracing::warn!(
-                lock_path = %lock_path.display(),
-                holder_session_id,
-                error = %err,
-                "failed to acquire worktree stale-lock reclaim guard; keeping existing lock"
-            );
-            return Ok(None);
-        }
-    };
-
-    let current = read_lock_diagnostic(lock_path)?;
-    let Some(current) = current else {
-        return Ok(None);
-    };
-    if !same_lock_holder(&current, diagnostic) {
-        return Ok(None);
-    }
-
-    let stale_path = stale_lock_path(lock_path, diagnostic.acquired_at);
-    fs::rename(lock_path, &stale_path).with_context(|| {
-        format!(
-            "failed to atomically move stale worktree lock '{}' aside",
-            lock_path.display()
-        )
-    })?;
-
-    tracing::warn!(
-        lock_path = %lock_path.display(),
-        stale_path = %stale_path.display(),
-        old_holder_pid = diagnostic.pid,
-        old_holder_session_id = holder_session_id,
-        old_acquired_at = %diagnostic.acquired_at,
-        "reclaimed stale worktree write lock"
-    );
-
-    let lock = match acquire_lock_at_path_with_metadata(
-        lock_path,
-        lock_name,
-        reason,
-        Some(session_id),
-        Some(canonical_root),
-    ) {
-        Ok(lock) => lock,
-        Err(err) => {
-            if let Err(restore_err) = fs::rename(&stale_path, lock_path)
-                && restore_err.kind() != ErrorKind::NotFound
-            {
-                tracing::warn!(
-                    lock_path = %lock_path.display(),
-                    stale_path = %stale_path.display(),
-                    error = %restore_err,
-                    "failed to restore stale worktree lock after reclaim acquisition error"
-                );
-            }
-            return Err(err).with_context(|| {
-                format!(
-                    "failed to acquire worktree write lock after reclaiming stale holder {holder_session_id}"
-                )
-            });
-        }
-    };
-    if let Err(err) = fs::remove_file(&stale_path)
-        && err.kind() != ErrorKind::NotFound
-    {
-        tracing::warn!(
-            stale_path = %stale_path.display(),
-            error = %err,
-            "failed to remove reclaimed stale worktree lock artifact"
-        );
-    }
-    Ok(Some(lock))
-}
-
-fn stale_holder_can_be_reclaimed(
     diagnostic: &crate::LockDiagnostic,
-    holder_session_id: &str,
-    holder_session_liveness: &mut impl FnMut(&str) -> HolderSessionLiveness,
 ) -> bool {
-    match holder_session_liveness(holder_session_id) {
-        HolderSessionLiveness::Dead | HolderSessionLiveness::RegistryAbsent => {
-            matches!(
-                process_probe_state(diagnostic.pid),
-                ProcessProbeState::Missing
-            )
-        }
-        HolderSessionLiveness::Live | HolderSessionLiveness::Unknown => false,
+    let Some(owner_pid) = current_flock_owner_pid(lock_path) else {
+        return false;
+    };
+    owner_pid == diagnostic.pid && diagnostic_process_identity_matches(diagnostic)
+}
+
+#[cfg(target_os = "linux")]
+fn current_flock_owner_pid(lock_path: &Path) -> Option<u32> {
+    let metadata = fs::metadata(lock_path).ok()?;
+    let (major, minor) = linux_dev_major_minor(metadata.dev());
+    let inode = metadata.ino();
+    fs::read_to_string("/proc/locks")
+        .ok()?
+        .lines()
+        .find_map(|line| proc_lock_owner_for_inode(line, major, minor, inode))
+}
+
+#[cfg(target_os = "linux")]
+fn proc_lock_owner_for_inode(line: &str, major: u64, minor: u64, inode: u64) -> Option<u32> {
+    let mut fields = line.split_whitespace();
+    let _id = fields.next()?;
+    if fields.next()? != "FLOCK" {
+        return None;
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessProbeState {
-    Missing,
-    Signalable,
-    PermissionDenied,
-    Unknown,
-}
-
-fn process_probe_state(pid: u32) -> ProcessProbeState {
-    #[cfg(unix)]
-    {
-        // SAFETY: signal 0 checks process existence without sending a signal.
-        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        if ret == 0 {
-            return ProcessProbeState::Signalable;
-        }
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(libc::ESRCH) => ProcessProbeState::Missing,
-            Some(libc::EPERM) => ProcessProbeState::PermissionDenied,
-            _ => ProcessProbeState::Unknown,
-        }
+    let _scope = fields.next()?;
+    if fields.next()? != "WRITE" {
+        return None;
     }
-
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        ProcessProbeState::Unknown
+    let pid = fields.next()?.parse::<u32>().ok()?;
+    let lock_id = fields.next()?;
+    let mut parts = lock_id.split(':');
+    let lock_major = u64::from_str_radix(parts.next()?, 16).ok()?;
+    let lock_minor = u64::from_str_radix(parts.next()?, 16).ok()?;
+    let lock_inode = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
     }
+    (lock_major == major && lock_minor == minor && lock_inode == inode).then_some(pid)
 }
 
-fn same_lock_holder(left: &crate::LockDiagnostic, right: &crate::LockDiagnostic) -> bool {
-    left.pid == right.pid
-        && left.holder_session_id == right.holder_session_id
-        && left.acquired_at == right.acquired_at
-        && left.resource_path == right.resource_path
+#[cfg(target_os = "linux")]
+fn linux_dev_major_minor(dev: u64) -> (u64, u64) {
+    let major = ((dev >> 8) & 0x0fff) | ((dev >> 32) & !0x0fff);
+    let minor = (dev & 0x00ff) | ((dev >> 12) & !0x00ff);
+    (major, minor)
 }
 
-fn stale_lock_path(lock_path: &Path, acquired_at: DateTime<Utc>) -> PathBuf {
-    let suffix = acquired_at
-        .timestamp_nanos_opt()
-        .unwrap_or_else(|| Utc::now().timestamp_nanos_opt().unwrap_or_default());
-    lock_path.with_file_name(format!(".exclusive.stale.{suffix}.lock"))
+#[cfg(target_os = "linux")]
+fn diagnostic_process_identity_matches(diagnostic: &crate::LockDiagnostic) -> bool {
+    let Some(expected_start_time) = diagnostic.pid_start_time_ticks else {
+        return false;
+    };
+    crate::process_start_time_ticks(diagnostic.pid) == Some(expected_start_time)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_flock_owner_pid(_lock_path: &Path) -> Option<u32> {
+    Some(std::process::id())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn diagnostic_process_identity_matches(diagnostic: &crate::LockDiagnostic) -> bool {
+    diagnostic.pid == std::process::id()
 }
 
 #[cfg(test)]

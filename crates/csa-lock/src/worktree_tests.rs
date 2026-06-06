@@ -2,7 +2,8 @@ use super::*;
 use crate::LockDiagnostic;
 use chrono::Utc;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::os::unix::io::AsRawFd;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tempfile::tempdir;
 
@@ -121,29 +122,32 @@ fn worktree_write_lock_removes_lock_file_on_drop() {
 }
 
 #[test]
-fn worktree_write_lock_reclaims_dead_holder_lock() {
+fn worktree_write_lock_acquires_over_stale_file_without_held_flock() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let holder = acquire_worktree_write_lock(worktree_root.path(), "01DEAD", &[])
+    let holder = acquire_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[])
         .expect("holder lock should succeed");
+    let lock_path = holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(
-        holder.lock_path(),
-        missing_pid(),
-        "01DEAD",
+        &lock_path,
+        std::process::id(),
+        crate::process_start_time_ticks(std::process::id()),
+        "01STALE",
         worktree_root.path(),
     );
+    drop(holder);
 
-    let lock =
-        acquire_worktree_write_lock_with_liveness(worktree_root.path(), "01NEXT", &[], |_| {
-            HolderSessionLiveness::Dead
-        })
-        .expect("dead holder lock should be reclaimed");
+    let lock = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+        .expect("stale diagnostic file without a held flock must not block acquisition");
 
     assert!(!lock.is_lineage_reentry());
-    drop(holder);
+    let diagnostic = read_lock_diagnostic(&lock_path)
+        .expect("read refreshed diagnostic")
+        .expect("refreshed diagnostic should parse");
+    assert_eq!(diagnostic.holder_session_id.as_deref(), Some("01NEXT"));
     drop(lock);
 }
 
@@ -157,10 +161,7 @@ fn worktree_write_lock_keeps_live_holder_blocked() {
     let _holder = acquire_worktree_write_lock(worktree_root.path(), "01LIVE", &[])
         .expect("holder lock should succeed");
 
-    let err =
-        acquire_worktree_write_lock_with_liveness(worktree_root.path(), "01NEXT", &[], |_| {
-            HolderSessionLiveness::Live
-        })
+    let err = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
         .expect_err("live holder must still block")
         .to_string();
 
@@ -169,108 +170,117 @@ fn worktree_write_lock_keeps_live_holder_blocked() {
 }
 
 #[test]
-fn worktree_write_lock_keeps_registry_absent_signalable_holder_blocked() {
+fn worktree_write_lock_blocks_post_exec_window_with_live_flock() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let holder = acquire_worktree_write_lock(worktree_root.path(), "01ABSENT", &[])
+    let holder = acquire_worktree_write_lock(worktree_root.path(), "01DONE", &[])
         .expect("holder lock should succeed");
     let lock_path = holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(
         &lock_path,
         std::process::id(),
-        "01ABSENT",
+        crate::process_start_time_ticks(std::process::id()),
+        "01DONE",
         worktree_root.path(),
     );
 
-    let err =
-        acquire_worktree_write_lock_with_liveness(worktree_root.path(), "01NEXT", &[], |_| {
-            HolderSessionLiveness::RegistryAbsent
-        })
-        .expect_err("registry-absent holder with signalable pid must block")
+    let err = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+        .expect_err("post-exec holder with live flock must block")
         .to_string();
 
     assert!(err.contains("concurrent write session blocked"));
-    assert!(err.contains("01ABSENT"));
+    assert!(err.contains("01DONE"));
     assert!(
         lock_path.exists(),
-        "canonical lock path must not be moved aside"
+        "canonical lock path must stay in place while the live flock is held"
     );
-    let diagnostic = read_lock_diagnostic(&lock_path)
-        .expect("read retained diagnostic")
-        .expect("retained diagnostic should parse");
-    assert_eq!(diagnostic.holder_session_id.as_deref(), Some("01ABSENT"));
 }
 
 #[test]
-fn worktree_write_lock_keeps_unknown_signalable_holder_blocked() {
+fn worktree_write_lock_blocks_stale_diagnostic_with_live_unrelated_flock_without_stealing_inode() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let holder = acquire_worktree_write_lock(worktree_root.path(), "01UNKNOWN", &[])
-        .expect("holder lock should succeed");
-    let lock_path = holder.lock_path().to_path_buf();
+    let stale_holder = acquire_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[])
+        .expect("stale holder setup lock should succeed");
+    let lock_path = stale_holder.lock_path().to_path_buf();
+    overwrite_worktree_lock_diagnostic(&lock_path, 4_000_000, None, "01DEAD", worktree_root.path());
+    drop(stale_holder);
+    let before_inode = fs::metadata(&lock_path).expect("lock metadata").ino();
+    let _manual_holder = ManualFlock::acquire(&lock_path);
+
+    let err = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+        .expect_err("live unrelated flock must block despite stale diagnostic")
+        .to_string();
+
+    assert!(err.contains("concurrent write session blocked"));
+    assert!(err.contains("01DEAD"));
+    assert!(
+        lock_path.exists(),
+        "canonical lock path must not be moved aside"
+    );
+    assert_eq!(
+        fs::metadata(&lock_path).expect("lock metadata").ino(),
+        before_inode,
+        "canonical lock inode must not be replaced"
+    );
+    assert_no_reclaim_artifacts(&lock_path);
+}
+
+#[test]
+fn worktree_write_lock_blocks_lineage_reentry_when_stale_diagnostic_is_not_flock_owner() {
+    let _env_lock = env_test_lock();
+    let state_home = tempdir().expect("state-home tempdir");
+    let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
+
+    let worktree_root = tempdir().expect("worktree tempdir");
+    let stale_holder = acquire_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[])
+        .expect("stale holder setup lock should succeed");
+    let lock_path = stale_holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(
         &lock_path,
         std::process::id(),
-        "01UNKNOWN",
+        Some(0),
+        "01DEAD",
         worktree_root.path(),
     );
+    drop(stale_holder);
+    let before_inode = fs::metadata(&lock_path).expect("lock metadata").ino();
+    let _manual_holder = ManualFlock::acquire(&lock_path);
 
-    let err =
-        acquire_worktree_write_lock_with_liveness(worktree_root.path(), "01NEXT", &[], |_| {
-            HolderSessionLiveness::Unknown
-        })
-        .expect_err("unknown holder liveness must block")
-        .to_string();
+    let err = acquire_worktree_write_lock(
+        worktree_root.path(),
+        "01DESCENDANT",
+        &["01DEAD".to_string()],
+    )
+    .expect_err("stale ancestor diagnostic must not bypass a live unrelated flock")
+    .to_string();
 
     assert!(err.contains("concurrent write session blocked"));
-    assert!(err.contains("01UNKNOWN"));
-    assert!(
-        lock_path.exists(),
-        "canonical lock path must not be moved aside"
+    assert!(err.contains("01DEAD"));
+    assert_eq!(
+        fs::metadata(&lock_path).expect("lock metadata").ino(),
+        before_inode,
+        "canonical lock inode must not be replaced"
     );
-}
-
-#[test]
-fn worktree_write_lock_reclaims_registry_absent_holder_with_missing_pid() {
-    let _env_lock = env_test_lock();
-    let state_home = tempdir().expect("state-home tempdir");
-    let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
-
-    let worktree_root = tempdir().expect("worktree tempdir");
-    let holder = acquire_worktree_write_lock(worktree_root.path(), "01ABSENT", &[])
-        .expect("holder lock should succeed");
-    overwrite_worktree_lock_diagnostic(
-        holder.lock_path(),
-        missing_pid(),
-        "01ABSENT",
-        worktree_root.path(),
-    );
-
-    let lock =
-        acquire_worktree_write_lock_with_liveness(worktree_root.path(), "01NEXT", &[], |_| {
-            HolderSessionLiveness::RegistryAbsent
-        })
-        .expect("registry-absent holder with missing pid should be reclaimed");
-
-    assert!(!lock.is_lineage_reentry());
-    drop(holder);
-    drop(lock);
+    assert_no_reclaim_artifacts(&lock_path);
 }
 
 fn overwrite_worktree_lock_diagnostic(
     lock_path: &Path,
     pid: u32,
+    pid_start_time_ticks: Option<u64>,
     session_id: &str,
     worktree_root: &Path,
 ) {
     let diagnostic = LockDiagnostic {
         pid,
+        pid_start_time_ticks,
         tool_name: "worktree-write:exclusive".to_string(),
         acquired_at: Utc::now(),
         reason: format!(
@@ -284,9 +294,46 @@ fn overwrite_worktree_lock_diagnostic(
         .expect("overwrite lock diagnostic");
 }
 
-fn missing_pid() -> u32 {
-    [4_000_000, 8_000_000, 16_000_000, 1_000_000_000]
-        .into_iter()
-        .find(|pid| matches!(process_probe_state(*pid), ProcessProbeState::Missing))
-        .expect("test host should have at least one definitely missing pid")
+struct ManualFlock {
+    file: File,
+}
+
+impl ManualFlock {
+    fn acquire(lock_path: &Path) -> Self {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .expect("open canonical lock file");
+        // SAFETY: `file` owns a valid fd, and LOCK_EX requests an advisory flock.
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(ret, 0, "manual flock setup should acquire the lock");
+        Self { file }
+    }
+}
+
+impl Drop for ManualFlock {
+    fn drop(&mut self) {
+        // SAFETY: `file` owns a valid fd; unlocking before close is deterministic cleanup.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn assert_no_reclaim_artifacts(lock_path: &Path) {
+    let lock_dir = lock_path.parent().expect("lock path should have parent");
+    for entry in fs::read_dir(lock_dir).expect("read lock dir") {
+        let entry = entry.expect("read lock dir entry");
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        assert_ne!(
+            file_name, ".reclaim.lock",
+            "reclaim guard must not be created"
+        );
+        assert!(
+            !file_name.starts_with(".exclusive.stale."),
+            "stale lock artifact must not be created: {file_name}"
+        );
+    }
 }
