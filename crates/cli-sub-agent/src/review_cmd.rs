@@ -92,10 +92,10 @@ use resolve::build_review_instruction;
 pub(crate) use resolve::resolve_review_tool;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
-    resolve_review_effective_tier, resolve_review_model, resolve_review_selection,
-    resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
-    review_scope_allows_auto_discovery, validate_review_direct_tool_tier_restriction,
-    verify_review_skill_available,
+    resolve_review_effective_tier, resolve_review_model, resolve_review_readonly_configured,
+    resolve_review_selection, resolve_review_stream_mode, resolve_review_thinking,
+    resolve_review_tier_name, review_scope_allows_auto_discovery,
+    validate_review_direct_tool_tier_restriction, verify_review_skill_available,
 };
 use result_handling::resolve_single_review_result;
 #[rustfmt::skip]
@@ -300,8 +300,10 @@ pub(crate) async fn handle_review(
         tool.as_str(),
     );
 
-    let readonly_project_root =
-        resolve_review_readonly_project_root(args.fix, global_config.review.readonly_sandbox);
+    let readonly_project_root = resolve_review_readonly_project_root(
+        args.fix,
+        resolve_review_readonly_configured(config.as_ref(), &global_config),
+    );
 
     let reviewer_selection = resolve_effective_reviewer_selection_for_args(
         &args,
