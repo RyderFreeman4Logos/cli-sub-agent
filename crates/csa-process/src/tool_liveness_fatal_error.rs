@@ -155,6 +155,9 @@ fn read_fatal_error_marker_file(marker_path: &Path) -> Vec<String> {
 /// failed-turn quota path in `pipeline_execute.rs` applies the same discipline by
 /// inspecting only the transport error chain.
 ///
+/// The tmux exclusion is also the bounded non-tmux-session behavior for #1670: a
+/// provider-error scan must not fork `tmux capture-pane` during liveness polling.
+///
 /// Note: this scoping does NOT retire the #1847 `CSA_PATTERN_INTERNAL` interim
 /// suppression, which additionally depends on #1738 (codex provider-error stream
 /// separation).
