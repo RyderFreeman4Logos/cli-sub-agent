@@ -47,15 +47,21 @@ fn init_review_check_repo() -> TempDir {
 }
 
 fn install_fake_csa(project_root: &Path) -> PathBuf {
+    install_fake_csa_with_status(project_root, 2)
+}
+
+fn install_fake_csa_with_status(project_root: &Path, exit_status: i32) -> PathBuf {
     let bin_dir = project_root.join("fake-bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let csa_path = bin_dir.join("csa");
     fs::write(
         &csa_path,
-        r#"#!/usr/bin/env bash
-printf 'called\n' > "${CSA_FAKE_CALLED}"
-exit 2
+        format!(
+            r#"#!/usr/bin/env bash
+printf 'called\n' > "${{CSA_FAKE_CALLED}}"
+exit {exit_status}
 "#,
+        ),
     )
     .unwrap();
 
@@ -149,4 +155,50 @@ fn review_check_still_invokes_csa_outside_executor() {
         fake_called.exists(),
         "manual pre-push path must still invoke csa"
     );
+}
+
+#[test]
+fn protected_branch_is_blocked_by_branch_protection_script() {
+    let td = init_review_check_repo();
+    install_branch_protection_script(td.path()).unwrap();
+    run_quiet(
+        Command::new("git")
+            .args(["checkout", "-B", "master"])
+            .current_dir(td.path()),
+    );
+
+    let output = Command::new("bash")
+        .arg("scripts/hooks/branch-protection.sh")
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Cannot commit or push directly to 'master'"));
+}
+
+#[test]
+fn feature_branch_with_passing_verdict_still_passes_pre_push_gate_sequence() {
+    let td = init_review_check_repo();
+    install_branch_protection_script(td.path()).unwrap();
+    let fake_bin = install_fake_csa_with_status(td.path(), 0);
+    let fake_called = td.path().join("csa-called");
+
+    let branch_output = Command::new("bash")
+        .arg("scripts/hooks/branch-protection.sh")
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    assert!(
+        branch_output.status.success(),
+        "feature branch must pass branch protection"
+    );
+
+    let output = run_review_check(td.path(), &fake_bin, &fake_called, None, None);
+
+    assert!(output.status.success());
+    assert!(fake_called.exists(), "review-check must validate via csa");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Full-diff review verified for HEAD"));
 }

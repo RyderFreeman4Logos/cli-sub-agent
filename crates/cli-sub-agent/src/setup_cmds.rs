@@ -191,92 +191,11 @@ fn get_opencode_config_path() -> Result<PathBuf> {
 
 // ── Review Gate Setup ─────────────────────────────────────────────────────────
 
+/// Branch-protection hook script installed by `csa setup review-gate`.
+const BRANCH_PROTECTION_TEMPLATE: &str = include_str!("setup_cmds/branch-protection.sh");
+
 /// Generalized pre-push review gate hook script, embedded at compile time.
-const REVIEW_CHECK_TEMPLATE: &str = r#"#!/usr/bin/env bash
-# Git pre-push hook: verify csa review has been run on current HEAD.
-# Installed by: csa setup review-gate
-#
-# Fast path: stat .csa/state/review-gate/<branch_safe>-<short_sha>.pass
-#   millisecond check; new commits auto-invalidate (different SHA → different filename).
-# Slow path (fallback): csa review --check-verdict scans session store.
-
-set -euo pipefail
-
-if [ "${CSA_SKIP_REVIEW_CHECK:-0}" = "1" ]; then
-  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  head_sha="$(git rev-parse HEAD 2>/dev/null || echo "<unknown-head>")"
-  author_email="$(git config user.email 2>/dev/null || echo "<unknown-email>")"
-  raw_reason="${CSA_SKIP_REVIEW_CHECK_REASON:-<unspecified>}"
-  reason="$(
-    printf '%s' "${raw_reason}" \
-      | tr '\r\n\t' '   ' \
-      | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
-  )"
-  [ -z "${reason}" ] && reason="<unspecified>"
-
-  mkdir -p .csa
-  printf '%s %s %s %s\n' "${timestamp}" "${head_sha}" "${author_email}" "${reason}" >> .csa/review-bypass.log
-  echo "WARNING: review-check bypassed via CSA_SKIP_REVIEW_CHECK=1 for ${head_sha:0:11}; logged to .csa/review-bypass.log. Reason: ${reason}" >&2
-  exit 0
-fi
-
-# CSA-managed executors run their own review gates in the workflow. Skipping
-# here prevents pre-push from recursively spawning csa review inside csa.
-CSA_DEPTH_VALUE="${CSA_DEPTH:-0}"
-if [ -n "${CSA_SESSION_ID:-}" ] || [[ "${CSA_DEPTH_VALUE}" =~ ^[0-9]+$ && "${CSA_DEPTH_VALUE}" -gt 0 ]]; then
-  echo "pre-push: Review gate skipped inside CSA executor session; CSA workflow owns review enforcement."
-  exit 0
-fi
-
-# Skip if csa is not installed in this repo
-if ! command -v csa >/dev/null 2>&1; then
-  exit 0
-fi
-
-CURRENT_HEAD="$(git rev-parse HEAD)"
-CURRENT_BRANCH="$(git branch --show-current)"
-
-# Skip for main/dev branches (direct pushes are blocked by branch protection)
-if [ "${CURRENT_BRANCH}" = "main" ] || [ "${CURRENT_BRANCH}" = "dev" ]; then
-  exit 0
-fi
-
-# ── Fast path: SHA-pinned marker file ────────────────────────────────────────
-# Sanitize branch name the same way review_gate::sanitize_branch does:
-#   '/' → '__', any non-[a-zA-Z0-9._-] → '_'
-_sanitize_branch() {
-  printf '%s' "$1" \
-    | sed 's|/|__|g' \
-    | sed 's|[^a-zA-Z0-9._-]|_|g'
-}
-
-SHORT_SHA="${CURRENT_HEAD:0:11}"
-SAFE_BRANCH="$(_sanitize_branch "${CURRENT_BRANCH}")"
-MARKER=".csa/state/review-gate/${SAFE_BRANCH}-${SHORT_SHA}.pass"
-
-if [ -f "${MARKER}" ]; then
-  echo "pre-push: Review gate marker found for ${CURRENT_BRANCH} at ${SHORT_SHA}; validating session."
-fi
-
-# ── Session-store validation ─────────────────────────────────────────────────
-if csa review --check-verdict; then
-  echo "pre-push: Full-diff review verified for HEAD ${SHORT_SHA}."
-  exit 0
-fi
-
-# ── Blocked — emit reverse prompt injection for agent context ─────────────────
-cat >&2 <<GATE_BLOCKED
-<!-- CSA:REVIEW_GATE_BLOCKED branch="${CURRENT_BRANCH}" head_sha="${CURRENT_HEAD}" -->
-Push blocked: no passing review found for current HEAD.
-Run: csa review --range main...HEAD --sa-mode true
-Wait for PASS verdict, then retry push.
-<!-- /CSA:REVIEW_GATE_BLOCKED -->
-GATE_BLOCKED
-
-echo "" >&2
-echo "ERROR: Push blocked — no PASS/CLEAN full-diff csa review session recorded for ${CURRENT_BRANCH} at ${SHORT_SHA}." >&2
-exit 1
-"#;
+const REVIEW_CHECK_TEMPLATE: &str = include_str!("setup_cmds/review-check.sh");
 
 /// Rate-limit interval for auto-setup checks (1 hour).
 const REVIEW_GATE_CHECK_INTERVAL_SECS: u64 = 3600;
@@ -412,7 +331,9 @@ fn install_review_gate(project_root: &Path, verbose: bool) -> Result<()> {
         );
     }
 
-    merge_lefthook_review_check(project_root).context("Failed to update lefthook.yml")?;
+    merge_lefthook_review_gate(project_root).context("Failed to update lefthook.yml")?;
+    install_branch_protection_script(project_root)
+        .context("Failed to install branch-protection.sh")?;
     install_review_check_script(project_root).context("Failed to install review-check.sh")?;
     fs::create_dir_all(project_root.join(".csa/state/review-gate"))
         .context("Failed to create .csa/state/review-gate/")?;
@@ -420,7 +341,8 @@ fn install_review_gate(project_root: &Path, verbose: bool) -> Result<()> {
 
     if verbose {
         eprintln!("✓ Review gate installed successfully");
-        eprintln!("  lefthook.yml updated with pre-push.commands.review-check");
+        eprintln!("  lefthook.yml updated with pre-push branch-protection + review-check");
+        eprintln!("  scripts/hooks/branch-protection.sh written");
         eprintln!("  scripts/hooks/review-check.sh written");
         eprintln!("  .csa/state/review-gate/ created");
         eprintln!("  Git hooks activated via `lefthook install`");
@@ -428,11 +350,11 @@ fn install_review_gate(project_root: &Path, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Merge `pre-push.commands.review-check` into `lefthook.yml` (idempotent).
+/// Merge review-gate pre-push commands into `lefthook.yml` (idempotent).
 ///
 /// Preserves all existing sections and comments. Appends the `pre-push` section
-/// when absent; inserts the entry after `  commands:` when the section already exists.
-fn merge_lefthook_review_check(project_root: &Path) -> Result<()> {
+/// when absent; inserts missing entries after `  commands:` when the section exists.
+fn merge_lefthook_review_gate(project_root: &Path) -> Result<()> {
     let lefthook_path = project_root.join("lefthook.yml");
 
     let existing = if lefthook_path.exists() {
@@ -441,21 +363,22 @@ fn merge_lefthook_review_check(project_root: &Path) -> Result<()> {
         String::new()
     };
 
-    if existing.contains("review-check:") {
-        return Ok(()); // already installed — idempotent
-    }
-
     let new_content = build_merged_lefthook(&existing);
+    if new_content == existing {
+        return Ok(());
+    }
     fs::write(&lefthook_path, new_content).context("Failed to write lefthook.yml")?;
     Ok(())
 }
 
 /// Build the merged lefthook.yml content string.
 fn build_merged_lefthook(existing: &str) -> String {
-    const ENTRY_LINES: [&str; 2] = [
-        "    review-check:",
-        "      run: scripts/hooks/review-check.sh",
-    ];
+    let needs_branch_protection = !pre_push_contains_command(existing, "branch-protection");
+    let needs_review_check = !pre_push_contains_command(existing, "review-check");
+    if !needs_branch_protection && !needs_review_check {
+        return existing.to_string();
+    }
+    let entry_lines = missing_pre_push_entry_lines(needs_branch_protection, needs_review_check);
 
     let lines: Vec<&str> = existing.lines().collect();
     let trailing_newline = existing.ends_with('\n');
@@ -473,9 +396,9 @@ fn build_merged_lefthook(existing: &str) -> String {
 
         // Found "  commands:" inside the pre-push section — insert after it.
         if in_pre_push && line.trim() == "commands:" {
-            let mut result_lines: Vec<&str> = Vec::with_capacity(lines.len() + ENTRY_LINES.len());
+            let mut result_lines: Vec<&str> = Vec::with_capacity(lines.len() + entry_lines.len());
             result_lines.extend_from_slice(&lines[..=i]);
-            result_lines.extend_from_slice(&ENTRY_LINES);
+            result_lines.extend(entry_lines.iter().copied());
             result_lines.extend_from_slice(&lines[i + 1..]);
             let mut out = result_lines.join("\n");
             if trailing_newline {
@@ -491,11 +414,80 @@ fn build_merged_lefthook(existing: &str) -> String {
         out.push_str("\n\n");
     }
     out.push_str("pre-push:\n  commands:\n");
-    for line in &ENTRY_LINES {
+    for line in &entry_lines {
         out.push_str(line);
         out.push('\n');
     }
     out
+}
+
+fn pre_push_contains_command(existing: &str, command_name: &str) -> bool {
+    let needle = format!("{command_name}:");
+    let mut in_pre_push = false;
+
+    for line in existing.lines() {
+        if !line.is_empty()
+            && !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && !line.starts_with('#')
+        {
+            in_pre_push = line.starts_with("pre-push:");
+        }
+
+        if in_pre_push && line.trim() == needle {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn missing_pre_push_entry_lines(
+    needs_branch_protection: bool,
+    needs_review_check: bool,
+) -> Vec<&'static str> {
+    let mut entry_lines = Vec::new();
+    if needs_branch_protection {
+        entry_lines.extend_from_slice(&[
+            "    branch-protection:",
+            "      run: scripts/hooks/branch-protection.sh",
+        ]);
+    }
+    if needs_review_check {
+        entry_lines.extend_from_slice(&[
+            "    review-check:",
+            "      run: scripts/hooks/review-check.sh",
+        ]);
+    }
+    entry_lines
+}
+
+/// Write `scripts/hooks/branch-protection.sh` from the embedded template.
+fn install_branch_protection_script(project_root: &Path) -> Result<()> {
+    let scripts_dir = project_root.join("scripts/hooks");
+    fs::create_dir_all(&scripts_dir).context("Failed to create scripts/hooks/")?;
+
+    let script_path = scripts_dir.join("branch-protection.sh");
+
+    if script_path.exists() {
+        let existing = fs::read_to_string(&script_path).unwrap_or_default();
+        if !existing.contains("Installed by: csa setup review-gate") {
+            return Ok(());
+        }
+    }
+
+    fs::write(&script_path, BRANCH_PROTECTION_TEMPLATE)
+        .context("Failed to write branch-protection.sh")?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms)?;
+    }
+
+    Ok(())
 }
 
 /// Write `scripts/hooks/review-check.sh` from the embedded template.
@@ -545,12 +537,17 @@ fn report_review_gate_status(project_root: &Path) -> Result<()> {
     let lefthook_ok = which::which("lefthook").is_ok();
 
     let lefthook_path = project_root.join("lefthook.yml");
-    let lefthook_has_entry = lefthook_path.exists() && {
-        fs::read_to_string(&lefthook_path)
-            .map(|c| c.contains("review-check:"))
-            .unwrap_or(false)
+    let lefthook_content = if lefthook_path.exists() {
+        fs::read_to_string(&lefthook_path).unwrap_or_default()
+    } else {
+        String::new()
     };
+    let lefthook_has_entry = pre_push_contains_command(&lefthook_content, "branch-protection")
+        && pre_push_contains_command(&lefthook_content, "review-check");
 
+    let branch_script_ok = project_root
+        .join("scripts/hooks/branch-protection.sh")
+        .exists();
     let script_ok = project_root.join("scripts/hooks/review-check.sh").exists();
 
     let gate_dir_ok = project_root.join(".csa/state/review-gate").exists();
@@ -566,8 +563,12 @@ fn report_review_gate_status(project_root: &Path) -> Result<()> {
     eprintln!("Review gate status for {}:", project_root.display());
     eprintln!("  {} lefthook binary available", mark(lefthook_ok));
     eprintln!(
-        "  {} lefthook.yml has pre-push.commands.review-check",
+        "  {} lefthook.yml has pre-push branch-protection + review-check",
         mark(lefthook_has_entry)
+    );
+    eprintln!(
+        "  {} scripts/hooks/branch-protection.sh exists",
+        mark(branch_script_ok)
     );
     eprintln!("  {} scripts/hooks/review-check.sh exists", mark(script_ok));
     eprintln!(
@@ -579,7 +580,12 @@ fn report_review_gate_status(project_root: &Path) -> Result<()> {
         mark(git_hook_ok)
     );
 
-    let all_ok = lefthook_ok && lefthook_has_entry && script_ok && gate_dir_ok && git_hook_ok;
+    let all_ok = lefthook_ok
+        && lefthook_has_entry
+        && branch_script_ok
+        && script_ok
+        && gate_dir_ok
+        && git_hook_ok;
     if all_ok {
         eprintln!("\nStatus: Fully installed");
     } else {

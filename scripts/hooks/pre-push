@@ -9,6 +9,7 @@
 
 set -euo pipefail
 
+bash scripts/hooks/branch-protection.sh
 bash scripts/hooks/review-check.sh
 
 # Skip pr-bot warning when csa is unavailable or the branch is protected.
@@ -18,7 +19,7 @@ fi
 
 CURRENT_HEAD="$(git rev-parse HEAD)"
 CURRENT_BRANCH="$(git branch --show-current)"
-if [ "${CURRENT_BRANCH}" = "main" ] || [ "${CURRENT_BRANCH}" = "dev" ]; then
+if [ "${CURRENT_BRANCH}" = "main" ] || [ "${CURRENT_BRANCH}" = "dev" ] || [ "${CURRENT_BRANCH}" = "master" ]; then
   exit 0
 fi
 

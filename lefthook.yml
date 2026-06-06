@@ -17,6 +17,8 @@ pre-commit:
 
 pre-push:
   commands:
+    branch-protection:
+      run: scripts/hooks/branch-protection.sh
     version-check:
       run: scripts/hooks/version-check.sh
     review-check:
