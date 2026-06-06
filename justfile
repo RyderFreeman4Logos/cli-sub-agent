@@ -372,6 +372,8 @@ install:
 # Requires: cargo-edit (cargo install cargo-edit)
 bump-patch:
     cargo set-version --bump patch -p cli-sub-agent
+    @cargo run --quiet -p cli-sub-agent -- migrate
+    git add Cargo.toml Cargo.lock weave.lock
     @echo "Bumped workspace version:"
     @cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent" or .name == "weave") | "  \(.name) = \(.version)"'
 
