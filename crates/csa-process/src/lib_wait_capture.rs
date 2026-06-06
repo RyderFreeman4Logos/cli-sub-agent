@@ -63,6 +63,8 @@ pub async fn wait_and_capture_with_idle_timeout(
             }
         }
     }
+    let tee_stderr_to_parent =
+        should_tee_stderr_to_parent(stream_mode, session_dir, stderr_spool_file.is_some());
 
     const READ_BUF_SIZE: usize = 4096;
     let mut stdout_reader = BufReader::new(stdout);
@@ -165,7 +167,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             flush_stderr_buf(
                                 &mut stderr_line_buf,
                                 &mut stderr_output,
-                                stream_mode,
+                                tee_stderr_to_parent,
                             );
                             stderr_done = true;
                         }
@@ -185,7 +187,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 &chunk,
                                 &mut stderr_line_buf,
                                 &mut stderr_output,
-                                stream_mode,
+                                tee_stderr_to_parent,
                             );
                             kill_on_persistent_rate_limit!(&stderr_output[previous_stderr_len..], "stderr");
                             drain_if_over_high_water(&mut stderr_output);
@@ -201,7 +203,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             flush_stderr_buf(
                                 &mut stderr_line_buf,
                                 &mut stderr_output,
-                                stream_mode,
+                                tee_stderr_to_parent,
                             );
                             stderr_done = true;
                         }

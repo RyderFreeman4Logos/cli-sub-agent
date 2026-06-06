@@ -30,6 +30,8 @@ const OPAQUE_OBJECT_PATTERN: &str = "[object object]";
 const OPAQUE_OBJECT_REPLACEMENT: &str = "(opaque error payload)";
 const OPAQUE_PAYLOAD_MARKER: &str = "(opaque error payload)";
 const SPOOL_BUFFER_CAPACITY: usize = 64 * 1024;
+const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
+const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 
 #[derive(Debug)]
 pub struct SpoolRotator {
@@ -183,6 +185,43 @@ pub(super) fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8]) {
     }
 }
 
+pub(super) fn should_tee_stderr_to_parent(
+    stream_mode: StreamMode,
+    session_dir: Option<&Path>,
+    stderr_spool_active: bool,
+) -> bool {
+    if stream_mode != StreamMode::TeeToStderr {
+        return false;
+    }
+    if !stderr_spool_active {
+        return true;
+    }
+
+    let Some(session_dir) = session_dir else {
+        return true;
+    };
+    if std::env::var_os(DAEMON_SESSION_ID_ENV).is_none() {
+        return true;
+    }
+    let Some(daemon_session_dir) = std::env::var_os(DAEMON_SESSION_DIR_ENV) else {
+        return true;
+    };
+
+    // In daemon mode fd 2 already drains into this session's stderr.log.
+    !same_session_dir(session_dir, Path::new(&daemon_session_dir))
+}
+
+fn same_session_dir(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 /// Drain the front of an output accumulator if it exceeds the high-water mark.
 ///
 /// This bounds the in-memory accumulator to ~[`TAIL_BUFFER_HIGH_WATER`] bytes,
@@ -287,13 +326,13 @@ pub(super) fn accumulate_and_flush_stderr(
     chunk: &str,
     line_buf: &mut String,
     stderr_output: &mut String,
-    stream_mode: StreamMode,
+    tee_to_parent_stderr: bool,
 ) -> usize {
     let mut boundary_hits = 0usize;
     line_buf.push_str(chunk);
     while let Some(newline_pos) = line_buf.find('\n') {
         let line: String = line_buf.drain(..=newline_pos).collect();
-        if stream_mode == StreamMode::TeeToStderr {
+        if tee_to_parent_stderr {
             eprint!("{line}");
         }
         if is_workspace_boundary_error_line(&line) {
@@ -308,10 +347,10 @@ pub(super) fn accumulate_and_flush_stderr(
 pub(super) fn flush_stderr_buf(
     line_buf: &mut String,
     stderr_output: &mut String,
-    stream_mode: StreamMode,
+    tee_to_parent_stderr: bool,
 ) {
     if !line_buf.is_empty() {
-        if stream_mode == StreamMode::TeeToStderr {
+        if tee_to_parent_stderr {
             eprint!("{line_buf}");
         }
         stderr_output.push_str(line_buf);
