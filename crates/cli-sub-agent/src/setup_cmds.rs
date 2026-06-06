@@ -198,6 +198,8 @@ const BRANCH_PROTECTION_TEMPLATE: &str = include_str!("setup_cmds/branch-protect
 /// Generalized pre-push review gate hook script, embedded at compile time.
 const REVIEW_CHECK_TEMPLATE: &str = include_str!("setup_cmds/review-check.sh");
 
+const REVIEW_GATE_INSTALL_MARKER: &str = "Installed by: csa setup review-gate";
+
 /// Rate-limit interval for auto-setup checks (1 hour).
 const REVIEW_GATE_CHECK_INTERVAL_SECS: u64 = 3600;
 /// Timestamp file name stored in the project state dir.
@@ -312,7 +314,14 @@ enum HookInstallDecision {
     Write,
     SkipIdentical,
     SkipTracked,
-    SkipUnknown,
+    SkipUnmanaged,
+}
+
+fn hook_contains_install_marker(existing: &[u8]) -> bool {
+    let marker = REVIEW_GATE_INSTALL_MARKER.as_bytes();
+    existing
+        .windows(marker.len())
+        .any(|window| window == marker)
 }
 
 fn hook_tracking_status(project_root: &Path, relative_path: &str) -> HookTrackingStatus {
@@ -350,10 +359,16 @@ fn should_install_hook(
     match existing {
         None => HookInstallDecision::Write,
         Some(existing_bytes) if existing_bytes == would_write => HookInstallDecision::SkipIdentical,
-        Some(_) => match tracked_status {
+        Some(existing_bytes) => match tracked_status {
             HookTrackingStatus::Tracked => HookInstallDecision::SkipTracked,
-            HookTrackingStatus::Untracked => HookInstallDecision::Write,
-            HookTrackingStatus::Unknown => HookInstallDecision::SkipUnknown,
+            HookTrackingStatus::Untracked | HookTrackingStatus::Unknown
+                if hook_contains_install_marker(existing_bytes) =>
+            {
+                HookInstallDecision::Write
+            }
+            HookTrackingStatus::Untracked | HookTrackingStatus::Unknown => {
+                HookInstallDecision::SkipUnmanaged
+            }
         },
     }
 }
@@ -576,10 +591,10 @@ fn install_managed_hook_script(
             );
             return Ok(());
         }
-        HookInstallDecision::SkipUnknown => {
+        HookInstallDecision::SkipUnmanaged => {
             warn!(
                 path = %script_path.display(),
-                "review-gate hook install: could not determine whether existing hook is git-tracked; leaving it untouched"
+                "review-gate hook install: existing hook is not CSA-managed (missing install marker); leaving it untouched"
             );
             return Ok(());
         }

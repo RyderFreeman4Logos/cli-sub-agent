@@ -267,6 +267,84 @@ fn generated_pre_push_wiring_invokes_branch_protection_before_review_check() {
 }
 
 #[test]
+fn review_gate_templates_carry_install_marker() {
+    assert!(REVIEW_CHECK_TEMPLATE.contains(REVIEW_GATE_INSTALL_MARKER));
+    assert!(BRANCH_PROTECTION_TEMPLATE.contains(REVIEW_GATE_INSTALL_MARKER));
+}
+
+#[test]
+fn should_install_hook_preserves_unmanaged_and_updates_csa_marked_hooks() {
+    let would_write = REVIEW_CHECK_TEMPLATE.as_bytes();
+    let custom_without_marker = b"#!/bin/sh\n# custom review hook\nexit 0\n";
+    let custom_with_marker =
+        format!("#!/bin/sh\n# {REVIEW_GATE_INSTALL_MARKER}\n# stale review hook\nexit 0\n");
+
+    for status in [
+        HookTrackingStatus::Tracked,
+        HookTrackingStatus::Untracked,
+        HookTrackingStatus::Unknown,
+    ] {
+        assert_eq!(
+            should_install_hook(None, would_write, status),
+            HookInstallDecision::Write
+        );
+        assert_eq!(
+            should_install_hook(Some(would_write), would_write, status),
+            HookInstallDecision::SkipIdentical
+        );
+    }
+
+    assert_eq!(
+        should_install_hook(
+            Some(custom_without_marker.as_slice()),
+            would_write,
+            HookTrackingStatus::Tracked,
+        ),
+        HookInstallDecision::SkipTracked
+    );
+    assert_eq!(
+        should_install_hook(
+            Some(custom_with_marker.as_bytes()),
+            would_write,
+            HookTrackingStatus::Tracked,
+        ),
+        HookInstallDecision::SkipTracked
+    );
+    assert_eq!(
+        should_install_hook(
+            Some(custom_without_marker.as_slice()),
+            would_write,
+            HookTrackingStatus::Untracked,
+        ),
+        HookInstallDecision::SkipUnmanaged
+    );
+    assert_eq!(
+        should_install_hook(
+            Some(custom_with_marker.as_bytes()),
+            would_write,
+            HookTrackingStatus::Untracked,
+        ),
+        HookInstallDecision::Write
+    );
+    assert_eq!(
+        should_install_hook(
+            Some(custom_without_marker.as_slice()),
+            would_write,
+            HookTrackingStatus::Unknown,
+        ),
+        HookInstallDecision::SkipUnmanaged
+    );
+    assert_eq!(
+        should_install_hook(
+            Some(custom_with_marker.as_bytes()),
+            would_write,
+            HookTrackingStatus::Unknown,
+        ),
+        HookInstallDecision::Write
+    );
+}
+
+#[test]
 fn tracked_different_review_check_is_not_overwritten_and_warns() {
     let td = TempDir::new().expect("create tempdir");
     init_git_repo(td.path());
@@ -322,14 +400,37 @@ fn tracked_identical_review_check_is_noop_and_clean() {
 }
 
 #[test]
-fn untracked_different_review_check_is_updated() {
+fn untracked_different_review_check_without_marker_is_not_overwritten_and_warns() {
     let td = TempDir::new().expect("create tempdir");
     init_git_repo(td.path());
     let script_path = td.path().join("scripts/hooks/review-check.sh");
     fs::create_dir_all(script_path.parent().unwrap()).expect("create hooks dir");
-    fs::write(&script_path, "#!/bin/sh\n# stale CSA-managed hook\n").expect("write stale hook");
+    let custom = "#!/bin/sh\n# custom review hook\nexit 0\n";
+    fs::write(&script_path, custom).expect("write custom hook");
 
-    install_review_check_script(td.path()).expect("untracked hook may be updated");
+    let logs = capture_warnings(|| {
+        install_review_check_script(td.path()).expect("custom untracked hook should be preserved");
+    });
+
+    let script = fs::read_to_string(script_path).expect("read review-check.sh");
+    assert_eq!(script, custom);
+    assert!(logs.contains("not CSA-managed"));
+    assert!(logs.contains("review-check.sh"));
+}
+
+#[test]
+fn untracked_csa_marked_review_check_is_updated() {
+    let td = TempDir::new().expect("create tempdir");
+    init_git_repo(td.path());
+    let script_path = td.path().join("scripts/hooks/review-check.sh");
+    fs::create_dir_all(script_path.parent().unwrap()).expect("create hooks dir");
+    fs::write(
+        &script_path,
+        format!("#!/bin/sh\n# {REVIEW_GATE_INSTALL_MARKER}\n# stale CSA-managed hook\n"),
+    )
+    .expect("write stale hook");
+
+    install_review_check_script(td.path()).expect("CSA-marked untracked hook may be updated");
 
     let script = fs::read_to_string(script_path).expect("read review-check.sh");
     assert_eq!(script, REVIEW_CHECK_TEMPLATE);
@@ -349,7 +450,7 @@ fn non_git_different_review_check_is_not_overwritten_and_warns() {
 
     let script = fs::read_to_string(script_path).expect("read review-check.sh");
     assert_eq!(script, custom);
-    assert!(logs.contains("could not determine whether existing hook is git-tracked"));
+    assert!(logs.contains("not CSA-managed"));
     assert!(logs.contains("review-check.sh"));
 }
 
@@ -367,6 +468,26 @@ fn tracked_different_branch_protection_is_not_overwritten() {
         .expect("read branch-protection.sh");
     assert_eq!(script, custom);
     assert_eq!(git_status_short(td.path()), "", "tracked hook stays clean");
+}
+
+#[test]
+fn untracked_different_branch_protection_without_marker_is_not_overwritten_and_warns() {
+    let td = TempDir::new().expect("create tempdir");
+    init_git_repo(td.path());
+    let script_path = td.path().join("scripts/hooks/branch-protection.sh");
+    fs::create_dir_all(script_path.parent().unwrap()).expect("create hooks dir");
+    let custom = "#!/bin/sh\n# custom branch policy\nexit 0\n";
+    fs::write(&script_path, custom).expect("write custom hook");
+
+    let logs = capture_warnings(|| {
+        install_branch_protection_script(td.path())
+            .expect("custom untracked branch-protection hook should be preserved");
+    });
+
+    let script = fs::read_to_string(script_path).expect("read branch-protection.sh");
+    assert_eq!(script, custom);
+    assert!(logs.contains("not CSA-managed"));
+    assert!(logs.contains("branch-protection.sh"));
 }
 
 #[test]
