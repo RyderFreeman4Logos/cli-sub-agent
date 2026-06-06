@@ -85,3 +85,76 @@ fn progress_signal_clears_transient_provider_backoff() {
         ProviderErrorBackoff::default()
     );
 }
+
+#[test]
+fn stale_failed_over_provider_marker_does_not_kill_progressing_active_backend() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("stderr.log"),
+        "gemini failed: HTTP 429 Too Many Requests reason: 'QUOTA_EXHAUSTED'\n",
+    )
+    .expect("write stale stderr");
+    crate::reset_liveness_scope(tmp.path(), "codex").expect("reset liveness scope");
+    crate::tool_liveness::record_spool_bytes_written(tmp.path(), 32);
+
+    let mut state = IdleWatchdogState {
+        liveness_dead_since: Some(Instant::now() - Duration::from_secs(5)),
+        next_liveness_poll_at: Some(Instant::now() - Duration::from_secs(1)),
+        provider_error_backoff: ProviderErrorBackoff {
+            retries_used: TRANSIENT_PROVIDER_ERROR_RETRY_BUDGET,
+            retry_after: Some(Instant::now() - Duration::from_secs(1)),
+        },
+    };
+    let mut last_activity = Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+
+    let terminate = should_terminate_for_idle_with_state(
+        &mut last_activity,
+        Duration::from_secs(7200),
+        Duration::from_secs(1),
+        Some(tmp.path()),
+        &mut state,
+        true,
+    );
+
+    assert_eq!(
+        terminate, None,
+        "stale provider marker from failed-over backend must not kill active backend progress"
+    );
+    assert_eq!(
+        state.provider_error_backoff,
+        ProviderErrorBackoff::default()
+    );
+}
+
+#[test]
+fn active_provider_marker_still_kills_when_current_backend_stalls() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    crate::reset_liveness_scope(tmp.path(), "codex").expect("reset liveness scope");
+    std::fs::write(
+        tmp.path().join("stderr.log"),
+        "codex failed: HTTP 429 Too Many Requests\n",
+    )
+    .expect("write active stderr");
+    let _ = ToolLiveness::probe(tmp.path());
+
+    let mut state = IdleWatchdogState {
+        provider_error_backoff: ProviderErrorBackoff {
+            retries_used: TRANSIENT_PROVIDER_ERROR_RETRY_BUDGET,
+            retry_after: Some(Instant::now() - Duration::from_secs(1)),
+        },
+        next_liveness_poll_at: Some(Instant::now() - Duration::from_secs(1)),
+        ..IdleWatchdogState::default()
+    };
+    let mut last_activity = Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
+
+    let terminate = should_terminate_for_idle_with_state(
+        &mut last_activity,
+        Duration::from_secs(7200),
+        Duration::from_secs(600),
+        Some(tmp.path()),
+        &mut state,
+        true,
+    );
+
+    assert_eq!(terminate, Some(IdleTerminationReason::FatalError));
+}
