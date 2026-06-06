@@ -6,9 +6,9 @@ usage() {
 Usage: scripts/monolith/check.sh --scope all|staged|range [--range <git-range>] --baseline <path> [--report-all]
 
 Scopes:
-  all      all tracked Rust files
-  staged   staged Rust files only
-  range    Rust files changed in --range <git-range>
+  all      all tracked text files
+  staged   staged text files only
+  range    text files changed in --range <git-range>
 EOF
 }
 
@@ -159,7 +159,7 @@ for index, entry in enumerate(entries, start=1):
         sys.exit(2)
     seen.add(path)
 
-    if kind not in {"source", "test"}:
+    if kind not in {"source", "test", "doc", "config", "other"}:
         print(f"ERROR: baseline entry for {path} has invalid kind: {kind!r}", file=sys.stderr)
         sys.exit(2)
     if not isinstance(tokens, int) or tokens < 0:
@@ -202,9 +202,9 @@ is_exempt_path() {
     case "$file" in
         *.lock|*lock.json|*lock.yaml) return 0 ;;
         .test-target/*|.test-target/**) return 0 ;;
-        */AGENTS.md|*/FACTORY.md) return 0 ;;
-        */PATTERN.md|*/SKILL.md) return 0 ;;
-        */workflow.toml) return 0 ;;
+        scripts/monolith/check.sh) return 0 ;;
+        scripts/monolith/baseline.toml) return 0 ;;
+        scripts/tests/monolith-check-tests.sh) return 0 ;;
     esac
     return 1
 }
@@ -215,8 +215,17 @@ classify_kind() {
         *_tests.rs|*_test.rs|*_tests_*.rs|tests/*.rs|*/tests/*.rs|*/benches/*.rs)
             printf 'test\n'
             ;;
-        *)
+        *.md|*.markdown|*.mdx|*.txt|*.rst)
+            printf 'doc\n'
+            ;;
+        *.toml|*.yml|*.yaml|*.json|*.jsonc|*.ini|*.cfg|*.ron)
+            printf 'config\n'
+            ;;
+        *.rs|*.sh|*.bash|*.zsh|*.py|*.ts|*.tsx|*.js|*.jsx|*.go|*.proto|*.c|*.h|*.cpp|*.hpp|*.sql|*.nix|Dockerfile|Makefile|justfile)
             printf 'source\n'
+            ;;
+        *)
+            printf 'other\n'
             ;;
     esac
 }
@@ -277,13 +286,13 @@ PY
 file_list="$(new_tmp)"
 case "$scope" in
     all)
-        git ls-files -z -- '*.rs' >"$file_list"
+        git ls-files -z --recurse-submodules >"$file_list"
         ;;
     staged)
-        git diff --cached --name-only -z --diff-filter=ACMR -- '*.rs' >"$file_list"
+        git diff --cached --name-only -z --diff-filter=ACMR >"$file_list"
         ;;
     range)
-        git diff --name-only -z --diff-filter=ACMR "$range" -- '*.rs' >"$file_list"
+        git diff --name-only -z --diff-filter=ACMR "$range" >"$file_list"
         ;;
 esac
 
@@ -296,11 +305,11 @@ for failure in "${metadata_failures[@]}"; do
 done
 
 while IFS= read -r -d '' file; do
-    [[ "$file" == *.rs ]] || continue
     [ -f "$file" ] || continue
     if is_exempt_path "$file"; then
         continue
     fi
+    grep -Iq '' "$file" 2>/dev/null || continue
 
     checked=$((checked + 1))
     lines="$(line_count "$file")"
@@ -340,7 +349,7 @@ if [ "$scope" = "range" ]; then
 fi
 printf 'Thresholds: %s lines, %s tokens (model: %s)\n' "$line_threshold" "$token_threshold" "$model"
 printf 'Baseline: %s\n' "${baseline#"$repo_root"/}"
-printf 'Checked Rust files: %s\n' "$checked"
+printf 'Checked text files: %s\n' "$checked"
 
 if [ "${#warnings[@]}" -gt 0 ] && [ "$report_all" = true ]; then
     printf '\nWarnings:\n'

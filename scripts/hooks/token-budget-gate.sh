@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # L4 quality gate: token budget check for changed files in review range.
-# Delegates to the shared monolith checker for .rs files in the review range.
+# Delegates to the shared monolith checker for text files in the review range.
 #
 # Usage: token-budget-gate.sh [range]
 #   range: git diff range (default: main...HEAD)

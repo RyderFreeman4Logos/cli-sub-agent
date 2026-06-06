@@ -69,6 +69,10 @@ default: pre-commit
 find-monolith-files:
     scripts/monolith/check.sh --scope staged --baseline scripts/monolith/baseline.toml --report-all
 
+# Test the shared monolith checker shell harness.
+monolith-test:
+    bash scripts/tests/monolith-check-tests.sh
+
 # Fail if generated or scratch artifacts are staged for commit.
 check-generated-artifacts:
     #!/usr/bin/env bash
@@ -129,6 +133,7 @@ check-version-bumped:
 # Tests run in pre-push hook instead, avoiding ~58min commit wait (#1383).
 pre-commit-fast:
     just find-monolith-files
+    just monolith-test
     just check-generated-artifacts
     just check-version-bumped
     just check-chinese

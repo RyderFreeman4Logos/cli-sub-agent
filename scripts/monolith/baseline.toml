@@ -1,4 +1,4 @@
-# Current over-budget Rust files measured by scripts/monolith/check.sh policy.
+# Current over-budget tracked text files measured by scripts/monolith/check.sh policy.
 # #1880 baselines pre-existing monolith debt with a no-growth ratchet.
 
 [[files]]
@@ -745,3 +745,50 @@ baseline_lines = 695
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
+[[files]]
+path = "patterns/dev2merge/PATTERN.md"
+kind = "doc"
+baseline_tokens = 9688
+baseline_lines = 705
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "patterns/dev2merge/workflow.toml"
+kind = "config"
+baseline_tokens = 9589
+baseline_lines = 813
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "patterns/mktd/PATTERN.md"
+kind = "doc"
+baseline_tokens = 12783
+baseline_lines = 877
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "patterns/mktd/workflow.toml"
+kind = "config"
+baseline_tokens = 11970
+baseline_lines = 895
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "patterns/pr-bot/PATTERN.md"
+kind = "doc"
+baseline_tokens = 33758
+baseline_lines = 2280
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+
+[[files]]
+path = "patterns/pr-bot/workflow.toml"
+kind = "config"
+baseline_tokens = 36819
+baseline_lines = 2774
+issue = "1880"
+rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"

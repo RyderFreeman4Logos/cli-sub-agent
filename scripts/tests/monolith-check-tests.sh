@@ -97,6 +97,54 @@ test_new_over_budget_file_hard_fails() {
         run_checker "$repo" "$baseline" --scope all
 }
 
+test_new_over_budget_markdown_file_hard_fails_across_scopes() {
+    local repo bin_dir baseline
+
+    repo="$(new_tmp_dir)"
+    bin_dir="$(new_tmp_dir)"
+    setup_repo "$repo"
+    write_fake_csa "$bin_dir"
+    mkdir -p "$repo/docs"
+    printf 'one\ntwo\nthree\nfour\n' >"$repo/docs/large.md"
+    baseline="$repo/baseline.toml"
+    printf '' >"$baseline"
+    git -C "$repo" add docs/large.md
+    git -C "$repo" commit -q -m init
+    PATH="$bin_dir:$PATH" assert_failure "new over-budget markdown file hard-fails in all scope" \
+        run_checker "$repo" "$baseline" --scope all
+
+    repo="$(new_tmp_dir)"
+    bin_dir="$(new_tmp_dir)"
+    setup_repo "$repo"
+    write_fake_csa "$bin_dir"
+    baseline="$repo/baseline.toml"
+    printf '' >"$baseline"
+    printf 'baseline\n' >"$repo/README.md"
+    git -C "$repo" add README.md
+    git -C "$repo" commit -q -m init
+    mkdir -p "$repo/docs"
+    printf 'one\ntwo\nthree\nfour\n' >"$repo/docs/large.md"
+    git -C "$repo" add docs/large.md
+    PATH="$bin_dir:$PATH" assert_failure "new over-budget markdown file hard-fails in staged scope" \
+        run_checker "$repo" "$baseline" --scope staged
+
+    repo="$(new_tmp_dir)"
+    bin_dir="$(new_tmp_dir)"
+    setup_repo "$repo"
+    write_fake_csa "$bin_dir"
+    baseline="$repo/baseline.toml"
+    printf '' >"$baseline"
+    printf 'baseline\n' >"$repo/README.md"
+    git -C "$repo" add README.md
+    git -C "$repo" commit -q -m init
+    mkdir -p "$repo/docs"
+    printf 'one\ntwo\nthree\nfour\n' >"$repo/docs/large.md"
+    git -C "$repo" add docs/large.md
+    git -C "$repo" commit -q -m add-doc
+    PATH="$bin_dir:$PATH" assert_failure "new over-budget markdown file hard-fails in range scope" \
+        run_checker "$repo" "$baseline" --scope range --range HEAD~1..HEAD
+}
+
 test_baselined_file_within_cap_passes_with_warning() {
     local repo bin_dir baseline output
     repo="$(new_tmp_dir)"
@@ -254,5 +302,6 @@ test_report_all_lists_multiple_offenders
 test_tokenizer_unavailable_fails_closed
 test_tokenizer_unparsable_fails_closed
 test_new_over_budget_test_file_hard_fails
+test_new_over_budget_markdown_file_hard_fails_across_scopes
 
 echo "monolith-check-tests: PASS"

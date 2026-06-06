@@ -40,6 +40,9 @@ jobs:
           MONOLITH_LINE_THRESHOLD: "800"
           TOKUIN_MODEL: "gpt-4o"
         run: scripts/monolith/check.sh --scope all --baseline scripts/monolith/baseline.toml --report-all
+      - name: Test monolith checker
+        shell: bash
+        run: bash scripts/tests/monolith-check-tests.sh
 
   fmt:
     name: Format
