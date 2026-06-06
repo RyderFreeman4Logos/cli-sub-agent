@@ -124,8 +124,10 @@ fn derive_findings_toml_artifact(
 /// Load the canonical review prose for a session.
 ///
 /// Resolves the authoritative review text via a fixed source precedence:
-/// when persisted `details` sections exist, prefer `output/full.md`, then the raw
-/// `output.log`, then the `details.md` body; otherwise fall back to `output/full.md`.
+/// when persisted `details` sections exist, preserve valid fenced TOML from
+/// `output/full.md`/`output.log`, then combine the final persisted
+/// `summary.md`/`details.md` prose with any distinct raw transcript/log prose.
+/// Otherwise fall back to `output/full.md`.
 /// This is the SINGLE source of review prose shared by both the findings extractor
 /// and the fail-closed verdict detector ([`super::output::clean_detection::
 /// review_contains_prose_fail_conclusion`]). Sharing one loader keeps their source
@@ -138,6 +140,7 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
 ) -> Result<Option<String>, anyhow::Error> {
     let details_path = session_dir.join("output").join("details.md");
     if details_path.exists() {
+        let mut raw_review_texts = Vec::new();
         for candidate in [
             session_dir.join("output").join("full.md"),
             session_dir.join("output.log"),
@@ -148,7 +151,10 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
             let raw_output = fs::read_to_string(&candidate)
                 .map_err(|error| anyhow::anyhow!("read {}: {error}", candidate.display()))?;
             if let Some(review_text) = extract_review_text(&raw_output) {
-                return Ok(Some(review_text));
+                if extract_findings_toml_from_text(&review_text).is_some() {
+                    return Ok(Some(review_text));
+                }
+                push_distinct_review_text(&mut raw_review_texts, review_text);
             }
         }
         let mut latest_summary = None;
@@ -165,8 +171,9 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
             .flatten()
             .collect::<Vec<_>>()
             .join("\n");
+        let mut review_texts = Vec::new();
         if !structured_text.trim().is_empty() {
-            return Ok(Some(structured_text));
+            push_distinct_review_text(&mut review_texts, structured_text);
         }
 
         let mut file_text = Vec::new();
@@ -182,7 +189,13 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
             }
         }
         let file_text = file_text.join("\n");
-        return Ok((!file_text.trim().is_empty()).then_some(file_text));
+        if !file_text.trim().is_empty() {
+            push_distinct_review_text(&mut review_texts, file_text);
+        }
+        for review_text in raw_review_texts {
+            push_distinct_review_text(&mut review_texts, review_text);
+        }
+        return Ok((!review_texts.is_empty()).then_some(review_texts.join("\n")));
     }
 
     let full_output_path = session_dir.join("output").join("full.md");
@@ -193,6 +206,17 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
     let raw_output = fs::read_to_string(&full_output_path)
         .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
     Ok(extract_review_text(&raw_output))
+}
+
+fn push_distinct_review_text(texts: &mut Vec<String>, candidate: String) {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if texts.iter().any(|text| text.trim() == trimmed) {
+        return;
+    }
+    texts.push(candidate);
 }
 
 pub(super) fn extract_findings_toml_from_text(text: &str) -> Option<FindingsFile> {

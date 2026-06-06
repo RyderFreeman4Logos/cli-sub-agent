@@ -18,6 +18,7 @@ pub(super) struct ReviewProseSignals {
     pub(super) blocking_summary: bool,
     pub(super) parsed_findings_sections: bool,
     pub(super) unparseable_findings_sections: bool,
+    pub(super) cross_dimension_blockers: bool,
     pub(super) checklist_violation_findings: bool,
     pub(super) findings: Vec<ReviewFinding>,
 }
@@ -29,6 +30,7 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
         blocking_summary: prose.blocking_summary,
         parsed_findings_sections: false,
         unparseable_findings_sections: false,
+        cross_dimension_blockers: false,
         checklist_violation_findings: false,
         findings: Vec::new(),
     };
@@ -68,28 +70,47 @@ fn current_round_review_prose_contents(
         .as_deref()
         .is_some_and(contains_blocking_issue_signal);
 
-    if let Some(content) =
-        crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
-    {
-        return Ok(CurrentRoundReviewProseContents {
-            blocking_summary,
-            contents: vec![("canonical".to_string(), content)],
-        });
-    }
-
     let mut contents = Vec::new();
     if let Some(content) = latest_summary {
-        contents.push(("summary".to_string(), content));
+        push_review_content(&mut contents, "summary", content);
     }
 
     if let Some(content) = latest_details {
-        contents.push(("details".to_string(), content));
+        push_review_content(&mut contents, "details", content);
+    }
+
+    if let Some(content) =
+        crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
+        && !review_content_is_covered_by_sections(&contents, &content)
+    {
+        push_review_content(&mut contents, "canonical", content);
     }
 
     Ok(CurrentRoundReviewProseContents {
         blocking_summary,
         contents,
     })
+}
+
+fn push_review_content(contents: &mut Vec<(String, String)>, section_id: &str, content: String) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if contents
+        .iter()
+        .any(|(_, existing)| existing.trim() == trimmed)
+    {
+        return;
+    }
+    contents.push((section_id.to_string(), content));
+}
+
+fn review_content_is_covered_by_sections(contents: &[(String, String)], candidate: &str) -> bool {
+    !contents.is_empty()
+        && contents
+            .iter()
+            .all(|(_, content)| candidate.contains(content.trim()))
 }
 
 fn record_review_prose_signal(
@@ -102,6 +123,7 @@ fn record_review_prose_signal(
         classify_findings_sections(content, default_unlabeled_severity.clone());
     signals.parsed_findings_sections |= parsed_findings_sections;
     signals.unparseable_findings_sections |= unparseable_findings_sections;
+    signals.cross_dimension_blockers |= cross_dimension_enumeration_has_blocker(content);
     signals.checklist_violation_findings |= checklist_violation_references_finding(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
@@ -131,6 +153,79 @@ fn classify_findings_sections(
         }
     }
     (parsed_findings_sections, unparseable_findings_sections)
+}
+
+fn cross_dimension_enumeration_has_blocker(content: &str) -> bool {
+    let mut in_section = false;
+    let mut in_code_fence = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            in_section = is_cross_dimension_enumeration_heading(trimmed);
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(body) = numbered_item_body(trimmed)
+            && enumeration_item_has_blocker(body)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_cross_dimension_enumeration_heading(line: &str) -> bool {
+    let normalized = line.trim_start_matches('#').trim().to_ascii_lowercase();
+    normalized == "cross-dimension blocking enumeration"
+        || normalized == "cross dimension blocking enumeration"
+}
+
+fn numbered_item_body(line: &str) -> Option<&str> {
+    let (index, rest) = line.split_once('.')?;
+    if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some(rest.trim_start())
+}
+
+fn enumeration_item_has_blocker(body: &str) -> bool {
+    let substantive = body
+        .split_once(':')
+        .map_or(body, |(_, description)| description)
+        .trim();
+    !substantive.is_empty() && !is_no_independent_blocker_phrase(substantive)
+}
+
+fn is_no_independent_blocker_phrase(text: &str) -> bool {
+    let normalized = text
+        .trim()
+        .trim_matches(|ch: char| ch.is_ascii_punctuation() || ch.is_whitespace())
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "none"
+            | "n/a"
+            | "not applicable"
+            | "no blocker"
+            | "no blockers"
+            | "no blocker found"
+            | "no blockers found"
+            | "no independent blocker"
+            | "no independent blockers"
+            | "no independent blocker found"
+            | "no independent blockers found"
+    )
 }
 
 fn contains_canonical_clean_conclusion(content: &str) -> bool {
