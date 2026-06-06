@@ -131,11 +131,12 @@ fn derive_findings_toml_artifact(
 
 /// Load the canonical review prose for a session.
 ///
-/// Resolves the authoritative review text by unioning every available prose
-/// source: persisted `summary`/`details` sections, physical `summary.md` and
-/// `details.md`, plus raw `output/full.md` and `output.log` review text. Valid
-/// fenced `findings.toml` content is preserved inside the raw text, but never
-/// causes physical review prose to be skipped.
+/// Resolves the authoritative review text by unioning current prose sources:
+/// indexed `summary`/`details` sections, legacy physical `summary.md` and
+/// `details.md` when no indexed review prose exists, plus raw `output/full.md`
+/// and `output.log` review text. Valid fenced `findings.toml` content is
+/// preserved inside the raw text, but never causes current review prose to be
+/// skipped.
 /// This is the SINGLE source of review prose shared by both the findings extractor
 /// and the fail-closed verdict detector ([`super::output::clean_detection::
 /// review_contains_prose_fail_conclusion`]). Sharing one loader keeps their source
@@ -149,11 +150,18 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
     let mut review_texts = Vec::new();
     let mut latest_summary = None;
     let mut latest_details = None;
+    let mut has_indexed_review_prose = false;
 
     for (section, content) in csa_session::read_all_sections(session_dir)? {
         match section.id.as_str() {
-            "summary" => latest_summary = Some(content),
-            "details" => latest_details = Some(content),
+            "summary" => {
+                has_indexed_review_prose = true;
+                latest_summary = Some(content);
+            }
+            "details" => {
+                has_indexed_review_prose = true;
+                latest_details = Some(content);
+            }
             _ => {}
         }
     }
@@ -164,19 +172,21 @@ pub(in crate::review_cmd) fn load_canonical_review_text(
         .join("\n");
     push_distinct_review_text(&mut review_texts, structured_text);
 
-    let mut file_text = Vec::new();
-    for file_name in ["summary.md", "details.md"] {
-        let path = session_dir.join("output").join(file_name);
-        if !path.exists() {
-            continue;
+    if !has_indexed_review_prose {
+        let mut file_text = Vec::new();
+        for file_name in ["summary.md", "details.md"] {
+            let path = session_dir.join("output").join(file_name);
+            if !path.exists() {
+                continue;
+            }
+            let content = fs::read_to_string(&path)
+                .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+            if !content.trim().is_empty() {
+                file_text.push(content);
+            }
         }
-        let content = fs::read_to_string(&path)
-            .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
-        if !content.trim().is_empty() {
-            file_text.push(content);
-        }
+        push_distinct_review_text(&mut review_texts, file_text.join("\n"));
     }
-    push_distinct_review_text(&mut review_texts, file_text.join("\n"));
 
     for candidate in [
         session_dir.join("output").join("full.md"),
