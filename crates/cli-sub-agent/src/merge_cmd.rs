@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::cli::MergeArgs;
 
 const DEFAULT_BRANCH_FALLBACK: &str = "main";
+const REGENERABLE_WEAVE_LOCK_PATH: &str = "weave.lock";
 
 pub(crate) fn handle_merge(args: MergeArgs) -> Result<()> {
     let pr_number = args.pr_number;
@@ -74,12 +75,7 @@ fn warn_base_fallback() -> String {
 }
 
 fn sync_base_branch_best_effort(project_root: &Path, base_branch: &str) {
-    if let Err(err) = run_checked(
-        project_root,
-        "git",
-        &["checkout", base_branch],
-        "checkout base branch",
-    ) {
+    if let Err(err) = checkout_base_branch_after_weave_lock_restore(project_root, base_branch) {
         eprintln!("WARNING: merge succeeded, but post-merge checkout failed:\n{err:#}");
         return;
     }
@@ -92,6 +88,56 @@ fn sync_base_branch_best_effort(project_root: &Path, base_branch: &str) {
     ) {
         eprintln!("WARNING: merge succeeded, but post-merge pull failed:\n{err:#}");
     }
+}
+
+fn checkout_base_branch_after_weave_lock_restore(
+    project_root: &Path,
+    base_branch: &str,
+) -> Result<()> {
+    restore_weave_lock_drift_before_checkout(project_root);
+    run_checked(
+        project_root,
+        "git",
+        &["checkout", base_branch],
+        "checkout base branch",
+    )
+}
+
+fn restore_weave_lock_drift_before_checkout(project_root: &Path) {
+    let Ok(output) = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(project_root)
+        .output()
+    else {
+        return;
+    };
+
+    if !output.status.success() {
+        return;
+    }
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    if !has_unstaged_weave_lock_change(&status) {
+        return;
+    }
+
+    if let Err(err) = run_checked(
+        project_root,
+        "git",
+        &["checkout", "--", REGENERABLE_WEAVE_LOCK_PATH],
+        "restore weave.lock",
+    ) {
+        tracing::debug!(error = %err, "failed to restore transient weave.lock drift before checkout");
+    }
+}
+
+fn has_unstaged_weave_lock_change(status: &str) -> bool {
+    status.lines().any(|line| {
+        let second_status = line.as_bytes().get(1).copied();
+        let path = line.get(3..);
+        second_status.is_some_and(|status| status != b' ')
+            && path == Some(REGENERABLE_WEAVE_LOCK_PATH)
+    })
 }
 
 fn run_checked(project_root: &Path, program: &str, args: &[&str], action: &str) -> Result<()> {
@@ -137,9 +183,15 @@ fn command_output_text(output: &Output) -> String {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use std::path::Path;
 
-    use super::shell_command;
+    use clap::Parser;
+    use tempfile::TempDir;
+
+    use super::{
+        checkout_base_branch_after_weave_lock_restore, has_unstaged_weave_lock_change,
+        shell_command,
+    };
     use crate::cli::{Cli, Commands};
 
     #[test]
@@ -189,5 +241,113 @@ mod tests {
             shell_command("gh", &["pr", "merge", "--merge", "1626"]),
             "gh pr merge --merge 1626"
         );
+    }
+
+    #[test]
+    fn detects_unstaged_weave_lock_change_only_for_repo_root_lockfile() {
+        assert!(has_unstaged_weave_lock_change(" M weave.lock\n"));
+        assert!(has_unstaged_weave_lock_change("MM weave.lock\n"));
+        assert!(!has_unstaged_weave_lock_change("M  weave.lock\n"));
+        assert!(!has_unstaged_weave_lock_change(" M nested/weave.lock\n"));
+        assert!(!has_unstaged_weave_lock_change(" M other.txt\n"));
+    }
+
+    #[test]
+    fn checkout_restores_dirty_weave_lock_before_switching_to_base() {
+        let repo = setup_checkout_blocked_repo();
+
+        git(&repo, &["checkout", "-b", "feature"]);
+        write(repo.path(), "weave.lock", "feature lock\n");
+        git(&repo, &["add", "weave.lock"]);
+        git(&repo, &["commit", "-m", "feature lock"]);
+        write(repo.path(), "weave.lock", "dirty lock\n");
+
+        checkout_base_branch_after_weave_lock_restore(repo.path(), "main")
+            .expect("checkout should restore weave.lock drift and switch to main");
+
+        assert_eq!(current_branch(&repo), "main");
+        assert_eq!(read(repo.path(), "weave.lock"), "main lock\n");
+        assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn checkout_preserves_other_dirty_file_and_reports_checkout_failure() {
+        let repo = setup_checkout_blocked_repo();
+
+        git(&repo, &["checkout", "-b", "feature"]);
+        write(repo.path(), "weave.lock", "feature lock\n");
+        write(repo.path(), "tracked.txt", "feature contents\n");
+        git(&repo, &["add", "weave.lock", "tracked.txt"]);
+        git(&repo, &["commit", "-m", "feature changes"]);
+        write(repo.path(), "weave.lock", "dirty lock\n");
+        write(repo.path(), "tracked.txt", "dirty contents\n");
+
+        let err = checkout_base_branch_after_weave_lock_restore(repo.path(), "main")
+            .expect_err("other dirty tracked files should still block checkout");
+        let err = format!("{err:#}");
+
+        assert!(err.contains("failed to checkout base branch"));
+        assert!(err.contains("tracked.txt"));
+        assert_eq!(current_branch(&repo), "feature");
+        assert_eq!(read(repo.path(), "weave.lock"), "feature lock\n");
+        assert_eq!(read(repo.path(), "tracked.txt"), "dirty contents\n");
+    }
+
+    fn setup_checkout_blocked_repo() -> TempDir {
+        let repo = TempDir::new().expect("tempdir");
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["config", "core.excludesFile", ""]);
+        git(&repo, &["config", "user.email", "test@example.com"]);
+        git(&repo, &["config", "user.name", "Test User"]);
+        write(repo.path(), "weave.lock", "main lock\n");
+        write(repo.path(), "tracked.txt", "main contents\n");
+        git(&repo, &["add", "weave.lock", "tracked.txt"]);
+        git(&repo, &["commit", "-m", "initial"]);
+        repo
+    }
+
+    fn git(repo: &TempDir, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_stdout(repo: &TempDir, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
+    fn current_branch(repo: &TempDir) -> String {
+        git_stdout(repo, &["branch", "--show-current"])
+            .trim()
+            .to_string()
+    }
+
+    fn read(repo: &Path, path: &str) -> String {
+        std::fs::read_to_string(repo.join(path)).expect("read file")
+    }
+
+    fn write(repo: &Path, path: &str, contents: &str) {
+        std::fs::write(repo.join(path), contents).expect("write file");
     }
 }
