@@ -5,8 +5,6 @@ use crate::{
 use anyhow::Result;
 use std::fs;
 use std::io::ErrorKind;
-#[cfg(target_os = "linux")]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Guard for a write-capable CSA session sharing one git worktree.
@@ -126,12 +124,17 @@ impl Drop for WorktreeWriteLock {
 /// `${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/worktree-write-locks/<sha256(canonical(worktree_root))>/exclusive.lock`
 ///
 /// If the lock holder is one of `ancestor_session_ids`, the current session is
-/// allowed to proceed under the ancestor's flock. This prevents fork-call child
-/// sessions from self-deadlocking while still blocking unrelated write sessions.
+/// allowed to proceed only while that ancestor is still live. This prevents
+/// fork-call child sessions from self-deadlocking while still blocking stale
+/// lineage diagnostics that name dead ancestors.
+///
+/// `holder_session_is_live` must read caller-owned session state, not process
+/// PID liveness; `csa-lock` stays independent of the session registry crate.
 pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
     ancestor_session_ids: &[String],
+    holder_session_is_live: impl Fn(&str) -> bool,
 ) -> Result<WorktreeWriteLock> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -167,9 +170,7 @@ pub fn acquire_worktree_write_lock(
                 && ancestor_session_ids
                     .iter()
                     .any(|ancestor| ancestor == holder_session_id)
-                && diagnostic
-                    .as_ref()
-                    .is_some_and(|diag| diagnostic_matches_current_flock_owner(&lock_path, diag))
+                && holder_session_is_live(holder_session_id)
             {
                 return Ok(WorktreeWriteLock {
                     inner: WorktreeWriteLockKind::LineageReentry {
@@ -193,75 +194,6 @@ pub fn acquire_worktree_write_lock(
             )
         }
     }
-}
-
-fn diagnostic_matches_current_flock_owner(
-    lock_path: &Path,
-    diagnostic: &crate::LockDiagnostic,
-) -> bool {
-    let Some(owner_pid) = current_flock_owner_pid(lock_path) else {
-        return false;
-    };
-    owner_pid == diagnostic.pid && diagnostic_process_identity_matches(diagnostic)
-}
-
-#[cfg(target_os = "linux")]
-fn current_flock_owner_pid(lock_path: &Path) -> Option<u32> {
-    let metadata = fs::metadata(lock_path).ok()?;
-    let (major, minor) = linux_dev_major_minor(metadata.dev());
-    let inode = metadata.ino();
-    fs::read_to_string("/proc/locks")
-        .ok()?
-        .lines()
-        .find_map(|line| proc_lock_owner_for_inode(line, major, minor, inode))
-}
-
-#[cfg(target_os = "linux")]
-fn proc_lock_owner_for_inode(line: &str, major: u64, minor: u64, inode: u64) -> Option<u32> {
-    let mut fields = line.split_whitespace();
-    let _id = fields.next()?;
-    if fields.next()? != "FLOCK" {
-        return None;
-    }
-    let _scope = fields.next()?;
-    if fields.next()? != "WRITE" {
-        return None;
-    }
-    let pid = fields.next()?.parse::<u32>().ok()?;
-    let lock_id = fields.next()?;
-    let mut parts = lock_id.split(':');
-    let lock_major = u64::from_str_radix(parts.next()?, 16).ok()?;
-    let lock_minor = u64::from_str_radix(parts.next()?, 16).ok()?;
-    let lock_inode = parts.next()?.parse::<u64>().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    (lock_major == major && lock_minor == minor && lock_inode == inode).then_some(pid)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_dev_major_minor(dev: u64) -> (u64, u64) {
-    let major = ((dev >> 8) & 0x0fff) | ((dev >> 32) & !0x0fff);
-    let minor = (dev & 0x00ff) | ((dev >> 12) & !0x00ff);
-    (major, minor)
-}
-
-#[cfg(target_os = "linux")]
-fn diagnostic_process_identity_matches(diagnostic: &crate::LockDiagnostic) -> bool {
-    let Some(expected_start_time) = diagnostic.pid_start_time_ticks else {
-        return false;
-    };
-    crate::process_start_time_ticks(diagnostic.pid) == Some(expected_start_time)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn current_flock_owner_pid(_lock_path: &Path) -> Option<u32> {
-    Some(std::process::id())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn diagnostic_process_identity_matches(diagnostic: &crate::LockDiagnostic) -> bool {
-    diagnostic.pid == std::process::id()
 }
 
 #[cfg(test)]

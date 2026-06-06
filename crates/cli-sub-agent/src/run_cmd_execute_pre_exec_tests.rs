@@ -264,9 +264,13 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     let holder =
         csa_session::create_session(project_dir.path(), Some("holder"), None, Some("codex"))
             .unwrap();
-    let _holder_lock =
-        csa_lock::acquire_worktree_write_lock(project_dir.path(), &holder.meta_session_id, &[])
-            .expect("holder worktree write lock should succeed");
+    let _holder_lock = csa_lock::acquire_worktree_write_lock(
+        project_dir.path(),
+        &holder.meta_session_id,
+        &[],
+        |_| false,
+    )
+    .expect("holder worktree write lock should succeed");
 
     let err = handle_run(
         Some(ToolArg::Specific(ToolName::Codex)),

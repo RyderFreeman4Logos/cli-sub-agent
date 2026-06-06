@@ -2,7 +2,7 @@ use super::session_exec_pre_exec::persist_pipeline_pre_exec_failure;
 use crate::session_guard::SessionCleanupGuard;
 use anyhow::{Context, Result};
 use csa_lock::WorktreeWriteLock;
-use csa_session::MetaSessionState;
+use csa_session::{MetaSessionState, SessionPhase};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,6 +41,7 @@ pub(super) fn acquire_if_needed(
         &worktree_root,
         &session.meta_session_id,
         &ancestor_session_ids,
+        |holder_session_id| holder_session_is_active(project_root, holder_session_id),
     )
     .map(Some)
 }
@@ -149,6 +150,20 @@ fn push_lineage(
     Ok(())
 }
 
+fn holder_session_is_active(project_root: &Path, session_id: &str) -> bool {
+    match csa_session::load_session(project_root, session_id) {
+        Ok(state) => state.phase == SessionPhase::Active,
+        Err(err) => {
+            tracing::debug!(
+                session_id,
+                error = %err,
+                "treating unreadable lineage holder session as not live"
+            );
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,9 +188,13 @@ mod tests {
             csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
                 .expect("create holder session");
         save_success_result(temp.path(), &holder.meta_session_id);
-        let holder_lock =
-            csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
-                .expect("holder lock");
+        let holder_lock = csa_lock::acquire_worktree_write_lock(
+            temp.path(),
+            &holder.meta_session_id,
+            &[],
+            |_| false,
+        )
+        .expect("holder lock");
         let lock_path = holder_lock.lock_path().to_path_buf();
         let candidate =
             csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
@@ -199,9 +218,13 @@ mod tests {
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
                 .expect("create holder session");
-        let _holder_lock =
-            csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
-                .expect("holder lock");
+        let _holder_lock = csa_lock::acquire_worktree_write_lock(
+            temp.path(),
+            &holder.meta_session_id,
+            &[],
+            |_| false,
+        )
+        .expect("holder lock");
         let candidate =
             csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
                 .expect("create candidate session");

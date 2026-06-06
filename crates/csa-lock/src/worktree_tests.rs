@@ -3,7 +3,9 @@ use crate::LockDiagnostic;
 use chrono::Utc;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
+use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tempfile::tempdir;
 
@@ -40,6 +42,20 @@ impl Drop for EnvVarGuard {
     }
 }
 
+fn acquire_test_worktree_write_lock(
+    worktree_root: &Path,
+    session_id: &str,
+    ancestor_session_ids: &[String],
+    live_holder_session_ids: &[&str],
+) -> Result<WorktreeWriteLock> {
+    acquire_worktree_write_lock(
+        worktree_root,
+        session_id,
+        ancestor_session_ids,
+        |holder_session_id| live_holder_session_ids.contains(&holder_session_id),
+    )
+}
+
 #[test]
 fn test_worktree_write_lock_conflicts_for_same_worktree_root() {
     let _env_lock = env_test_lock();
@@ -47,10 +63,10 @@ fn test_worktree_write_lock_conflicts_for_same_worktree_root() {
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let _lock1 = acquire_worktree_write_lock(worktree_root.path(), "01PARENT", &[])
+    let _lock1 = acquire_test_worktree_write_lock(worktree_root.path(), "01PARENT", &[], &[])
         .expect("first worktree write lock should succeed");
 
-    let err = acquire_worktree_write_lock(worktree_root.path(), "01OTHER", &[])
+    let err = acquire_test_worktree_write_lock(worktree_root.path(), "01OTHER", &[], &[])
         .expect_err("non-lineage writer should fail fast")
         .to_string();
 
@@ -72,15 +88,70 @@ fn test_worktree_write_lock_allows_lineage_reentry() {
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let _parent = acquire_worktree_write_lock(worktree_root.path(), "01PARENT", &[])
+    let _parent = acquire_test_worktree_write_lock(worktree_root.path(), "01PARENT", &[], &[])
         .expect("parent worktree write lock should succeed");
 
-    let child =
-        acquire_worktree_write_lock(worktree_root.path(), "01CHILD", &["01PARENT".to_string()])
-            .expect("child should re-enter under ancestor lock");
+    let child = acquire_test_worktree_write_lock(
+        worktree_root.path(),
+        "01CHILD",
+        &["01PARENT".to_string()],
+        &["01PARENT"],
+    )
+    .expect("child should re-enter under live ancestor lock");
 
     assert!(child.is_lineage_reentry());
     assert_eq!(child.holder_session_id(), Some("01PARENT"));
+}
+
+#[test]
+fn test_worktree_write_lock_allows_cross_process_lineage_reentry() {
+    let _env_lock = env_test_lock();
+    let state_home = tempdir().expect("state-home tempdir");
+    let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
+
+    let worktree_root = tempdir().expect("worktree tempdir");
+    let holder_session_id = "01PARENT";
+    let _parent =
+        acquire_test_worktree_write_lock(worktree_root.path(), holder_session_id, &[], &[])
+            .expect("parent worktree write lock should succeed");
+
+    let output = Command::new(std::env::current_exe().expect("current test binary"))
+        .arg("cross_process_lineage_reentry_child_entrypoint")
+        .arg("--nocapture")
+        .env("XDG_STATE_HOME", state_home.path())
+        .env("CSA_LOCK_CROSS_PROCESS_WORKTREE", worktree_root.path())
+        .env("CSA_LOCK_CROSS_PROCESS_HOLDER", holder_session_id)
+        .output()
+        .expect("run child test process");
+    let child_stdout = String::from_utf8_lossy(&output.stdout);
+    let child_stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success() && !child_stdout.contains("running 0 tests"),
+        "child process should re-enter under live ancestor lock\nstdout:\n{}\nstderr:\n{}",
+        child_stdout,
+        child_stderr
+    );
+}
+
+#[test]
+fn cross_process_lineage_reentry_child_entrypoint() {
+    let Some(worktree_root) = std::env::var_os("CSA_LOCK_CROSS_PROCESS_WORKTREE") else {
+        return;
+    };
+    let holder_session_id =
+        std::env::var("CSA_LOCK_CROSS_PROCESS_HOLDER").expect("holder session id env");
+
+    let child = acquire_worktree_write_lock(
+        Path::new(&worktree_root),
+        "01CHILD",
+        std::slice::from_ref(&holder_session_id),
+        |candidate| candidate == holder_session_id.as_str(),
+    )
+    .expect("child should re-enter under live ancestor lock held by parent process");
+
+    assert!(child.is_lineage_reentry());
+    assert_eq!(child.holder_session_id(), Some(holder_session_id.as_str()));
 }
 
 #[test]
@@ -92,8 +163,8 @@ fn test_worktree_write_lock_allows_different_worktree_roots() {
     let worktree_a = tempdir().expect("worktree a tempdir");
     let worktree_b = tempdir().expect("worktree b tempdir");
 
-    let lock_a = acquire_worktree_write_lock(worktree_a.path(), "01A", &[]);
-    let lock_b = acquire_worktree_write_lock(worktree_b.path(), "01B", &[]);
+    let lock_a = acquire_test_worktree_write_lock(worktree_a.path(), "01A", &[], &[]);
+    let lock_b = acquire_test_worktree_write_lock(worktree_b.path(), "01B", &[], &[]);
 
     assert!(lock_a.is_ok());
     assert!(lock_b.is_ok());
@@ -106,7 +177,7 @@ fn worktree_write_lock_removes_lock_file_on_drop() {
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let lock = acquire_worktree_write_lock(worktree_root.path(), "01OWNER", &[])
+    let lock = acquire_test_worktree_write_lock(worktree_root.path(), "01OWNER", &[], &[])
         .expect("worktree write lock should succeed");
     let lock_path = lock.lock_path().to_path_buf();
     assert!(lock_path.exists(), "lock file should exist while held");
@@ -117,7 +188,7 @@ fn worktree_write_lock_removes_lock_file_on_drop() {
         !lock_path.exists(),
         "owned worktree lock file should be removed when guard drops"
     );
-    acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+    acquire_test_worktree_write_lock(worktree_root.path(), "01NEXT", &[], &[])
         .expect("next writer should acquire after guard drop");
 }
 
@@ -128,7 +199,7 @@ fn worktree_write_lock_acquires_over_stale_file_without_held_flock() {
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let holder = acquire_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[])
+    let holder = acquire_test_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[], &[])
         .expect("holder lock should succeed");
     let lock_path = holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(
@@ -140,7 +211,7 @@ fn worktree_write_lock_acquires_over_stale_file_without_held_flock() {
     );
     drop(holder);
 
-    let lock = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+    let lock = acquire_test_worktree_write_lock(worktree_root.path(), "01NEXT", &[], &[])
         .expect("stale diagnostic file without a held flock must not block acquisition");
 
     assert!(!lock.is_lineage_reentry());
@@ -158,10 +229,10 @@ fn worktree_write_lock_keeps_live_holder_blocked() {
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let _holder = acquire_worktree_write_lock(worktree_root.path(), "01LIVE", &[])
+    let _holder = acquire_test_worktree_write_lock(worktree_root.path(), "01LIVE", &[], &[])
         .expect("holder lock should succeed");
 
-    let err = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+    let err = acquire_test_worktree_write_lock(worktree_root.path(), "01NEXT", &[], &[])
         .expect_err("live holder must still block")
         .to_string();
 
@@ -176,7 +247,7 @@ fn worktree_write_lock_blocks_post_exec_window_with_live_flock() {
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let holder = acquire_worktree_write_lock(worktree_root.path(), "01DONE", &[])
+    let holder = acquire_test_worktree_write_lock(worktree_root.path(), "01DONE", &[], &[])
         .expect("holder lock should succeed");
     let lock_path = holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(
@@ -187,7 +258,7 @@ fn worktree_write_lock_blocks_post_exec_window_with_live_flock() {
         worktree_root.path(),
     );
 
-    let err = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+    let err = acquire_test_worktree_write_lock(worktree_root.path(), "01NEXT", &[], &[])
         .expect_err("post-exec holder with live flock must block")
         .to_string();
 
@@ -206,15 +277,16 @@ fn worktree_write_lock_blocks_stale_diagnostic_with_live_unrelated_flock_without
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let stale_holder = acquire_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[])
-        .expect("stale holder setup lock should succeed");
+    let stale_holder =
+        acquire_test_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[], &[])
+            .expect("stale holder setup lock should succeed");
     let lock_path = stale_holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(&lock_path, 4_000_000, None, "01DEAD", worktree_root.path());
     drop(stale_holder);
     let before_inode = fs::metadata(&lock_path).expect("lock metadata").ino();
     let _manual_holder = ManualFlock::acquire(&lock_path);
 
-    let err = acquire_worktree_write_lock(worktree_root.path(), "01NEXT", &[])
+    let err = acquire_test_worktree_write_lock(worktree_root.path(), "01NEXT", &[], &[])
         .expect_err("live unrelated flock must block despite stale diagnostic")
         .to_string();
 
@@ -233,14 +305,15 @@ fn worktree_write_lock_blocks_stale_diagnostic_with_live_unrelated_flock_without
 }
 
 #[test]
-fn worktree_write_lock_blocks_lineage_reentry_when_stale_diagnostic_is_not_flock_owner() {
+fn worktree_write_lock_blocks_lineage_reentry_when_ancestor_session_is_not_live() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
 
     let worktree_root = tempdir().expect("worktree tempdir");
-    let stale_holder = acquire_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[])
-        .expect("stale holder setup lock should succeed");
+    let stale_holder =
+        acquire_test_worktree_write_lock(worktree_root.path(), "01OLDOWNER", &[], &[])
+            .expect("stale holder setup lock should succeed");
     let lock_path = stale_holder.lock_path().to_path_buf();
     overwrite_worktree_lock_diagnostic(
         &lock_path,
@@ -253,12 +326,13 @@ fn worktree_write_lock_blocks_lineage_reentry_when_stale_diagnostic_is_not_flock
     let before_inode = fs::metadata(&lock_path).expect("lock metadata").ino();
     let _manual_holder = ManualFlock::acquire(&lock_path);
 
-    let err = acquire_worktree_write_lock(
+    let err = acquire_test_worktree_write_lock(
         worktree_root.path(),
         "01DESCENDANT",
         &["01DEAD".to_string()],
+        &[],
     )
-    .expect_err("stale ancestor diagnostic must not bypass a live unrelated flock")
+    .expect_err("dead ancestor diagnostic must not bypass a live unrelated flock")
     .to_string();
 
     assert!(err.contains("concurrent write session blocked"));
