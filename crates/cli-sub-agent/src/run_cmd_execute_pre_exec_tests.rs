@@ -261,8 +261,12 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     }
     let config = run_config_with_tier("default", vec!["codex/openai/o4-mini/high"], &["codex"]);
     write_project_config(project_dir.path(), &config);
-    let _holder = csa_lock::acquire_worktree_write_lock(project_dir.path(), "01HOLDER", &[])
-        .expect("holder worktree write lock should succeed");
+    let holder =
+        csa_session::create_session(project_dir.path(), Some("holder"), None, Some("codex"))
+            .unwrap();
+    let _holder_lock =
+        csa_lock::acquire_worktree_write_lock(project_dir.path(), &holder.meta_session_id, &[])
+            .expect("holder worktree write lock should succeed");
 
     let err = handle_run(
         Some(ToolArg::Specific(ToolName::Codex)),
@@ -324,7 +328,10 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
         err.contains("concurrent write session blocked"),
         "unexpected error: {err}"
     );
-    assert!(err.contains("01HOLDER"), "missing holder session id: {err}");
+    assert!(
+        err.contains(&holder.meta_session_id),
+        "missing holder session id: {err}"
+    );
     assert!(
         err.contains(&project_dir.path().display().to_string()),
         "missing worktree path: {err}"

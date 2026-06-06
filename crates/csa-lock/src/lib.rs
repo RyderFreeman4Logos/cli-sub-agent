@@ -12,7 +12,10 @@
 pub mod slot;
 mod worktree;
 
-pub use worktree::{WorktreeWriteLock, acquire_worktree_write_lock};
+pub use worktree::{
+    HolderSessionLiveness, WorktreeWriteLock, acquire_worktree_write_lock,
+    acquire_worktree_write_lock_with_liveness,
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -26,14 +29,14 @@ use std::path::{Path, PathBuf};
 /// Diagnostic information written to lock files
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LockDiagnostic {
-    pid: u32,
+    pub(crate) pid: u32,
     tool_name: String,
-    acquired_at: DateTime<Utc>,
+    pub(crate) acquired_at: DateTime<Utc>,
     reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) holder_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    resource_path: Option<String>,
+    pub(crate) resource_path: Option<String>,
 }
 
 /// Session lock guard backed by `flock(2)`.

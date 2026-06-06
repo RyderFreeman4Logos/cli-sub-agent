@@ -377,9 +377,7 @@ pub struct ReviewConfig {
         skip_serializing_if = "is_default_gate_timeout"
     )]
     pub gate_timeout_secs: u64,
-    /// When true, enforce filesystem-level read-only access to the project root
-    /// during review sessions. This prevents the review tool from writing files
-    /// even if instructed to. Default: false (allows resume-to-fix workflow).
+    /// Standard review is read-only by default; `csa review --fix` stays writable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readonly_sandbox: Option<bool>,
 }

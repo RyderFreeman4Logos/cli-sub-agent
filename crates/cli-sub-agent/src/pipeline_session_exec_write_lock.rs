@@ -1,8 +1,9 @@
 use super::session_exec_pre_exec::persist_pipeline_pre_exec_failure;
 use crate::session_guard::SessionCleanupGuard;
 use anyhow::{Context, Result};
+use csa_lock::HolderSessionLiveness;
 use csa_lock::WorktreeWriteLock;
-use csa_session::MetaSessionState;
+use csa_session::{MetaSessionState, SessionPhase};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,10 +38,11 @@ pub(super) fn acquire_if_needed(
 
     let worktree_root = resolve_worktree_lock_root(project_root)?;
     let ancestor_session_ids = collect_lineage_session_ids(project_root, session)?;
-    csa_lock::acquire_worktree_write_lock(
+    csa_lock::acquire_worktree_write_lock_with_liveness(
         &worktree_root,
         &session.meta_session_id,
         &ancestor_session_ids,
+        |holder_session_id| holder_session_liveness(project_root, holder_session_id),
     )
     .map(Some)
 }
@@ -60,6 +62,60 @@ pub(super) fn acquire_if_needed(
 /// acquires no lock and never contends.
 fn session_mutates_worktree(readonly_project_root: bool) -> bool {
     !readonly_project_root
+}
+
+fn holder_session_liveness(project_root: &Path, session_id: &str) -> HolderSessionLiveness {
+    match csa_session::load_session(project_root, session_id) {
+        Ok(session) => classify_holder_session(&session),
+        Err(project_err) => match csa_session::load_session_global_exact(session_id) {
+            Ok(Some(session)) => classify_holder_session(&session),
+            Ok(None) => HolderSessionLiveness::Dead,
+            Err(global_err) => {
+                tracing::warn!(
+                    session_id,
+                    project_error = %project_err,
+                    global_error = %global_err,
+                    "could not determine worktree lock holder session liveness"
+                );
+                HolderSessionLiveness::Unknown
+            }
+        },
+    }
+}
+
+fn classify_holder_session(session: &MetaSessionState) -> HolderSessionLiveness {
+    let project_root = Path::new(&session.project_path);
+    let session_dir = match csa_session::get_session_dir(project_root, &session.meta_session_id) {
+        Ok(dir) => dir,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %session.meta_session_id,
+                error = %err,
+                "could not resolve worktree lock holder session dir"
+            );
+            return HolderSessionLiveness::Unknown;
+        }
+    };
+
+    if csa_process::ToolLiveness::has_live_process(&session_dir)
+        || csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir)
+    {
+        return HolderSessionLiveness::Live;
+    }
+
+    match csa_session::load_result(project_root, &session.meta_session_id) {
+        Ok(Some(_)) => HolderSessionLiveness::Dead,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %session.meta_session_id,
+                error = %err,
+                "could not read worktree lock holder result"
+            );
+            HolderSessionLiveness::Unknown
+        }
+        Ok(None) if matches!(session.phase, SessionPhase::Active) => HolderSessionLiveness::Live,
+        Ok(None) => HolderSessionLiveness::Dead,
+    }
 }
 
 fn resolve_worktree_lock_root(project_root: &Path) -> Result<PathBuf> {
@@ -164,5 +220,98 @@ mod tests {
         // A read-only sandbox cannot mutate the worktree → no lock, no
         // contention.
         assert!(!session_mutates_worktree(true));
+    }
+
+    #[test]
+    fn holder_session_liveness_treats_completed_active_session_as_dead() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = csa_session::create_session(temp.path(), Some("done"), None, Some("codex"))
+            .expect("create session");
+        save_success_result(temp.path(), &session.meta_session_id);
+
+        assert_eq!(
+            holder_session_liveness(temp.path(), &session.meta_session_id),
+            HolderSessionLiveness::Dead
+        );
+    }
+
+    #[test]
+    fn holder_session_liveness_keeps_active_session_without_result_live() {
+        let temp = tempfile::tempdir().unwrap();
+        let session =
+            csa_session::create_session(temp.path(), Some("running"), None, Some("codex"))
+                .expect("create session");
+
+        assert_eq!(
+            holder_session_liveness(temp.path(), &session.meta_session_id),
+            HolderSessionLiveness::Live
+        );
+    }
+
+    #[test]
+    fn acquire_if_needed_reclaims_completed_holder_session_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder = csa_session::create_session(temp.path(), Some("done"), None, Some("codex"))
+            .expect("create holder session");
+        save_success_result(temp.path(), &holder.meta_session_id);
+        let _holder_lock =
+            csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
+                .expect("holder lock");
+        let candidate = csa_session::create_session(temp.path(), Some("next"), None, Some("codex"))
+            .expect("create candidate session");
+
+        let lock = acquire_if_needed(temp.path(), &candidate, false)
+            .expect("completed holder should be reclaimed")
+            .expect("writer should acquire a lock");
+
+        assert!(!lock.is_lineage_reentry());
+    }
+
+    #[test]
+    fn acquire_if_needed_keeps_active_holder_session_blocked() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder = csa_session::create_session(temp.path(), Some("running"), None, Some("codex"))
+            .expect("create holder session");
+        let _holder_lock =
+            csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
+                .expect("holder lock");
+        let candidate = csa_session::create_session(temp.path(), Some("next"), None, Some("codex"))
+            .expect("create candidate session");
+
+        let err = acquire_if_needed(temp.path(), &candidate, false)
+            .expect_err("active holder with no result must still block")
+            .to_string();
+
+        assert!(err.contains("concurrent write session blocked"));
+        assert!(err.contains(&holder.meta_session_id));
+    }
+
+    fn save_success_result(project_root: &Path, session_id: &str) {
+        csa_session::save_result(
+            project_root,
+            session_id,
+            &csa_session::SessionResult {
+                status: "success".to_string(),
+                exit_code: 0,
+                summary: "done".to_string(),
+                tool: "codex".to_string(),
+                original_tool: None,
+                fallback_tool: None,
+                fallback_reason: None,
+                started_at: chrono::Utc::now(),
+                completed_at: chrono::Utc::now(),
+                events_count: 0,
+                artifacts: Vec::new(),
+                peak_memory_mb: None,
+                fallback_chain: None,
+                gate_timeout: false,
+                warnings: Vec::new(),
+                raw_process_exit_code: None,
+                uncommitted_changes: None,
+                post_exec_gate: None,
+                manager_fields: Default::default(),
+            },
+        )
+        .expect("save result");
     }
 }

@@ -54,11 +54,22 @@ async fn run_pipeline_for_worktree_lock_test(
     .await
 }
 
+fn acquire_active_holder_worktree_lock(
+    project_root: &std::path::Path,
+) -> (String, csa_lock::WorktreeWriteLock) {
+    let holder =
+        csa_session::create_session(project_root, Some("holder"), None, Some("codex")).unwrap();
+    let lock = csa_lock::acquire_worktree_write_lock(project_root, &holder.meta_session_id, &[])
+        .expect("holder worktree write lock should succeed");
+    (holder.meta_session_id, lock)
+}
+
 /// Assert the pipeline failed fast on the per-worktree write lock, surfacing the
-/// non-lineage holder session id `01HOLDER` and serialize guidance (#1672).
+/// non-lineage holder session id and serialize guidance (#1672).
 fn assert_worktree_write_lock_blocked(
     execution: anyhow::Result<crate::pipeline::SessionExecutionResult>,
     project_root: &std::path::Path,
+    expected_holder_session_id: &str,
 ) {
     let err = match execution {
         Ok(_) => panic!("held worktree write lock must reject non-lineage writer"),
@@ -68,7 +79,10 @@ fn assert_worktree_write_lock_blocked(
         err.contains("concurrent write session blocked"),
         "unexpected error: {err}"
     );
-    assert!(err.contains("01HOLDER"), "missing holder session id: {err}");
+    assert!(
+        err.contains(expected_holder_session_id),
+        "missing holder session id: {err}"
+    );
     assert!(
         err.contains(&project_root.display().to_string()),
         "missing worktree path: {err}"
@@ -185,12 +199,11 @@ async fn run_writer_fails_fast_when_worktree_write_lock_is_held() {
     let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path();
 
-    let _holder = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
-        .expect("holder worktree write lock should succeed");
+    let (holder_session_id, _worktree_lock) = acquire_active_holder_worktree_lock(project_root);
 
     let execution =
         run_pipeline_for_worktree_lock_test(project_root, Some("run"), None, false).await;
-    assert_worktree_write_lock_blocked(execution, project_root);
+    assert_worktree_write_lock_blocked(execution, project_root, &holder_session_id);
 }
 
 #[tokio::test]
@@ -199,8 +212,7 @@ async fn review_fix_fails_fast_when_worktree_write_lock_is_held() {
     let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path();
 
-    let _holder = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
-        .expect("holder worktree write lock should succeed");
+    let (holder_session_id, _worktree_lock) = acquire_active_holder_worktree_lock(project_root);
 
     // `csa review --fix` runs as a `reviewer_sub_session` with a writable
     // project root (`readonly_project_root == false`), so it mutates the shared
@@ -213,7 +225,7 @@ async fn review_fix_fails_fast_when_worktree_write_lock_is_held() {
         false,
     )
     .await;
-    assert_worktree_write_lock_blocked(execution, project_root);
+    assert_worktree_write_lock_blocked(execution, project_root, &holder_session_id);
 }
 
 #[tokio::test]
@@ -222,14 +234,13 @@ async fn debate_write_mode_fails_fast_when_worktree_write_lock_is_held() {
     let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path();
 
-    let _holder = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
-        .expect("holder worktree write lock should succeed");
+    let (holder_session_id, _worktree_lock) = acquire_active_holder_worktree_lock(project_root);
 
     // A write-mode debate (`readonly_project_root == false`) can mutate the
     // worktree and must serialize against concurrent writers (#1828).
     let execution =
         run_pipeline_for_worktree_lock_test(project_root, Some("debate"), None, false).await;
-    assert_worktree_write_lock_blocked(execution, project_root);
+    assert_worktree_write_lock_blocked(execution, project_root, &holder_session_id);
 }
 
 #[tokio::test]
@@ -245,8 +256,7 @@ async fn readonly_review_is_not_blocked_by_worktree_write_lock() {
     // Hold the per-session lock so the pipeline has a deterministic failure point
     // AFTER the worktree-lock gate.
     let _session_lock = csa_lock::acquire_lock(&session_dir, "codex", "active review").unwrap();
-    let _worktree_lock = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
-        .expect("holder worktree write lock should succeed");
+    let (_holder_session_id, _worktree_lock) = acquire_active_holder_worktree_lock(project_root);
 
     // A read-only review (`readonly_project_root == true`) cannot mutate the
     // worktree, acquires no worktree lock, and must not contend with the holder.
@@ -271,8 +281,7 @@ async fn readonly_debate_is_not_blocked_by_worktree_write_lock() {
             .unwrap();
     let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).unwrap();
     let _session_lock = csa_lock::acquire_lock(&session_dir, "codex", "active debate").unwrap();
-    let _worktree_lock = csa_lock::acquire_worktree_write_lock(project_root, "01HOLDER", &[])
-        .expect("holder worktree write lock should succeed");
+    let (_holder_session_id, _worktree_lock) = acquire_active_holder_worktree_lock(project_root);
 
     // A read-only debate (`readonly_project_root == true`) acquires no worktree
     // lock → it is not blocked by the holder.

@@ -300,7 +300,8 @@ pub(crate) async fn handle_review(
         tool.as_str(),
     );
 
-    let readonly_project_root = global_config.review.readonly_sandbox.unwrap_or(false);
+    let readonly_project_root =
+        resolve_review_readonly_project_root(args.fix, global_config.review.readonly_sandbox);
 
     let reviewer_selection = resolve_effective_reviewer_selection_for_args(
         &args,
@@ -604,6 +605,14 @@ pub(crate) async fn handle_review(
         startup_env,
     })
     .await
+}
+
+fn resolve_review_readonly_project_root(fix: bool, configured: Option<bool>) -> bool {
+    if fix {
+        false
+    } else {
+        configured.unwrap_or(true)
+    }
 }
 
 #[cfg(test)]

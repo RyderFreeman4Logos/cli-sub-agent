@@ -11,3 +11,17 @@ mod safety_preamble_tests;
 mod tests_full_consistency;
 #[path = "review_cmd_timeout_tests.rs"]
 mod timeout_tests;
+
+#[test]
+fn review_readonly_project_root_defaults_to_readonly_without_fix() {
+    assert!(resolve_review_readonly_project_root(false, None));
+    assert!(resolve_review_readonly_project_root(false, Some(true)));
+    assert!(!resolve_review_readonly_project_root(false, Some(false)));
+}
+
+#[test]
+fn review_fix_forces_writable_project_root() {
+    assert!(!resolve_review_readonly_project_root(true, None));
+    assert!(!resolve_review_readonly_project_root(true, Some(true)));
+    assert!(!resolve_review_readonly_project_root(true, Some(false)));
+}
