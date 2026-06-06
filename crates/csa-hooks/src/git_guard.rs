@@ -177,33 +177,54 @@ done < <(env)
 
 if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   top="$("${REAL_GIT}" rev-parse --show-toplevel 2>/dev/null || pwd)"
-  has_lefthook_config=false
+  lefthook_config=""
   for cfg in lefthook.yml lefthook.yaml .lefthook.yml .lefthook.yaml; do
     if [ -f "${top}/${cfg}" ]; then
-      has_lefthook_config=true
+      lefthook_config="${top}/${cfg}"
       break
     fi
   done
 
-  if [ "${has_lefthook_config}" = "true" ]; then
+  if [ -n "${lefthook_config}" ]; then
     hooks_path="$("${REAL_GIT}" config --path --get core.hooksPath 2>/dev/null || true)"
-    if [ -n "${hooks_path}" ]; then
-      case "${hooks_path}" in
-        /*) pre_commit="${hooks_path}/pre-commit" ;;
-        *) pre_commit="${top}/${hooks_path}/pre-commit" ;;
+    lefthook_hooks=()
+    while IFS= read -r line || [ -n "${line}" ]; do
+      line="${line%$'\r'}"
+      case "${line}" in
+        ""|\#*|" "*|$'\t'*) continue ;;
       esac
-    else
-      pre_commit="$("${REAL_GIT}" rev-parse --git-path hooks/pre-commit 2>/dev/null || true)"
-    fi
+      hook_name="${line%%:*}"
+      [ "${hook_name}" = "${line}" ] && continue
+      case "${hook_name}" in
+        applypatch-msg|commit-msg|fsmonitor-watchman|p4-changelist|p4-post-changelist|p4-pre-submit|p4-prepare-changelist|post-applypatch|post-checkout|post-commit|post-index-change|post-merge|post-receive|post-rewrite|post-update|pre-applypatch|pre-auto-gc|pre-commit|pre-merge-commit|pre-push|pre-rebase|pre-receive|prepare-commit-msg|proc-receive|push-to-checkout|reference-transaction|sendemail-validate|update)
+          lefthook_hooks+=("${hook_name}")
+          ;;
+      esac
+    done < "${lefthook_config}"
 
-    if [ -z "${pre_commit}" ] || [ ! -x "${pre_commit}" ]; then
-      echo "BLOCKED: lefthook config exists but no executable pre-commit hook is active." >&2
-      echo "Run: lefthook install" >&2
-      if [ -n "${pre_commit}" ]; then
-        echo "Expected hook: ${pre_commit}" >&2
+    hook_path_for() {
+      local hook_name="$1"
+      if [ -n "${hooks_path}" ]; then
+        case "${hooks_path}" in
+          /*) printf '%s\n' "${hooks_path}/${hook_name}" ;;
+          *) printf '%s\n' "${top}/${hooks_path}/${hook_name}" ;;
+        esac
+      else
+        "${REAL_GIT}" rev-parse --git-path "hooks/${hook_name}" 2>/dev/null || true
       fi
-      exit 1
-    fi
+    }
+
+    for hook_name in "${lefthook_hooks[@]}"; do
+      hook_path="$(hook_path_for "${hook_name}")"
+      if [ -z "${hook_path}" ] || [ ! -x "${hook_path}" ]; then
+        echo "BLOCKED: lefthook config defines ${hook_name} but no executable ${hook_name} hook is active." >&2
+        echo "Run: lefthook install" >&2
+        if [ -n "${hook_path}" ]; then
+          echo "Expected hook: ${hook_path}" >&2
+        fi
+        exit 1
+      fi
+    done
   fi
 fi
 
@@ -329,6 +350,26 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn write_fake_worktree_git(path: &Path) {
+        write_executable(
+            path,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "rev-parse --is-inside-work-tree") exit 0 ;;
+  "rev-parse --show-toplevel") printf '%s\n' "${FAKE_TOP}" ; exit 0 ;;
+  "config --path --get core.hooksPath") exit 1 ;;
+esac
+if [ "${1:-}" = "rev-parse" ] && [ "${2:-}" = "--git-path" ]; then
+  printf '%s\n' "${FAKE_TOP}/.git/${3}"
+  exit 0
+fi
+printf '%s\n' "$*"
+"#,
+        );
+    }
+
     #[test]
     fn inject_git_guard_env_sets_real_git_and_path() {
         let mut env = HashMap::new();
@@ -402,6 +443,115 @@ mod tests {
         assert!(!output.status.success());
         assert!(!marker.exists(), "real git must not run after LEFTHOOK=0");
         assert!(String::from_utf8_lossy(&output.stderr).contains("LEFTHOOK=0"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_allows_pre_push_only_lefthook_config_without_pre_commit() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().unwrap();
+        let wrapper = temp.path().join("git");
+        write_executable(&wrapper, git_wrapper_script());
+
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        std::fs::write(
+            repo.join("lefthook.yml"),
+            "pre-push:\n  commands:\n    review:\n      run: echo ok\n",
+        )
+        .unwrap();
+        write_executable(
+            repo.join(".git/hooks/pre-push").as_path(),
+            "#!/usr/bin/env bash\n",
+        );
+
+        let fake_git = temp.path().join("real-git");
+        write_fake_worktree_git(&fake_git);
+
+        let output = std::process::Command::new(&wrapper)
+            .arg("commit")
+            .arg("-m")
+            .arg("test")
+            .current_dir(&repo)
+            .env("CSA_REAL_GIT", &fake_git)
+            .env("FAKE_TOP", &repo)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "commit -m test"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_blocks_missing_defined_pre_push_lefthook_hook() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().unwrap();
+        let wrapper = temp.path().join("git");
+        write_executable(&wrapper, git_wrapper_script());
+
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        std::fs::write(repo.join("lefthook.yml"), "pre-push:\n").unwrap();
+
+        let fake_git = temp.path().join("real-git");
+        write_fake_worktree_git(&fake_git);
+
+        let output = std::process::Command::new(&wrapper)
+            .arg("commit")
+            .arg("-m")
+            .arg("test")
+            .current_dir(&repo)
+            .env("CSA_REAL_GIT", &fake_git)
+            .env("FAKE_TOP", &repo)
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(stderr.contains("pre-push"), "{stderr}");
+        assert!(stderr.contains("lefthook install"), "{stderr}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_requires_pre_commit_when_lefthook_config_defines_it() {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let temp = tempfile::tempdir().unwrap();
+        let wrapper = temp.path().join("git");
+        write_executable(&wrapper, git_wrapper_script());
+
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        std::fs::write(repo.join("lefthook.yml"), "pre-commit:\npre-push:\n").unwrap();
+        write_executable(
+            repo.join(".git/hooks/pre-push").as_path(),
+            "#!/usr/bin/env bash\n",
+        );
+
+        let fake_git = temp.path().join("real-git");
+        write_fake_worktree_git(&fake_git);
+
+        let output = std::process::Command::new(&wrapper)
+            .arg("commit")
+            .arg("-m")
+            .arg("test")
+            .current_dir(&repo)
+            .env("CSA_REAL_GIT", &fake_git)
+            .env("FAKE_TOP", &repo)
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(stderr.contains("pre-commit"), "{stderr}");
     }
 
     #[cfg(unix)]
