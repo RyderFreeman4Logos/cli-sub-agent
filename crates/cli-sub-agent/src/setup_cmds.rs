@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Handle setup for Claude Code MCP integration
 pub(crate) fn handle_setup_claude_code() -> Result<()> {
@@ -197,6 +198,8 @@ const BRANCH_PROTECTION_TEMPLATE: &str = include_str!("setup_cmds/branch-protect
 /// Generalized pre-push review gate hook script, embedded at compile time.
 const REVIEW_CHECK_TEMPLATE: &str = include_str!("setup_cmds/review-check.sh");
 
+const REVIEW_GATE_INSTALL_MARKER: &str = "Installed by: csa setup review-gate";
+
 /// Rate-limit interval for auto-setup checks (1 hour).
 const REVIEW_GATE_CHECK_INTERVAL_SECS: u64 = 3600;
 /// Timestamp file name stored in the project state dir.
@@ -297,6 +300,77 @@ fn git_path_is_tracked(project_root: &Path, relative_path: &str) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HookTrackingStatus {
+    Tracked,
+    Untracked,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HookInstallDecision {
+    Write,
+    SkipIdentical,
+    SkipTracked,
+    SkipUnmanaged,
+}
+
+fn hook_contains_install_marker(existing: &[u8]) -> bool {
+    let marker = REVIEW_GATE_INSTALL_MARKER.as_bytes();
+    existing
+        .windows(marker.len())
+        .any(|window| window == marker)
+}
+
+fn hook_tracking_status(project_root: &Path, relative_path: &str) -> HookTrackingStatus {
+    let inside_work_tree = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match inside_work_tree {
+        Ok(status) if status.success() => {}
+        Ok(_) | Err(_) => return HookTrackingStatus::Unknown,
+    }
+
+    match Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["ls-files", "--error-unmatch", "--", relative_path])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => HookTrackingStatus::Tracked,
+        Ok(_) => HookTrackingStatus::Untracked,
+        Err(_) => HookTrackingStatus::Unknown,
+    }
+}
+
+fn should_install_hook(
+    existing: Option<&[u8]>,
+    would_write: &[u8],
+    tracked_status: HookTrackingStatus,
+) -> HookInstallDecision {
+    match existing {
+        None => HookInstallDecision::Write,
+        Some(existing_bytes) if existing_bytes == would_write => HookInstallDecision::SkipIdentical,
+        Some(existing_bytes) => match tracked_status {
+            HookTrackingStatus::Tracked => HookInstallDecision::SkipTracked,
+            HookTrackingStatus::Untracked | HookTrackingStatus::Unknown
+                if hook_contains_install_marker(existing_bytes) =>
+            {
+                HookInstallDecision::Write
+            }
+            HookTrackingStatus::Untracked | HookTrackingStatus::Unknown => {
+                HookInstallDecision::SkipUnmanaged
+            }
+        },
+    }
 }
 
 /// Returns true when the timestamp file is absent or older than CHECK_INTERVAL_SECS.
@@ -464,49 +538,72 @@ fn missing_pre_push_entry_lines(
 
 /// Write `scripts/hooks/branch-protection.sh` from the embedded template.
 fn install_branch_protection_script(project_root: &Path) -> Result<()> {
-    let scripts_dir = project_root.join("scripts/hooks");
-    fs::create_dir_all(&scripts_dir).context("Failed to create scripts/hooks/")?;
-
-    let script_path = scripts_dir.join("branch-protection.sh");
-
-    if script_path.exists() {
-        let existing = fs::read_to_string(&script_path).unwrap_or_default();
-        if !existing.contains("Installed by: csa setup review-gate") {
-            return Ok(());
-        }
-    }
-
-    fs::write(&script_path, BRANCH_PROTECTION_TEMPLATE)
-        .context("Failed to write branch-protection.sh")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&script_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms)?;
-    }
-
-    Ok(())
+    install_managed_hook_script(
+        project_root,
+        "scripts/hooks/branch-protection.sh",
+        BRANCH_PROTECTION_TEMPLATE,
+        "branch-protection.sh",
+    )
 }
 
 /// Write `scripts/hooks/review-check.sh` from the embedded template.
 fn install_review_check_script(project_root: &Path) -> Result<()> {
-    let scripts_dir = project_root.join("scripts/hooks");
-    fs::create_dir_all(&scripts_dir).context("Failed to create scripts/hooks/")?;
+    install_managed_hook_script(
+        project_root,
+        "scripts/hooks/review-check.sh",
+        REVIEW_CHECK_TEMPLATE,
+        "review-check.sh",
+    )
+}
 
-    let script_path = scripts_dir.join("review-check.sh");
+fn install_managed_hook_script(
+    project_root: &Path,
+    relative_path: &str,
+    template: &str,
+    hook_name: &str,
+) -> Result<()> {
+    let script_path = project_root.join(relative_path);
+    let existing = match fs::read(&script_path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            warn!(
+                path = %script_path.display(),
+                error = %error,
+                "review-gate hook install: failed to read existing hook; leaving it untouched"
+            );
+            return Ok(());
+        }
+    };
+    let tracked_status = existing
+        .as_ref()
+        .map_or(HookTrackingStatus::Untracked, |_| {
+            hook_tracking_status(project_root, relative_path)
+        });
 
-    // Do not overwrite an existing script unless we installed it (check for our marker comment).
-    if script_path.exists() {
-        let existing = fs::read_to_string(&script_path).unwrap_or_default();
-        if !existing.contains("Installed by: csa setup review-gate") {
-            // User has a custom script — leave it untouched.
+    match should_install_hook(existing.as_deref(), template.as_bytes(), tracked_status) {
+        HookInstallDecision::Write => {}
+        HookInstallDecision::SkipIdentical => return Ok(()),
+        HookInstallDecision::SkipTracked => {
+            warn!(
+                path = %script_path.display(),
+                "review-gate hook install: respecting git-tracked hook; CSA will not manage or overwrite it"
+            );
+            return Ok(());
+        }
+        HookInstallDecision::SkipUnmanaged => {
+            warn!(
+                path = %script_path.display(),
+                "review-gate hook install: existing hook is not CSA-managed (missing install marker); leaving it untouched"
+            );
             return Ok(());
         }
     }
 
-    fs::write(&script_path, REVIEW_CHECK_TEMPLATE).context("Failed to write review-check.sh")?;
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).context("Failed to create scripts/hooks/")?;
+    }
+    fs::write(&script_path, template).with_context(|| format!("Failed to write {hook_name}"))?;
 
     #[cfg(unix)]
     {
