@@ -18,40 +18,6 @@ fn wait_for_process_command_line_contains(pid: u32, expected: &str) -> bool {
     read_process_command_line(pid).is_some_and(|cmdline| cmdline.contains(expected))
 }
 
-#[cfg(unix)]
-struct PathEnvGuard {
-    previous: Option<std::ffi::OsString>,
-}
-
-#[cfg(unix)]
-impl PathEnvGuard {
-    fn prepend(path: &std::path::Path) -> Self {
-        let previous = std::env::var_os("PATH");
-        let mut paths = vec![path.to_path_buf()];
-        if let Some(existing) = previous.as_ref() {
-            paths.extend(std::env::split_paths(existing));
-        }
-        let joined = std::env::join_paths(paths).expect("join PATH entries");
-        // SAFETY: this unit test is Unix-only and restores PATH on drop; csa-process
-        // tests do not concurrently mutate PATH.
-        unsafe { std::env::set_var("PATH", joined) };
-        Self { previous }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for PathEnvGuard {
-    fn drop(&mut self) {
-        // SAFETY: restores the process PATH value captured by this test guard.
-        unsafe {
-            match self.previous.as_ref() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-}
-
 #[test]
 fn lock_file_is_recent_false_when_stale() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -515,15 +481,16 @@ fn fatal_error_signal_excludes_model_output_channel() {
 #[test]
 fn provider_error_scan_does_not_spawn_tmux_capture_pane() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let session_dir = tmp.path().join("01KTMUXPROBE0000000000000000");
     let bin_dir = tmp.path().join("bin");
-    fs::create_dir_all(&session_dir).expect("create session dir");
+    let empty_path_dir = tmp.path().join("empty-path");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
+    fs::create_dir_all(&empty_path_dir).expect("create empty PATH dir");
 
     let fake_tmux = bin_dir.join("tmux");
+    let tmux_called = tmp.path().join("tmux-called");
     fs::write(
         &fake_tmux,
-        "#!/bin/sh\nprintf invoked >> \"$(dirname \"$0\")/tmux-called\"\nprintf 'provider envelope: quota exceeded\\n'\n",
+        "#!/bin/sh\nprintf invoked >> \"$CSA_FAKE_TMUX_CALLED\"\nprintf 'provider envelope: quota exceeded\\n'\n",
     )
     .expect("write fake tmux");
     let mut permissions = fs::metadata(&fake_tmux)
@@ -532,15 +499,75 @@ fn provider_error_scan_does_not_spawn_tmux_capture_pane() {
     std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
     fs::set_permissions(&fake_tmux, permissions).expect("chmod fake tmux");
 
-    let _path_guard = PathEnvGuard::prepend(&bin_dir);
+    let present_session_dir = tmp.path().join("01KTMUXPROBEPRESENT000000000");
+    fs::create_dir_all(&present_session_dir).expect("create present session dir");
+    run_provider_error_scan_helper(
+        &present_session_dir,
+        &bin_dir,
+        &tmux_called,
+        tmp.path().join("present-ran"),
+    );
+    assert!(
+        !tmux_called.exists(),
+        "#1670 regression: provider-error liveness probes must not fork tmux even when it is on PATH"
+    );
+
+    let missing_session_dir = tmp.path().join("01KTMUXPROBEMISSING000000000");
+    fs::create_dir_all(&missing_session_dir).expect("create missing session dir");
+    run_provider_error_scan_helper(
+        &missing_session_dir,
+        &empty_path_dir,
+        &tmux_called,
+        tmp.path().join("missing-ran"),
+    );
+    assert!(
+        !tmux_called.exists(),
+        "stderr-only provider scan should not need tmux after binary-missing probes"
+    );
+}
+
+#[cfg(unix)]
+fn run_provider_error_scan_helper(
+    session_dir: &std::path::Path,
+    path: &std::path::Path,
+    tmux_called: &std::path::Path,
+    ran_marker: std::path::PathBuf,
+) {
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .arg("provider_error_scan_tmux_path_helper")
+        .arg("--ignored")
+        .env("CSA_PROVIDER_ERROR_SCAN_SESSION_DIR", session_dir)
+        .env("CSA_PROVIDER_ERROR_SCAN_RAN_MARKER", &ran_marker)
+        .env("CSA_FAKE_TMUX_CALLED", tmux_called)
+        .env("PATH", path)
+        .output()
+        .expect("run provider error helper");
+    assert!(
+        output.status.success(),
+        "provider error helper failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        ran_marker.exists(),
+        "provider error helper filter did not execute the helper test"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn provider_error_scan_tmux_path_helper() {
+    let session_dir = std::env::var_os("CSA_PROVIDER_ERROR_SCAN_SESSION_DIR")
+        .map(std::path::PathBuf::from)
+        .expect("helper session dir");
+    let ran_marker = std::env::var_os("CSA_PROVIDER_ERROR_SCAN_RAN_MARKER")
+        .map(std::path::PathBuf::from)
+        .expect("helper ran marker");
 
     assert!(
         !ToolLiveness::probe(&session_dir).fatal_error,
         "provider-error scan must not read marker text from tmux capture-pane"
-    );
-    assert!(
-        !bin_dir.join("tmux-called").exists(),
-        "#1670 regression: non-tmux liveness probes must not fork tmux"
     );
 
     fs::write(
@@ -552,10 +579,7 @@ fn provider_error_scan_does_not_spawn_tmux_capture_pane() {
         ToolLiveness::probe(&session_dir).fatal_error,
         "stderr transport markers must still fast-fail"
     );
-    assert!(
-        !bin_dir.join("tmux-called").exists(),
-        "stderr-only provider scan should not need tmux even when detecting a marker"
-    );
+    fs::write(ran_marker, "ran\n").expect("write helper ran marker");
 }
 
 #[test]
