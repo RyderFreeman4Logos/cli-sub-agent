@@ -169,6 +169,16 @@ pub(crate) fn resolve_review_thinking(
     })
 }
 
+pub(crate) fn resolve_review_readonly_configured(
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Option<bool> {
+    project_config
+        .and_then(|c| c.review.as_ref())
+        .and_then(|r| r.readonly_sandbox)
+        .or(global_config.review.readonly_sandbox)
+}
+
 fn resolve_review_tool_from_selection(
     selection: &csa_config::ToolSelection,
     parent_tool: Option<&str>,

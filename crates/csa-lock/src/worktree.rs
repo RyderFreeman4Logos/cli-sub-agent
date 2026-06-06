@@ -3,6 +3,8 @@ use crate::{
     read_lock_diagnostic,
 };
 use anyhow::Result;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 /// Guard for a write-capable CSA session sharing one git worktree.
@@ -16,8 +18,13 @@ pub struct WorktreeWriteLock {
 }
 
 enum WorktreeWriteLockKind {
-    Acquired { _lock: SessionLock },
-    LineageReentry { holder_session_id: String },
+    Acquired {
+        _lock: SessionLock,
+        owner_session_id: String,
+    },
+    LineageReentry {
+        holder_session_id: String,
+    },
 }
 
 impl std::fmt::Debug for WorktreeWriteLock {
@@ -60,18 +67,74 @@ impl WorktreeWriteLock {
     }
 }
 
+impl Drop for WorktreeWriteLock {
+    fn drop(&mut self) {
+        let WorktreeWriteLockKind::Acquired {
+            owner_session_id, ..
+        } = &self.inner
+        else {
+            return;
+        };
+
+        match read_lock_diagnostic(&self.lock_path) {
+            Ok(Some(diagnostic))
+                if diagnostic.holder_session_id.as_deref() == Some(owner_session_id.as_str()) =>
+            {
+                // Remove while the fd-level flock is still held so this drop
+                // cannot remove a successor's freshly-created lock file.
+                match fs::remove_file(&self.lock_path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == ErrorKind::NotFound => {}
+                    Err(err) => tracing::warn!(
+                        lock_path = %self.lock_path.display(),
+                        owner_session_id,
+                        error = %err,
+                        "failed to remove worktree write lock file on drop"
+                    ),
+                }
+            }
+            Ok(Some(diagnostic)) => tracing::warn!(
+                lock_path = %self.lock_path.display(),
+                owner_session_id,
+                current_holder = diagnostic.holder_session_id.as_deref().unwrap_or("unknown"),
+                "skipping worktree write lock removal because lock file holder changed"
+            ),
+            Ok(None) => tracing::warn!(
+                lock_path = %self.lock_path.display(),
+                owner_session_id,
+                "skipping worktree write lock removal because diagnostic is unreadable"
+            ),
+            Err(err) => {
+                if self.lock_path.exists() {
+                    tracing::warn!(
+                        lock_path = %self.lock_path.display(),
+                        owner_session_id,
+                        error = %err,
+                        "skipping worktree write lock removal after diagnostic read failure"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Acquire a fail-fast exclusive write lock for a canonical git worktree root.
 ///
 /// Lock path:
 /// `${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/worktree-write-locks/<sha256(canonical(worktree_root))>/exclusive.lock`
 ///
 /// If the lock holder is one of `ancestor_session_ids`, the current session is
-/// allowed to proceed under the ancestor's flock. This prevents fork-call child
-/// sessions from self-deadlocking while still blocking unrelated write sessions.
+/// allowed to proceed only while that ancestor is still live. This prevents
+/// fork-call child sessions from self-deadlocking while still blocking stale
+/// lineage diagnostics that name dead ancestors.
+///
+/// `holder_session_is_live` must read caller-owned session state, not process
+/// PID liveness; `csa-lock` stays independent of the session registry crate.
 pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
     ancestor_session_ids: &[String],
+    holder_session_is_live: impl Fn(&str) -> bool,
 ) -> Result<WorktreeWriteLock> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -93,7 +156,10 @@ pub fn acquire_worktree_write_lock(
         Some(&canonical_root),
     ) {
         Ok(lock) => Ok(WorktreeWriteLock {
-            inner: WorktreeWriteLockKind::Acquired { _lock: lock },
+            inner: WorktreeWriteLockKind::Acquired {
+                _lock: lock,
+                owner_session_id: session_id.to_string(),
+            },
             lock_path,
         }),
         Err(lock_error) => {
@@ -104,6 +170,7 @@ pub fn acquire_worktree_write_lock(
                 && ancestor_session_ids
                     .iter()
                     .any(|ancestor| ancestor == holder_session_id)
+                && holder_session_is_live(holder_session_id)
             {
                 return Ok(WorktreeWriteLock {
                     inner: WorktreeWriteLockKind::LineageReentry {
@@ -130,101 +197,5 @@ pub fn acquire_worktree_write_lock(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::ffi::OsString;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-    use tempfile::tempdir;
-
-    fn env_test_lock() -> MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set_os(key: &'static str, value: &Path) -> Self {
-            let original = std::env::var_os(key);
-            // SAFETY: test-scoped env mutation is isolated to the current test.
-            unsafe { std::env::set_var(key, value) };
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                // SAFETY: test-scoped env restoration is isolated to the current test.
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                // SAFETY: test-scoped env restoration is isolated to the current test.
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
-    }
-
-    #[test]
-    fn test_worktree_write_lock_conflicts_for_same_worktree_root() {
-        let _env_lock = env_test_lock();
-        let state_home = tempdir().expect("state-home tempdir");
-        let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
-
-        let worktree_root = tempdir().expect("worktree tempdir");
-        let _lock1 = acquire_worktree_write_lock(worktree_root.path(), "01PARENT", &[])
-            .expect("first worktree write lock should succeed");
-
-        let err = acquire_worktree_write_lock(worktree_root.path(), "01OTHER", &[])
-            .expect_err("non-lineage writer should fail fast")
-            .to_string();
-
-        assert!(err.contains("01PARENT"), "missing holder session id: {err}");
-        assert!(
-            err.contains(&worktree_root.path().display().to_string()),
-            "missing worktree path: {err}"
-        );
-        assert!(
-            err.contains("sequentially"),
-            "missing serialize guidance: {err}"
-        );
-    }
-
-    #[test]
-    fn test_worktree_write_lock_allows_lineage_reentry() {
-        let _env_lock = env_test_lock();
-        let state_home = tempdir().expect("state-home tempdir");
-        let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
-
-        let worktree_root = tempdir().expect("worktree tempdir");
-        let _parent = acquire_worktree_write_lock(worktree_root.path(), "01PARENT", &[])
-            .expect("parent worktree write lock should succeed");
-
-        let child =
-            acquire_worktree_write_lock(worktree_root.path(), "01CHILD", &["01PARENT".to_string()])
-                .expect("child should re-enter under ancestor lock");
-
-        assert!(child.is_lineage_reentry());
-        assert_eq!(child.holder_session_id(), Some("01PARENT"));
-    }
-
-    #[test]
-    fn test_worktree_write_lock_allows_different_worktree_roots() {
-        let _env_lock = env_test_lock();
-        let state_home = tempdir().expect("state-home tempdir");
-        let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
-
-        let worktree_a = tempdir().expect("worktree a tempdir");
-        let worktree_b = tempdir().expect("worktree b tempdir");
-
-        let lock_a = acquire_worktree_write_lock(worktree_a.path(), "01A", &[]);
-        let lock_b = acquire_worktree_write_lock(worktree_b.path(), "01B", &[]);
-
-        assert!(lock_a.is_ok());
-        assert!(lock_b.is_ok());
-    }
-}
+#[path = "worktree_tests.rs"]
+mod tests;

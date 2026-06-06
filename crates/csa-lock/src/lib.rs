@@ -26,14 +26,16 @@ use std::path::{Path, PathBuf};
 /// Diagnostic information written to lock files
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LockDiagnostic {
-    pid: u32,
+    pub(crate) pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pid_start_time_ticks: Option<u64>,
     tool_name: String,
-    acquired_at: DateTime<Utc>,
+    pub(crate) acquired_at: DateTime<Utc>,
     reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) holder_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    resource_path: Option<String>,
+    pub(crate) resource_path: Option<String>,
 }
 
 /// Session lock guard backed by `flock(2)`.
@@ -139,6 +141,7 @@ pub(crate) fn acquire_lock_at_path_with_metadata(
 
         let diagnostic = LockDiagnostic {
             pid: std::process::id(),
+            pid_start_time_ticks: process_start_time_ticks(std::process::id()),
             tool_name: lock_name.to_string(),
             acquired_at: Utc::now(),
             reason: reason.to_string(),
@@ -175,6 +178,18 @@ pub(crate) fn acquire_lock_at_path_with_metadata(
 
         Err(anyhow::anyhow!(error_msg))
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn process_start_time_ticks(pid: u32) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(") ")?.1;
+    after_comm.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn process_start_time_ticks(_pid: u32) -> Option<u64> {
+    None
 }
 
 fn format_lock_diagnostic(diagnostic: &LockDiagnostic) -> String {
