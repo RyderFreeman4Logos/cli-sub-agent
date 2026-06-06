@@ -66,10 +66,10 @@ fn session_mutates_worktree(readonly_project_root: bool) -> bool {
 
 fn holder_session_liveness(project_root: &Path, session_id: &str) -> HolderSessionLiveness {
     match csa_session::load_session(project_root, session_id) {
-        Ok(session) => classify_holder_session(&session),
+        Ok(session) => classify_loaded_holder_session(&session),
         Err(project_err) => match csa_session::load_session_global_exact(session_id) {
-            Ok(Some(session)) => classify_holder_session(&session),
-            Ok(None) => HolderSessionLiveness::Dead,
+            Ok(Some(session)) => classify_loaded_holder_session(&session),
+            Ok(None) => HolderSessionLiveness::RegistryAbsent,
             Err(global_err) => {
                 tracing::warn!(
                     session_id,
@@ -83,7 +83,7 @@ fn holder_session_liveness(project_root: &Path, session_id: &str) -> HolderSessi
     }
 }
 
-fn classify_holder_session(session: &MetaSessionState) -> HolderSessionLiveness {
+fn classify_loaded_holder_session(session: &MetaSessionState) -> HolderSessionLiveness {
     let project_root = Path::new(&session.project_path);
     let session_dir = match csa_session::get_session_dir(project_root, &session.meta_session_id) {
         Ok(dir) => dir,
@@ -208,6 +208,8 @@ fn push_lineage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use std::fs;
 
     #[test]
     fn worktree_mutation_predicate_keys_on_readonly_not_session_type() {
@@ -225,8 +227,9 @@ mod tests {
     #[test]
     fn holder_session_liveness_treats_completed_active_session_as_dead() {
         let temp = tempfile::tempdir().unwrap();
-        let session = csa_session::create_session(temp.path(), Some("done"), None, Some("codex"))
-            .expect("create session");
+        let session =
+            csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
+                .expect("create session");
         save_success_result(temp.path(), &session.meta_session_id);
 
         assert_eq!(
@@ -239,7 +242,7 @@ mod tests {
     fn holder_session_liveness_keeps_active_session_without_result_live() {
         let temp = tempfile::tempdir().unwrap();
         let session =
-            csa_session::create_session(temp.path(), Some("running"), None, Some("codex"))
+            csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
                 .expect("create session");
 
         assert_eq!(
@@ -249,16 +252,29 @@ mod tests {
     }
 
     #[test]
+    fn holder_session_liveness_keeps_missing_registry_entry_distinct_from_dead() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing_session_id = csa_session::new_session_id();
+
+        assert_eq!(
+            holder_session_liveness(temp.path(), &missing_session_id),
+            HolderSessionLiveness::RegistryAbsent
+        );
+    }
+
+    #[test]
     fn acquire_if_needed_reclaims_completed_holder_session_lock() {
         let temp = tempfile::tempdir().unwrap();
-        let holder = csa_session::create_session(temp.path(), Some("done"), None, Some("codex"))
-            .expect("create holder session");
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
+                .expect("create holder session");
         save_success_result(temp.path(), &holder.meta_session_id);
         let _holder_lock =
             csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
                 .expect("holder lock");
-        let candidate = csa_session::create_session(temp.path(), Some("next"), None, Some("codex"))
-            .expect("create candidate session");
+        let candidate =
+            csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
+                .expect("create candidate session");
 
         let lock = acquire_if_needed(temp.path(), &candidate, false)
             .expect("completed holder should be reclaimed")
@@ -268,15 +284,51 @@ mod tests {
     }
 
     #[test]
+    fn acquire_if_needed_reclaims_registry_absent_holder_only_when_pid_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("gone"), None, Some("codex"))
+                .expect("create holder session");
+        let holder_session_id = holder.meta_session_id.clone();
+        let holder_lock =
+            csa_lock::acquire_worktree_write_lock(temp.path(), &holder_session_id, &[])
+                .expect("holder lock");
+        overwrite_worktree_lock_diagnostic(
+            holder_lock.lock_path(),
+            missing_pid(),
+            &holder_session_id,
+            temp.path(),
+        );
+        csa_session::delete_session(temp.path(), &holder_session_id).expect("delete holder");
+        let candidate =
+            csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
+                .expect("create candidate session");
+        assert_eq!(
+            holder_session_liveness(temp.path(), &holder_session_id),
+            HolderSessionLiveness::RegistryAbsent
+        );
+
+        let lock = acquire_if_needed(temp.path(), &candidate, false)
+            .expect("missing registry entry with dead pid should be reclaimed")
+            .expect("writer should acquire a lock");
+
+        assert!(!lock.is_lineage_reentry());
+        drop(holder_lock);
+        drop(lock);
+    }
+
+    #[test]
     fn acquire_if_needed_keeps_active_holder_session_blocked() {
         let temp = tempfile::tempdir().unwrap();
-        let holder = csa_session::create_session(temp.path(), Some("running"), None, Some("codex"))
-            .expect("create holder session");
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
+                .expect("create holder session");
         let _holder_lock =
             csa_lock::acquire_worktree_write_lock(temp.path(), &holder.meta_session_id, &[])
                 .expect("holder lock");
-        let candidate = csa_session::create_session(temp.path(), Some("next"), None, Some("codex"))
-            .expect("create candidate session");
+        let candidate =
+            csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
+                .expect("create candidate session");
 
         let err = acquire_if_needed(temp.path(), &candidate, false)
             .expect_err("active holder with no result must still block")
@@ -284,6 +336,84 @@ mod tests {
 
         assert!(err.contains("concurrent write session blocked"));
         assert!(err.contains(&holder.meta_session_id));
+    }
+
+    #[test]
+    fn acquire_if_needed_blocks_registry_absent_holder_with_signalable_pid() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("missing"), None, Some("codex"))
+                .expect("create holder session");
+        let holder_session_id = holder.meta_session_id.clone();
+        let holder_lock =
+            csa_lock::acquire_worktree_write_lock(temp.path(), &holder_session_id, &[])
+                .expect("holder lock");
+        let lock_path = holder_lock.lock_path().to_path_buf();
+        overwrite_worktree_lock_diagnostic(
+            &lock_path,
+            std::process::id(),
+            &holder_session_id,
+            temp.path(),
+        );
+        csa_session::delete_session(temp.path(), &holder_session_id).expect("delete holder");
+        let candidate =
+            csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
+                .expect("create candidate session");
+        assert_eq!(
+            holder_session_liveness(temp.path(), &holder_session_id),
+            HolderSessionLiveness::RegistryAbsent
+        );
+
+        let err = acquire_if_needed(temp.path(), &candidate, false)
+            .expect_err("missing registry entry with signalable pid must block")
+            .to_string();
+
+        assert!(err.contains("concurrent write session blocked"));
+        assert!(err.contains(&holder_session_id));
+        assert!(
+            lock_path.exists(),
+            "canonical lock path must not be moved aside"
+        );
+    }
+
+    #[test]
+    fn acquire_if_needed_blocks_unreadable_holder_state_with_signalable_pid() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("corrupt"), None, Some("codex"))
+                .expect("create holder session");
+        let holder_session_id = holder.meta_session_id.clone();
+        let holder_lock =
+            csa_lock::acquire_worktree_write_lock(temp.path(), &holder_session_id, &[])
+                .expect("holder lock");
+        let lock_path = holder_lock.lock_path().to_path_buf();
+        overwrite_worktree_lock_diagnostic(
+            &lock_path,
+            std::process::id(),
+            &holder_session_id,
+            temp.path(),
+        );
+        let holder_dir =
+            csa_session::get_session_dir(temp.path(), &holder_session_id).expect("holder dir");
+        fs::write(holder_dir.join("state.toml"), "not valid toml").expect("corrupt state");
+        let candidate =
+            csa_session::create_session_fresh(temp.path(), Some("next"), None, Some("codex"))
+                .expect("create candidate session");
+        assert_eq!(
+            holder_session_liveness(temp.path(), &holder_session_id),
+            HolderSessionLiveness::Unknown
+        );
+
+        let err = acquire_if_needed(temp.path(), &candidate, false)
+            .expect_err("unreadable holder state must block")
+            .to_string();
+
+        assert!(err.contains("concurrent write session blocked"));
+        assert!(err.contains(&holder_session_id));
+        assert!(
+            lock_path.exists(),
+            "canonical lock path must not be moved aside"
+        );
     }
 
     fn save_success_result(project_root: &Path, session_id: &str) {
@@ -313,5 +443,39 @@ mod tests {
             },
         )
         .expect("save result");
+    }
+
+    fn overwrite_worktree_lock_diagnostic(
+        lock_path: &Path,
+        pid: u32,
+        session_id: &str,
+        worktree_root: &Path,
+    ) {
+        let diagnostic = serde_json::json!({
+            "pid": pid,
+            "tool_name": "worktree-write:exclusive",
+            "acquired_at": Utc::now(),
+            "reason": format!(
+                "write session {session_id} holds worktree {}",
+                worktree_root.display()
+            ),
+            "holder_session_id": session_id,
+            "resource_path": worktree_root.display().to_string(),
+        });
+        fs::write(lock_path, serde_json::to_string(&diagnostic).unwrap())
+            .expect("overwrite lock diagnostic");
+    }
+
+    fn missing_pid() -> u32 {
+        [4_000_000, 8_000_000, 16_000_000, 1_000_000_000]
+            .into_iter()
+            .find(|pid| process_is_missing(*pid))
+            .expect("test host should have at least one definitely missing pid")
+    }
+
+    fn process_is_missing(pid: u32) -> bool {
+        // SAFETY: signal 0 checks process existence without sending a signal.
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        ret != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
     }
 }

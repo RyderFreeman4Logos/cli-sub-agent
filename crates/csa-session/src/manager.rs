@@ -253,14 +253,12 @@ pub fn load_session(project_path: &Path, session_id: &str) -> Result<MetaSession
 /// Load a session via global exact ULID lookup (cross-project, read-only).
 ///
 /// Returns `None` if no session with this exact ULID is found anywhere.
+/// Returns an error if an exact registry entry exists but cannot be loaded.
 /// Unlike `load_session`, this bypasses project path validation.
 pub fn load_session_global_exact(session_id: &str) -> Result<Option<MetaSessionState>> {
     use manager_paths::resolve_read_base_dir_global_exact;
     if let Some((base_dir, _)) = resolve_read_base_dir_global_exact(session_id)? {
-        match load_session_in(&base_dir, session_id) {
-            Ok(state) => return Ok(Some(state)),
-            Err(_) => return Ok(None),
-        }
+        return load_session_in(&base_dir, session_id).map(Some);
     }
     Ok(None)
 }
