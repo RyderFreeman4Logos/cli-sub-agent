@@ -40,7 +40,7 @@ use output_helpers::{
     append_actionable_detail_for_opaque_payload, drain_if_over_high_water, extract_summary,
     failure_summary, flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat,
     parse_legacy_terminal_reason, resolve_actionable_failure_detail, resolve_heartbeat_interval,
-    sanitize_opaque_object_payloads, spool_chunk,
+    sanitize_opaque_object_payloads, should_tee_stderr_to_parent, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
@@ -266,3 +266,6 @@ mod tests_heartbeat;
 #[cfg(test)]
 #[path = "lib_tests_retry.rs"]
 mod tests_retry;
+#[cfg(test)]
+#[path = "lib_tests_stderr_dedup.rs"]
+mod tests_stderr_dedup;
