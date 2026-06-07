@@ -20,6 +20,9 @@ name = "CURRENT_BRANCH"
 [[workflow.variables]]
 name = "DEFAULT_BRANCH"
 [[workflow.variables]]
+name = "DEV2MERGE_MODE"
+default = "full"
+[[workflow.variables]]
 name = "DEV2MERGE_SKIP"
 [[workflow.variables]]
 name = "DIFF_LINES"
@@ -91,6 +94,8 @@ name = "PR_STATE"
 name = "PR_URL"
 [[workflow.variables]]
 name = "REMOTE_SHA"
+[[workflow.variables]]
+name = "RESUME_MODE"
 [[workflow.variables]]
 name = "REVIEW_COMPLETED"
 [[workflow.variables]]
@@ -179,10 +184,19 @@ prompt = '''
 Detect whether changes are docs/config-only. When FAST_PATH=true,
 skip mktd/mktsk/debate but keep L1/L2 quality checks. An empty diff
 vs the base branch is NOT docs-only; it must stay on the full plan
-path to avoid no-op commit/version-bump steps.
+path to avoid no-op commit/version-bump steps. Also classify resume
+runs: when DEV2MERGE_MODE=resume the implementation already exists, so
+RESUME_MODE gates the planning steps (mktd/mktsk) off while every
+review/merge gate downstream still runs.
 
 ```bash
 set -euo pipefail
+# Resume-mode classification (#1662): skip planning when DEV2MERGE_MODE=resume.
+RESUME_MODE=false
+if [ "${DEV2MERGE_MODE:-full}" = "resume" ]; then
+  RESUME_MODE=true
+fi
+echo "CSA_VAR:RESUME_MODE=${RESUME_MODE}"
 CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | awk '!/\.(md|txt|lock|toml)$/ { count++ } END { print count + 0 }')"
 TOTAL_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | wc -l | xargs)"
 TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
@@ -329,7 +343,7 @@ bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}"
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
 csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
-echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "(!(${DEV2MERGE_SKIP})) && (${FAST_PATH})"
@@ -442,7 +456,7 @@ echo "CSA_VAR:MKTD_TODO_TIMESTAMP=${LATEST_TS}"
 echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 ```'''
 on_fail = "abort"
-condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH}))"
+condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH})) && (!(${RESUME_MODE}))"
 
 [[workflow.steps]]
 id = 8
@@ -454,10 +468,64 @@ Run mktsk in main context with TODO `${MKTD_TODO_TIMESTAMP}` and
 `[CSA:<value>]` impl tasks use `csa run`; `Implementation override: csa run ...`
 wins, else tier-*→`--tier`, other→`--tool`."""
 on_fail = "abort"
-condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH}))"
+condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH})) && (!(${RESUME_MODE}))"
 
 [[workflow.steps]]
 id = 9
+title = "Resume Commit"
+tool = "bash"
+prompt = '''
+Resume mode (DEV2MERGE_MODE=resume) skips mktd/mktsk because the work is
+already implemented on the branch. Run the L2 test gate, then commit any
+uncommitted remainder so the review/push gates see the full diff. Mirrors
+the FAST_PATH commit (Step 4); fails closed when there is no work to merge.
+
+```bash
+set -euo pipefail
+if [ -f Cargo.toml ]; then
+  just test
+elif [ -f pyproject.toml ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+    just test
+  elif command -v pytest >/dev/null 2>&1; then
+    pytest
+  fi
+elif [ -f package.json ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+    just test
+  elif command -v vitest >/dev/null 2>&1; then
+    vitest run
+  fi
+elif [ -f go.mod ]; then
+  go test ./...
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+  just test
+else
+  echo "WARNING: No recognized test runner; skipping L2 test gate."
+fi
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+if [ -z "$(git status --porcelain)" ]; then
+  COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
+  if [ "${COMMITS_AHEAD}" -gt 0 ]; then
+    echo "Resume Commit: working tree clean, ${COMMITS_AHEAD} commit(s) ahead — nothing to commit."
+    exit 0
+  fi
+  echo "ERROR: resume mode requires committed or staged work, but the tree is clean with 0 commits ahead of ${DEFAULT_BRANCH}."
+  exit 1
+fi
+git add -A
+if ! git diff --cached --name-only | grep -q .; then
+  echo "ERROR: No staged files after staging dirty working tree."
+  exit 1
+fi
+COMMIT_MSG="$(scripts/gen_commit_msg.sh "${SCOPE:-}" 2>/dev/null || echo "chore: commit resumed work")"
+git commit -m "${COMMIT_MSG}"
+```'''
+on_fail = "abort"
+condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH})) && (${RESUME_MODE})"
+
+[[workflow.steps]]
+id = 10
 title = "Ensure Version Bumped"
 tool = "bash"
 prompt = '''
@@ -475,7 +543,7 @@ on_fail = "abort"
 condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH}))"
 
 [[workflow.steps]]
-id = 10
+id = 11
 title = "Self-Review Gate"
 tool = "manual"
 prompt = """
@@ -492,14 +560,14 @@ on_fail = "abort"
 condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH}))"
 
 [[workflow.steps]]
-id = 11
+id = 12
 title = "Pre-PR Cumulative Review Gate"
 tool = "bash"
 prompt = '''
 Cumulative review covering all commits since the default branch.
 Sets REVIEW_COMPLETED=true as gate for push step.
 REVIEW_COMPLETED is declared in workflow variables so CSA_VAR injection survives
-into Step 12.
+into Step 13.
 
 ```bash
 set -euo pipefail
@@ -507,7 +575,7 @@ bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}"
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
 csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
-echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 13)" required=true -->'
 ```
 
 When global config sets `[review].batch_commits >= 2`, intermediate cumulative
@@ -518,7 +586,7 @@ on_fail = "abort"
 condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH}))"
 
 [[workflow.steps]]
-id = 12
+id = 13
 title = "Push Gate"
 tool = "bash"
 prompt = '''
@@ -553,16 +621,16 @@ if [ "${DIFF_LINES}" -eq 0 ]; then
   exit 1
 fi
 CSA_SKIP_REVIEW_CHECK=1 \
-CSA_SKIP_REVIEW_CHECK_REASON="dev2merge Step 12 push after Step 11 review verification" \
+CSA_SKIP_REVIEW_CHECK_REASON="dev2merge Step 13 push after Step 12 review verification" \
   git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
-echo '<!-- CSA:NEXT_STEP cmd="verify review verdict (Step 13)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="verify review verdict (Step 14)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"
 
 [[workflow.steps]]
-id = 13
+id = 14
 title = "Pre-PR Review Verdict Check"
 tool = "bash"
 prompt = '''
@@ -573,19 +641,19 @@ review verdict for the full cumulative diff (`${DEFAULT_BRANCH}...HEAD`).
 set -euo pipefail
 csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_VERDICT_CHECKED=true"
-echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 14)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 15)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"
 
 [[workflow.steps]]
-id = 14
+id = 15
 title = "Create or Reuse Pull Request"
 tool = "bash"
 prompt = '''
 Create or reuse a PR for the current branch. Outputs PR_NUMBER and PR_URL
 as CSA_VARs for the next step. This step does NOT trigger pr-bot —
-that is a separate hard gate in Step 15.
+that is a separate hard gate in Step 16.
 
 ```bash
 set -euo pipefail
@@ -636,19 +704,19 @@ fi
 echo "PR #${PR_NUMBER} resolved: ${PR_URL}"
 echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
 echo "CSA_VAR:PR_URL=${PR_URL}"
-echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml (Step 15)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml (Step 16)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"
 
 [[workflow.steps]]
-id = 15
+id = 16
 title = "pr-bot Review & Merge Gate (HARD GATE)"
 tool = "bash"
 prompt = '''
 **MANDATORY**: This step MUST NOT be skipped. It runs pr-bot which performs
 cloud review (if enabled) and the actual merge. Without this step completing
-successfully, the PR remains unmerged and Step 16 will fail.
+successfully, the PR remains unmerged and Step 17 will fail.
 
 Uses marker files for idempotency: skips if pr-bot already completed for
 the same PR/HEAD combination.
@@ -656,7 +724,7 @@ the same PR/HEAD combination.
 ```bash
 set -euo pipefail
 if [ -z "${PR_NUMBER:-}" ]; then
-  echo "ERROR: PR_NUMBER not set — Step 14 must run first." >&2
+  echo "ERROR: PR_NUMBER not set — Step 15 must run first." >&2
   exit 1
 fi
 HEAD_SHA="$(git rev-parse --verify HEAD)"
@@ -684,7 +752,7 @@ trap cleanup_lock EXIT
 if [ -f "${DONE_MARKER}" ]; then
   echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
   echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 16)" required=true -->'
+  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 17)" required=true -->'
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
   echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
@@ -696,7 +764,7 @@ else
   if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
     touch "${DONE_MARKER}"
     echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 16)" required=true -->'
+    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 17)" required=true -->'
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
   else
@@ -709,7 +777,7 @@ on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"
 
 [[workflow.steps]]
-id = 16
+id = 17
 title = "Post-Merge Local Sync"
 tool = "bash"
 prompt = '''
@@ -718,17 +786,17 @@ by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
 ```bash
 set -euo pipefail
-# NOTE: PR_NUMBER comes from Step 14 (gh pr view/list). In fork workflows,
+# NOTE: PR_NUMBER comes from Step 15 (gh pr view/list). In fork workflows,
 # pr-bot may resolve a different PR via owner-aware lookup. For single-repo
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   # --- Deterministic gate: verify pr-bot completion marker ---
-  # Prefer exact marker path from Step 15 (CSA_VAR:PR_BOT_DONE_MARKER).
+  # Prefer exact marker path from Step 16 (CSA_VAR:PR_BOT_DONE_MARKER).
   # Fall back to repo-scoped glob if variable is unset (backwards compat).
   if [ -n "${PR_BOT_DONE_MARKER:-}" ]; then
     if [ ! -f "${PR_BOT_DONE_MARKER}" ]; then
       echo "ERROR: pr-bot marker not found: ${PR_BOT_DONE_MARKER}" >&2
-      echo "Step 15 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Step 16 (pr-bot) must complete successfully before post-merge sync." >&2
       exit 1
     fi
     echo "pr-bot completion marker verified (exact): ${PR_BOT_DONE_MARKER}"
@@ -744,7 +812,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
     MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
     if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
       echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
-      echo "Step 15 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Step 16 (pr-bot) must complete successfully before post-merge sync." >&2
       echo "Marker directory: ${MARKER_DIR}" >&2
       exit 1
     fi
