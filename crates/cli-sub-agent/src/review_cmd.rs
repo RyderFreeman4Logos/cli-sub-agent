@@ -544,6 +544,7 @@ pub(crate) async fn handle_review(
             review_mode: Some(review_mode.as_str().to_string()),
             max_rounds: args.max_rounds,
             initial_session_id: result.execution.meta_session_id.clone(),
+            codex_single: args.single,
             review_iterations,
             current_depth,
             startup_env,
