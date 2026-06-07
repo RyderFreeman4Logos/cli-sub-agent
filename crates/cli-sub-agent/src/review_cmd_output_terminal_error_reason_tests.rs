@@ -18,3 +18,18 @@ fn terminal_tool_error_reason_survives_trailing_stream_noise() {
         Some("HTTP 403 Forbidden: authentication failed")
     );
 }
+
+#[test]
+fn terminal_tool_error_reason_updates_after_prior_terminal_error() {
+    let transcript = [
+        r#"{"type":"system","subtype":"init"}"#,
+        r#"{"type":"result","subtype":"error_api","is_error":true,"result":"transient backend error"}"#,
+        r#"{"type":"turn.failed","error":{"message":"HTTP 403 Forbidden: authentication failed"}}"#,
+    ]
+    .join("\n");
+
+    assert_eq!(
+        terminal_tool_error_reason(&transcript).as_deref(),
+        Some("HTTP 403 Forbidden: authentication failed")
+    );
+}
