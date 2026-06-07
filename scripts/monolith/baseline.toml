@@ -290,14 +290,6 @@ issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
 [[files]]
-path = "crates/cli-sub-agent/src/run_cmd_attempt.rs"
-kind = "source"
-baseline_tokens = 11572
-baseline_lines = 820
-issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
-
-[[files]]
 path = "crates/cli-sub-agent/src/run_cmd_attempt_tests.rs"
 kind = "test"
 baseline_tokens = 10561
@@ -630,14 +622,6 @@ path = "crates/csa-lock/src/slot.rs"
 kind = "source"
 baseline_tokens = 8246
 baseline_lines = 729
-issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
-
-[[files]]
-path = "crates/csa-mcp-hub/src/serve.rs"
-kind = "source"
-baseline_tokens = 8123
-baseline_lines = 759
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
