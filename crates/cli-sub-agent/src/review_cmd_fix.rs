@@ -18,7 +18,6 @@ use csa_session::{
 
 use super::CLEAN;
 use super::output::{is_review_output_empty, sanitize_review_output};
-use super::resolve::ANTI_RECURSION_PREAMBLE;
 
 #[path = "review_cmd_fix_clean_output.rs"]
 mod clean_output;
@@ -28,6 +27,8 @@ mod convergence;
 mod diff_report_artifacts;
 #[path = "review_cmd_fix_noop.rs"]
 mod noop;
+#[path = "review_cmd_fix_prompt.rs"]
+mod prompt;
 use convergence::{
     FixTerminalOutcome, fix_exit_code_for_convergence, pre_verdict_non_convergence_reason,
 };
@@ -38,6 +39,9 @@ pub(crate) use diff_report_artifacts::{
     persist_fix_final_artifacts_for_tests_with_output_and_diff_report,
 };
 use noop::{FixNoOpProbe, apply_fix_loop_noop_signal, is_fix_loop_noop_failure_reason};
+#[cfg(test)]
+pub(super) use prompt::build_codex_single_fix_prompt;
+use prompt::build_fix_prompt;
 
 /// Context for review fix-loop execution.
 pub(crate) struct FixLoopContext<'a> {
@@ -71,6 +75,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub review_mode: Option<String>,
     pub max_rounds: u8,
     pub initial_session_id: String,
+    pub codex_single: bool,
     pub review_iterations: u32,
     pub current_depth: u32,
     pub startup_env: &'a crate::startup_env::StartupSubtreeEnv,
@@ -96,13 +101,13 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
     for round in 1..=ctx.max_rounds {
         info!(round, max_rounds = ctx.max_rounds, session_id = %session_id, "Fix round starting");
 
-        let fix_prompt = format!(
-            "{ANTI_RECURSION_PREAMBLE}\
-             Fix round {round}/{}.\n\
-             Fix all issues found in the review. Run formatting and linting commands as needed.\n\
-             After applying fixes, verify the changes compile and pass basic checks.\n\
-             If no issues remain, emit verdict: CLEAN.",
+        let fix_prompt = build_fix_prompt(
+            ctx.effective_tool,
+            ctx.codex_single,
+            round,
             ctx.max_rounds,
+            ctx.project_root,
+            &session_id,
         );
 
         let fix_future = super::execute_review_with_tier_filter(
