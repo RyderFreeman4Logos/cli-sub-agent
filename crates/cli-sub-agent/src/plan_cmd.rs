@@ -71,8 +71,8 @@ pub(crate) use crate::plan_cmd_journal::{
 // unused-import error in non-test builds.
 #[cfg(test)]
 pub(crate) use crate::plan_cmd_journal::{
-    PLAN_PIPELINE_SOURCE_CLI_ALIAS, PLAN_PIPELINE_SOURCE_DIRECT, RepoFingerprint,
-    default_plan_pipeline_source, normalize_path, safe_plan_name,
+    PLAN_PIPELINE_SOURCE_CLI_ALIAS, PLAN_PIPELINE_SOURCE_DIRECT, default_plan_pipeline_source,
+    normalize_path, safe_plan_name,
 };
 
 /// Workflow variable containing the fetched issue body from
@@ -305,7 +305,6 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         &workflow_path,
         &journal_path,
         &cli_variables,
-        &current_repo_fingerprint,
         explicit_resume,
     )?;
     if resume_context.resumed {
