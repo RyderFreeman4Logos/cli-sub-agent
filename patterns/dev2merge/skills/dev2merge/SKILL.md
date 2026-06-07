@@ -183,16 +183,16 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 |------|------|------|------|
 | 1 | Validate Branch | Not default branch/dev | bash |
 | 2 | FAST_PATH Detection | Diff-stat heuristic | bash |
-| 3 | L1/L2 Quality Gates | `just fmt && just clippy` | bash |
+| 3 | L1/L2 Quality Gates | language-aware lint/test gate | bash |
 | **IF FAST_PATH** | | | |
 | 4 | Simplified Commit | `just test && git commit` | bash |
-| 5 | Version Bump | `just bump-patch` if needed | bash |
+| 5 | Version Bump | Rust-only `just bump-patch` if needed; non-Rust skips | bash |
 | 6 | Pre-PR Review | `csa review --range` then `csa review --check-verdict --range` | bash |
 | **ELSE (Full Pipeline)** | | | |
 | 7 | Plan with mktd | `csa plan run patterns/mktd/workflow.toml` (skipped in resume mode) | bash |
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly, TaskCreate/TaskUpdate (skipped in resume mode) | main agent |
 | 9 | Resume Commit | resume mode only: L2 tests + commit uncommitted remainder | bash |
-| 10 | Version Bump | `just bump-patch` if needed | bash |
+| 10 | Version Bump | Rust-only `just bump-patch` if needed; non-Rust skips | bash |
 | 11 | Self-Review Gate | Main agent checks and fixes the full branch diff before CSA review | main agent |
 | 12 | Pre-PR Cumulative Review Gate | `csa review --range ${DEFAULT_BRANCH}...HEAD` then `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` | bash |
 | **ENDIF** | | | |
@@ -243,10 +243,10 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 
 1. Feature branch validated (not default branch/dev).
 2. FAST_PATH detection completed (heuristic applied).
-3. `just fmt` and `just clippy` exit 0 (L1/L2 gates).
+3. Language-aware L1/L2 gates exit 0.
 4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks via main agent.
 5. If FAST_PATH: simplified commit created with tests passing.
-6. Version bumped if needed.
+6. Rust repos have version bumped if needed; non-Rust repos skip version bump without aborting.
 7. Pre-PR cumulative review passed the PASS/CLEAN verdict check before setting `REVIEW_COMPLETED=true`.
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
 9. Pre-PR review verdict check passed (`csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD`).
