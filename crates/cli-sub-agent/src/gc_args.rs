@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 #[derive(Debug, clap::Args, Clone)]
 pub struct GcArgs {
     /// Show what would be removed without actually removing

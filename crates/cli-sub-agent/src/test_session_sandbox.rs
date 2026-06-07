@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 /// Redirect session state/cache I/O into a tempdir so tests work in sandboxed
 /// CI environments (avoids read-only host XDG paths leaking into test runs).
 ///
@@ -9,7 +10,7 @@
 use std::ffi::OsString;
 use tokio::sync::OwnedMutexGuard;
 
-use crate::test_env_lock::TEST_ENV_LOCK;
+use super::test_env_lock::TEST_ENV_LOCK;
 
 /// RAII guard that sandboxes session env vars and restores them on drop.
 ///

@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -97,7 +98,7 @@ pub enum Commands {
         /// Read prompt from a file; use `-` or `/dev/stdin` for stdin.
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         prompt_file: Option<PathBuf>,
-        /// Prepend summary/details/findings from a prior review session into the employee prompt
+        /// Add prior review context to the prompt
         #[arg(long, value_name = "SESSION_ID", value_parser = validate_ulid)]
         inline_context_from_review_session: Option<String>,
         /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
@@ -215,13 +216,11 @@ pub enum Commands {
         #[arg(long)]
         no_stream_stdout: bool,
 
-        /// Disable the #1652 fatal-error-marker scan (for CSA code/fixtures that
-        /// carry provider markers, #1745). Default on; OFF under
-        /// CSA_PATTERN_INTERNAL (#1847).
+        /// Disable provider fatal-marker scan (#1652/#1745); default on except CSA_PATTERN_INTERNAL.
         #[arg(long)]
         no_error_marker_scan: bool,
 
-        /// Force-enable the scan despite CSA_PATTERN_INTERNAL (#1847).
+        /// Force-enable the fatal-marker scan.
         #[arg(long, conflicts_with = "no_error_marker_scan")]
         error_marker_scan: bool,
 
@@ -233,7 +232,7 @@ pub enum Commands {
         #[arg(long)]
         no_preflight: bool,
 
-        /// Skip only the post-exec shell gate; external verification remains required.
+        /// Skip only the post-exec shell gate; external verification still applies.
         #[arg(long)]
         no_post_exec_gate: bool,
 
@@ -327,7 +326,7 @@ pub enum Commands {
     },
 
     /// Garbage collect stale session artifacts
-    Gc(crate::gc::GcArgs),
+    Gc(super::gc::GcArgs),
 
     /// Show/manage configuration
     Config {

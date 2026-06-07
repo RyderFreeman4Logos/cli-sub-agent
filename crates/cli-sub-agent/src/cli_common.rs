@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use anyhow::Result;
 
 /// Build version string combining Cargo.toml version and git describe.

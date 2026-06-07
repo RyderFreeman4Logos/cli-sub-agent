@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use std::fs;
 use std::path::Path;
 
@@ -5,7 +6,7 @@ use chrono::Utc;
 use csa_session::review_artifact::{ReviewArtifact, Severity, SeveritySummary};
 use csa_session::{create_session, get_session_dir};
 
-use crate::test_session_sandbox::ScopedSessionSandbox;
+use super::super::test_session_sandbox::ScopedSessionSandbox;
 
 use super::{
     BugClassCandidate, CONSOLIDATED_REVIEW_ARTIFACT_FILE, CaseStudy, SkillExtractor,

@@ -134,6 +134,7 @@ check-version-bumped:
 pre-commit-fast:
     just find-monolith-files
     just monolith-test
+    just check-path-includes
     just check-generated-artifacts
     just check-version-bumped
     just check-chinese
@@ -147,6 +148,13 @@ pre-commit:
     just pre-commit-fast
     just test
     just test-e2e
+
+# ==============================================================================
+
+# Ensure src modules pulled into integration test crates stay crate-root agnostic.
+check-path-includes:
+    ./scripts/hooks/check-path-included-src.sh --self-test
+    ./scripts/hooks/check-path-included-src.sh
 
 # ==============================================================================
 

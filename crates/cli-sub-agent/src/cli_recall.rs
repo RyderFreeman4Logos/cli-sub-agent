@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 //! CLI subcommand for recall-based main-agent context recovery.
 
 use clap::{Args, Subcommand};

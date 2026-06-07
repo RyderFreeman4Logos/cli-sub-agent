@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use super::{BugClassCandidate, CaseStudy};
 
 const SKILL_SHORT_FIELD_MAX_CHARS: usize = 200;

@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 pub(crate) const REVIEW_DESIGN_PREFERENCE_ANCHOR: &str = r#"## Design preferences vs correctness bugs
 
 When reviewing diffs that touch design-level choices (preserve-vs-overwrite semantics, where to persist artifacts, API surface shapes, which lifecycle stages trigger which side-effects), treat the current choice as a DESIGN PREFERENCE if it has a coherent rationale, not as a correctness bug.
