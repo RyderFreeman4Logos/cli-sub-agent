@@ -122,13 +122,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         completed_at,
         events_count: 0,
         artifacts,
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     if let Err(save_err) = save_result(project_root, &session.meta_session_id, &fallback_result) {

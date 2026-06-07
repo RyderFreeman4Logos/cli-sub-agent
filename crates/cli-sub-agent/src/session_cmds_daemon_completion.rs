@@ -169,13 +169,7 @@ pub(crate) fn daemon_completion_result(
             project_root,
             &session.meta_session_id,
         ),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -316,13 +310,7 @@ mod tests {
             completed_at: now,
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
         save_result(project, &session_id, &existing)?;
         let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);

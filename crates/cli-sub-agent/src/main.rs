@@ -91,6 +91,7 @@ mod session_cmds_result;
 mod session_cmds_result_measure;
 mod session_dispatch;
 mod session_guard;
+mod session_kill_diagnostics;
 mod session_observability;
 mod session_outcome;
 mod session_result_publish;

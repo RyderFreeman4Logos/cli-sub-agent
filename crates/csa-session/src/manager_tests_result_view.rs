@@ -64,13 +64,7 @@ fn test_load_result_view_ignores_orphaned_manager_sidecar() {
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -126,13 +120,7 @@ fn test_load_result_merges_manager_sidecar_sections_into_runtime_result() {
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     std::fs::write(
         session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
@@ -250,13 +238,7 @@ fn test_manager_sidecar_roundtrip_preserves_full_sa_schema() {
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     let input_sidecar = toml::Value::Table(toml::toml! {
         [result]
@@ -405,13 +387,7 @@ fn test_load_result_without_sidecar_keeps_manager_fields_empty() {
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -448,6 +424,8 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),
@@ -479,10 +457,6 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
 
     let clean_result = crate::result::SessionResult {
         fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
         manager_fields: Default::default(),
         ..populated_result.clone()
     };
@@ -530,6 +504,8 @@ fn test_clear_manager_sidecar_removes_existing_sidecar() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),
@@ -586,13 +562,7 @@ fn test_load_result_with_malformed_manager_sidecar_is_non_fatal() {
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     std::fs::write(
         session_dir.join(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
@@ -671,11 +641,7 @@ fn test_fallback_chain_not_retained_after_save_without_fallback() {
         artifacts: vec![],
         peak_memory_mb: None,
         fallback_chain,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     // First save: with a non-empty fallback_chain.
@@ -751,13 +717,7 @@ fn test_post_exec_gate_not_retained_after_save_without_gate() {
         completed_at: now,
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     // First save: a failed-gate result carrying a [post_exec_gate] table.

@@ -174,7 +174,7 @@ pub struct UncommittedChanges {
 
 /// Structured result of a session execution.
 /// Written to `sessions/{id}/result.toml` after each tool invocation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionResult {
     /// Execution status: "success", "failure", "timeout", "signal"
     pub status: String,
@@ -211,6 +211,12 @@ pub struct SessionResult {
     /// `None` when cgroup monitoring is unavailable or the scope was already removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_mb: Option<u64>,
+    /// Best-effort signal-exit diagnostic hint, not a definitive kill cause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_hint: Option<String>,
+    /// Last known work item when the signal diagnostic was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_item: Option<String>,
     /// Ordered list of tools skipped due to quota/rate-limit failover before the final tool ran.
     /// `None` when no failover occurred; non-empty only when `csa run` cycled through alternatives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,12 +292,10 @@ mod tests {
             events_count: 4,
             artifacts: vec![SessionArtifact::new("output/diff.patch")],
             peak_memory_mb: None,
+            kill_hint: Some("memory_pressure".to_string()),
+            last_item: Some("running tests".to_string()),
             fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
 
         let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
@@ -304,6 +308,8 @@ mod tests {
         assert_eq!(loaded.events_count, 4);
         assert_eq!(loaded.artifacts.len(), 1);
         assert_eq!(loaded.artifacts[0].path, "output/diff.patch");
+        assert_eq!(loaded.kill_hint.as_deref(), Some("memory_pressure"));
+        assert_eq!(loaded.last_item.as_deref(), Some("running tests"));
     }
 
     #[test]
@@ -322,13 +328,7 @@ mod tests {
             completed_at: now,
             events_count: 0,
             artifacts: vec![],
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
 
         let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
@@ -343,6 +343,14 @@ mod tests {
         assert!(
             !toml_str.contains("uncommitted_changes"),
             "Clean sessions should omit uncommitted_changes"
+        );
+        assert!(
+            !toml_str.contains("kill_hint"),
+            "Missing kill hint should be omitted from serialization"
+        );
+        assert!(
+            !toml_str.contains("last_item"),
+            "Missing last_item should be omitted from serialization"
         );
 
         let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
@@ -368,6 +376,8 @@ mod tests {
             events_count: 0,
             artifacts: vec![],
             peak_memory_mb: None,
+            kill_hint: None,
+            last_item: None,
             fallback_chain: None,
             gate_timeout: false,
             warnings: Vec::new(),
@@ -446,13 +456,7 @@ completed_at = "2026-01-01T00:00:00Z"
             completed_at: now,
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
         let toml_str = toml::to_string_pretty(&result).expect("serialize");
         assert!(
@@ -483,13 +487,7 @@ completed_at = "2026-01-01T00:00:00Z"
             completed_at: now,
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
         let toml_str = toml::to_string_pretty(&result).expect("serialize");
         let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
@@ -546,13 +544,7 @@ completed_at = "2026-01-01T00:00:00Z"
                 SessionArtifact::new("output/a.txt"),
                 SessionArtifact::with_stats("output/acp-events.jsonl", 10, 256),
             ],
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
 
         let contents = toml::to_string_pretty(&result).unwrap();

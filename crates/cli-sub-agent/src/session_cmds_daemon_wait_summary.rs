@@ -87,6 +87,10 @@ pub(crate) fn render_wait_result_summary(
         lines.push(format!("Failover: {failover}"));
     }
 
+    if let Some(kill_hint) = format_kill_hint_label(session_dir, result) {
+        lines.push(kill_hint);
+    }
+
     if let Some(changes) = result.uncommitted_changes.as_ref() {
         lines.push(crate::run_cmd::format_uncommitted_warning(changes));
     }
@@ -170,6 +174,7 @@ fn render_wait_result_json(
         "tokens": tokens,
         "review_verdict": read_review_verdict_label(session_dir, result),
         "failover": format_failover_chain_label(session_dir, result),
+        "kill_hint": result.kill_hint.as_deref(),
         "warnings": result.warnings,
         "summary": crate::session_summary_text::human_session_summary(session_dir, &result.summary)
             .and_then(|text| compact_wait_summary_text(&text)),
@@ -184,6 +189,24 @@ fn wait_result_tool_label(result: &csa_session::SessionResult) -> String {
         }
         _ => result.tool.clone(),
     }
+}
+
+fn format_kill_hint_label(
+    session_dir: &Path,
+    result: &csa_session::SessionResult,
+) -> Option<String> {
+    let kill_hint = result.kill_hint.as_deref()?.trim();
+    if kill_hint.is_empty() {
+        return None;
+    }
+    let summary = crate::session_summary_text::human_session_summary(session_dir, &result.summary)
+        .and_then(|text| compact_wait_summary_text(&text));
+    if let Some(summary) = summary
+        && summary.starts_with("CSA diagnostic:")
+    {
+        return Some(format!("Kill hint: {kill_hint} ({summary})"));
+    }
+    Some(format!("Kill hint: {kill_hint}"))
 }
 
 fn wait_elapsed_seconds(result: &csa_session::SessionResult) -> i64 {

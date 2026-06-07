@@ -524,13 +524,7 @@ fn build_result_json_payload_includes_review_iterations() {
         completed_at: now,
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     let review_meta = ReviewSessionMeta {
         session_id: "01JTESTPAYLOAD00000000000001".to_string(),
@@ -585,13 +579,7 @@ fn build_result_json_payload_includes_result_sidecars() {
             completed_at: now,
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
         manager_sidecar: Some(
             toml::toml! {
@@ -634,13 +622,7 @@ fn build_result_json_payload_redacts_result_sidecars() {
             completed_at: now,
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
         manager_sidecar: Some(
             toml::toml! {

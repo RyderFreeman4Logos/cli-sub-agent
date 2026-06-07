@@ -236,13 +236,7 @@ mod tests {
             completed_at: started_at + Duration::seconds(2),
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         }
     }
 

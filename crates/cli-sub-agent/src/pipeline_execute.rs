@@ -55,7 +55,7 @@ pub(crate) async fn execute_transport_with_signal(
                         wall_timeout_secs = ?wall_timeout.map(|timeout| timeout.as_secs()),
                         "Session received SIGTERM; classifying as external signal, not CSA idle or wall-clock timeout"
                     );
-                    record_session_termination(
+                    let diagnostic = record_session_termination(
                         project_root,
                         session,
                         executor.tool_name(),
@@ -66,10 +66,13 @@ pub(crate) async fn execute_transport_with_signal(
                         "Execution interrupted by SIGTERM",
                         cleanup_guard,
                     );
-                    return Err(anyhow::anyhow!("Execution interrupted by SIGTERM"));
+                    return Err(anyhow::anyhow!(
+                        "{}",
+                        diagnostic.unwrap_or_else(|| "Execution interrupted by SIGTERM".to_string())
+                    ));
                 }
                 _ = sigint.recv() => {
-                    record_session_termination(
+                    let _ = record_session_termination(
                         project_root,
                         session,
                         executor.tool_name(),
@@ -92,7 +95,7 @@ pub(crate) async fn execute_transport_with_signal(
                         timeout_secs,
                         "Session wall-clock timeout fired"
                     );
-                    record_session_termination(
+                    let _ = record_session_termination(
                         project_root,
                         session,
                         executor.tool_name(),
@@ -137,7 +140,7 @@ pub(crate) async fn execute_transport_with_signal(
                     Err(_) => {
                         let timeout_secs = timeout.as_secs().max(1);
                         let summary = format!("Execution timed out after {timeout_secs}s");
-                        record_session_termination(
+                        let _ = record_session_termination(
                             project_root,
                             session,
                             executor.tool_name(),
@@ -215,12 +218,10 @@ pub(crate) async fn execute_transport_with_signal(
                 events_count: 0,
                 artifacts: Vec::new(),
                 peak_memory_mb,
+                kill_hint: None,
+                last_item: None,
                 fallback_chain: None,
-                gate_timeout: false,
-                warnings: Vec::new(),
-                raw_process_exit_code: None,
-                uncommitted_changes: None,
-                manager_fields: Default::default(),
+                ..Default::default()
             };
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
                 warn!("Failed to save transport error result: {}", save_err);
@@ -327,11 +328,11 @@ fn record_session_termination(
     exit_code: i32,
     summary: &str,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
-) {
+) -> Option<String> {
     let completed_at = chrono::Utc::now();
     let mut updated_session = session.clone();
     updated_session.termination_reason = Some(termination_reason.to_string());
-    let updated_result = SessionResult {
+    let mut updated_result = SessionResult {
         post_exec_gate: None,
         status: status.to_string(),
         exit_code,
@@ -344,20 +345,25 @@ fn record_session_termination(
         completed_at,
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
-    if let Err(e) = save_result(project_root, &session.meta_session_id, &updated_result) {
-        warn!(
-            "Failed to save session result after {}: {}",
-            termination_reason, e
-        );
-    }
+    let diagnostic_line = match crate::session_kill_diagnostics::save_result_with_signal_diagnostic(
+        project_root,
+        session,
+        tool_name,
+        &mut updated_result,
+        Some(termination_reason),
+        None,
+    ) {
+        Ok(line) => line,
+        Err(e) => {
+            warn!(
+                "Failed to save session result after {}: {}",
+                termination_reason, e
+            );
+            None
+        }
+    };
     // Best-effort cooldown marker
     csa_session::write_cooldown_marker_for_project(
         project_root,
@@ -373,4 +379,5 @@ fn record_session_termination(
     if let Some(cg) = cleanup_guard {
         cg.defuse();
     }
+    diagnostic_line
 }

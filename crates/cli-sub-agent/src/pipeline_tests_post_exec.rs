@@ -71,13 +71,7 @@ fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
         completed_at: now,
         events_count: 1,
         artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result(project_root, &session.meta_session_id, &existing).expect("write existing result");
 
@@ -385,13 +379,7 @@ fn codex_exec_initial_stall_summary_forces_failure_status_in_result_toml() {
         completed_at: now,
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     if is_codex_exec_initial_stall_summary(&result.tool, result.exit_code, &result.summary) {
@@ -416,6 +404,79 @@ fn codex_exec_initial_stall_detection_rejects_plain_substring_collisions() {
         137,
         "codex_exec_initial_stall: no stdout within 300s (effort=high, retry_attempted=true)"
     ));
+}
+
+#[tokio::test]
+async fn process_execution_result_persists_signal_kill_hint() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let executor = csa_executor::Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: csa_executor::CodexRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let mut session =
+        create_session(project_root, Some("signal"), None, Some("codex")).expect("create session");
+    let session_dir = get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    let ctx = PostExecContext {
+        executor: &executor,
+        prompt: "test prompt",
+        effective_prompt: "test prompt",
+        task_type: Some("run"),
+        readonly_project_root: false,
+        project_root,
+        config: None,
+        global_config: None,
+        session_dir: session_dir.clone(),
+        sessions_root: "test-root".to_string(),
+        execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+        hooks_config: &hooks_config,
+        memory_project_key: None,
+        provider_session_id: None,
+        events_count: 0,
+        transcript_artifacts: Vec::new(),
+        changed_paths: Vec::new(),
+        pre_exec_snapshot: None,
+        has_tool_calls: true,
+        turn_count: 1,
+        output_tokens: None,
+        sa_mode: false,
+    };
+    let mut result = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "killed by signal 9".to_string(),
+        exit_code: 137,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process result");
+
+    let raw = fs::read_to_string(session_dir.join("result.toml")).expect("read result");
+    let value = toml::from_str::<toml::Value>(&raw).expect("parse result");
+    let kill_hint = value
+        .get("kill_hint")
+        .and_then(toml::Value::as_str)
+        .expect("kill_hint should be persisted");
+    assert!(matches!(
+        kill_hint,
+        "unknown_signal" | "possible_memory_pressure" | "memory_pressure" | "earlyoom"
+    ));
+    assert_eq!(
+        value.get("last_item").and_then(toml::Value::as_str),
+        Some("killed by signal 9")
+    );
+
+    let loaded = csa_session::load_result(project_root, &session.meta_session_id)
+        .expect("load result")
+        .expect("result should exist");
+    assert_eq!(loaded.kill_hint.as_deref(), Some(kill_hint));
+    assert_eq!(loaded.last_item.as_deref(), Some("killed by signal 9"));
 }
 
 #[test]

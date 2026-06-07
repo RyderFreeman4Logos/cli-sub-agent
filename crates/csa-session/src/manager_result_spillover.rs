@@ -332,6 +332,8 @@ mod tests {
             events_count: 1,
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
             peak_memory_mb: None,
+            kill_hint: None,
+            last_item: None,
             fallback_chain: None,
             gate_timeout: false,
             warnings: Vec::new(),
@@ -359,11 +361,6 @@ mod tests {
         let turn_2_result = SessionResult {
             summary: "turn 2".to_string(),
             fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
             ..turn_1_result
         };
         save_result_in(
@@ -481,13 +478,7 @@ mod tests {
             completed_at: now,
             events_count: 1,
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
         save_result_in_with_threshold(
             td.path(),

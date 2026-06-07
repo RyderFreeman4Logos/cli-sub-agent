@@ -121,13 +121,7 @@ fn write_success_result_for(project_root: &Path, session_id: &str) {
         completed_at: now,
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result(project_root, session_id, &result).expect("write success result");
 }

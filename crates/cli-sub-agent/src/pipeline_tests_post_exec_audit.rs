@@ -118,13 +118,7 @@ fn apply_repo_write_audit_to_result_populates_manager_sidecar_sections() {
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     let audit = RepoWriteAudit {
         added: vec![PathBuf::from("new.txt")],
@@ -440,13 +434,7 @@ fn audit_failure_does_not_fail_execution() {
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let buffer = SharedLogBuffer::default();
@@ -569,13 +557,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     maybe_record_repo_write_audit(&ctx, &session, &mut session_result);
@@ -677,13 +659,7 @@ fn writer_run_does_not_emit_repo_write_audit_artifact() {
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     maybe_record_repo_write_audit(&ctx, &session, &mut session_result);
@@ -786,13 +762,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let buffer = SharedLogBuffer::default();

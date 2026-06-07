@@ -77,13 +77,7 @@ fn compact_summary_includes_usage_and_review_verdict() {
         completed_at: now + chrono::TimeDelta::seconds(65),
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let summary = render_wait_result_summary(temp.path(), "01TESTWAITSUMMARY", &result);
@@ -93,6 +87,37 @@ fn compact_summary_includes_usage_and_review_verdict() {
     assert!(summary.contains("Elapsed: 1m 5s"));
     assert!(summary.contains("Tokens: input=100, output=25, total=125, cache_read=40"));
     assert!(summary.contains("Review verdict: PASS"));
+}
+
+#[test]
+fn compact_summary_includes_signal_kill_hint() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let now = Utc::now();
+    let diagnostic = "CSA diagnostic: signal kill hint: memory pressure (MemAvailable: 512 MB / MemTotal: 8192 MB, earlyoom running). Re-dispatch when host memory frees.";
+    let result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: "signal".to_string(),
+        exit_code: 143,
+        summary: diagnostic.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        kill_hint: Some("memory_pressure".to_string()),
+        last_item: None,
+        fallback_chain: None,
+        ..Default::default()
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITKILL", &result);
+
+    assert!(summary.contains("Kill hint: memory_pressure"));
+    assert!(summary.contains("CSA diagnostic: signal kill hint: memory pressure"));
 }
 
 #[test]
@@ -144,6 +169,8 @@ fn compact_summary_labels_fix_loop_noop_from_review_meta() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: vec!["fix loop did not engage: head_unchanged_worktree_clean".to_string()],
@@ -184,6 +211,8 @@ fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: Some(vec![
             csa_core::types::FallbackAttempt {
                 tool: "gemini-cli".to_string(),
@@ -200,11 +229,7 @@ fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
                 timestamp: now,
             },
         ]),
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let summary = render_wait_result_summary(temp.path(), "01TESTWAITQUOTA", &result);
@@ -241,13 +266,7 @@ fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
         completed_at: now + chrono::TimeDelta::seconds(65),
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let summary = render_wait_result_summary(temp.path(), "01TESTWAITARTPASS", &result);
@@ -273,6 +292,8 @@ fn compact_summary_includes_writer_uncommitted_warning() {
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),
@@ -318,13 +339,7 @@ fn compact_summary_does_not_print_pass_when_result_failed() {
         completed_at: now + chrono::TimeDelta::seconds(65),
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let summary = render_wait_result_summary(temp.path(), "01TESTWAITFAILPASS", &result);
@@ -382,13 +397,7 @@ fn compact_summary_does_not_print_pass_for_failed_fix_convergence() {
         completed_at: now + chrono::TimeDelta::seconds(65),
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     let summary = render_wait_result_summary(temp.path(), "01TESTWAITFAILED", &result);

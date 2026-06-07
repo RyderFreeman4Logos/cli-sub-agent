@@ -369,13 +369,7 @@ pub(crate) async fn handle_plan_run_daemon_child(
         completed_at,
         events_count: 0,
         artifacts: vec![SessionArtifact::new(workflow_label.clone())],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     if let Err(save_err) = save_result(&project_root, session_id, &session_result) {
         warn!(

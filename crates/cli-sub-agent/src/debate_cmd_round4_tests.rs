@@ -77,13 +77,7 @@ fn debate_tier_all_fail_does_not_overwrite_unrelated_latest_session() {
                 SessionArtifact::new("output/debate-verdict.json"),
                 SessionArtifact::new("output/debate-transcript.md"),
             ],
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -215,13 +209,7 @@ fn debate_pre_session_all_fail_yields_unavailable() {
                 SessionArtifact::new("output/debate-verdict.json"),
                 SessionArtifact::new("output/debate-transcript.md"),
             ],
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();

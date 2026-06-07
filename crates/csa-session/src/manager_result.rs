@@ -11,7 +11,8 @@ const USER_RESULT_FILE_NAME: &str = "user-result.toml";
 pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
 pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
 pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
-const RUNTIME_RESULT_KEYS: [&str; 14] = [
+const LEGACY_KILL_REASON_KEY: &str = "kill_reason";
+const RUNTIME_RESULT_KEYS: [&str; 17] = [
     "status",
     "exit_code",
     "summary",
@@ -26,6 +27,9 @@ const RUNTIME_RESULT_KEYS: [&str; 14] = [
     "fallback_chain",
     "peak_memory_mb",
     "post_exec_gate",
+    "kill_hint",
+    LEGACY_KILL_REASON_KEY,
+    "last_item",
 ];
 
 #[path = "manager_result_spillover.rs"]
@@ -63,6 +67,23 @@ pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult
     save_result_with_options(project_path, session_id, result, SaveOptions::default())
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SignalResultMetadata<'a> {
+    pub kill_hint: &'a str,
+    pub last_item: Option<&'a str>,
+}
+
+/// Write a session result with signal-only diagnostic fields.
+pub fn save_result_with_signal_metadata(
+    project_path: &Path,
+    session_id: &str,
+    result: &mut SessionResult,
+    metadata: SignalResultMetadata<'_>,
+) -> Result<()> {
+    apply_signal_metadata(result, metadata);
+    save_result(project_path, session_id, result)
+}
+
 /// Write a session result to disk with explicit sidecar preservation semantics.
 pub fn save_result_with_options(
     project_path: &Path,
@@ -96,6 +117,27 @@ pub(crate) fn save_result_in(
         options,
         csa_config::DEFAULT_RESULT_REPORT_SPILL_THRESHOLD_BYTES,
     )
+}
+
+#[cfg(test)]
+pub(crate) fn save_result_with_signal_metadata_in(
+    base_dir: &Path,
+    session_id: &str,
+    result: &mut SessionResult,
+    options: SaveOptions,
+    metadata: SignalResultMetadata<'_>,
+) -> Result<()> {
+    apply_signal_metadata(result, metadata);
+    save_result_in(base_dir, session_id, result, options)
+}
+
+fn apply_signal_metadata(result: &mut SessionResult, metadata: SignalResultMetadata<'_>) {
+    result.kill_hint = Some(metadata.kill_hint.to_string());
+    result.last_item = metadata
+        .last_item
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
 }
 
 fn save_result_in_with_threshold(
@@ -366,7 +408,9 @@ fn table_has_custom_schema(table: &toml::Table) -> bool {
 
 fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
     match key {
-        "status" | "summary" | "tool" | "started_at" | "completed_at" => value.is_str(),
+        "status" | "summary" | "tool" | "started_at" | "completed_at" | "kill_hint"
+        | "last_item" => value.is_str(),
+        LEGACY_KILL_REASON_KEY => value.is_str(),
         "exit_code" | "events_count" => value.is_integer(),
         "artifacts" => artifacts_value_matches_runtime_schema(value),
         "post_exec_gate" => value.is_table(),

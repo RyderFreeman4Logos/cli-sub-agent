@@ -454,13 +454,7 @@ mod tests {
             completed_at: now,
             events_count: 0,
             artifacts: vec![],
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         };
         std::fs::write(
             tmp.path().join(RESULT_FILE_NAME),
