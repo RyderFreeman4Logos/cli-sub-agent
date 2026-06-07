@@ -15,7 +15,8 @@ prompt = """
 Choose exactly one input mode.
 
 TODO mode is the default. Read the TODO plan file from mktd output or a user-provided path.
-Extract every unchecked checklist item with executor tag and DONE WHEN.
+Extract every unchecked checklist item with executor tag, optional Implementation override directive,
+and DONE WHEN.
 Record the resolved TODO path explicitly in the output.
 
 Issue mode applies when the user passes --from-issues or asks to process all open issues.
@@ -53,6 +54,7 @@ Each TODO task must include:
 - stable item id
 - source TODO line reference
 - executor tag
+- optional Implementation override directive
 - concrete action
 - mechanically verifiable DONE WHEN
 
@@ -87,7 +89,11 @@ Treat each task as an atomic transaction:
 4) write progress checkpoint before moving to next item
 
 Dispatch by executor tag:
-- [CSA:tool] => csa run
+- Priority: Implementation override > [CSA:tier-*] > [CSA:<tool>] > default
+- Implementation override: csa run ... => run that exact csa run command; it wins over any executor tag
+- [CSA:tier-*] => csa run --tier <tier-name>
+- [CSA:<tool>] => csa run --tool <tool-name>
+- Example: [CSA:tier-4-critical] => csa run --tier tier-4-critical; Implementation override: csa run --tier tier-4-critical --tool claude-code => run csa run --tier tier-4-critical --tool claude-code
 - [Sub:developer] => execute directly
 - [Skill:xxx] => invoke skill
 - [Main]/no tag => execute directly

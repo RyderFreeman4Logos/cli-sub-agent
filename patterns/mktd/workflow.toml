@@ -22,13 +22,20 @@ name = "FINAL_TODO"
 
 [[workflow.variables]]
 name = "EPIC_PLAN"
-
 [[workflow.variables]]
 name = "EPIC_ARTIFACT"
-
 [[workflow.variables]]
 name = "FEATURE"
-
+[[workflow.variables]]
+name = "IMPL_EXECUTOR_DIRECTIVE"
+[[workflow.variables]]
+name = "IMPL_EXECUTOR_TAG"
+[[workflow.variables]]
+name = "IMPL_TIER"
+default = ""
+[[workflow.variables]]
+name = "IMPL_TOOL"
+default = ""
 [[workflow.variables]]
 name = "KEY_POINTS"
 
@@ -208,6 +215,19 @@ if [[ -n "${TIER:-}" ]]; then
 else
   echo "CSA_VAR:RECON_TIER=tier-1-quick"
 fi
+
+IMPL_EXECUTOR_TAG="[Sub:developer]"
+[[ -n "${IMPL_TOOL:-}" ]] && IMPL_EXECUTOR_TAG="[CSA:${IMPL_TOOL}]"
+[[ -n "${IMPL_TIER:-}" ]] && IMPL_EXECUTOR_TAG="[CSA:${IMPL_TIER}]"
+echo "CSA_VAR:IMPL_EXECUTOR_TAG=${IMPL_EXECUTOR_TAG}"
+
+IMPL_EXECUTOR_DIRECTIVE="Implementation override: none"
+if [[ -n "${IMPL_TIER:-}" || -n "${IMPL_TOOL:-}" ]]; then
+  IMPL_EXECUTOR_DIRECTIVE="Implementation override: csa run"
+  [[ -z "${IMPL_TIER:-}" ]] || IMPL_EXECUTOR_DIRECTIVE+=" --tier ${IMPL_TIER}"
+  [[ -z "${IMPL_TOOL:-}" ]] || IMPL_EXECUTOR_DIRECTIVE+=" --tool ${IMPL_TOOL}"
+fi
+echo "CSA_VAR:IMPL_EXECUTOR_DIRECTIVE=${IMPL_EXECUTOR_DIRECTIVE}"
 
 # --- Language detection (result is the step's logical output) ---
 if [[ -n "${USER_LANGUAGE:-}" ]]; then
@@ -422,53 +442,19 @@ Status: Proposed
 Each item is a [ ] checkbox with executor tag.
 Write all TODO descriptions, section headers, and task names in `${STEP_2_OUTPUT}`.
 Technical terms, code snippets, commit scope strings, and executor tags remain in English.
-Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool].
+Pre-assign: [Main], ${IMPL_EXECUTOR_TAG}, [Skill:commit], [CSA:tool].
+Use `${IMPL_EXECUTOR_TAG}` for implementation tasks; if `${IMPL_EXECUTOR_DIRECTIVE}`
+is not `Implementation override: none`, include that line in each such task.
 Every checkbox item MUST include a mechanically verifiable `DONE WHEN:` line.
 
 ### Epic Scale Detection
 
-Before drafting, assess whether this task is epic-scale. Count how many of these signals appear in the RECON findings:
-
-1. New crate/module count > 2
-2. New public API surface > 5 new pub fn/trait
-3. New config schema sections > 2
-4. New CLI subcommands > 1
-5. Cross-crate dependency edges > 3
-6. Whitepaper/RFC/design-doc exceeds 5 logical pages
-
-If >= 3 signals fire, this is an EPIC. Produce BOTH:
-(A) A summary TODO.md that lists the epic's stories as checkbox items
-(B) An epic-plan.toml section enclosed in a fenced code block tagged ```epic-plan.toml
-
-The epic-plan.toml MUST follow this schema:
-```toml
-[epic]
-name = "feature-name"
-prefix = "feat/feature-name"
-summary = "One-line description"
-
-[[stories]]
-id = "phase-1"
-branch = "feat/feature-name/phase-1-description"
-depends_on = []
-summary = "What this story delivers"
-
-[[stories]]
-id = "phase-2"
-branch = "feat/feature-name/phase-2-description"
-depends_on = ["phase-1"]
-summary = "What this story delivers"
-```
-
-Each story MUST have:
-- Unique id (short kebab-case, e.g. "phase-1a", "core-types")
-- Branch name under the epic prefix
-- Explicit depends_on (empty array if independent)
-- Summary describing what the story delivers
-
-The summary TODO.md should reference `epic-plan.toml` and list each story as a checkbox item with its branch and dependencies.
-
-If < 3 signals fire, produce a regular TODO.md as before (no epic plan).
+Before drafting, count epic signals: >2 new crates/modules; >5 public APIs; >2
+config sections; >1 CLI subcommand; >3 cross-crate edges; source doc >5 pages.
+If >=3, output summary TODO stories plus fenced `epic-plan.toml`; otherwise
+regular TODO only. `epic-plan.toml` schema: `[epic]` name/prefix/summary and
+`[[stories]]` id/branch/depends_on/summary, with unique kebab ids, branches
+under the epic prefix, explicit dependency arrays, and story summaries.
 
 ### Output
 
