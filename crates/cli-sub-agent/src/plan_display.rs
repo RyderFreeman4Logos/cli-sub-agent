@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use csa_config::ProjectConfig;
 use weave::compiler::{ExecutionPlan, FailAction};
 
-use crate::plan_cmd::{StepResult, StepTarget, resolve_step_tool};
+use crate::plan_cmd::{StepResult, StepTarget, resolve_step_tool_with_variables};
 
 /// Print the execution plan for dry-run mode.
 pub(crate) fn print_plan(
@@ -29,7 +29,8 @@ pub(crate) fn print_plan(
 
     println!("Steps ({}):", plan.steps.len());
     for step in &plan.steps {
-        let tool_info = match resolve_step_tool(step, config, None, None) {
+        let tool_info = match resolve_step_tool_with_variables(step, variables, config, None, None)
+        {
             Ok(StepTarget::DirectBash) => "bash (direct)".into(),
             Ok(StepTarget::WeaveInclude) => "weave (include)".into(),
             Ok(StepTarget::Note) => "note (non-executable)".into(),

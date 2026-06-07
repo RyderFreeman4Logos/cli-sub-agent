@@ -32,7 +32,11 @@ const STEP_FAILURE_STDERR_TAIL_MAX_CHARS: usize = 4000;
 
 #[path = "plan_cmd_step_target.rs"]
 mod step_target;
-pub(crate) use step_target::{StepTarget, resolve_step_tool, step_readonly_project_root};
+#[cfg(test)]
+pub(crate) use step_target::resolve_step_tool;
+pub(crate) use step_target::{
+    StepTarget, resolve_step_tool_with_variables, step_readonly_project_root,
+};
 
 /// Result of executing a single step.
 #[derive(Serialize, Deserialize)]
@@ -303,8 +307,9 @@ pub(crate) async fn execute_step_with_workflow(
     }
 
     // Resolve execution target (needed for weave-include check)
-    let target = match resolve_step_tool(
+    let target = match resolve_step_tool_with_variables(
         step,
+        variables,
         step_ctx.config,
         step_ctx.tool_override,
         step_ctx.model_spec_override,

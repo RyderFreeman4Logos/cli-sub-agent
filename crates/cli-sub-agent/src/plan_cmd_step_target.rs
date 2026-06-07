@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Result, bail};
 
 use csa_config::ProjectConfig;
@@ -5,6 +7,8 @@ use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
 use weave::compiler::PlanStep;
 use weave::parser::WorkspaceAccess;
+
+use super::substitute_vars;
 
 /// Resolved execution target for a plan step.
 /// Keeps direct shell execution separate from AI dispatch so `tool = "bash"` never falls through.
@@ -117,6 +121,26 @@ pub(crate) fn resolve_step_tool(
     }
 
     Ok(StepTarget::csa(ToolName::Codex, None))
+}
+
+/// Resolve a step target after applying workflow variables to the step tier.
+pub(crate) fn resolve_step_tool_with_variables(
+    step: &PlanStep,
+    variables: &HashMap<String, String>,
+    config: Option<&ProjectConfig>,
+    tool_override: Option<&ToolName>,
+    model_spec_override: Option<&String>,
+) -> Result<StepTarget> {
+    let Some(tier) = step.tier.as_deref() else {
+        return resolve_step_tool(step, config, tool_override, model_spec_override);
+    };
+    let resolved_tier = substitute_vars(tier, variables);
+    if resolved_tier == tier {
+        return resolve_step_tool(step, config, tool_override, model_spec_override);
+    }
+    let mut resolved_step = step.clone();
+    resolved_step.tier = Some(resolved_tier);
+    resolve_step_tool(&resolved_step, config, tool_override, model_spec_override)
 }
 
 pub(crate) fn step_readonly_project_root(step: &PlanStep) -> bool {
