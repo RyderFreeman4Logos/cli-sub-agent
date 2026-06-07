@@ -277,6 +277,7 @@ pub(super) async fn prepare_session_runtime(
     );
     let effective_prompt = session_exec_prompt_inject::finalize_effective_prompt(
         prompt_assembly,
+        input.executor.tool_name(),
         input.task_type,
         is_first_turn,
         input.project_root,
