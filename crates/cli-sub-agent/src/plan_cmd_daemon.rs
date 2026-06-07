@@ -20,7 +20,7 @@ use crate::cli::PlanCommands;
 use crate::gh_env::fetch_issue_body;
 use crate::pipeline::determine_project_root;
 use crate::plan_cmd::{
-    self, FEATURE_INPUT_VAR, PlanRunArgs, PlanRunPipelineSource, handle_plan_run,
+    self, FEATURE_INPUT_VAR, ISSUE_NUMBER_VAR, PlanRunArgs, PlanRunPipelineSource, handle_plan_run,
 };
 use crate::startup_env::StartupSubtreeEnv;
 use crate::{error_hints, error_report, exit_current_process};
@@ -67,14 +67,14 @@ pub(crate) async fn dispatch(
         session_id,
     } = cmd;
 
-    // Resolve `--issue <N>` into the FEATURE_INPUT workflow variable before the
-    // daemon/foreground split. Fetching in the top-level invocation means a bad
-    // issue number or auth failure fails fast with a non-zero exit rather than
-    // surfacing only via the daemon session result, and the issue is fetched
-    // exactly once: the resolved variable is forwarded to the daemon child in
-    // place of `--issue` (see `forwarded_args_with_feature_input`). A daemon
-    // child never sees `--issue` (the parent strips it), so this branch only
-    // runs in the top-level/foreground process.
+    // Resolve `--issue <N>` into workflow variables before the daemon/foreground
+    // split. Fetching in the top-level invocation means a bad issue number or
+    // auth failure fails fast with a non-zero exit rather than surfacing only
+    // via the daemon session result, and the issue is fetched exactly once: the
+    // resolved variables are forwarded to the daemon child in place of `--issue`
+    // (see `forwarded_args_with_feature_input`). A daemon child never sees
+    // `--issue` (the parent strips it), so this branch only runs in the
+    // top-level/foreground process.
     let mut vars = vars;
     let mut forwarded_args = None;
     if let Some(issue_number) = issue {
@@ -89,8 +89,9 @@ pub(crate) async fn dispatch(
             );
         }
         let body = fetch_issue_body(issue_number).await?;
-        forwarded_args = Some(forwarded_args_with_feature_input(&body));
+        forwarded_args = Some(forwarded_args_with_feature_input(&body, issue_number));
         vars.push(format!("{FEATURE_INPUT_VAR}={body}"));
+        vars.push(format!("{ISSUE_NUMBER_VAR}={issue_number}"));
     }
 
     let pipeline_source = if daemon_child {

@@ -5,7 +5,7 @@
 //! to the daemon child; the daemon spawner re-injects
 //! `--daemon-child --session-id <ID>` itself.
 
-use crate::plan_cmd::FEATURE_INPUT_VAR;
+use crate::plan_cmd::{FEATURE_INPUT_VAR, ISSUE_NUMBER_VAR};
 
 /// Build daemon-child args from the parent's argv.
 ///
@@ -63,17 +63,28 @@ pub(crate) fn build_forwarded_plan_args(all_args: &[String]) -> Vec<String> {
 ///
 /// Starts from the normal [`build_forwarded_plan_args`] output, drops the
 /// already-resolved `--issue <N>` / `--issue=<N>` token(s), and appends the
-/// fetched issue body as `--var FEATURE_INPUT=<body>`. This lets the daemon
-/// child consume the pre-fetched body instead of re-running `gh issue view`,
-/// so the issue is fetched exactly once (in the parent).
+/// fetched issue body plus numeric issue number as workflow variables. This
+/// lets the daemon child consume the pre-fetched body instead of re-running
+/// `gh issue view`, so the issue is fetched exactly once (in the parent).
 ///
 /// Like [`build_forwarded_plan_args`], the `--issue` strip is `--`-aware: a
 /// literal `--issue`/`--issue=` token appearing AFTER a `--` positional
 /// separator is a workflow argument and is preserved intact.
-pub(crate) fn forwarded_args_with_feature_input(feature_input: &str) -> Vec<String> {
+pub(crate) fn forwarded_args_with_feature_input(
+    feature_input: &str,
+    issue_number: u64,
+) -> Vec<String> {
     let argv: Vec<String> = std::env::args().collect();
     let base = build_forwarded_plan_args(&argv);
-    let mut forwarded = Vec::with_capacity(base.len() + 2);
+    forwarded_args_with_issue_vars(base, feature_input, issue_number)
+}
+
+fn forwarded_args_with_issue_vars(
+    base: Vec<String>,
+    feature_input: &str,
+    issue_number: u64,
+) -> Vec<String> {
+    let mut forwarded = Vec::with_capacity(base.len() + 4);
     let mut post_double_dash = Vec::new();
     let mut tokens = base.into_iter();
     let mut past_double_dash = false;
@@ -97,9 +108,64 @@ pub(crate) fn forwarded_args_with_feature_input(feature_input: &str) -> Vec<Stri
     }
     forwarded.push("--var".to_string());
     forwarded.push(format!("{FEATURE_INPUT_VAR}={feature_input}"));
+    forwarded.push("--var".to_string());
+    forwarded.push(format!("{ISSUE_NUMBER_VAR}={issue_number}"));
     if past_double_dash {
         forwarded.push("--".to_string());
         forwarded.extend(post_double_dash);
     }
     forwarded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issue_forwarding_injects_issue_number_before_double_dash() {
+        let base = vec![
+            "--pattern".to_string(),
+            "dev2merge".to_string(),
+            "--issue".to_string(),
+            "1663".to_string(),
+            "--".to_string(),
+            "--issue".to_string(),
+            "literal".to_string(),
+        ];
+
+        let forwarded = forwarded_args_with_issue_vars(base, "review body", 1663);
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "--pattern",
+                "dev2merge",
+                "--var",
+                "FEATURE_INPUT=review body",
+                "--var",
+                "ISSUE_NUMBER=1663",
+                "--",
+                "--issue",
+                "literal",
+            ]
+        );
+    }
+
+    #[test]
+    fn issue_forwarding_strips_equals_issue_form() {
+        let base = vec!["workflow.toml".to_string(), "--issue=1663".to_string()];
+
+        let forwarded = forwarded_args_with_issue_vars(base, "review body", 1663);
+
+        assert_eq!(
+            forwarded,
+            vec![
+                "workflow.toml",
+                "--var",
+                "FEATURE_INPUT=review body",
+                "--var",
+                "ISSUE_NUMBER=1663",
+            ]
+        );
+    }
 }

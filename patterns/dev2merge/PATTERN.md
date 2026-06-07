@@ -1,6 +1,6 @@
 ---
 name = "dev2merge"
-description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), self-review gate, pre-PR review, push, PR creation, pr-bot hard gate, post-merge sync"
+description = "Hard-gated dev2merge"
 allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task, TaskCreate, TaskUpdate, TaskList, TaskGet"
 tier = "tier-3-complex"
 version = "0.4.0"
@@ -11,7 +11,7 @@ version = "0.4.0"
 End-to-end development workflow enforced as a weave workflow. Every stage has
 hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
-Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
+Pipeline: Already-Resolved Check → Branch Validation → FAST_PATH Detection → mktd (planning) →
 mktsk N*(implement → commit) → Self-Review Gate → Pre-PR Cumulative Review → Push →
 Pre-PR Verdict Check → PR Creation → **pr-bot Hard Gate** → Post-Merge Sync.
 
@@ -77,11 +77,52 @@ the orchestrator.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
-## Step 1: Validate Branch
-
+## Step 0: Already-Resolved Check
 Tool: bash
 OnFail: abort
+Short-circuit no-op runs before branch validation:
 
+- Best-effort issue check: with `ISSUE_NUMBER`, `gh issue view` skips `CLOSED`
+  issues; `gh` failures warn and continue.
+- Merge-completion skip requires both ancestor confirmation and a merged PR for
+  the current branch.
+- Ancestor success without a merged PR means a fresh branch and continues.
+
+Runs without `--issue` skip the issue check. Any skip prints
+`dev2merge: ... nothing to do`, sets `DEV2MERGE_SKIP=true`, and exits 0.
+Issue and PR lookup failures fail open.
+
+```bash
+set -euo pipefail
+echo "CSA_VAR:DEV2MERGE_SKIP=false"
+skip() { echo "$1"; echo "CSA_VAR:DEV2MERGE_SKIP=true"; exit 0; }
+
+if [ -n "${ISSUE_NUMBER:-}" ]; then
+  ISSUE_STATE="$(GH_CONFIG_DIR=~/.config/gh-aider gh issue view "$ISSUE_NUMBER" --repo "${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)}" --json state -q .state 2>&1)" || {
+    # best-effort: gh failure → warn + continue (not a hard gate)
+    echo "dev2merge: WARNING: issue check failed; continuing"
+    ISSUE_STATE=
+  }
+  if [ "$ISSUE_STATE" = CLOSED ]; then
+    skip "dev2merge: issue #${ISSUE_NUMBER} is already CLOSED — nothing to do"
+  fi
+fi
+
+BRANCH="$(git branch --show-current)"
+[ -n "${BRANCH}" ] && [ "${BRANCH}" != "HEAD" ] || exit 0
+DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+[ -n "${DEFAULT_BRANCH}" ] || DEFAULT_BRANCH="main"
+[ -z "$(git status --porcelain)" ] || exit 0
+
+if git merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+  MERGED_PR="$(gh pr list --head "${BRANCH}" --state merged --json number -q '.[0].number' 2>/dev/null || true)"
+  [ -n "${MERGED_PR}" ] && skip "dev2merge: branch ${BRANCH} already merged via PR #${MERGED_PR} and HEAD is ancestor of ${DEFAULT_BRANCH} — nothing to do"
+fi
+```
+
+## Step 1: Validate Branch
+Tool: bash
+OnFail: abort
 Verify the current branch is a feature branch, not protected.
 
 ```bash
@@ -101,10 +142,8 @@ echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 ```
 
 ## Step 2: FAST_PATH Detection
-
 Tool: bash
 OnFail: abort
-
 Detect whether changes are docs/config-only. When FAST_PATH=true,
 skip mktd/mktsk/debate but keep L1/L2 quality checks. An empty diff
 vs the base branch is NOT docs-only; it must stay on the full plan
@@ -130,10 +169,8 @@ fi
 ```
 
 ## Step 3: L1/L2 Quality Gates (Always Run)
-
 Tool: bash
 OnFail: abort
-
 Formatters and linters run regardless of FAST_PATH.
 Language detection: Cargo.toml → Rust, pyproject.toml → Python, package.json → JS/TS, go.mod → Go.
 Falls back to `just pre-commit` when available, skip otherwise.
@@ -167,10 +204,8 @@ fi
 ## IF ${FAST_PATH}
 
 ## Step 4: FAST_PATH Commit
-
 Tool: bash
 OnFail: abort
-
 For docs/config-only changes, run a simplified commit flow:
 stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 
@@ -209,10 +244,8 @@ echo "CSA_VAR:FAST_PATH_COMMITTED=true"
 ```
 
 ## Step 5: FAST_PATH Version Bump
-
 Tool: bash
 OnFail: abort
-
 ```bash
 set -euo pipefail
 if ! just check-version-bumped 2>/dev/null; then
@@ -225,10 +258,8 @@ fi
 ```
 
 ## Step 6: FAST_PATH Pre-PR Review
-
 Tool: bash
 OnFail: abort
-
 Even FAST_PATH runs cumulative review before push.
 
 ```bash
@@ -243,47 +274,30 @@ echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ## ELSE
 
 ## Step 7: Plan with mktd
-
 Tool: bash
 OnFail: abort
-
-Generate a TODO plan via mktd. Hard-capped at `MKTD_TIMEOUT_SECONDS`
-(default `1800`s, aligned with `execution.min_timeout_seconds` per #1137) to
-prevent runaway debate-loop sub-sessions (#1118).
-Auto-selects intensity based on:
-
-- **Brief specificity** (#1118 part B): if `FEATURE_INPUT` is short
-  (< 4096 chars) and already names ≥ 2 concrete
-  `path/file.{rs,toml,md}:LINE` references, default to `light` — the user
-  already provided the change shape and a debate-loop adds no value.
-- **Change size**: `light` when code_files ≤ 2 AND total_insertions < 50
-  (small changes).
-- Otherwise: `full` (default, includes threat model + debate).
+Generate a TODO via mktd with a hard timeout (default `1800`s). Intensity is
+`light` when the brief names at least two `path/file:LINE` refs or the diff is
+small; otherwise it is `full`.
 
 ```bash
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
-MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}" # Default empty so mktd's per-step tier annotations decide; override via env (closes #1169)
-MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}" # #1118 part A + #1137: hard cap on mktd wall-clock, aligned with csa CLI execution.min_timeout_seconds (1800s)
+MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}"
+MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}"
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
   MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 else
   MKTD_TOOL_ARGS=()
 fi
-# Auto-select planning intensity based on change size
 LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
 LIGHT_THRESHOLD_LINES="${PLANNING_LIGHT_THRESHOLD_LINES:-50}"
 PLAN_CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
 PLAN_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
-# Brief-specificity heuristic (#1118 part B): when the user's brief already
-# pins down concrete file:line targets, the planner does not need a debate-
-# loop to decide change shape — light intensity is enough.
 FEATURE_INPUT_LEN=${#FEATURE_INPUT}
 FEATURE_FILE_LINE_HITS="$(printf '%s' "${FEATURE_INPUT}" | grep -oE '[A-Za-z0-9_./-]+\.(rs|toml|md):[0-9]+' | wc -l | xargs || true)"
-# Audit note: empty diff also lands in "light", but that is fine here because this
-# block only chooses mktd intensity after Step 2 has already forced the full plan path.
 if [ "${FEATURE_INPUT_LEN}" -lt 4096 ] && [ "${FEATURE_FILE_LINE_HITS}" -ge 2 ]; then
   MKTD_INTENSITY="light"
   echo "Planning intensity: light (brief specificity: ${FEATURE_FILE_LINE_HITS} file:line refs in ${FEATURE_INPUT_LEN}-char brief)"
@@ -296,8 +310,6 @@ else
 fi
 echo "mktd hard-timeout: ${MKTD_TIMEOUT_SECONDS}s"
 set +e
-# `timeout -k 30` sends SIGTERM at the cap, then SIGKILL after a 30s grace
-# if the inner process still has not exited. Exit code 124 = SIGTERM hit.
 MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode true patterns/mktd/workflow.toml \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
@@ -326,9 +338,6 @@ fail_step7_gate() {
   fi
   exit 1
 }
-# Hard timeout (#1118 part A): exit 124 means SIGTERM was sent at the cap;
-# 137 (= 128+SIGKILL) means the grace expired. Either way, abort with the
-# partial planning artifacts surfaced above for orchestrator triage.
 if [ "${MKTD_EXIT}" -eq 124 ] || [ "${MKTD_EXIT}" -eq 137 ]; then
   echo "ERROR: mktd hard-timeout after ${MKTD_TIMEOUT_SECONDS}s (#1118 part A)." >&2
   echo "Inspect runaway sub-sessions with 'csa session list' and clean up via 'csa session kill'." >&2
@@ -343,11 +352,6 @@ TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
 if ! grep -qF -- '- [ ] ' "${TODO_PATH}"; then
   fail_step7_gate "TODO missing checkbox tasks."
 fi
-# Per-task DONE WHEN gate (#1843; 4th sibling of the #1822 per-task conversion).
-# Every OPEN task must carry its OWN `DONE WHEN:` clause (AGENTS.md Meta 005), not
-# a single global mention. Mirrors mktd's pre-persist awk; `is_open` matches `- [ ]`
-# (not mktd's `^- \[ \] .+`) so the empty `- [ ] ` placeholder `csa todo create`
-# leaves when mktd fails before persist is still rejected, as the prior global check did.
 if ! awk '
 function flush() { if (in_open == 1 && has_clause == 0) bad = 1; in_open = 0; has_clause = 0 }
 function scan(text,   pos, rest) {
@@ -386,10 +390,8 @@ mktsk reads the TODO plan, registers tasks via TaskCreate, and executes each
 item serially: implement → quality gates → review → commit → next.
 
 ## Step 9: Ensure Version Bumped
-
 Tool: bash
 OnFail: abort
-
 ```bash
 set -euo pipefail
 if ! just check-version-bumped 2>/dev/null; then
@@ -405,7 +407,6 @@ fi
 
 Tool: manual (main agent action)
 OnFail: abort
-
 Before triggering `csa review`, the implementing agent MUST self-check the
 entire branch diff and fix any issues it finds.
 
@@ -417,10 +418,8 @@ Required actions:
 5. Only after completing all checks and fixes, continue to the cumulative `csa review` step.
 
 ## Step 11: Pre-PR Cumulative Review Gate
-
 Tool: bash
 OnFail: abort
-
 Cumulative review covering all commits since the default branch.
 Sets REVIEW_COMPLETED=true as gate for push step.
 REVIEW_COMPLETED is declared in workflow variables so CSA_VAR injection survives
@@ -443,10 +442,8 @@ for the current run.
 ## ENDIF
 
 ## Step 12: Push Gate
-
 Tool: bash
 OnFail: abort
-
 Hard gates before any push:
 
 1. `REVIEW_COMPLETED` must be true.
@@ -485,10 +482,8 @@ echo '<!-- CSA:NEXT_STEP cmd="verify review verdict (Step 13)" required=true -->
 ```
 
 ## Step 13: Pre-PR Review Verdict Check
-
 Tool: bash
 OnFail: abort
-
 Hard gate before PR creation: the current branch HEAD must have a PASS/CLEAN
 review verdict for the full cumulative diff (`${DEFAULT_BRANCH}...HEAD`).
 
@@ -500,10 +495,8 @@ echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 14)" required=true -->'
 ```
 
 ## Step 14: Create or Reuse Pull Request
-
 Tool: bash
 OnFail: abort
-
 Create or reuse a PR for the current branch. Outputs PR_NUMBER and PR_URL
 as CSA_VARs for the next step. This step does NOT trigger pr-bot —
 that is a separate hard gate in Step 15.
@@ -561,10 +554,8 @@ echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workfl
 ```
 
 ## Step 15: pr-bot Review & Merge Gate (HARD GATE)
-
 Tool: bash
 OnFail: abort
-
 **MANDATORY**: This step MUST NOT be skipped. It runs pr-bot which performs
 cloud review (if enabled) and the actual merge. Without this step completing
 successfully, the PR remains unmerged and Step 16 will fail.
@@ -626,10 +617,8 @@ fi
 ```
 
 ## Step 16: Post-Merge Local Sync
-
 Tool: bash
 OnFail: abort
-
 Verify pr-bot completion marker exists (deterministic gate — cannot be bypassed
 by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
