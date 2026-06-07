@@ -9,7 +9,7 @@
 //! - Tier→tool resolution via project config
 //! - `tool = "bash"` direct execution (extracts code block from prompt)
 //! - Workflow variables from `--var KEY=VALUE` and `STEP_<id>_OUTPUT`
-//! - `${VAR}` substitution for CSA prompts and condition evaluation
+//! - `${VAR}` substitution for CSA prompts, step tiers, and condition evaluation
 //! - `on_fail` handling: abort / skip / retry N
 //! - `condition` evaluation: `${VAR}` truthiness, `!(expr)`, `(a) && (b)`
 //! - Steps with `loop_var` are skipped with a warning (v2)
@@ -54,8 +54,10 @@ pub(crate) use plan_cmd_assignment::{
     extract_output_assignment_markers, is_assignment_marker_key, should_inject_assignment_markers,
 };
 pub(crate) use plan_cmd_flow::shell_escape_for_command;
+#[cfg(test)]
+pub(crate) use plan_cmd_steps::resolve_step_tool;
 use plan_cmd_steps::{PlanRunContext, execute_plan_with_journal};
-pub(crate) use plan_cmd_steps::{StepResult, StepTarget, resolve_step_tool};
+pub(crate) use plan_cmd_steps::{StepResult, StepTarget, resolve_step_tool_with_variables};
 #[cfg(test)]
 pub(crate) use plan_cmd_steps_test_helpers::{execute_plan, execute_step};
 
@@ -516,7 +518,7 @@ fn validate_variable_name(name: &str) -> Result<()> {
     }
 }
 
-/// Substitute `${VAR}` placeholders in a string (used by CSA steps only).
+/// Substitute `${VAR}` placeholders in a workflow string.
 fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {

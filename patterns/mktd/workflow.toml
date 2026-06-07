@@ -124,7 +124,10 @@ name = "TIER"
 
 [[workflow.variables]]
 name = "RECON_TIER"
-
+# Plan-authoring tier for DRAFT, Spec, and Revise.
+[[workflow.variables]]
+name = "PLAN_TIER"
+default = "tier-3-complex"
 [[workflow.variables]]
 name = "USER_LANGUAGE"
 
@@ -335,7 +338,7 @@ session = "${STEP_1_OUTPUT}"
 [[workflow.steps]]
 id = 7
 title = "Phase 2 — DRAFT TODO"
-tier = "tier-3-complex"
+tier = "${PLAN_TIER}"
 prompt = """
 Synthesize CSA findings into a structured TODO plan.
 
@@ -355,7 +358,7 @@ ${STEP_6_OUTPUT}
 
 ### Instructions
 
-CONSTRAINT VERIFICATION: Before drafting, check that RECON findings align with the user's original feature request (${FEATURE}). If the user specified a target crate, architecture, or key files, the plan MUST target those — not alternatives suggested by codebase pattern matching. If RECON findings contradict user constraints, note the conflict and follow the user's intent.
+CONSTRAINT VERIFICATION: Draft against ${FEATURE}. Honor user-specified target crates, architecture, and key files over recon alternatives; if recon conflicts, note it and follow user intent.
 
 #### TODO Structure Requirements
 
@@ -404,13 +407,9 @@ f) ADR creation guidance:
 ```text
 <!-- CSA:ADR:START adr-0001-short-title.md -->
 # Title
-
 Status: Proposed
-
 ## Context
-
 ## Decision
-
 ## Consequences
 <!-- CSA:ADR:END -->
 ```
@@ -483,7 +482,7 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 8
 title = "Phase 2.25 — Spec Generation"
-tier = "tier-3-complex"
+tier = "${PLAN_TIER}"
 prompt = """
 Extract verifiable acceptance criteria from the draft TODO plan.
 
@@ -670,14 +669,12 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 12
 title = "Revise TODO"
-tier = "tier-3-complex"
+tier = "${PLAN_TIER}"
 condition = "!(${INTENSITY_IS_LIGHT})"
 prompt = """
 Incorporate debate feedback and threat model findings into the TODO plan.
 Concede valid points and revise accordingly. Defend sound decisions with evidence.
-Use the generated spec as an acceptance contract.
-If the debate reveals missing coverage, add TODO work that restores alignment
-instead of silently diverging from the spec.
+Use the generated spec as the acceptance contract; add TODO work for debate-revealed coverage gaps.
 
 ### Prior Context
 

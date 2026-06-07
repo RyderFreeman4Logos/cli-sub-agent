@@ -44,18 +44,18 @@ Each story follows: branch from main -> mktd (story-specific) -> dev2merge -> me
 
 ### Tier Configuration
 
-`TIER` controls which tier the four RECON sub-sessions (Dimensions 1–4) use.
-When unset, RECON defaults to `tier-1-quick` (lightweight exploration).
-Set `TIER` to a heavier tier when RECON needs deeper analysis:
+`TIER` controls RECON sub-sessions (Dimensions 1–4). When unset, Step 1.5 writes
+`RECON_TIER=tier-1-quick`; set `TIER=tier-2-standard` or `TIER=tier-4-critical`
+for deeper RECON.
 
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `TIER` | (empty) | RECON uses `tier-1-quick` |
-| `TIER=tier-2-standard` | — | RECON uses `tier-2-standard` |
-| `TIER=tier-4-critical` | — | RECON uses `tier-4-critical` |
+`PLAN_TIER` controls plan-authoring sub-sessions (DRAFT TODO, Spec Generation,
+Revise TODO) and defaults to `tier-3-complex`. Example:
 
-The resolved value is written to `RECON_TIER` in Step 1.5 and applied to all four RECON csa steps.
-Debate and Revise phases always use the tier specified at the step level (`tier-2-standard` / `tier-3-complex`).
+```bash
+csa plan run patterns/mktd/workflow.toml --var PLAN_TIER=tier-4-critical
+```
+
+Debate remains step-level `tier-2-standard`.
 
 ## Step 0: Phase 0.5 — Auto Session Discovery
 
@@ -284,7 +284,7 @@ echo "RECON references persisted"
 > become available.
 
 ## Step 7: Phase 2 — DRAFT TODO
-Tier: tier-3-complex
+Tier: ${PLAN_TIER}
 
 Synthesize CSA findings into a structured TODO plan.
 
@@ -429,7 +429,7 @@ CSA captures stdout and persists it under `$CSA_SESSION_DIR/output/summary.md`.
 The output is captured as `${STEP_7_OUTPUT}` for subsequent steps.
 
 ## Step 8: Phase 2.25 — Spec Generation
-Tier: tier-3-complex
+Tier: ${PLAN_TIER}
 
 Extract verifiable acceptance criteria from the draft TODO plan.
 
@@ -616,7 +616,7 @@ printf '%s\n' "${STEP_10_OUTPUT}" | grep -q '^OVERALL_ASSESSMENT:' || { echo "ov
 ```
 
 ## Step 12: Revise TODO
-Tier: tier-3-complex
+Tier: ${PLAN_TIER}
 
 **Condition**: Skip if `INTENSITY=light`.
 

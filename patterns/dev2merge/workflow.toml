@@ -333,9 +333,8 @@ id = 7
 title = "Plan with mktd"
 tool = "bash"
 prompt = '''
-Generate a TODO via mktd with a hard timeout (default `1800`s). Intensity is
-`light` when the brief names at least two `path/file:LINE` refs or the diff is
-small; otherwise it is `full`.
+Generate a TODO via mktd with a hard timeout. Use `light` intensity for
+specific briefs or small diffs; otherwise use `full`.
 
 ```bash
 set -euo pipefail
@@ -344,6 +343,7 @@ FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}"
 MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}"
+MKTD_PLAN_TIER="${PLAN_TIER:-${TIER:-tier-3-complex}}"
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
   MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 else
@@ -372,6 +372,8 @@ MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode tr
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
   --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" \
+  --var TIER="${TIER:-}" \
+  --var PLAN_TIER="${MKTD_PLAN_TIER}" \
   --var INTENSITY="${MKTD_INTENSITY}" 2>&1)"
 MKTD_EXIT=$?
 set -e

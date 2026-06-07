@@ -633,6 +633,66 @@ models = ["gemini-cli/google/gemini-2.5-pro/high"]
 }
 
 #[test]
+fn resolve_step_tool_interpolates_plan_tier_variable() {
+    let config: csa_config::ProjectConfig = toml::from_str(
+        r#"
+[tools.gemini-cli]
+enabled = true
+
+[tiers.tier-plan]
+description = "planning"
+models = ["gemini-cli/google/gemini-2.5-pro/high"]
+"#,
+    )
+    .unwrap();
+    let step = PlanStep {
+        id: 7,
+        title: "Plan with mktd".to_string(),
+        tool: None,
+        tier: Some("${PLAN_TIER}".to_string()),
+        prompt: "test prompt".to_string(),
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+        workspace_access: None,
+    };
+    let mut vars = std::collections::HashMap::new();
+    vars.insert("PLAN_TIER".to_string(), "tier-plan".to_string());
+
+    let literal_target = resolve_step_tool(&step, Some(&config), None, None)
+        .expect("literal tier should fall back cleanly");
+    assert!(matches!(
+        literal_target,
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            tier_name: None,
+            ..
+        }
+    ));
+
+    let target = resolve_step_tool_with_variables(&step, &vars, Some(&config), None, None)
+        .expect("interpolated PLAN_TIER should resolve");
+
+    match target {
+        StepTarget::CsaTool {
+            tool_name,
+            model_spec,
+            tier_name,
+        } => {
+            assert_eq!(tool_name, ToolName::GeminiCli);
+            assert_eq!(
+                model_spec.as_deref(),
+                Some("gemini-cli/google/gemini-2.5-pro/high")
+            );
+            assert_eq!(tier_name.as_deref(), Some("tier-plan"));
+        }
+        _ => panic!("PLAN_TIER should resolve to a CSA tool"),
+    }
+}
+
+#[test]
 fn resolve_step_tool_model_spec_override_does_not_affect_bash() {
     use super::plan_cmd_steps::resolve_step_tool;
 
