@@ -279,8 +279,16 @@ echo "CSA_VAR:FAST_PATH_COMMITTED=true"
 ## Step 5: FAST_PATH Version Bump
 Tool: bash
 OnFail: abort
+Version bump is Rust-only (`just bump-patch` + `cargo metadata`). Repos without
+a `Cargo.toml` (e.g. Python/Node) skip this step with a warning instead of
+aborting the pipeline (#1658).
+
 ```bash
 set -euo pipefail
+if [ ! -f Cargo.toml ]; then
+  echo "Version bump skipped: no Cargo.toml found"
+  exit 0
+fi
 if ! just check-version-bumped 2>/dev/null; then
   just bump-patch
   cargo run -p weave -- lock 2>/dev/null || true
@@ -469,8 +477,16 @@ git commit -m "${COMMIT_MSG}"
 ## Step 10: Ensure Version Bumped
 Tool: bash
 OnFail: abort
+Version bump is Rust-only (`just bump-patch` + `cargo metadata`). Repos without
+a `Cargo.toml` (e.g. Python/Node) skip this step with a warning instead of
+aborting the pipeline (#1658).
+
 ```bash
 set -euo pipefail
+if [ ! -f Cargo.toml ]; then
+  echo "Version bump skipped: no Cargo.toml found"
+  exit 0
+fi
 if ! just check-version-bumped 2>/dev/null; then
   just bump-patch
   cargo run -p weave -- lock 2>/dev/null || true
